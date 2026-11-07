@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- Compiling a long list built from variables, such as `[X Y X Z ...]`, no longer takes time that grows with its
+  length squared: 16000 elements take about a thirtieth of what they did.
+
 ## [0.4] - 2026-11-06
 
 ### Added

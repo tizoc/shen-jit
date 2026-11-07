@@ -928,6 +928,13 @@
        (do (shen-jit.lower.value-h B Env [prim cons Args] D Top)
            (shen-jit.lower.emit B [prim D cons [const K] D])))
       where (>= D (+ 2 (<-address B 1)))
+  \\ So does one whose heads are local variables. A head in D itself would be
+  \\ overwritten before it is read; no lowering puts one there now.
+  B Env [prim cons [[var X] [prim cons Args]]] D Top
+  -> (do (shen-jit.lower.value-h B Env [prim cons Args] D Top)
+         (shen-jit.lower.emit B [prim D cons (shen-jit.lower.slot X Env) D]))
+      where (and (>= D (+ 2 (<-address B 1))) (number? (shen-jit.lower.slot X Env))
+                 (not (= (shen-jit.lower.slot X Env) D)))
   B Env [prim Op Args] D Top
   -> (shen-jit.lower.emit B [prim D Op | (shen-jit.lower.operands B Env Args Top)])
   B Env [lambda X Body] D Top -> (shen-jit.lower.closure B Env lambda [X] Body D Top)

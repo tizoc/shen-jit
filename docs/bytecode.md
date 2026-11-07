@@ -387,7 +387,8 @@ the shifts. The others are calls to C.
   cannot be told apart.
 - `(cons (const A) (cons ...))` computed into a slot that is not a parameter's
   computes its tail into that same slot, so a long chain with constant heads
-  takes one slot.
+  takes one slot. So does `(cons X (cons ...))` with X a variable in a slot,
+  unless that slot is the one computed into.
 - `(+ A B)` and `(- A B)` of two integer constants below 10^9 in magnitude
   are their result, as a constant.
 - A definition whose body (or a branch of it in tail position) is `(if C X
@@ -427,7 +428,7 @@ store a result that the code after it never reads. The lowerer's other habits, s
 as leaving parameters alone, are its own: code written by hand need not share them.
 
 Slot assignment is scope-based, so windows sit above every variable in scope
-and every pending temporary. A chain of `cons` with constant heads takes one slot
+and every pending temporary. A chain of `cons` with constant or variable heads takes one slot
 (see the lowering rules), and most frames are 16 slots or fewer. The lowerer also
 keeps a call's result slot below its window, which is not checked.
 

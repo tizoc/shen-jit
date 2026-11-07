@@ -137,7 +137,7 @@ Some refinements are built on that:
 - **A result read only from CACHE is not stored,** when nothing between it and its one reader could collect.
 - **Tests branch directly.** A Boolean primitive followed by a jump on its result branches on the comparison and stores
   nothing, and after a `cons?` that falls through, `hd` and `tl` of that slot need no test. A run of conses, as a chain
-  with constant heads lowers to, checks room once and passes each pair on in CACHE.
+  with constant or variable heads lowers to, checks room once and passes each pair on in CACHE.
 - **Leaves skip the stack check:** code that makes no call, with a frame of at most 64 words. Every check
   reserves 64 words beyond its own frame, and `jit_call` reserves as much, so a leaf's frame is always in checked space.
   Tail calls do not count against a leaf, except in code compiled once something needs interrupts seen, since

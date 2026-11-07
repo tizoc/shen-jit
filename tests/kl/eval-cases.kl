@@ -1086,3 +1086,5 @@ goes through the stub, and a function that cannot be found raises as anything do
 (value ((a b q) (q)) (let Y (cons q ()) (let X (cons a (cons b Y)) (cons X (cons Y ())))))
 (value ((a b q) (b q) (q)) (let Y (cons q ()) (let X (cons b Y) (let Z (cons a X) (cons Z (cons X (cons Y ())))))))
 (value (a c b q) ((lambda X (lambda Y (cons a (cons X (cons b Y))))) c (cons q ())))
+(value ((a b a c) (b a c)) ((lambda X (lambda Y (let Z (cons X (cons Y (cons X (cons c ())))) (cons Z (cons (tl Z) ()))))) a b))
+(value (q (p q p) p) (let X p (let Y q (cons Y (cons (cons X (cons Y (cons X ()))) (cons X ()))))))

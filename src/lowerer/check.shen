@@ -250,6 +250,10 @@
        "(code f 1 5 (a b c d)
           ((prim 3 cons (const 1) 2) (prim 3 cons (const 0) 3) (prim 4 cons (const 3) 3)
            (prim 2 cons (const 2) 4) (tail-call-sealed 0 foo 1)) ())"]
+      \\ So does one with variables as heads, read from their own slots.
+      ["(defun f (X Y) (foo (cons X (cons Y (cons X ())))))" [[foo | 1]]
+       "(code f 2 5 (())
+          ((prim 4 cons 2 (const 0)) (prim 4 cons 3 4) (prim 2 cons 2 4) (tail-call-sealed 0 foo 1)) ())"]
       \\ An expression for eval-kl; type is erased.
       ["(type (+ 1 2) number)" []
        "(code eval-kl 0 2 (3) ((return (const 0))) ())"]
