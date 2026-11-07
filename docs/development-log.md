@@ -314,6 +314,39 @@ Lowering rules, the collector and the kernel port have their own sections.
 - **Compile-time cost of open inlining** (2026-11-03, M3 Max). Re-evaluating eight realistic definitions: 253 to
   310 µs a round, 269 without open inlining, 308 at depth 1, so most of it is the inlined code. Workloads outside
   the benchmarks lost 3 to 5%: open inlining 1%, the rest most likely backtrace bookkeeping.
+- **`dead_after` stops at a slot's last read** (2026-11-07, Apple M5, load 25 to 40, instructions retired, against
+  the build before). Proving a slot dead walked the rest of the function from each fused test and cons, and
+  allocated and cleared a byte and a word per bytecode word each time: at startup 1,908 walks of 14 steps on
+  average, behind what a reviewer measured as 33.5 MB of allocation. Now each compile finds, once, the last offset
+  that reads each slot and whether every jump goes forward, and keeps one stack and one array of marks for all its
+  walks. Where jumps only go forward, nothing past a slot's last read reads it, so the walk drops any path that gets
+  there; the forward test is made on the code, as the loader does not check it. Past 4096 instructions a walk gives
+  up and keeps the store, which is always safe. A build that ran the old walk and the new one side by side found no
+  case where the new said dead and the old did not, and none where it gave up, over the fast tier, the kernel suite
+  and the standard library's lowering; the table agreed with `reads_slot` wherever it was read. The two now take
+  what an instruction reads from one function, `slots_read`, so that a read added to one cannot be missing from the
+  other, which would prove a slot dead too early: that cost the inlined calls 3.95 to 4.18 G, as the walk's
+  `reads_slot` now calls it, and within this load's noise elsewhere (kernel suite 3.129-3.131 to 3.132-3.142 G, 2
+  runs each). Superlinear growth is left: `(g (g ... X))` takes 3.4 times as long at twice the depth, lowering
+  included. Generated files unchanged. Loading a file of one definition and calling it, by script: a list of 6,400
+  calls 12.84 to 10.93 G, a list nested 8,000 deep 2.91 to 0.19, `(g (g ... X))` 2,000 deep 1.78 to 0.64 and 4,000
+  deep 6.71 to 2.16, a list of 4,000 frozen sums 1.44 to 0.72, 3,200 lambdas 1.08 to 0.62, a list of 4,000 inlined
+  calls 8.47 to 4.18; 8,000 numbers, 4,000 nested triples and 400 live lets unchanged within 1%. Startup 48.3-48.9
+  to 47.2-47.7 M (the lower half of 15 runs each, as the load made the rest noisy); kernel suite, 3 rounds,
+  3.113-3.140 to 3.101-3.123 G, its walks 1,052,237 to 807,900 steps; standard library lowering 1.116-1.139 to
+  1.114-1.135 G; proof-bench, same inference counts, steam 3.58-3.59 to 3.57-3.58, yql 4.47-4.49 to 4.47-4.49, thm13
+  25.85-25.95 to 25.89-26.01, rcc10 19.11-19.14 to 19.12-19.15. **Only the buffers** (the walk unchanged, so nothing
+  to prune): the nested list 2.65 G, the frozen sums 1.55, the calls 12.68, as most walks there are long. **No limit
+  on the walk:** the inlined calls 9.77 G, more than before. Their walks take 72 million steps, against 80 million
+  before, and each step costs more: the old walk's switch with the pruning read 7.87 G, with the shared buffers
+  8.06, and `successors`, the switch shared with the scan, 9.77 out of line and 8.60 forced inline. The limit bounds
+  that, and at the kernel suite's 0.8 million steps the difference is lost. With the limit, 3,545 of that function's
+  11,049 tests and conses keep a store they skipped before. **The 4096-word cap rejected above** skipped the walk in
+  any function that long, so every cons run in one paid a store, a kernel function of 4737 words among them; this
+  limit counts steps after the pruning, and no walk in the kernel or the standard library reached it: the longest
+  that proves a slot dead, over the kernel suite and the standard library's lowering, takes 1,584. **Rejected:
+  `successors` filling a local array** pushed one by one: clang made each push a call to `memcpy`, 1.9 G more on the
+  inlined calls without the limit. It now pushes straight onto the stack.
 - **A long literal list's constants** (2026-11-06, Apple M5, load 5 to 10, instructions retired, one run each, against the build before). A list past the 64 nodes that make one constant takes a slot per element, and adding each took a search that called `str` on both numbers of every pair, a `length` and an `append`. The search now tests `=` before `str`, and the pool is kept reversed with a count. `(length [0 1 2 ...])` by script, numbers: 1000 elements 0.93 to 0.14 G, 2000 3.75 to 0.39 G, 4000 15.35 to 1.34 G, 8000 62.72 to 5.11 G. Symbols, which never called `str`: 8000 7.97 to 6.72 G. Lowering the standard library, 3 runs each: 1.15-1.17 to 1.12-1.15 G. Only the lowerer's own generated files changed, so its output for the rest of the kernel, the bench programs and the ops tests is the same. Two NaN objects no longer share a slot, as `=` is false for them. **Rejected: `=` before everything,** in the search: 8000 numbers 5.11 to 4.03 G and symbols 6.72 to 4.02 G, but it would compare a closure or an absvector passed to `eval-kl` by structure, where nothing compares them now. **Still quadratic, not fixed here:** with `consumed_next` not calling `dead_after`, which allocates and clears a byte per bytecode word and scans for each cons of a run, 8000 numbers read 2.35 G and 16000 8.97 G, against 5.11 and 19.98. An index over the pool is not tried.
 - **A cons chain with constant heads in one slot** (2026-11-06, Apple M5, load about 27, instructions retired, against the build before). Each cons of a run took a new slot, and `consumed_next` then walked the rest of the code for each, to prove the slot before it dead. The walk is the cost, not the byte per bytecode word it clears: reusing that array made no difference. A cons whose head is a constant, computed into a slot that is not a parameter's, now computes its tail in the same slot, which the next cons overwrites, so nothing needs proving. Long literals by script, one run each: 4000 numbers 1.34 to 0.67 G, 8000 5.07 to 2.38 G, 16000 19.96 to 9.09 G, 8000 symbols 6.64 to 3.98 G. What is left grows about 3.8 times per doubling, not profiled. A run with variable heads still walks: 4000 elements 0.83 G before and after. Kernel frames: 21,545 to 20,996 slots in all, and `shen.initialise-environment` 355 to 19; the largest is now 57. 3 rounds each: a 1000-element literal rebuilt 200,000 times 1.60 to 1.56 G, kernel suite 3.113-3.117 to 3.096-3.115 G, standard library lowering 1.12-1.15 to 1.11-1.14 G. proof-bench, same inference counts, steam 3.52-3.56 to 3.54-3.56 G, yql 4.48-4.49 to 4.45-4.46, thm13 25.70-25.91 to 25.75-25.94, rcc10 19.10-19.16 to 18.98-19.15. `make bench`'s suite read 1.03 overall and the independent workloads 0.74 to 1.22, but the suite's own control loops moved 1.01 to 1.23 under that load, so these say little. **Rejected: guarding on the top slot,** `D = Top - 1`, from a first version. It passed the kernel's check, but a chain in the last parameter wrote that slot and read it again, against what `docs/bytecode.md` guarantees, and the kernel has no such case. Leaving parameters out makes the top-slot test unnecessary. **Rejected: not walking in code past 4096 words,** sound and about as fast on these literals, as it cost every cons run in large functions a store, about one instruction a cons, including a kernel function of 4737 words.
 

@@ -626,6 +626,11 @@ typedef struct {
         uint64_t pairs;
     } *at_label;
     const size_t *label_pos; /* each label's offset in the bytecode */
+    /* For dead_after: each slot's last read's offset plus one, or 0, used only if every jump goes
+       forward; and the stack and the marks its walks share, each walk marking with a new number. */
+    size_t *last_read, *todo;
+    uint32_t *seen, mark;
+    bool forward;
     /* The handlers pushed by this code that are active here, innermost
        last: each one's label, with NONE for one that reads the exception. */
     uint32_t *handlers;
@@ -1323,8 +1328,7 @@ static int kept_for(const Emit *e, uint32_t s)
     return free;
 }
 
-static bool dead_after(const uint32_t *w, size_t n, const size_t *label_pos,
-                       size_t after, uint32_t target, uint32_t s);
+static bool dead_after(Emit *e, size_t after, uint32_t target, uint32_t s);
 static bool type_test(uint32_t prim);
 static bool identity_operand(const Emit *e, uint32_t x);
 static bool string_operand(const Emit *e, uint32_t x);
@@ -1343,7 +1347,7 @@ static bool inline_eq_operand(const Emit *e, uint32_t x)
    nothing reads the slot or collects while only CACHE holds the value; and
    dst must be dead after them and where the test jumps. That is the shape
    of factorised pattern matching. */
-static bool dead_store(const Emit *e, uint32_t dst)
+static bool dead_store(Emit *e, uint32_t dst)
 {
     const uint32_t *w = e->words;
     size_t n = e->nwords, i = e->next;
@@ -1358,19 +1362,19 @@ static bool dead_store(const Emit *e, uint32_t dst)
                                            (test[5] == dst && inline_eq_operand(e, test[4])));
     size_t after = (size_t)(branch - w) + insn_length(branch);
     if (!(by_type || by_identity) || after >= n ||
-        !dead_after(w, n, e->label_pos, after, branch[2], test[1]))
+        !dead_after(e, after, branch[2], test[1]))
         return false;
     const uint32_t *take = w + after;
     if (test[2] == P_CONSP && take[0] == OP_PRIM && (take[2] == P_HD || take[2] == P_TL) && take[4] == dst)
         after += insn_length(take);
-    return dead_after(w, n, e->label_pos, after, branch[2], dst);
+    return dead_after(e, after, branch[2], dst);
 }
 
 /* Whether the next instruction is the only one to read slot dst, from
    CACHE, with nothing between that could collect or read the frame: a
    return of it, or the next cons of a run, which has room already, when
    that cons overwrites dst or dst is dead after it. */
-static bool consumed_next(const Emit *e, uint32_t dst)
+static bool consumed_next(Emit *e, uint32_t dst)
 {
     const uint32_t *w = e->words, *q = w + e->next;
     if (slot_kind(e, dst) != SLJIT_MEM1(FP) || e->next >= e->nwords)
@@ -1378,7 +1382,7 @@ static bool consumed_next(const Emit *e, uint32_t dst)
     if (q[0] == OP_RETURN)
         return q[1] == dst;
     return q[0] == OP_PRIM && q[2] == P_CONS && e->reserved && (q[4] == dst || q[5] == dst) &&
-           (q[1] == dst || dead_after(w, e->nwords, e->label_pos, e->next + insn_length(q), NONE, dst));
+           (q[1] == dst || dead_after(e, e->next + insn_length(q), NONE, dst));
 }
 
 /* Whether a result for slot dst can go straight to its register: a loop
@@ -2996,36 +3000,48 @@ static void emit_fused(Emit *e, const uint32_t *p, uint32_t label)
         sljit_set_label(same, slow->back);
 }
 
-static bool reads_slot(const uint32_t *p, uint32_t s)
+/* The slots an instruction reads, for reads_slot and last_reads alike, so that the two agree: the n
+   words at ops, and slots lo to hi - 1. For code written by hand, the words from its first o operand
+   to its last, though none has more than one. */
+typedef struct {
+    const uint32_t *ops;
+    uint32_t n, lo, hi;
+} Reads;
+
+static Reads slots_read(const uint32_t *p)
 {
     switch (p[0]) {
-    case OP_MOVE: return p[2] == s;
-    case OP_CAPTURE: return s == 1;
+    case OP_MOVE: return (Reads){p + 2, 1, 0, 0};
+    case OP_CAPTURE: return (Reads){NULL, 0, 1, 2};
     case OP_CLOSURE:
     case OP_PRIM:
     case OP_REAL_LOAD:
-    case OP_REAL_STORE:
-        for (uint32_t i = 0; i < p[3]; i++)
-            if (p[4 + i] == s)
-                return true;
-        return false;
+    case OP_REAL_STORE: return (Reads){p + 4, p[3], 0, 0};
     case OP_JUMP_IF_FALSE:
     case OP_JUMP_UNLESS_ENTRY:
-    case OP_RETURN: return p[1] == s;
+    case OP_RETURN: return (Reads){p + 1, 1, 0, 0};
     case OP_CALL:
-    case OP_CALL_SEALED: return s >= p[2] + 2 && s < p[2] + 2 + p[4];
-    case OP_CALL_VALUE: return s >= p[2] + 1 && s < p[2] + 2 + p[3];
+    case OP_CALL_SEALED: return (Reads){NULL, 0, p[2] + 2, p[2] + 2 + p[4]};
+    case OP_CALL_VALUE: return (Reads){NULL, 0, p[2] + 1, p[2] + 2 + p[3]};
     case OP_TAIL_CALL:
-    case OP_TAIL_CALL_SEALED: return s >= p[1] + 2 && s < p[1] + 2 + p[3];
-    case OP_TAIL_CALL_VALUE: return s >= p[1] + 1 && s < p[1] + 2 + p[2];
+    case OP_TAIL_CALL_SEALED: return (Reads){NULL, 0, p[1] + 2, p[1] + 2 + p[3]};
+    case OP_TAIL_CALL_VALUE: return (Reads){NULL, 0, p[1] + 1, p[1] + 2 + p[2]};
     default: {
-        const char *kinds = raw_kinds(p[0]);
-        for (size_t i = 0; kinds && kinds[i]; i++)
-            if (kinds[i] == 'o' && p[1 + i] == s)
-                return true;
-        return false;
+        const char *kinds = raw_kinds(p[0]), *o = kinds ? strchr(kinds, 'o') : NULL;
+        if (!o)
+            return (Reads){NULL, 0, 0, 0};
+        return (Reads){p + 1 + (o - kinds), (uint32_t)(strrchr(kinds, 'o') - o + 1), 0, 0};
     }
     }
+}
+
+static bool reads_slot(const uint32_t *p, uint32_t s)
+{
+    Reads r = slots_read(p);
+    for (uint32_t i = 0; i < r.n; i++)
+        if (r.ops[i] == s)
+            return true;
+    return s >= r.lo && s < r.hi;
 }
 
 static bool writes_slot(const uint32_t *p, uint32_t s)
@@ -3038,52 +3054,75 @@ static bool writes_slot(const uint32_t *p, uint32_t s)
     }
 }
 
-/* Whether slot s is written before it is read on every path from the two
-   successors of a jump-if-false, or from after alone when target is NONE.
-   It visits each instruction once, so the walk ends, also round a loop. */
-static bool dead_after(const uint32_t *w, size_t n, const size_t *label_pos,
-                       size_t after, uint32_t target, uint32_t s)
+/* The offsets an instruction goes on to: none, the next, or the next and a label's. */
+static int successors(const uint32_t *w, size_t i, const size_t *label_pos, size_t to[2])
 {
-    unsigned char *seen = calloc(n + 1, 1);
-    size_t *todo = malloc((n + 2) * sizeof *todo), ntodo = 0;
-    bool dead = seen && todo;
-    if (dead) {
-        todo[ntodo++] = after;
-        if (target != NONE)
-            todo[ntodo++] = label_pos[target];
+    const uint32_t *p = w + i;
+    to[0] = i + insn_length(p);
+    switch (p[0]) {
+    case OP_RETURN: case OP_TAIL_CALL: case OP_TAIL_CALL_SEALED: case OP_TAIL_CALL_VALUE: return 0;
+    case OP_JUMP: case OP_AGAIN: to[0] = label_pos[p[1]]; return 1;
+    case OP_JUMP_IF_FALSE: case OP_ENTRY: to[1] = label_pos[p[2]]; return 2;
+    case OP_JUMP_UNLESS_ENTRY: to[1] = label_pos[p[3]]; return 2;
+    case OP_PUSH_HANDLER: to[1] = label_pos[p[1]]; return 2;
+    default:
+        if (!raw_kinds(p[0]) || !strchr(raw_kinds(p[0]), 'l'))
+            return 1;
+        to[1] = label_pos[p[3]];
+        return 2;
     }
-    while (dead && ntodo) {
-        size_t i = todo[--ntodo];
-        if (i >= n || seen[i])
-            continue;
-        seen[i] = 1;
+}
+
+/* For dead_after, once per code: the offset of each slot's last read, plus one, and whether every
+   jump goes forward. */
+static bool last_reads(const uint32_t *w, size_t n, const size_t *label_pos, uint64_t frame, size_t *last)
+{
+    bool forward = true;
+    for (size_t i = 0; i < n; i += insn_length(w + i)) {
         const uint32_t *p = w + i;
-        if (reads_slot(p, s))
-            dead = false;
-        else if (!writes_slot(p, s)) {
-            size_t next = i + insn_length(p);
-            switch (p[0]) {
-            case OP_RETURN: case OP_TAIL_CALL: case OP_TAIL_CALL_SEALED: case OP_TAIL_CALL_VALUE:
-                break;
-            case OP_JUMP: case OP_AGAIN: todo[ntodo++] = label_pos[p[1]]; break;
-            case OP_JUMP_IF_FALSE: case OP_ENTRY:
-                todo[ntodo++] = next;
-                todo[ntodo++] = label_pos[p[2]];
-                break;
-            case OP_JUMP_UNLESS_ENTRY: todo[ntodo++] = next; todo[ntodo++] = label_pos[p[3]]; break;
-            case OP_PUSH_HANDLER: todo[ntodo++] = next; todo[ntodo++] = label_pos[p[1]]; break;
-            default:
-                todo[ntodo++] = next;
-                if (raw_kinds(p[0]) && strchr(raw_kinds(p[0]), 'l'))
-                    todo[ntodo++] = label_pos[p[3]];
-            }
-            if (ntodo > n)
-                dead = false; /* the stack is full, so assume the worst */
-        }
+        size_t to[2];
+        for (int k = successors(w, i, label_pos, to); k-- > 0;)
+            forward = forward && to[k] > i;
+        Reads r = slots_read(p);
+        for (uint32_t k = 0; k < r.n; k++)
+            if (r.ops[k] < frame)
+                last[r.ops[k]] = i + 1;
+        for (uint32_t k = r.lo; k < r.hi && k < frame; k++)
+            last[k] = i + 1;
     }
-    free(seen);
-    free(todo);
-    return dead;
+    return forward;
+}
+
+/* Whether slot s is written before it is read on every path from the two successors of a
+   jump-if-false, or from after alone when target is NONE. It visits each instruction once, so the
+   walk ends, also round a loop. Where every jump goes forward, nothing past the last read of s
+   reads it, so the walk stops there, and it gives up, assuming the worst, past 4096 instructions:
+   the longest that proves a slot dead in the kernel suite or the standard library takes 1,584. */
+static bool dead_after(Emit *e, size_t after, uint32_t target, uint32_t s)
+{
+    const uint32_t *w = e->words;
+    size_t n = e->nwords, end = e->forward && s < e->frame ? e->last_read[s] : n, *todo = e->todo, ntodo = 0;
+    uint32_t *seen = e->seen, mark = ++e->mark, steps = 0;
+    if (mark == 0) {
+        memset(seen, 0, n * sizeof *seen);
+        mark = e->mark = 1;
+    }
+    todo[ntodo++] = after;
+    if (target != NONE)
+        todo[ntodo++] = e->label_pos[target];
+    while (ntodo) {
+        size_t i = todo[--ntodo];
+        if (i >= end || seen[i] == mark)
+            continue;
+        seen[i] = mark;
+        if (reads_slot(w + i, s) || ++steps > 4096)
+            return false;
+        if (!writes_slot(w + i, s))
+            ntodo += successors(w, i, e->label_pos, todo + ntodo);
+        if (ntodo > n)
+            return false; /* the stack is full, so assume the worst */
+    }
+    return true;
 }
 
 static void go_back(Emit *e, const Slow *s)
@@ -3484,6 +3523,9 @@ static void *compile_code(VM *vm, V code)
               .arity = co[CODE_ARITY] & UINT32_MAX, .cbase = co[CODE_CBASE], .nconst = co[CODE_NCONST],
               .code = code, .cached = NONE, .post = NONE, .kept = {NONE, NONE}, .kept_post = {NONE, NONE},
               .entry = NONE, .label_pos = label_pos};
+    e.last_read = calloc(e.frame + 1, sizeof *e.last_read);
+    e.seen = calloc(nwords + 1, sizeof *e.seen);
+    e.todo = malloc((nwords + 2) * sizeof *e.todo);
     e.labels = calloc(nlabels + 1, sizeof *e.labels);
     e.fixups = calloc(6 * ninsns + 2, sizeof *e.fixups);
     e.handlers = calloc(ninsns + 1, sizeof *e.handlers);
@@ -3496,8 +3538,9 @@ static void *compile_code(VM *vm, V code)
     struct sljit_compiler *c = e.c;
     void *native = NULL, *generated = NULL;
     if (!c || !e.labels || !e.fixups || !e.slow || !e.calls || !label_pos || !e.at_label || !e.handlers ||
-        !e.selfs || !e.guards || !e.raises)
+        !e.selfs || !e.guards || !e.raises || !e.last_read || !e.seen || !e.todo)
         goto done;
+    e.forward = last_reads(words, nwords, label_pos, e.frame, e.last_read);
     sljit_set_context(c, 0, ARG_TYPES, SCRATCHES, SAVEDS, LOCALS);
 
     /* Entry: check the argument count and that the frame fits. A lambda
@@ -3624,7 +3667,7 @@ static void *compile_code(VM *vm, V code)
             size_t after = i + insn_length(p);
             if (fusable(p[2]) && after < nwords && next[0] == OP_JUMP_IF_FALSE &&
                 next[1] == p[1] &&
-                dead_after(words, nwords, label_pos, after + insn_length(next), next[2], p[1])) {
+                dead_after(&e, after + insn_length(next), next[2], p[1])) {
                 /* An exit test, in code that loops: the jump's fall-through
                    is only a return, followed by the label it jumps to.
                    Elsewhere the return is as likely as the rest, as in the
@@ -3853,6 +3896,9 @@ done:
     free(e.selfs);
     free(e.guards);
     free(e.raises);
+    free(e.last_read);
+    free(e.seen);
+    free(e.todo);
     free(marks);
     return native;
 }

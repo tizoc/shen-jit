@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- The JIT compiles a large function, with thousands of calls, lambdas or nested lists, in far less time.
+
 ## [0.4] - 2026-11-06
 
 ### Added
