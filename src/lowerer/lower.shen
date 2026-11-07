@@ -231,45 +231,71 @@
 \\ ---------------------------------------------------------------------------
 \\ Fixed names
 
-(define shen-jit.lower.prim-arity
-  F -> 0 where (element? F [shen-jit.quiet? shen-jit.mark-toplevel shen-jit.backtrace shen-jit.errno shen-jit.c-errno
-                            shen-jit.pointers-dead shen-jit.collect])
-  F -> 1 where (element? F [number? hd tl cons? tlstr str string? n->string string->n
-                            intern absvector absvector? value simple-error error-to-string
-                            get-time close read-byte char-stream? read-unit-string
-                            shen-jit.install shen-jit.symbol? shen-jit.exit
-                            shen-jit.symbol-kind shen-jit.dict-entries
-                            shen-jit.sealed? shen-jit.sealing shen-jit.inline-body
-                            shen-jit.vector? shen-jit.trace-text shen-jit.integer?
-                            shen-jit.bytes shen-jit.bytes? shen-jit.bytes-length shen-jit.string->bytes
-                            shen-jit.bit-not shen-jit.bswap32 shen-jit.popcount shen-jit.clz shen-jit.ctz
-                            shen-jit.pvar shen-jit.pvar? shen-jit.pvar-offset shen-jit.thread
-                            shen-jit.pointer? shen-jit.pointer-kind shen-jit.pointer-address
-                            shen-jit.pointer->string shen-jit.pointer-kill shen-jit.pointer-owner
-                            shen-jit.pointer-read-only])
-  F -> 2 where (element? F [+ - * / < > <= >= = cons cn pos <-address set open write-byte
-                            write-string shen-jit.hash shen-jit.filled-vector
-                            shen-jit.save-executable shen-jit.foreign
-                            shen-jit.dict-find shen-jit.dict-remove shen-jit.tagged? shen-jit.same?
-                            shen-jit.read-file shen-jit.append shen-jit.arity?
-                            shen-jit.inlined? shen-jit.u8 shen-jit.u16 shen-jit.u32
-                            shen-jit.bit-and shen-jit.bit-or shen-jit.bit-xor
-                            shen-jit.shift-left shen-jit.shift-right shen-jit.rotate32
-                            shen-jit.decimal shen-jit.s32 shen-jit.s64 shen-jit.f32 shen-jit.f64
-                            shen-jit.pointer-sized shen-jit.pointer-guard])
-  F -> 3 where (element? F [address-> shen-jit.dict-put shen-jit.absvector3 shen-jit.deref
-                            shen-jit.u8! shen-jit.u16! shen-jit.u32! shen-jit.bytes->string
-                            shen-jit.bytes->pointer shen-jit.pointer->bytes
-                            shen-jit.s32! shen-jit.s64! shen-jit.f32! shen-jit.f64! shen-jit.pointer!])
-  shen-jit.copy-bytes -> 5
-  _ -> -1)
+\\ The primitives' arities, and the special forms, eval-kl and protect, which
+\\ are fixed but no primitive. A named call looks its name up here, so it is a
+\\ table, made the first time it is needed: a bucket for each value of hash.
+\\ Nothing else is stored, so a name that is not fixed costs a hash and the
+\\ scan of one short bucket.
+(define shen-jit.lower.fixed-names
+  -> [[0 [shen-jit.quiet? shen-jit.mark-toplevel shen-jit.backtrace shen-jit.errno shen-jit.c-errno
+       shen-jit.pointers-dead shen-jit.collect]]
+   [1 [number? hd tl cons? tlstr str string? n->string string->n
+       intern absvector absvector? value simple-error error-to-string
+       get-time close read-byte char-stream? read-unit-string
+       shen-jit.install shen-jit.symbol? shen-jit.exit
+       shen-jit.symbol-kind shen-jit.dict-entries
+       shen-jit.sealed? shen-jit.sealing shen-jit.inline-body
+       shen-jit.vector? shen-jit.trace-text shen-jit.integer?
+       shen-jit.bytes shen-jit.bytes? shen-jit.bytes-length shen-jit.string->bytes
+       shen-jit.bit-not shen-jit.bswap32 shen-jit.popcount shen-jit.clz shen-jit.ctz
+       shen-jit.pvar shen-jit.pvar? shen-jit.pvar-offset shen-jit.thread
+       shen-jit.pointer? shen-jit.pointer-kind shen-jit.pointer-address
+       shen-jit.pointer->string shen-jit.pointer-kill shen-jit.pointer-owner
+       shen-jit.pointer-read-only]]
+   [2 [+ - * / < > <= >= = cons cn pos <-address set open write-byte
+       write-string shen-jit.hash shen-jit.filled-vector
+       shen-jit.save-executable shen-jit.foreign
+       shen-jit.dict-find shen-jit.dict-remove shen-jit.tagged? shen-jit.same?
+       shen-jit.read-file shen-jit.append shen-jit.arity?
+       shen-jit.inlined? shen-jit.u8 shen-jit.u16 shen-jit.u32
+       shen-jit.bit-and shen-jit.bit-or shen-jit.bit-xor
+       shen-jit.shift-left shen-jit.shift-right shen-jit.rotate32
+       shen-jit.decimal shen-jit.s32 shen-jit.s64 shen-jit.f32 shen-jit.f64
+       shen-jit.pointer-sized shen-jit.pointer-guard]]
+   [3 [address-> shen-jit.dict-put shen-jit.absvector3 shen-jit.deref
+       shen-jit.u8! shen-jit.u16! shen-jit.u32! shen-jit.bytes->string
+       shen-jit.bytes->pointer shen-jit.pointer->bytes
+       shen-jit.s32! shen-jit.s64! shen-jit.f32! shen-jit.f64! shen-jit.pointer!]]
+   [5 [shen-jit.copy-bytes]]
+   [fixed [if and or cond let lambda defun freeze type trap-error do thaw eval-kl protect]]])
 
-(define shen-jit.lower.special?
-  F -> (element? F [if and or cond let lambda defun freeze type trap-error do thaw]))
+(define shen-jit.lower.fixed-table
+  -> (trap-error (value shen-jit.lower.*fixed*)
+                 (/. E (set shen-jit.lower.*fixed*
+                            (shen-jit.lower.fill-table (shen-jit.lower.fixed-names)
+                                                       (shen-jit.lower.empty-table 0 (absvector 64)))))))
+
+(define shen-jit.lower.empty-table
+  64 Table -> Table
+  I Table -> (shen-jit.lower.empty-table (+ I 1) (address-> Table I [])))
+
+(define shen-jit.lower.fill-table
+  [] Table -> Table
+  [[_ []] | Groups] Table -> (shen-jit.lower.fill-table Groups Table)
+  [[A [F | Fs]] | Groups] Table
+  -> (let I (hash F 64)
+       (shen-jit.lower.fill-table [[A Fs] | Groups]
+                                  (address-> Table I [[F | A] | (<-address Table I)]))))
+
+(define shen-jit.lower.fixed-entry
+  F -> (assoc F (<-address (shen-jit.lower.fixed-table) (hash F 64))))
+
+(define shen-jit.lower.prim-arity
+  F -> (let Entry (shen-jit.lower.fixed-entry F)
+         (if (and (cons? Entry) (number? (tl Entry))) (tl Entry) -1)))
 
 (define shen-jit.lower.fixed?
-  F -> (or (shen-jit.lower.special? F) (>= (shen-jit.lower.prim-arity F) 0)
-           (element? F [eval-kl protect])))
+  F -> (cons? (shen-jit.lower.fixed-entry F)))
 
 \\ The kernel itself defines do and thaw, so stage 0 (where they are sealed)
 \\ lowers those definitions; any other defun of a fixed name is an error.
@@ -628,15 +654,19 @@
 \\ ---------------------------------------------------------------------------
 \\ Builders. A builder accumulates one code object in an absvector:
 \\ 0 name, 1 arity, 2 sealed names, 3 instructions (reversed), 4 constants
-\\ (reversed), 5 nested codes, 6 labels used, 7 frame size, 8 captured variables,
-\\ 9 how many constants.
+\\ (reversed), 5 nested codes (reversed), 6 labels used, 7 frame size, 8 captured
+\\ variables, 9 how many constants, 10 how many instructions, 11 how many nested
+\\ codes. The counts are kept so that nothing takes the length of a list that
+\\ grows with the code: that made a definition with many inlined calls or
+\\ closures quadratic to lower.
 
 (define shen-jit.lower.builder
   Name Arity Sealed
-  -> (let B (absvector 10)
+  -> (let B (absvector 12)
        (do (address-> B 0 Name) (address-> B 1 Arity) (address-> B 2 Sealed)
            (address-> B 3 []) (address-> B 4 []) (address-> B 5 [])
-           (address-> B 6 0) (address-> B 7 (+ Arity 2)) (address-> B 8 []) (address-> B 9 0))))
+           (address-> B 6 0) (address-> B 7 (+ Arity 2)) (address-> B 8 []) (address-> B 9 0)
+           (address-> B 10 0) (address-> B 11 0))))
 
 \\ Lower Body with Params in slots 2.. and return the finished code object.
 (define shen-jit.lower.code
@@ -651,14 +681,15 @@
 
 (define shen-jit.lower.code-form
   B -> [code (<-address B 0) (<-address B 1) (<-address B 7) (reverse (<-address B 4))
-             (reverse (<-address B 3)) (<-address B 5)])
+             (reverse (<-address B 3)) (reverse (<-address B 5))])
 
 (define shen-jit.lower.bind
   [] _ -> []
   [X | Xs] S -> [[X | S] | (shen-jit.lower.bind Xs (+ S 1))])
 
 (define shen-jit.lower.emit
-  B Instruction -> (address-> B 3 [Instruction | (<-address B 3)]))
+  B Instruction -> (do (address-> B 10 (+ (<-address B 10) 1))
+                       (address-> B 3 [Instruction | (<-address B 3)])))
 
 \\ The code an inlined body of F lowers to, marked as F's for backtraces:
 \\ (inline F N) before its N instructions, which compiled code keeps as a
@@ -667,11 +698,13 @@
 (define shen-jit.lower.mark
   B F Lower -> (if (cons? (<-address B 2))
                    (thaw Lower)
-                   (let Before (length (<-address B 3))
+                   (let Before (<-address B 10)
                         Done (thaw Lower)
-                        N (- (length (<-address B 3)) Before)
+                        N (- (<-address B 10) Before)
                      (if (> N 0)
-                         (do (address-> B 3 (shen-jit.lower.insert N [inline F N] (<-address B 3))) Done)
+                         (do (address-> B 10 (+ (<-address B 10) 1))
+                             (address-> B 3 (shen-jit.lower.insert N [inline F N] (<-address B 3)))
+                             Done)
                          Done))))
 
 \\ X put after the first N of the instructions, which are newest first.
@@ -707,8 +740,8 @@
   X Y -> (and (not (number? Y)) (shen-jit.lower.literal? X) (= X Y)))
 
 (define shen-jit.lower.add-code
-  B Code -> (let Codes (<-address B 5)
-              (do (address-> B 5 (append Codes [Code])) (length Codes))))
+  B Code -> (let Count (<-address B 11)
+              (do (address-> B 5 [Code | (<-address B 5)]) (address-> B 11 (+ Count 1)) Count)))
 
 (define shen-jit.lower.capture-index
   B X -> (let Captures (<-address B 8)
@@ -977,13 +1010,27 @@
   B Env [X | Xs] S Top Moves
   -> (do (shen-jit.lower.value B Env X Top (+ Top 1))
          (shen-jit.lower.in-place B Env Xs (+ S 1) (+ Top 1) [[S Top] | Moves]))
-      where (shen-jit.lower.reads? Env (shen-jit.lower.vars-of Xs) S)
+      where (shen-jit.lower.reads? Env Xs S)
   B Env [X | Xs] S Top Moves
   -> (do (shen-jit.lower.value B Env X S Top)
          (shen-jit.lower.in-place B Env Xs (+ S 1) Top Moves)))
 
+\\ Whether Xs have some [var V] with V in slot S, among the variables vars-of
+\\ finds, bound ones included. Xs are walked once, stopping at the first, and
+\\ only when Env has a variable in S at all: in a nested code, often none.
+\\ Tail calls nest, so the arguments walked contain the next calls.
 (define shen-jit.lower.reads?
-  Env Vs S -> (element? S (map (/. V (shen-jit.lower.slot V Env)) Vs)))
+  Env Xs S -> (and (shen-jit.lower.holds? Env S) (shen-jit.lower.reads-slot? Env Xs S)))
+
+(define shen-jit.lower.holds?
+  [[_ | S] | _] S -> true
+  [_ | Env] S -> (shen-jit.lower.holds? Env S)
+  _ _ -> false)
+
+(define shen-jit.lower.reads-slot?
+  Env [var V] S -> (= (shen-jit.lower.slot V Env) S)
+  Env [X | Xs] S -> (or (shen-jit.lower.reads-slot? Env X S) (shen-jit.lower.reads-slot? Env Xs S))
+  _ _ _ -> false)
 
 (define shen-jit.lower.named-call
   B F Target A N

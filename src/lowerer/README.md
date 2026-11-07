@@ -5,7 +5,7 @@ Shen, and its stage 0 driver.
 
 | File | Lines | Contents |
 | --- | --- | --- |
-| `lower.shen` | 1137 | The lowerer: normalization, then emission (tail positions, closure conversion, slots and windows). |
+| `lower.shen` | 1184 | The lowerer: normalization, then emission (tail positions, closure conversion, slots and windows). |
 | `stage0.shen` | 224 | Driver: lowers the kernel KLambda files and the port to `build/stage0/<file>.sbc`. |
 | `tokl.shen` | 39 | Compiles `lower.shen` to KLambda for stage 0. |
 | `host.shen` | 43 | What the lowerer takes from Shen/JIT, defined for running under a host. |

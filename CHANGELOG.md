@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- Compiling and loading a long definition takes far less time when it has many inlined calls, many closures or a
+  long Prolog clause body, each of which made the time grow with the square of the definition's size.
+
 ## [0.4] - 2026-11-06
 
 ### Added
