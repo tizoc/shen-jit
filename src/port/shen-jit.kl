@@ -545,6 +545,77 @@ kernel's shen.<alphanum> and shen.<alphanums>, without their rule calls."
         (shen.comb (hd Rest) (cn (n->string (hd Bytes)) (hd (tl Rest)))))
       (shen.comb Bytes "")))
 
+"A string literal's contents, as the kernel's shen.<strcontents> parses them:
+shen.<strc> as often as it parses, then the rest of the input and every
+piece joined. The kernel joins with cn on the way back, copying the rest of
+the string at each piece, so a literal took time quadratic in its length.
+Here the pieces, each one byte, collect in reverse and are joined once. A
+byte that is neither c, which may start c#NN;, nor a double quote, which
+ends the string, is a piece of its own, as shen.<notdbq> makes it, and
+n->string still checks it."
+
+(defun shen.<strcontents> (Bytes)
+  (shen-jit.strcontents Bytes ()))
+
+(defun shen-jit.strcontents (Bytes Acc)
+  (if (and (cons? Bytes) (and (not (= (hd Bytes) 34)) (not (= (hd Bytes) 99))))
+      (shen-jit.strcontents (tl Bytes) (cons (string->n (n->string (hd Bytes))) Acc))
+      (let Piece (shen.<strc> Bytes)
+        (if (shen.parse-failure? Piece)
+            (shen.comb Bytes (shen-jit.reversed-bytes->string Acc))
+            (shen-jit.strcontents (shen.in-> Piece)
+                                  (shen-jit.rev-onto (shen.str->bytes (shen.<-out Piece)) Acc))))))
+
+(defun shen-jit.rev-onto (Xs Acc)
+  (if (cons? Xs) (shen-jit.rev-onto (tl Xs) (cons (hd Xs) Acc)) Acc))
+
+"A string from a list of bytes in reverse order: its last byte first."
+
+(defun shen-jit.reversed-bytes->string (Bytes)
+  (let N (length Bytes)
+    (shen-jit.bytes->string (shen-jit.fill-down (shen-jit.bytes N) (- N 1) Bytes) 0 N)))
+
+(defun shen-jit.fill-down (Buffer I Bytes)
+  (if (cons? Bytes)
+      (shen-jit.fill-down (shen-jit.u8! Buffer I (hd Bytes)) (- I 1) (tl Bytes))
+      Buffer))
+
+"shen.str->bytes and shen.bytes->string, which the reader uses on every
+string it reads from (read-from-string) and on what it records, took time
+quadratic in the length: the kernel's take tlstr of the string at each byte,
+and join with cn on the way back. Here the string's bytes are read from one
+copy of it, and a list is written into one buffer. The results are the same,
+and so are the errors: shen.f-error for what is not a string, and for a list
+that does not end in [], after n->string has checked every element before
+it, in order, as the kernel's does."
+
+(defun shen.str->bytes (S)
+  (if (string? S)
+      (let Buffer (shen-jit.string->bytes S)
+        (shen-jit.buffer->list Buffer (- (shen-jit.bytes-length Buffer) 1) ()))
+      (shen.f-error shen.str->bytes)))
+
+(defun shen-jit.buffer->list (Buffer I Acc)
+  (if (< I 0)
+      Acc
+      (shen-jit.buffer->list Buffer (- I 1) (cons (shen-jit.u8 Buffer I) Acc))))
+
+(defun shen.bytes->string (Bytes)
+  (if (= Bytes ())
+      ""
+      (let N (shen-jit.checked-bytes Bytes 0)
+        (shen-jit.bytes->string (shen-jit.fill-up (shen-jit.bytes N) 0 Bytes) 0 N))))
+
+(defun shen-jit.checked-bytes (Bytes N)
+  (cond ((= Bytes ()) N)
+        ((cons? Bytes) (do (n->string (hd Bytes)) (shen-jit.checked-bytes (tl Bytes) (+ N 1))))
+        (true (shen.f-error shen.bytes->string))))
+
+(defun shen-jit.fill-up (Buffer I Bytes)
+  (if (cons? Bytes)
+      (shen-jit.fill-up (shen-jit.u8! Buffer I (hd Bytes)) (+ I 1) (tl Bytes))
+      Buffer))
+
 "An atom is a string, a number or a symbol, tried in that order. Every
 alternative of shen.<number> starts with a digit or one of - + . (bytes 45,
 43 and 46), so the kernel's number rules, five calls deep, are tried only

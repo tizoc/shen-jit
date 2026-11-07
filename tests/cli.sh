@@ -936,5 +936,27 @@ check deep-equal-both "$dir/deep.out" "both true false"
 check deep-equal-wide "$dir/deep.out" "wide true false"
 fi
 
+# Long strings through the reader's byte lists, which took time quadratic in their length: a 40000-byte
+# literal ending in an escape, and str->bytes, bytes->string and read-from-string on 64000 bytes.
+awk 'BEGIN { s = ""; for (i = 0; i < 4000; i++) s = s "abcdefghé"; printf "(output \"literal ~A~%%\" (length (shen.str->bytes \"%sc#33;\")))\n", s }' > "$dir/long.shen"
+cat >> "$dir/long.shen" <<'SHEN'
+(define long-bytes 0 Acc -> Acc N Acc -> (long-bytes (- N 1) [119 32 120 32 | Acc]))
+(let Bytes (long-bytes 16000 [])
+     S (shen.bytes->string Bytes)
+  (output "bytes ~A ~A ~A~%" (= (shen.str->bytes S) Bytes) (length (read-from-string S))
+          (= (read-from-string (cn (n->string 34) (cn S "é€c#99;#33;c#34;"))) [(cn S "é€!")])))
+SHEN
+"$SHEN" script "$dir/long.shen" > "$dir/long.out" 2>&1
+check long-literal "$dir/long.out" "literal 40001"
+check long-bytes "$dir/long.out" "bytes true 32000 true"
+# Escapes in string literals, read by the reader's rules and by read-from-string.
+cat > "$dir/escapes.shen" <<'SHEN'
+(output "escapes ~S~%" (read-from-string (cn "c#34;abc#34; c c#34;c#34; c#34;xc#99;#65;yc#99;#zc#34; " "c#34;hé€c#99;#33;c#34;")))
+(output "escape ~A~%" (trap-error (read-from-string "c#34;c#99;#300;c#34;") (/. E (error-to-string E))))
+SHEN
+"$SHEN" script "$dir/escapes.shen" > "$dir/escapes.out" 2>&1
+check escapes "$dir/escapes.out" 'escapes ["ab" c "" "xAyc#z" "hé€!"]'
+check escape-not-byte "$dir/escapes.out" "escape n->string: 300 is not a byte"
+
 echo "cli tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

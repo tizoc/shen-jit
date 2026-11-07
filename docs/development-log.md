@@ -655,6 +655,14 @@ all that Shen/Scheme and the earlier prototype replace.
   `shen.+string?` testing the type first: failing patterns 0.57-0.62.
 - **Reader rules** (2026-11-02, Apple M3 Max). Loops over runs of bytes where the kernel's rules build a parse result
   per byte. Reading 1,000 definitions 10.6 → 5.8 ms; 13 packaged kernel sources 26 → 22 ms (Shen/Scheme 86).
+- **Strings and byte lists** (2026-11-07, Apple M5, load 15-40, instructions retired against the main binary provided, main2-jit).
+  `shen.str->bytes` took `tlstr` at each byte, and `shen.bytes->string` and `shen.<strcontents>` joined with `cn` on
+  the way back, all quadratic. Overridden with one buffer each: a copy of the string read with `u8`, a buffer filled
+  with `u8!`, and string literals' bytes collected in reverse, the kernel's `shen.<strc>` still parsing `c#NN;`.
+  Whole runs, about 0.05G of which is startup: `str->bytes` of 1k, 4k, 16k and 64k bytes 0.053, 0.068, 0.31, 4.24G
+  → 0.052, 0.053, 0.054, 0.056G; `read-from-string` 0.055, 0.073, 0.32, 4.21G → 0.054, 0.057, 0.072, 0.131G;
+  `bytes->string` of 16k and 64k 0.20, 2.60G → 0.055, 0.100G; a literal of 2k, 8k and 32k 0.093, 0.138, 0.728G →
+  0.090, 0.086, 0.091G. Startup 49.2 → 48.9M, lowering stlib 1.134-1.139 → 1.134-1.137G over 3 runs: unchanged.
 - **`append` in C, `reverse` not** (Apple M3 Max, against the kernel's). `append` copies in one pass into the free
   space (2026-11-02): 32 elements 61 → 32 ns (Shen/Scheme 43), one element 0.5 ns slower. The same for `reverse`
   (2026-11-03) was rejected: 37 → 32 ns at 32 elements, but 2.4 → 3.3 ns at one and 233 → 320 ns at 256.
