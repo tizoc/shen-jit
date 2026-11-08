@@ -52,12 +52,15 @@
 (define-foreign socket.c-startup socket.lib "WSAStartup" (int32 bytes) --> int32)
 (define-foreign socket.c-getaddrinfo socket.lib "getaddrinfo" (string string bytes bytes) --> int32 blocking)
 (define-foreign socket.c-freeaddrinfo socket.lib "freeaddrinfo" (pointer) --> void)
-(define-foreign socket.c-socket socket.lib "socket" (int32 int32 int32) --> (socket.type))
+(define-foreign socket.c-socket-plain socket.lib "socket" (int32 int32 int32) --> (socket.type))
+(define-foreign socket.c-wsocket socket.lib "WSASocketW"
+  (int32 int32 int32 pointer uint32 uint32) --> int64)
 (define-foreign socket.c-close socket.lib (if (socket.windows?) "closesocket" "close") ((socket.type)) --> int32)
 (define-foreign socket.c-connect socket.lib "connect" ((socket.type) bytes int32) --> int32)
 (define-foreign socket.c-bind socket.lib "bind" ((socket.type) bytes int32) --> int32)
 (define-foreign socket.c-listen socket.lib "listen" ((socket.type) int32) --> int32)
-(define-foreign socket.c-accept socket.lib "accept" ((socket.type) pointer pointer) --> (socket.type))
+(define-foreign socket.c-accept-plain socket.lib "accept" ((socket.type) pointer pointer) --> (socket.type))
+(define-foreign socket.c-accept4 socket.lib "accept4" (int32 pointer pointer int32) --> int32)
 (define-foreign socket.c-send socket.lib "send" ((socket.type) bytes int64 int32) --> int32)
 (define-foreign socket.c-recv socket.lib "recv" ((socket.type) bytes int64 int32) --> int32)
 (define-foreign socket.c-shutdown socket.lib "shutdown" ((socket.type) int32) --> int32)
@@ -68,6 +71,28 @@
 (define-foreign socket.c-ioctlsocket socket.lib "ioctlsocket" (int64 int32 bytes) --> int32)
 (define-foreign socket.c-poll socket.lib (if (socket.windows?) "WSAPoll" "poll") (bytes int64 int32) --> int32 blocking)
 (define-foreign socket.c-strerror socket.lib "strerror" (int32) --> string)
+
+(shen-jit.library socket.handles ["kernel32.dll"])
+(define-foreign socket.c-inheritance socket.handles "SetHandleInformation" (int64 uint32 uint32) --> bool)
+
+\\ Linux creates sockets close-on-exec atomically. Windows uses WSA_FLAG_NO_HANDLE_INHERIT.
+(define socket.c-socket
+  Family Type Protocol ->
+    (if (socket.windows?)
+        (socket.c-wsocket Family Type Protocol [] 0 128)
+        (socket.c-socket-plain Family (+ Type (if (= (value *os*) "Linux") 524288 0)) Protocol)))
+
+(define socket.c-accept
+  S Address Length ->
+    (if (= (value *os*) "Linux")
+        (socket.c-accept4 S Address Length 524288)
+        (socket.c-accept-plain S Address Length)))
+
+(define socket.no-inherit
+  S ->
+    (if (socket.windows?)
+        (if (socket.c-inheritance S 1 0) S (socket.fail "SetHandleInformation"))
+        (if (< (socket.c-fcntl S 2 1) 0) (socket.fail "fcntl close-on-exec") S)))
 
 \\ ---------------------------------------------------------------------------
 \\ Errors.
@@ -164,7 +189,8 @@
 
 \\ What every socket needs, and an accepted one does not always inherit.
 (define socket.set-up
-  S -> (do (socket.closing-on-error S (freeze (socket.no-sigpipe (socket.non-blocking S)))) S))
+  S -> (socket.closing-on-error S
+         (freeze (socket.no-inherit (socket.no-sigpipe (socket.non-blocking S))))))
 
 (define socket.make
   Family Type Protocol -> (let S (socket.c-socket Family Type Protocol)

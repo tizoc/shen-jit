@@ -25,6 +25,7 @@
          of memory". The collector copies, so the process can use two to three
          times SIZE. */
 #define _DEFAULT_SOURCE /* access, sigaction */
+#include "file.h"
 #include "jit.h"
 #include "ops.h"
 #include "reader.h"
@@ -51,7 +52,7 @@ enum { SEALED_FILES = 18 };
 
 static char *slurp(const char *path, size_t *len)
 {
-    FILE *f = fopen(path, "rb");
+    FILE *f = sj_fopen(path, "rb");
     if (!f)
         return NULL;
     fseek(f, 0, SEEK_END);

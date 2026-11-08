@@ -33,6 +33,7 @@ BUILD := build
 FFI_TEST_LIB := $(BUILD)/ffi_test$(if $(EXE),.dll,.so)
 CURL_ADAPTER := $(BUILD)/shen-curl$(if $(EXE),.dll,.so)
 FS_ADAPTER := $(BUILD)/shen-fs$(if $(EXE),.dll,.so)
+PROCESS_ADAPTER := $(BUILD)/shen-process$(if $(EXE),.dll,.so)
 # Your own paths and targets, which git ignores: see the variables below.
 -include local.mk
 .DEFAULT_GOAL := all
@@ -49,7 +50,7 @@ VERSION := $(shell cat VERSION)
 RUNTIME_SRC := src/runtime/heap.c src/runtime/objects.c src/runtime/image.c src/runtime/prims.c \
                src/runtime/reader.c src/runtime/loader.c src/runtime/jit.c src/runtime/dict.c \
                src/runtime/profile.c src/runtime/thread.c src/runtime/ffi.c src/runtime/win32.c
-RUNTIME_HDR := src/runtime/value.h src/runtime/vm.h src/runtime/ops.h src/runtime/reader.h src/runtime/jit.h src/runtime/win32.h include/shen.h
+RUNTIME_HDR := src/runtime/value.h src/runtime/vm.h src/runtime/ops.h src/runtime/reader.h src/runtime/jit.h src/runtime/win32.h src/runtime/file.h include/shen.h
 SLJIT_OBJ := $(BUILD)/sljitLir.o
 RUNTIME_OBJ := $(patsubst src/runtime/%.c,$(BUILD)/%.o,$(RUNTIME_SRC))
 
@@ -80,6 +81,15 @@ $(FS_ADAPTER): lib/fs.c lib/build-fs.sh include/shen.h | $(BUILD)
 
 test-fs: $(BUILD)/shen-jit
 	CC="$(CC)" sh tests/fs.sh $(SHEN_JIT)
+
+.PHONY: process test-process
+process: $(PROCESS_ADAPTER)
+
+$(PROCESS_ADAPTER): lib/process.c lib/process-posix.h lib/process-win.h lib/build-process.sh include/shen.h | $(BUILD)
+	CC="$(CC)" CFLAGS="$(CFLAGS)" sh lib/build-process.sh $@
+
+test-process: $(BUILD)/shen-jit
+	CC="$(CC)" sh tests/process.sh $(SHEN_JIT)
 
 # The runtime alone, and the image stage 1 writes with it from the stage 0
 # output.
@@ -213,7 +223,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi buffers grammar io fs framing io-sockets deadlines http-head http http-streaming http-listener json datalog curl
+GUIDE_PAGES := design semantics bytecode ffi buffers grammar io fs processes framing io-sockets deadlines http-head http http-streaming http-listener json datalog curl
 GUIDE_PANDOC := pandoc -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
 guide:
@@ -530,6 +540,8 @@ test-san: $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stage0/.done 
 	  CC="$(CC)" CFLAGS="$(SAN_FLAGS)" sh tests/curl.sh $(BUILD)/shen-jit-san$(EXE)
 	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=$(abspath $(BUILD)/shen-jit-san.img) \
 	  CC="$(CC)" CFLAGS="$(SAN_FLAGS)" sh tests/fs.sh $(BUILD)/shen-jit-san$(EXE)
+	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=$(abspath $(BUILD)/shen-jit-san.img) \
+	  CC="$(CC)" CFLAGS="$(SAN_FLAGS)" sh tests/process.sh $(BUILD)/shen-jit-san$(EXE)
 
 test-x86: $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stage0/.done | $(BUILD)
 	for t in $(TESTS); do \

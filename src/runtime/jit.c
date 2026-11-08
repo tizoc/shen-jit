@@ -4,6 +4,7 @@
    return label in the callee's slot 0 and the callee in slot 1, moves the
    frame pointer to the window and jumps; a return jumps through slot 0. The
    argument count travels in R2 and the callee checks it. */
+#include "file.h"
 #include "jit.h"
 #include "ops.h"
 
@@ -4005,7 +4006,7 @@ void jit_attach(VM *vm, Jit *jit)
     if (getenv("SHEN_JIT_PERF_MAP")) {
         char path[64];
         snprintf(path, sizeof path, "/tmp/perf-%d.map", (int)getpid());
-        jit->perf_map = fopen(path, "w");
+        jit->perf_map = sj_fopen(path, "w");
     }
     slow_prims = getenv("SHEN_JIT_SLOW_PRIMS") != NULL;
     vm->jit = jit;

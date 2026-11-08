@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.."
 KERNEL_DIR=$(cd "${KERNEL_DIR:-.deps/kernel}" && pwd)
 IMAGE_arm64=gcc@sha256:fb2568a8cc0609134396aeb1eae1f3a91c8ceec54aaee67c798d9602593abd66
 IMAGE_amd64=gcc@sha256:3ae7320d7dd41f446a48930e1edf4e7a41c7be5ae43a5ddbf017c53fe6495738
-SUITES="check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-fs test-http test-datalog test-ffi test-curl test-overrides test-differential test-kernel-stress test-kl-stress test-san"
+SUITES="check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-fs test-process test-http test-datalog test-ffi test-curl test-overrides test-differential test-kernel-stress test-kl-stress test-san"
 
 make dist < /dev/null > /dev/null
 tarball=$(ls -t build/shen-jit-*.tar.gz | head -1)

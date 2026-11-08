@@ -1,0 +1,30 @@
+\\ Stream more bytes than the allowed heap without retaining output chunks.
+(define process-memory.write
+  State Bytes ->
+    (let N (shen-jit.bytes-length Bytes)
+         At (<-address State 0)
+         _ (if (and (= (shen-jit.u8 Bytes 0) (shen.mod At 251))
+                    (= (shen-jit.u8 Bytes (- N 1)) (shen.mod (+ At (- N 1)) 251)))
+               true (error "process stream bytes differ"))
+         _ (address-> State 0 (+ At N))
+         _ (address-> State 1 (if (> N (<-address State 1)) N (<-address State 1)))
+      [written N]))
+
+(let Size (value process-memory.size)
+     State (io.record [0 0])
+     Source (io.input-buffer (buffer.new 0))
+     Sink (io.endpoint "discard" write 4096 (function io.no-read)
+            (/. B (process-memory.write State B)) (freeze [ok]))
+     Err (io.output-buffer (buffer.new 0))
+     Result (process.run-to (value process-test.helper) ["flood" (str Size)] Source Sink Err
+                [[stdout-limit 1073741824] [chunk-size 4096] [timeout 30000]])
+     _ (io.close Source)
+     _ (io.close Sink)
+     _ (io.close Err)
+     Report (hd (tl Result))
+  (if (and (= (hd Result) ok) (process.success? Report)
+           (= (<-address State 0) Size) (<= (<-address State 1) 4096)
+           (= (process.output-count Report) Size) (= (buffer.length (process.output-bytes Report)) 0))
+      (output "process stream memory ok ~A ~A~%" Size (<-address State 1))
+      (error "process stream lost bytes or exceeded a bound")))
+(shen-jit.collect)

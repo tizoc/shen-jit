@@ -1733,6 +1733,43 @@ execution remains CI's responsibility; no new platform ABI or instruction was in
   `test-io` target includes the new suites, with native socket cases explicitly skipped on static
   builds. API references live on their own framing and socket pages linked from the guide.
 
+### Child processes and bounded pipelines (2026-11-08, M3 Max, macOS and Linux arm64)
+
+- Added optional process libraries over our own I/O, with explicit executable/arguments, child
+  environment and cwd, owned handles, status, bounded capture, streaming and pipelines. There was
+  no earlier subprocess library to compare against; these checks establish behavior and storage
+  bounds, rather than a throughput improvement. No shell is inserted. Shen owns orchestration,
+  quotas, deadlines, cancellation and cleanup; a public-C-API adapter owns platform structures.
+- One Shen pump feeds stdin and drains all outputs, using nonblocking parent pipe ends and finite
+  waits that release the VM lock. Windows uses named byte pipes in nonblocking wait mode, with
+  blocking child ends. This needs neither per-stream threads/channels nor a new scheduler. Short
+  sink writes retain the current suffix and apply backpressure without another output queue.
+- Spawn allocates the managed child, endpoint wrappers, success result and pipeline registry node
+  before starting the OS child. POSIX reserves the leader PID with `waitid(WNOWAIT)` until close,
+  so group cleanup cannot target a reused identifier. Cleanup escalates even when its budget expires
+  before the requested grace period. macOS reports EPERM when signaling a group containing only
+  zombies; a bounded native process snapshot distinguishes that case from a live permission failure.
+- POSIX uses spawn file actions and explicit signal defaults/masks. Linux runtime files and library
+  sockets now acquire close-on-exec atomically. Older glibc closes a descriptor snapshot where its
+  newer close-from spawn action is unavailable; arbitrary foreign-library descriptors must honor
+  close-on-exec too. Windows uses strict Unicode paths, CRT argument quoting, explicit inherited
+  handles and atomic job assignment. Its adapter needs a published job-list constant missing from
+  older MinGW headers. Cross-compilation also caught a DWORD conditional turning pipe retry -1
+  into 4294967295; both conditional arms now have the intended signed type.
+- The subprocess suite passes 140 checks on macOS and Linux arm64 with gcc 10, including independent
+  argument/binary oracles, simultaneous full stdout/stderr, cancellation, inherited descriptors,
+  descendants holding pipes open, partial pipeline startup, types, saved images and concurrent GC.
+  Streaming 8 MiB and 64 MiB under a 16 MiB heap cap retains about 2455 KiB on macOS. Holding the
+  first sink write lets the child produce only 69632 bytes of an 8 MiB output before it blocks.
+  These are bounded-storage checks under the available host load, not timing benchmarks.
+- `tools/process-filter.shen` runs a real file filter and publishes output through filesystem
+  replacement only after successful I/O and exit status. A 2 MiB binary filter passes under the
+  same heap cap; a child that writes output then exits 17 preserves the original destination.
+- The fast tier and ASan/UBSan pass on macOS. Linux static builds pass 40 pure checks and explicitly
+  skip native work before compiling fixtures. The Windows adapter and Unicode child cross-compile
+  with MinGW gcc 10.2; Windows execution awaits CI. The reference has its own guide page, executable
+  examples and release-package coverage.
+
 ### Filesystem operations (2026-11-08, M3 Max, macOS and Linux arm64)
 
 - Added optional `lib/fs.shen` over our I/O endpoints, with paths, owned metadata, sorted bounded

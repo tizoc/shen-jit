@@ -3,6 +3,7 @@
    fields stored as 0, followed by the root arrays and a trailer. Loading adds
    the new base to every pointer and then rebuilds what is specific to the
    process. */
+#include "file.h"
 #include "vm.h"
 
 #include <limits.h>
@@ -176,7 +177,7 @@ static bool write_image(VM *vm, const char *path, const char *mode)
     ImageTrailer t = {image_length(words, vm->cells.count, vm->consts.count), {0}};
     memcpy(t.magic, "SJHI-END", sizeof t.magic);
 
-    FILE *f = fopen(path, mode);
+    FILE *f = sj_fopen(path, mode);
     bool ok = f && fwrite(&h, sizeof h, 1, f) == 1 &&
               fwrite(copy, sizeof(uint64_t), words, f) == words &&
               write_root_array(f, &vm->cells, delta) &&
@@ -201,7 +202,7 @@ bool image_append(VM *vm, const char *path)
    comes before the images that end it, if any. */
 bool image_copy_runtime(const char *from, const char *to)
 {
-    FILE *f = fopen(from, "rb");
+    FILE *f = sj_fopen(from, "rb");
     if (!f)
         return false;
     ImageTrailer t;
@@ -210,7 +211,7 @@ bool image_copy_runtime(const char *from, const char *to)
            fread(&t, sizeof t, 1, f) == 1 && memcmp(t.magic, "SJHI-END", sizeof t.magic) == 0 &&
            t.length > 0 && t.length <= (uint64_t)end)
         end -= (long)t.length;
-    FILE *out = end >= 0 ? fopen(to, "wb") : NULL;
+    FILE *out = end >= 0 ? sj_fopen(to, "wb") : NULL;
     bool ok = out && fseek(f, 0, SEEK_SET) == 0;
     char buffer[65536];
     for (long left = end; ok && left > 0;) {
@@ -240,7 +241,7 @@ static bool read_root_array(FILE *f, RootArray *ra, size_t count, intptr_t delta
 VM *image_load(const char *path, size_t min_semispace_words, size_t stack_words,
                void *compile_stub, void *foreign_stub)
 {
-    FILE *f = fopen(path, "rb");
+    FILE *f = sj_fopen(path, "rb");
     if (!f)
         return NULL;
     ImageHeader h;

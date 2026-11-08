@@ -32,6 +32,10 @@ C API. `make curl` builds it; `lib/build-curl.sh` also builds it from a binary r
 `lib/fs.shen` adds paths, metadata, bounded traversal, temporary files and replacement over the I/O
 library. `make fs` builds its platform-layout adapter, `lib/fs.c`, with only the system C library.
 
+`lib/process.shen` and `lib/process-io.shen` add child processes, bounded pipe I/O and pipelines.
+`make process` builds their adapter; `make test-process` needs a C compiler and Python 3. Static Linux
+runs the pure checks and skips native work before compiling adapters or starting child fixtures.
+
 ## Priorities
 
 - Shen/JIT must perform well, but stay small and simple. A speed-up that needs a lot of new machinery for
@@ -62,7 +66,7 @@ A commit message says what changed and what it measured.
 Run the fast tier after every change; it takes about 20 s and catches nearly everything:
 
 ```bash
-make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-fs test-http test-datalog test-ffi test-curl test-overrides
+make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-fs test-process test-http test-datalog test-ffi test-curl test-overrides
 ```
 
 `make test-curl` builds the optional adapter with libcurl's development headers, then runs an independent
