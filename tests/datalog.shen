@@ -859,6 +859,8 @@
    tuple holding in the reference and every condition true, down to the facts given. *\
 (define dt.valid?
   Name Facts Ref [T fact] -> (element? T Facts)
+  Name Facts Ref [[Rel | Values] lattice] -> (and (cons? (assoc Rel (datalog.nth 9 (datalog.program Name))))
+                                                  (element? Values (datalog.tuples Ref Rel)))
   Name Facts Ref [[Rel | Values] equivalence] -> (and (element? Rel (datalog.nth 8 (datalog.program Name)))
                                                       (element? Values (datalog.tuples Ref Rel)))
   Name Facts Ref [[Rel | Values] Form | Subs]
@@ -1025,11 +1027,43 @@
       (dt.check "a choice derived" (datalog.subset? (map (/. T [(hd (tl T)) (hd T)]) Via) (datalog.tuples Db step)) true)
       (dt.check "a choice explained" (dt.valid? dt.paths Facts (datalog.run-naive dt.paths Facts) (datalog.explain Db [via 1 (hd (tl (hd Via)))])) true)))
 (dt.explain-all "explained, least" dt.paths [[start 1] [edge 1 2 5] [edge 1 3 1] [edge 3 2 1] [edge 2 4 1] [edge 4 1 1] [edge 3 4 10]])
+\* Lattices: the union of bit sets, for which starts reach each node, and a flat lattice, a value
+   or 2147483647 for many, for constant propagation. *\
+(define dt.union A B -> (shen-jit.bit-or A B))
+(define dt.flat A A -> A _ _ -> 2147483647)
+(defdatalog dt.lattices
+  (relation edge [integer integer])
+  (relation start [integer integer])
+  (relation reached-by [integer integer] (lattice dt.union))
+  (relation assign [integer integer])
+  (relation copy [integer integer])
+  (relation const [integer integer] (lattice dt.flat))
+  (relation known [integer])
+  (rule (reached-by X M) <-- (start X I) (= M (bshl 1 I)))
+  (rule (reached-by Y M) <-- (reached-by X M) (edge X Y))
+  (rule (const X C) <-- (assign X C))
+  (rule (const Y C) <-- (copy X Y) (const X C))
+  (rule (known X) <-- (const X C) (!= C 2147483647)))
+(set dt.lattice-facts [[start 1 0] [start 4 1] [edge 1 2] [edge 2 3] [edge 4 3] [edge 3 5] [edge 5 3]
+                       [assign 10 7] [assign 11 7] [assign 12 8] [copy 10 13] [copy 11 13] [copy 12 14] [copy 13 15] [copy 12 15]])
+(dt.same "lattice" (value dt.lattice-facts) dt.lattices reached-by [[1 1] [2 1] [3 3] [4 2] [5 3]])
+(dt.same "lattice" (value dt.lattice-facts) dt.lattices const [[10 7] [11 7] [12 8] [13 7] [14 8] [15 2147483647]])
+(dt.same "lattice" (value dt.lattice-facts) dt.lattices known [[10] [11] [12] [13] [14]])
+(define dt.random-lattice
+  0 -> ok
+  K -> (let Facts (append [[start (dtg.random 10) 0] [start (dtg.random 10) 1] [start (dtg.random 10) 2]]
+                          (map (/. E [edge (hd (tl E)) (hd (tl (tl E)))]) (dt.weighted 18 10 [])))
+         (do (dt.same (make-string "random lattice ~A" K) Facts dt.lattices reached-by (datalog.sorted (datalog.run-naive dt.lattices Facts) reached-by))
+             (dt.random-lattice (- K 1)))))
+(dt.random-lattice 20)
+(dt.explain-all "explained, lattice" dt.lattices (value dt.lattice-facts))
+(dt.raises "a lattice of symbols" "must be an integer"
+  (freeze (datalog.define dt.bad [[relation a [integer symbol] [lattice dt.union]]])))
 (dt.raises "a least of symbols" "must be an integer"
   (freeze (datalog.define dt.bad [[relation a [integer symbol] min]])))
 (dt.raises "a key with no value" "two columns or more"
   (freeze (datalog.define dt.bad [[relation a [integer] choice]])))
-(dt.raises "an unknown way to keep" "neither equivalence, min, max nor choice"
+(dt.raises "an unknown way to keep" "neither equivalence, min, max, choice nor (lattice F)"
   (freeze (datalog.define dt.bad [[relation a [integer integer] best]])))
 
 \* Queries by demand give what a whole run would, and compute less. *\
@@ -1083,6 +1117,7 @@
 (dt.query "demand" dt.equal (value dt.equal-facts) [same a [var "X"]])
 (dt.query "demand" dt.paths [[start 1] [edge 1 2 5] [edge 1 3 1] [edge 3 2 1] [edge 2 4 1]] [dist 4 [var "D"]])
 (dt.query "demand" dt.paths [[start 1] [edge 1 2 5] [edge 1 3 1] [edge 3 2 1] [edge 2 4 1]] [near [var "X"]])
+(dt.query "demand" dt.lattices (value dt.lattice-facts) [known [var "X"]])
 (dt.query "demand" dt.equal (value dt.equal-facts) [near-big [var "X"]])
 (dt.query "demand" dt.equal (value dt.equal-facts) [classes [var "X"] 2])
 (let Db (datalog.run dt.equal [[same a b] [same c d]])

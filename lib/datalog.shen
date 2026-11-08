@@ -124,11 +124,11 @@
   Name _ [[relation Rel Types equivalence] | _] _
   -> (error "datalog ~A: equivalence ~A has columns ~S, where two of one type are wanted" Name Rel Types)
   Name Known [[relation Rel Types Mode] | Items] Acc
-  -> (cases (not (element? Mode [min max choice]))
-            (error "datalog ~A: relation ~A is declared ~S, which is neither equivalence, min, max nor choice" Name Rel Mode)
+  -> (cases (not (datalog.keep-mode? Mode))
+            (error "datalog ~A: relation ~A is declared ~S, which is neither equivalence, min, max, choice nor (lattice F)" Name Rel Mode)
             (or (not (cons? Types)) (< (length Types) 2))
             (error "datalog ~A: ~A keeps one tuple for each value of the columns before its last, so it needs two columns or more" Name Rel)
-            (and (element? Mode [min max]) (not (= (hd (reverse Types)) integer)))
+            (and (not (= Mode choice)) (not (= (hd (reverse Types)) integer)))
             (error "datalog ~A: ~A keeps the ~A of its last column, which must be an integer" Name Rel Mode)
             true (datalog.relations Name Known [[relation Rel Types] | Items] Acc))
   Name Known [[rule | _] | Items] Acc -> (datalog.relations Name Known Items Acc)
@@ -440,26 +440,33 @@
           (datalog.complete-relations Body)))
 
 \\ Each relation's stratum, as [[Rel | N] ...]: at least that of each relation its rules read, and
-\\ one more than that of each they need complete. The reference evaluates by these.
+\\ one more than that of each they need complete: what they negate or aggregate, and a relation of
+\\ one tuple a key, Keyed, read from outside its own recursion, as a better tuple can replace one.
+\\ The reference evaluates by these.
 (define datalog.strata
-  Relations Rules -> (datalog.strata-h Rules (map (/. R [(hd R) | 0]) Relations)))
+  Relations Rules Keyed
+  -> (let Reach (datalog.reach (map (/. R [(hd R) | (datalog.depends (hd R) Rules)]) Relations))
+       (datalog.strata-h Rules (map (/. R [(hd R) | 0]) Relations) [Keyed Reach])))
 
 (define datalog.strata-h
-  Rules S -> (let Next (datalog.strata-round Rules S)
-               (if (= Next S) S (datalog.strata-h Rules Next))))
+  Rules S Whole -> (let Next (datalog.strata-round Rules S Whole)
+                     (if (= Next S) S (datalog.strata-h Rules Next Whole))))
 
 (define datalog.strata-round
-  [] S -> S
-  [[[Head | _] Body] | Rules] S
-  -> (datalog.strata-round Rules (datalog.raise Head (datalog.body-stratum Body S) S)))
+  [] S _ -> S
+  [[[Head | _] Body] | Rules] S Whole
+  -> (datalog.strata-round Rules (datalog.raise Head (datalog.body-stratum Body S Head Whole) S) Whole))
 
 (define datalog.body-stratum
-  [] _ -> 0
-  [[not [Rel | _]] | Ls] S -> (datalog.max (+ 1 (tl (assoc Rel S))) (datalog.body-stratum Ls S))
-  [[aggregate _ _ _ [Rel | _] _] | Ls] S -> (datalog.max (+ 1 (tl (assoc Rel S))) (datalog.body-stratum Ls S))
-  [L | Ls] S -> (if (datalog.atom? L)
-                    (datalog.max (tl (assoc (hd L) S)) (datalog.body-stratum Ls S))
-                    (datalog.body-stratum Ls S)))
+  [] _ _ _ -> 0
+  [[not [Rel | _]] | Ls] S H W -> (datalog.max (+ 1 (tl (assoc Rel S))) (datalog.body-stratum Ls S H W))
+  [[aggregate _ _ _ [Rel | _] _] | Ls] S H W -> (datalog.max (+ 1 (tl (assoc Rel S))) (datalog.body-stratum Ls S H W))
+  [[Rel | _] | Ls] S H [Keyed Reach]
+  -> (datalog.max (+ 1 (tl (assoc Rel S))) (datalog.body-stratum Ls S H [Keyed Reach]))
+     where (and (element? Rel Keyed) (not (element? H (tl (assoc Rel Reach)))))
+  [L | Ls] S H W -> (if (datalog.atom? L)
+                        (datalog.max (tl (assoc (hd L) S)) (datalog.body-stratum Ls S H W))
+                        (datalog.body-stratum Ls S H W)))
 
 (define datalog.raise
   Rel N [[Rel | M] | S] -> [[Rel | (datalog.max N M)] | S]
@@ -504,11 +511,17 @@
   [_ | Items] -> (datalog.equivalences Items))
 
 \\ The relations that keep one tuple for each key, the columns before the last: [[Rel | Mode] ...],
-\\ Mode min or max for the least or greatest last column, or choice for the first.
+\\ Mode min or max for the least or greatest last column, choice for the first, or [lattice F].
 (define datalog.keyed
   [] -> []
-  [[relation Rel _ Mode] | Items] -> [[Rel | Mode] | (datalog.keyed Items)] where (element? Mode [min max choice])
+  [[relation Rel _ Mode] | Items] -> [[Rel | Mode] | (datalog.keyed Items)] where (datalog.keep-mode? Mode)
   [_ | Items] -> (datalog.keyed Items))
+
+\\ (lattice F) keeps for each key the least upper bound of its values, by F, a function of two
+\\ integers that gives one; min and max are such, natively.
+(define datalog.keep-mode?
+  [lattice F] -> (symbol? F)
+  Mode -> (element? Mode [min max choice]))
 
 \\ [program Name Relations Rules Constants Strata Constructors Equivalences Keyed].
 (define datalog.check
@@ -518,7 +531,8 @@
                      _ (set datalog.*constructors* Constructors)
                      Rules (datalog.rules Name Relations Items)
                      _ (datalog.check-strata Name Relations Rules)
-                  [program Name Relations Rules (datalog.constants Rules []) (datalog.strata Relations Rules) Constructors
+                  [program Name Relations Rules (datalog.constants Rules [])
+                   (datalog.strata Relations Rules (map (function hd) (datalog.keyed Items))) Constructors
                    (datalog.equivalences Items) (datalog.keyed Items)]))
 
 (define datalog.define
@@ -697,13 +711,21 @@
 (define datalog.keep-best
   Mode Values [] -> [Values]
   Mode Values [T | Ts] -> (if (= (datalog.key-of Values) (datalog.key-of T))
-                              (if (datalog.better? Mode (hd (reverse Values)) (hd (reverse T))) [Values | Ts] [T | Ts])
+                              (if (datalog.better? Mode (hd (reverse Values)) (hd (reverse T)))
+                                  [(datalog.kept Mode Values T) | Ts]
+                                  [T | Ts])
                               [T | (datalog.keep-best Mode Values Ts)]))
+
+\\ What a key keeps of a better value: a lattice the bound of both.
+(define datalog.kept
+  [lattice F] Values T -> (append (datalog.key-of T) [(datalog.in-range ((fn F) (hd (reverse T)) (hd (reverse Values))))])
+  _ Values _ -> Values)
 
 (define datalog.key-of
   Values -> (reverse (tl (reverse Values))))
 
 (define datalog.better?
+  [lattice F] A B -> (not (= ((fn F) B A) B))
   min A B -> (< A B)
   max A B -> (> A B)
   choice _ _ -> false)
@@ -1326,6 +1348,7 @@
 \\ Statements for a key that has a tuple: Refuse, which leaves it as it is, unless the new value is
 \\ better, and then Go on to add it. Under choice no value is better.
 (define datalog.keyed-check
+  replace _ _ _ Go -> [Go]
   choice _ _ Refuse _ -> [Refuse]
   min New Old Refuse Go -> [[unless [< [shift-right-signed [shift-left New 32] 32] Old] Refuse] Go]
   max New Old Refuse Go -> [[unless [> [shift-right-signed [shift-left New 32] 32] Old] Refuse] Go])
@@ -1711,6 +1734,16 @@
 \\ Add a tuple to the relation in r, growing it if it must. Its first attempt found no room and
 \\ changed nothing, so that a second is the whole of it.
 (define datalog.insert-form
+  N Forms [lattice F]
+  -> (let Keys (reverse (tl (reverse Forms)))
+          Find (datalog.find-kernel N (datalog.upto 1 (- N 1)))
+          Replace (/. Value (datalog.insert-form N (append Keys [Value]) replace))
+       [let k [Find [<-address r 8] [<-address r 2] [shen-jit.u32 [<-address r 4] 8] | Keys]
+         [if [= k 0]
+             (Replace (hd (reverse Forms)))
+             [let old [shen-jit.u32 [<-address r 2] [+ [* [- k 1] [<-address r 7]] (* 4 (- N 1))]]
+               [let j [datalog.int-word [datalog.in-range [F [datalog.word-int old] [datalog.word-int (hd (reverse Forms))]]]]
+                 [if [= j old] 0 (Replace j)]]]]])
   N Forms Mode
   -> (let Call (if (= Mode none)
                    [(datalog.insert-kernel N) [<-address r 3] [<-address r 2] [<-address r 4] | Forms]
@@ -1723,6 +1756,21 @@
 
 (define datalog.keyed-mode
   Rel -> (let Entry (assoc Rel (value datalog.*keyed*)) (if (empty? Entry) none (tl Entry))))
+
+\\ Adds a value to a lattice's key, as the KL of datalog.insert-form does inline: the key's tuple is
+\\ replaced by one of the least upper bound of the two values, unless that is what it has. 1 if the
+\\ relation changed, and 0 if not.
+(define datalog.lattice-insert
+  Rec F Words
+  -> (let N (length Words)
+          Keys (reverse (tl (reverse Words)))
+          P ((datalog.key-finder N) Rec Keys)
+          Replace (datalog.adder-for N replace)
+       (if (= P 0)
+           (Replace Rec Words)
+           (let Old (shen-jit.u32 (<-address Rec 2) (+ (* (- P 1) (<-address Rec 7)) (* 4 (- N 1))))
+                Join (datalog.int-word (datalog.in-range ((fn F) (datalog.word-int Old) (datalog.word-int (hd (reverse Words))))))
+             (if (= Join Old) 0 (Replace Rec (append Keys [Join])))))))
 
 \\ The expression for these steps. Each atom's loop is a function of its own, so that it is a
 \\ self tail call and named in a backtrace; those go to datalog.*forms*. Ctx is Relations,
@@ -1975,10 +2023,12 @@
                                (datalog.gen-plan Steps Ctx Prefix))))
          (do (set datalog.*forms* []) (datalog.gen-plan Steps Ctx Prefix))))
 
-\\ Plans that divide, shift by other than a constant from 0 to 31, take a mean or work on strings
-\\ are KL: a kernel has no division, cannot intern, and has no way to say that a value is missing.
+\\ Plans that divide, shift by other than a constant from 0 to 31, take a mean, work on strings or
+\\ add to a lattice are KL: a kernel has no division, cannot intern or call a lattice's function,
+\\ and has no way to say that a value is missing.
 (define datalog.kl-only?
   [] -> false
+  [[emit Rel | _] | _] -> (cons? (datalog.keyed-mode Rel))
   [[filter _ A B] | Steps] -> (or (datalog.kl-only-term? A) (datalog.kl-only-term? B) (datalog.kl-only? Steps))
   [[assign _ E] | Steps] -> (or (datalog.kl-only-term? E) (datalog.kl-only? Steps))
   [[fold _ _ mean | _] | _] -> true
@@ -2836,6 +2886,7 @@
   N -> (datalog.adder-for N none))
 
 (define datalog.adder-for
+  N [lattice F] -> (/. Rec Words (datalog.lattice-insert Rec F Words))
   N Mode -> (let Name (intern (cn "datalog.adder." (cn (str Mode) (cn "." (str N)))))
                  Known (datalog.dict-find (value datalog.*kernels*) Name)
               (if (cons? Known)
@@ -3319,7 +3370,8 @@
 
 \\ ---------------------------------------------------------------------------
 \\ Explanations. (datalog.explain Db [Rel V ...]) gives why a tuple holds, as a proof: [Tuple fact]
-\\ for a fact given, [Tuple equivalence] for a pair an equivalence has as such, and otherwise
+\\ for a fact given, [Tuple equivalence] for a pair an equivalence has as such, [Tuple lattice] for
+\\ a value a lattice joined from others, and otherwise
 \\ [Tuple Rule Proof ...], the rule as written and a proof of each tuple of its positive atoms, in
 \\ order; [] if the tuple does not hold. Nothing is recorded as tuples are derived: a rule instance
 \\ is found whose atoms' tuples were all merged before the tuple was, which the one that derived it
@@ -3353,6 +3405,7 @@
                   [[Rel | Values] (datalog.rule->form (hd (hd Found)) (hd (tl (hd Found))))
                    | (map (/. T (datalog.prove Ctx (hd T) (tl T))) (tl Found))]
                   (element? Rel (datalog.nth 8 (datalog.nth 2 Ctx))) [[Rel | Values] equivalence]
+                  (cons? (assoc Rel (datalog.nth 9 (datalog.nth 2 Ctx)))) [[Rel | Values] lattice]
                   true (error "datalog: no derivation of ~S found" [Rel | Values])))))
 
 \\ The first rule with an instance for these values: [Rule [Tuple | Merge] ...], or none.

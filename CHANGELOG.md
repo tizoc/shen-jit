@@ -12,6 +12,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Datalog lattices: `(relation reached [symbol integer] (lattice F))` keeps for each key the least upper bound, by a Shen
+  function, of the values derived.
 - Datalog relations that keep one tuple a key: `(relation dist [symbol integer] min)`, `max` and `choice`, by which shortest
   paths end without a bound.
 - `datalog.explain`: why a Datalog tuple holds, as a proof down to the facts given.

@@ -33,7 +33,7 @@ false
 
 | Form | Meaning |
 | --- | --- |
-| `(defdatalog Name Item ...)` | Defines a program, checked now. An item is `(relation Name [Types])`, with `equivalence`, `min`, `max` or `choice` after it for such a relation, `(type Name [Constructor Types] ...)` or `(rule Head <-- Body ...)`, or `(rule Head)` for one that always holds |
+| `(defdatalog Name Item ...)` | Defines a program, checked now. An item is `(relation Name [Types])`, with `equivalence`, `min`, `max`, `choice` or `(lattice F)` after it for such a relation, `(type Name [Constructor Types] ...)` or `(rule Head <-- Body ...)`, or `(rule Head)` for one that always holds |
 | `(datalog.run Name Facts)` | A database from facts such as `[imports a b]` |
 | `(datalog.add Db Facts)` | The database with these facts added and what follows from them, changed in place and given back |
 | `(datalog.remove Db Facts)` | The same with these facts removed, and what no longer follows; a fact it does not have is no change |
@@ -42,7 +42,7 @@ false
 | `(datalog.write-facts Db Relation Path)` | Writes a relation's tuples so, in no particular order, and gives how many |
 | `(datalog.count Db Relation)` | How many tuples it has |
 | `(datalog.holds? Db [Relation Value ...])` | Whether a tuple is there |
-| `(datalog.explain Db [Relation Value ...])` | Why it is: `[Tuple fact]`, `[Tuple Rule Proof ...]` with a proof of each tuple the rule's atoms read, or `[Tuple equivalence]`; `[]` if it is not there |
+| `(datalog.explain Db [Relation Value ...])` | Why it is: `[Tuple fact]`, `[Tuple Rule Proof ...]` with a proof of each tuple the rule's atoms read, `[Tuple equivalence]`, or `[Tuple lattice]` for a value joined from others; `[]` if it is not there |
 | `(datalog.ask Db (Relation Term ...))` | The tuples that match, in no particular order, with variables, constants and `_` |
 | `(datalog.query Name Facts (Relation Term ...))` | The same tuples as asking a run of these facts, computing only what the query needs |
 | `(datalog.define Name Items)`, `(datalog.match Db Pattern)`, `(datalog.solve Name Facts Pattern)` | The same as `defdatalog`, `datalog.ask` and `datalog.query` with the program as data, where a variable is `[var "X"]` and `_` is `[any]` |
@@ -143,6 +143,12 @@ With nodes `a` and `b`, an edge from `a` to `b` and costs 3 and 5 for `a`, `degr
   (rule (dist X 0) <-- (start X))
   (rule (dist Y D) <-- (dist X D0) (edge X Y W) (= D (+ D0 W))))
 ```
+
+  `(lattice F)` keeps, for each key, the least upper bound of all the values derived for it, by `F`, a Shen function of two
+  integers that is commutative, associative and idempotent, and whose values reach a top in finitely many steps, or evaluation
+  does not end; `min` and `max` are two such. The union of bit sets, `(define union A B -> (shen-jit.bit-or A B))`, gives for
+  each node which of up to 32 starts reach it, and a flat lattice, a constant or a value for many, constant propagation. Rules
+  that add to a lattice run as KL, as they call `F`.
 
   While its own recursion runs, a rule may still read a tuple that a better one has since replaced, so another relation in the
   same recursion may hold what follows from it; relations evaluated after it see only the best. `datalog.add` evaluates again

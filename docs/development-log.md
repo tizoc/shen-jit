@@ -2103,6 +2103,16 @@ Soufflé chooses a few sorted orders so that one serves several searches: an ord
 - **Semantics:** a relation in the same recursion as a min or max relation may hold what follows from a value later replaced, as in Soufflé, where a subsumed tuple's consequences also stay; relations after it see only the best. `choice` depends on the order of evaluation, so its tests check what holds of any choice: one tuple a key, each derivable.
 - **Checked:** fixtures, 30 random weighted graphs through native and KL joins, adds and removals, against the reference, which keeps the best of each key round by round, signed values at both ends of 32 bits, demand queries, explanations, and errors. Planted, a min that keeps the larger and a key entry left behind hang, as nothing stops paths around cycles, no compaction fails 101 checks, an unsigned comparison 5, once negative values were added, readers grown and not evaluated again 2, and a key table not grown raises.
 
+### Lattices (2026-11-08, Apple M3 Max, against the commit before)
+
+`(relation reached-by [integer integer] (lattice F))` keeps for each key the least upper bound of its values, by `F`, a Shen function of two integers. It is the relation of one tuple a key of the entry before, whose better tuple is the bound of the old value and the new: no new storage. About 40 lines of code.
+
+- **Rules that add to a lattice are KL,** as a kernel cannot call `F`; KL calls it inline. Bit sets for which of 30 starts reach each node of a random graph, 20,000 nodes and 60,000 edges: 148 ms, 527,935 derivations for 18,858 tuples, where the same as pairs, one per start and node, natively, takes 53 ms for 527,918 tuples. The first version went through a Shen function for each insert, finding the kernels it called by name, and took 528 ms.
+- **Not done: native joins for `bor` and `band`,** which would make bit-set lattices native: 32 bits make small sets, and the KL path is 2.8 times the pairs, with 28 times fewer tuples.
+- **The reference stratifies them:** a rule that reads a relation of one tuple a key from outside its recursion is now a stratum after it, as one that negates is, since the reference evaluated such a reader with the relation while its values were still rising, and kept `known(15)` from a constant that later became the top. The engine evaluates readers in later components already. Within one recursion, results of other relations depend on the order of evaluation in both, and the tests do not compare them.
+- **Explanations** give `[Tuple lattice]` for a value joined from others, which no single rule instance derives.
+- **Checked:** two lattices, the union of bit sets and a flat lattice for constant propagation, by hand and on 20 random graphs, through native and KL joins, adds and removals, against the reference, and explanations and a demand query. Planted, storing the new value instead of the bound fails 117 checks, readers in the same stratum as the lattice in the reference 2. Generating lattice plans natively first only falls back to KL, which changes no result.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.
