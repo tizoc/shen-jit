@@ -545,7 +545,8 @@ its own. The JIT gives machine registers to what is used most, each loop countin
 the order of the names make no difference: 27 float registers on arm64 and 12 on x86-64, and the integer registers a target has to spare,
 11 on arm64, 2 on x86-64 and none on Windows, which the base and limits of kept memory compete for too, where registers are many at half
 a word's weight: they never change in a loop, so a load of one from the native frame waits on nothing, while a word the loop writes puts
-a store and a load in the way of the next iteration. Code with loops that has more than
+a store and a load in the way of the next iteration. For the same reason a word that a loop carries from one iteration to the next,
+reading it before it writes it, counts there as used once more in a loop inside it. Code with loops that has more than
 fits also takes the saved registers its slots would have had, 6, 2 and 4, and its slots stay in the frame. The rest are places in the
 native frame. The collector does not look at any of them, and the JIT saves what C does not keep to the native frame around any call to
 C that returns: a collection, a primitive, an interrupt check. Nothing saves them across a call of a function, so **code using them calls nothing and

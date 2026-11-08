@@ -63,7 +63,8 @@ All notable changes to this project are documented in this file. The format is b
 - Datalog derives each combination of tuples once in a rule with several atoms of its own recursion, such as
   `(path X Z) <-- (path X Y) (path Y Z)`, where it derived those that were new together once for each.
 - On arm64, a loop in code written by hand keeps the memory of eight parameters at hand, where it kept four, and gives its
-  last registers to words before the bases and limits of that memory. Datalog's larger evaluations take 5 to 18% less time.
+  last registers to words before the bases and limits of that memory, and first to words it carries from one iteration to
+  the next. Datalog's larger evaluations take 9 to 21% less time.
 
 - A read lends the backend a chunk that the endpoint keeps, where it allocated a fresh one as large as the reader's
   free space each time. Small reads into a large reader are 3 to 8 times as fast, an HTTP head takes 15 to 32% less time,

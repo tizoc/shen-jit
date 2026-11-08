@@ -1189,13 +1189,31 @@ static void places_by_use(const uint64_t *use, uint8_t *place, uint32_t n)
         place[order[k]] = (uint8_t)k;
 }
 
+/* The words a loop reads before it writes them, and writes: what it carries from one iteration to
+   the next, a bit for each. */
+static uint32_t carried_words(const uint32_t *words, size_t head, size_t end)
+{
+    uint32_t read = 0, written = 0;
+    for (size_t j = head; j <= end; j += insn_length(words + j)) {
+        const char *kinds = raw_kinds(words[j]);
+        for (size_t k = 0; kinds && kinds[k]; k++)
+            if (kinds[k] == 'W' && !(words[j + 1 + k] & OPERAND_CONST))
+                read |= ~written & UINT32_C(1) << words[j + 1 + k];
+        for (size_t k = 0; kinds && kinds[k]; k++)
+            if (kinds[k] == 'w')
+                written |= UINT32_C(1) << words[j + 1 + k];
+    }
+    return read & written;
+}
+
 /* Machine registers go to what is used most, each loop counting 8 times what is around it, base
    and limits of kept memory competing with word registers. Where registers are many, the last ones
    decide between those and a word: the base and limits never change in a loop, so a load of one
    from the native frame waits on nothing, while a word the loop writes puts a store and a load in
-   the way of the next iteration. A loop runs from its head to its last jump back. Code that loops
-   and has more than fits takes the saved registers too, which slots would otherwise have: its work
-   is in these, and they need no saving around C. */
+   the way of the next iteration. So a word counts twice what they do, and a word a loop carries
+   counts as used once more in a loop inside it. A loop runs from its head to its last jump back.
+   Code that loops and has more than fits takes the saved registers too, which slots would otherwise
+   have: its work is in these, and they need no saving around C. */
 static void assign_places(Emit *e, const uint32_t *words, size_t nwords)
 {
     if (!e->reals && !e->word_regs && !e->nmemory)
@@ -1212,7 +1230,11 @@ static void assign_places(Emit *e, const uint32_t *words, size_t nwords)
             for (size_t j = i; j < nwords; j += insn_length(words + j))
                 if (words[j] == OP_AGAIN && words[j + 1] == p[1])
                     ends[depth] = j;
+            uint32_t carried = MANY_GPRS ? carried_words(words, i, ends[depth]) : 0;
             depth++;
+            for (uint32_t x = 0; x < WORD_REGISTERS; x++)
+                if (carried >> x & 1)
+                    raw_use[x] += 2 * (UINT64_C(1) << (3 * depth + 3));
         }
         uint64_t use = UINT64_C(1) << (3 * depth);
         const char *kinds = raw_kinds(p[0]);
