@@ -2830,8 +2830,8 @@
            (> To From)))
 
 \\ An equivalence keeps classes, not pairs. Rules add pairs to its own storage as to any relation's,
-\\ an inbox, which each merge empties into a union-find: a root for each value, each root's members
-\\ and its class's size, a class joining the larger. The classes that changed are then laid out
+\\ an inbox, which each merge empties into a union-find: for each value, its class's cell, which holds
+\\ the class's root, size and members, a class joining the larger. The classes that changed are then laid out
 \\ again at the end of a buffer X of five u32 a position: a value, its class's range of positions,
 \\ and the range of the part of it that was one class when last laid out, values new since being a
 \\ part of their own, whose range is empty. So the pairs of a class are its range, the old ones a
@@ -2839,15 +2839,15 @@
 \\ Their earlier positions become holes, whose ranges are empty, and a table by value, H, an index of
 \\ X's first column, finds a value's latest position, and so the class it was in. When X is full, H
 \\ half full or holes outnumber values, every class is laid out again, into new ones. The record:
-\\ 0 roots, 1 members, 2 each root's class size, 3 X, 4 H, 5 H's mask, 6 how many positions, holes
-\\ included, 7 where the classes that changed start, 8 how many pairs, 9 whether the last merge laid
-\\ any out, 10 the size of a pair's class on average, or -1 until asked for, 11 the roots of classes
-\\ changed since, 12 how many holes, 13 H's chains.
+\\ 0 each value's cell, 1 the cells changed since, 2 how many holes, 3 X, 4 H, 5 H's mask, 6 how many
+\\ positions, holes included, 7 where the classes that changed start, 8 how many pairs, 9 whether the
+\\ last merge laid any out, 10 the size of a pair's class on average, or -1 until asked for, 11 H's
+\\ chains.
 (define datalog.new-classes
-  -> (let C (absvector 14)
+  -> (let C (absvector 12)
           _ (address-> C 0 (shen.dict 64))
-          _ (address-> C 1 (shen.dict 64))
-          _ (address-> C 2 (shen.dict 64))
+          _ (address-> C 1 [])
+          _ (address-> C 2 0)
           _ (address-> C 3 (shen-jit.bytes 0))
           _ (address-> C 4 (shen-jit.bytes (* 16 8)))
           _ (address-> C 5 15)
@@ -2856,9 +2856,7 @@
           _ (address-> C 8 0)
           _ (address-> C 9 false)
           _ (address-> C 10 -1)
-          _ (address-> C 11 [])
-          _ (address-> C 12 0)
-          _ (address-> C 13 (shen-jit.bytes 0))
+          _ (address-> C 11 (shen-jit.bytes 0))
        C))
 
 (define datalog.classes?
@@ -2898,57 +2896,71 @@
               New (datalog.join C (shen-jit.u32 Tuples (* 8 P)) (shen-jit.u32 Tuples (+ 4 (* 8 P))))
            (datalog.join-pairs Rec C (+ P 1) N (or New Changed)))))
 
-\\ Joins two values' classes: whether that changed a class or made one. The pairs grow by twice the
-\\ product of the classes' sizes, or by one for a new value. Sizes are kept, as a class's members
-\\ may be many and its smaller partner few.
+\\ Joins two values' classes: whether that changed a class or made one. Each value's entry is its
+\\ class's cell, [Root Size Members Changed], shared by its members, so that a join looks each value
+\\ up once and re-points only the smaller class's values. The pairs grow by twice the product of the
+\\ classes' sizes, or by one for a new value. Cells are told apart by their roots.
 (define datalog.join
-  C A B -> (let NewA (datalog.ensure-class C A)
-                NewB (datalog.ensure-class C B)
-                RA (tl (datalog.dict-find (<-address C 0) A))
-                RB (tl (datalog.dict-find (<-address C 0) B))
-                SA (tl (datalog.dict-find (<-address C 2) RA))
-                SB (tl (datalog.dict-find (<-address C 2) RB))
-             (cases (= RA RB) (and (or NewA NewB) (datalog.changed C RA))
-                    (< SA SB) (datalog.join-into C RB SB RA SA)
-                    true (datalog.join-into C RA SA RB SB))))
+  C A B -> (let EA (datalog.dict-find (<-address C 0) A)
+                CA (if (cons? EA) (tl EA) (datalog.new-cell C A))
+                EB (datalog.dict-find (<-address C 0) B)
+                CB (if (cons? EB) (tl EB) (datalog.new-cell C B))
+             (cases (= (<-address CA 0) (<-address CB 0)) (and (not (and (cons? EA) (cons? EB))) (datalog.changed C CA))
+                    (< (<-address CA 1) (<-address CB 1)) (datalog.join-into C CB CA)
+                    true (datalog.join-into C CA CB))))
+
+(define datalog.new-cell
+  C V -> (let Cell (absvector 4)
+              _ (address-> Cell 0 V)
+              _ (address-> Cell 1 1)
+              _ (address-> Cell 2 [V])
+              _ (address-> Cell 3 false)
+              _ (shen.dict-> (<-address C 0) V Cell)
+              _ (address-> C 8 (+ (<-address C 8) 1))
+           Cell))
 
 (define datalog.changed
-  C Root -> (do (address-> C 11 [Root | (<-address C 11)]) true))
+  C Cell -> (do (if (<-address Cell 3)
+                    skip
+                    (do (address-> Cell 3 true) (address-> C 1 [Cell | (<-address C 1)])))
+                true))
 
-(define datalog.ensure-class
-  C X -> (if (cons? (datalog.dict-find (<-address C 0) X))
-             false
-             (do (shen.dict-> (<-address C 0) X X)
-                 (shen.dict-> (<-address C 1) X [X])
-                 (shen.dict-> (<-address C 2) X 1)
-                 (address-> C 8 (+ (<-address C 8) 1))
-                 true)))
-
+\\ The smaller class's values point at the larger's cell, and its own cell, now empty, is left.
 (define datalog.join-into
-  C Root Big Old Small
-  -> (let Members (tl (datalog.dict-find (<-address C 1) Old))
-       (do (map (/. Y (shen.dict-> (<-address C 0) Y Root)) Members)
-           (shen.dict-> (<-address C 1) Root (append Members (tl (datalog.dict-find (<-address C 1) Root))))
-           (shen.dict-rm (<-address C 1) Old)
-           (shen.dict-> (<-address C 2) Root (+ Big Small))
-           (shen.dict-rm (<-address C 2) Old)
-           (address-> C 8 (+ (<-address C 8) (* 2 (* Small Big))))
-           (datalog.changed C Root))))
+  C Big Small
+  -> (let _ (datalog.point (<-address C 0) (<-address Small 2) Big)
+          _ (address-> C 8 (+ (<-address C 8) (* 2 (* (<-address Small 1) (<-address Big 1)))))
+          _ (address-> Big 2 (append (<-address Small 2) (<-address Big 2)))
+          _ (address-> Big 1 (+ (<-address Big 1) (<-address Small 1)))
+          _ (address-> Small 1 0)
+       (datalog.changed C Big)))
+
+(define datalog.point
+  _ [] _ -> true
+  Cells [V | Vs] Cell -> (do (shen.dict-> Cells V Cell) (datalog.point Cells Vs Cell)))
+
+\\ The members of the cells changed since the last layout, but those emptied since.
+(define datalog.changed-classes
+  [] Acc -> Acc
+  [Cell | Cells] Acc -> (do (address-> Cell 3 false)
+                            (datalog.changed-classes Cells (if (= (<-address Cell 1) 0) Acc [(<-address Cell 2) | Acc]))))
+
+\\ Each class once, by the values that are their roots.
+(define datalog.fold-classes
+  F C Acc -> (shen.dict-fold (/. V Cell Acc (if (= V (<-address Cell 0)) (F Cell Acc) Acc)) (<-address C 0) Acc))
 
 \\ The classes that changed, each once, at the end of X; or every class again, into a new X and H,
 \\ if there is no room or the holes would outnumber the values.
 (define datalog.lay-out
-  C -> (let Seen (shen.dict 64)
-            _ (map (/. R (shen.dict-> Seen (tl (datalog.dict-find (<-address C 0) R)) true)) (<-address C 11))
-            Classes (shen.dict-fold (/. Root _ Acc [(tl (datalog.dict-find (<-address C 1) Root)) | Acc]) Seen [])
+  C -> (let Classes (datalog.changed-classes (<-address C 1) [])
             Moved (datalog.sum (map (function length) Classes) 0)
             Live (shen.dict-count (<-address C 0))
             _ (address-> C 9 true)
             _ (address-> C 10 -1)
-            _ (address-> C 11 [])
+            _ (address-> C 1 [])
          (if (or (> (* 20 (+ (<-address C 6) Moved)) (shen-jit.bytes-length (<-address C 3)))
                  (> (* 2 Live) (<-address C 5))
-                 (> (+ (<-address C 12) Moved) Live))
+                 (> (+ (<-address C 2) Moved) Live))
              (datalog.lay-out-all C Live)
              (datalog.lay-out-some C Classes))))
 
@@ -2962,7 +2974,7 @@
           Changed (datalog.filter-parts true (map (/. Ms (datalog.parts C Ms)) Classes))
           _ (map (/. Ps (map (/. Part (map (/. V (datalog.hole C X V)) (tl Part))) (tl Ps))) Changed)
           End (datalog.place-classes X Changed From)
-          _ ((datalog.index-function 5 [1]) (<-address C 4) (<-address C 13) X (<-address C 5) From End)
+          _ ((datalog.index-function 5 [1]) (<-address C 4) (<-address C 11) X (<-address C 5) From End)
           _ (address-> C 6 End)
           _ (address-> C 7 From)
        true))
@@ -2971,7 +2983,7 @@
 \\ twice that.
 (define datalog.lay-out-all
   C Live
-  -> (let Parts (shen.dict-fold (/. _ Ms Acc [(datalog.parts C Ms) | Acc]) (<-address C 1) [])
+  -> (let Parts (datalog.fold-classes (/. Cell Acc [(datalog.parts C (<-address Cell 2)) | Acc]) C [])
           Changed (datalog.filter-parts true Parts)
           Room (datalog.max 16 (* 2 Live))
           X (shen-jit.bytes (* 20 Room))
@@ -2986,8 +2998,8 @@
           _ (address-> C 5 (- Size 1))
           _ (address-> C 6 End)
           _ (address-> C 7 From)
-          _ (address-> C 12 0)
-          _ (address-> C 13 Next)
+          _ (address-> C 2 0)
+          _ (address-> C 11 Next)
        true))
 
 \\ A value's position, if it has one, made a hole: an empty class that no pair reads.
@@ -3000,7 +3012,7 @@
                       _ (shen-jit.u32! X (+ B 8) 0)
                       _ (shen-jit.u32! X (+ B 12) 0)
                       _ (shen-jit.u32! X (+ B 16) 0)
-                   (address-> C 12 (+ (<-address C 12) 1))))))
+                   (address-> C 2 (+ (<-address C 2) 1))))))
 
 \\ A class's parts: [Changed [Old Values] ... [new Values]], Old where the class each was in when
 \\ last laid out starts, before X changes.
@@ -3062,7 +3074,7 @@
 (define datalog.pair-class-size
   C -> (if (< (<-address C 10) 0)
            (let S (<-address C 8)
-                W (shen.dict-fold (/. _ K W (+ W (* K (/ (* K K) S)))) (<-address C 2) 0)
+                W (datalog.fold-classes (/. Cell W (let K (<-address Cell 1) (+ W (* K (/ (* K K) S))))) C 0)
                 _ (address-> C 10 W)
              W)
            (<-address C 10)))

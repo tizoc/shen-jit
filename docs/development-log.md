@@ -2651,6 +2651,20 @@ A kernel could write a layout's positions, where Shen writes five words a value.
 - **Only asking:** other questions of a demand database, `datalog.count`, `datalog.tuples` or `datalog.explain`, raise; its queries' constants stay as facts, so it grows with the patterns asked.
 - **Checked:** a fixture querying, adding, querying another pattern and removing, against the reference on the facts at each step, and that a query computes only what it reaches; and on each of the 300 generated programs, a demand database of a third of the facts, two random queries, the rest added, one asked again, and the middle third removed, against the reference, beside the asks of every other test, now by index. Planted, adds that skip kept databases fail 194 checks, removals that skip them 76, later queries that add no constants 23, and a chain read only to its first tuple 37.
 
+### Classes as cells (2026-11-08, Apple M3 Max, against the commit before, two alternating rounds)
+
+The union-find kept three dictionaries, a value's root, a root's members and a root's size, so a join took about fifteen dictionary operations. Each value's entry is now its class's cell, holding the root, the size, the members and whether it changed since the last layout, shared by the members: a join looks each value up once, re-points only the smaller class's values, and the changed classes need no dictionary of their own to be counted once. About 5 more lines of code.
+
+| ms | Before | After |
+| --- | --- | --- |
+| The closure of 200,000 links among 300,000 values | 198 to 203 | 102 to 134 |
+| The closure alone, 1,500, 2,500 and 3,000 links of the 3,000-node graphs | 1.07 to 1.10, 1.43 to 1.46, 1.67 to 1.70 | 0.50 to 0.53, 0.76 to 0.79, 0.88 to 0.89 |
+| A class growing over 200 rounds beside 50,000 that do not change | 76 to 77 | 46 to 47 |
+| A join reading the closures twice | 2.3, 165 to 182, 328 to 358 | 1.9, 156 to 171, 320 to 346 |
+
+- **Against Soufflé's eqrel,** 1.1, 1.2 and 1.4 ms on the three closures alone, from the same machine's earlier entry: ours now takes less on all three, where pairs took up to 800 times as long.
+- **Checked:** the Datalog tests, with the equivalence fixtures, the generated programs and SWI-Prolog. Planted, the smaller class's values left pointing at their emptied cell and an emptied cell keeping its size raise, the changed flag never cleared fails 87 checks, and a new value joining an old class not counted as a change 27.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.
