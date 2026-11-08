@@ -2078,6 +2078,13 @@ Integer `/` and `%`, truncating toward zero as C and Soufflé do, `band`, `bor`,
 - **The test suite** had grown from 2.1 to 6.8 s with queries by demand, which ran the reference evaluator over a chain of 60 nodes, cubic, once per query, and compiled kernels for a rewritten program on each generated query. With a chain of 25 and the generated queries on KL joins, which compile faster and test the rewriting as well, it takes 3.0 s, explanations included.
 - **Checked:** every tuple of nine fixtures, four of each relation of each of 300 generated programs, and a tuple after an add, explained and the proof checked against the reference: each rule instance holds there, conditions included, down to the facts. Planted, allowing an atom's tuple from the same merge overflows the stack in a circular proof, reading a range's merge one place off and not taking facts first find no derivation, and ignoring conditions fails 13 checks.
 
+### Index sharing, rejected (2026-11-08, Apple M3 Max)
+
+Soufflé chooses a few sorted orders so that one serves several searches: an order on columns (a, b) answers a search on a. Here an index is a hash table on a set of columns, with a chain per key; it cannot answer a search on fewer columns, but an index on fewer columns could answer one on more, with a check of the rest on each tuple of the chain. Separately, indexes stay once started, so one that a re-plan stops using is still kept up as its relation grows.
+
+- **What there is to gain:** building and keeping up every index, timed around each merge's indexing, took 8.0 to 8.7 ms of points-to's 480 to 790 ms in its three orders, 1.0 to 1.8%, with 10 or 11 indexes over five relations, two of them on `hpt`, by its first column and by its first two; 0.03 ms of the sparse closure's 90 and 0.5 of the nonlinear closure's 152.
+- **Rejected:** sharing could save at most that, and would make every lookup that used a narrower index walk a longer chain, checking the columns it lacks, which is the inner loop. Dropping indexes a re-plan leaves unused saves part of it, at the price of building one again if a later plan wants it. Neither is worth the code while upkeep is under 2%. Memory is where sharing would show: `hpt`'s second index holds 681,172 chain entries and a table of 2 million slots, about 19 MB, which nothing measured has made a problem.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.
