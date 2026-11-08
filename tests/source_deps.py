@@ -136,6 +136,15 @@ def check_report(rows, records):
     assert summary['legacy_files'] == sum(r['kind'] == 'file' and 'schema_version' not in r for r in records)
     assert summary['configured_units'] == sum(r['kind'] == 'file' and r.get('schema_version') == 3 for r in records)
     assert summary['input_declarations'] == sum(r['kind'] == 'declaration' for r in records)
+    detailed = {r['path']: r['parse'] for r in records if r['kind'] == 'file' and 'parse' in r}
+    assert summary['parse_metadata_files'] == len(detailed)
+    assert {r['file']: (r['profile'], r['error_count'], r['normalizations'], r['ignored_captures'])
+            for r in rows if r['kind'] == 'parse'} == {
+        path: (p['profile'], p['error_count'], p['normalizations'], p['ignored_captures']) for path, p in detailed.items()}
+    assert {(location(r['site']), r['diagnostic'], r['node_kind'], r['excerpt']) for r in rows
+            if r['kind'] == 'parse_diagnostic'} == {
+        ((path, d['start_byte'], d['end_byte'], d['row'], d['column']), d['kind'], d['node_kind'], d['excerpt'])
+        for path, p in detailed.items() for d in p['errors']}
     assert summary['functions'] == len(oracle['nodes'])
     assert summary['calls'] == sum(r['kind'] == 'call' and not r['syntax_error'] for r in records)
     assert summary['calls'] == sum(summary[k] for k in ['resolved_calls', 'unresolved_calls', 'ambiguous_calls', 'unowned_calls'])
@@ -265,9 +274,10 @@ def image(executable, base, directory):
     expression += '(if (and (= (datalog.count Db edge) 3) (= (datalog.count Walk reached) 3)) '
     expression += '(output "source-deps image gc ok~%") (error "source-deps image changed"))))'
     result = run([executable, 'eval', '-e', expression],
-                 env={'SHEN_JIT_IMAGE': str(path), 'SHEN_JIT_GC_STRESS': '1', 'SHEN_JIT_SEMISPACE': '4M'})
+                 env={'SHEN_JIT_IMAGE': str(path), 'SHEN_JIT_GC_STRESS': os.environ.get('TEST_GC_STRESS', ''),
+                      'SHEN_JIT_SEMISPACE': '4M'})
     assert 'source-deps image gc ok' in result.stdout
-    print('2 passed, 0 failed (saved facts/model and collection at every allocation)', flush=True)
+    print('2 passed, 0 failed (saved facts/model and collection)', flush=True)
 
 
 def main():

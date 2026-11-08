@@ -202,6 +202,7 @@ def source_linkage(args, grammar, fs_adapter, root):
     directory = root / 'linkage'
     directory.mkdir()
     code = ('static int inherited(void), other(void);\n'
+            'int logmsg(const char *, ...) __attribute__((format(printf, 1, 2)));\n'
             'static int *pointer(void);\n'
             'static int (grouped)(void);\n'
             'int inherited(void) { return 1; }\n'
@@ -210,7 +211,7 @@ def source_linkage(args, grammar, fs_adapter, root):
             'int (grouped)(void) { return 0; }\n'
             'static int hidden(void) { return 3; }\n'
             'int shared(void) { return 4; }\n'
-            '#if FLAG\nint branch(void) { return inherited(); }\n'
+            '#define CHECK(x) x\n#if CHECK(FLAG)\nint branch(void) { return inherited(); }\n'
             '#else\nint branch(void) { return other(); }\n#endif\n'
             'int wrap(void) { int nested(void) { return hidden(); } return nested(); }\n')
     (directory / 'a.c').write_text(code, encoding='utf-8')
@@ -228,6 +229,9 @@ def source_linkage(args, grammar, fs_adapter, root):
     assert all(r['schema_version'] == 2 and not r['syntax_error'] for r in records if r['kind'] == 'file')
     paths = {Path(r['path']).name: r['path'] for r in records if r['kind'] == 'file'}
     definitions = [r for r in records if r['kind'] == 'definition']
+    parse = next(r['parse'] for r in records if r['kind'] == 'file' and r['path'] == paths['a.c'])
+    assert parse['ignored_captures'] == dict(annotation=1, preprocessor=1), parse
+    assert not any(r.get('name') in ['format', 'CHECK'] and r['kind'] == 'call' for r in records)
     for r in definitions:
         assert r['container_byte'] == r['start_byte'] and r['container'] == r['name']
         if r['path'] == paths['a.c']:
@@ -258,7 +262,7 @@ def source_linkage(args, grammar, fs_adapter, root):
         if byte is not None:
             target = 'inherited' if byte == branches[0] else 'other'
             assert [r['function']['name'] for r in rows if r['kind'] == 'reach'] == [target]
-    print('6 passed, 0 failed (private/prototype linkage, parenthesized declarators, exact callers and byte roots)',
+    print('7 passed, 0 failed (private/prototype linkage, annotations, preprocessor captures and exact callers)',
           flush=True)
 
 

@@ -49,3 +49,4 @@ python=python3
 if ! command -v "$python" > /dev/null; then python=python; fi
 "$python" tests/tree_sitter.py "$SHEN" "$adapter" "$grammar" "$fixture" "$oracle" "$fs_adapter"
 "$python" tests/source_context.py "$SHEN" "$adapter" "$grammar" "$fs_adapter" "$process_adapter"
+"$python" tests/source_reference.py "$SHEN" "$adapter" "$grammar" "$fs_adapter" "$process_adapter"

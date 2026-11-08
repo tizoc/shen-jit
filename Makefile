@@ -327,6 +327,7 @@ LIB_IMAGE_TESTS = buffer_image json_image io_image frame_image io_socket_image h
 test-lib-stress: $(BUILD)/shen-jit
 	for t in $(LIB_IMAGE_TESTS); do TEST_GC_STRESS=1 sh tests/$$t.sh $(SHEN_JIT) || exit 1; done
 	TEST_GC_STRESS=1 CC="$(CC)" sh tests/curl.sh $(SHEN_JIT)
+	TEST_GC_STRESS=1 CC="$(CC)" sh example-apps/source-deps/test.sh $(SHEN_JIT)
 
 # The optional standard library: an executable of its own, with the kernel's
 # precompiled stlib in its image (docs/guide.md, "The standard library").

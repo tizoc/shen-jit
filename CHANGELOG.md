@@ -17,6 +17,9 @@ All notable changes to this project are documented in this file. The format is b
 - Configured C source facts from GCC/Clang compilation databases: bounded preprocessing through our
   subprocess library, recorded build/coordinate context and file-scope function declarations. Datalog
   requires a preceding external declaration for cross-unit matches and rejects mixed configurations.
+- Source analysis handles SDK annotations with an explicit parser-only syntax profile that preserves
+  byte positions. Exports/reports carry bounded parse diagnostics, normalization counts and ignored
+  annotation/preprocessor captures; real runtime-source checks compare against compiler symbols.
 - Optional subprocess and pipeline libraries, `lib/process.shen` and `lib/process-io.shen`: explicit argv,
   environment/cwd, owned children, bounded waits, cancellable pipes, concurrent communication, streaming
   sinks, output limits and process-group/job cleanup. `make process` builds their adapter. The

@@ -102,14 +102,18 @@
                           [[cwd Directory] [timeout Left] [stdout-limit 8388608] [stderr-limit 65536]]))
         (do (address-> State 4 Directory)
             (address-> State 5 [Compiler | Args])
-            (io.let-ok _ (source-facts.parsed Writer State File
-                          (treesitter.query Language Input (value source-facts.configured-query)
-                            [[node-limit 1048576] [result-limit 134217728]]))
-              (source-build.units Language Writer State Budget Rest))))))
+            (address-> State 6 Input)
+            (let Profile (source-syntax.profile Input)
+                 _ (address-> State 7 Profile)
+              (io.let-ok _ (source-facts.parsed Writer State File
+                            (treesitter.query Language (buffer.wrap (<-address Profile 0))
+                              (value source-facts.configured-query)
+                              [[node-limit 1048576] [result-limit 134217728]]))
+                (source-build.units Language Writer State Budget Rest)))))))
 
 (define source-build.extract
   Language Commands Configuration Out ->
-    (let State (io.record [0 0 0 Configuration "" []])
+    (let State (io.record [0 0 0 Configuration "" [] [] []])
          Writer (io.writer Out [[chunk-size 4096]])
       (io.let-ok _ (source-build.units Language Writer State (clock.deadline 300000) Commands)
         [ok (@p (<-address State 2) (<-address State 0))])))

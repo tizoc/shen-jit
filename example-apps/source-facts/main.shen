@@ -9,7 +9,9 @@
            (map (function load)
              ["lib/deadline.shen" "lib/clock.shen" "lib/process.shen" "lib/process-io.shen"
               "example-apps/source-facts/build.shen"]) true)
-     _ (load "example-apps/source-facts/facts.shen")
+     _ (map (function load)
+         ["example-apps/source-facts/syntax.shen" "example-apps/source-facts/diagnostics.shen"
+          "example-apps/source-facts/facts.shen"])
   (set *hush* Quiet))
 
 (source-facts.main (value *argv*))

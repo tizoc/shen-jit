@@ -24,12 +24,19 @@ def main():
     executable, adapter, grammar, fs_adapter, process_adapter = map(lambda p: Path(p).resolve(), sys.argv[1:6])
     compiler = shlex.split(os.environ.get('CC', 'cc'))
     assert len(compiler) == 1, 'configured extraction expects a compiler executable, without wrapper arguments'
+    macros = subprocess.check_output(compiler + ['-dM', '-E', '-x', 'c', '-'], input=b'')
+    clang = b'__clang__' in macros
+    dialect = ['-fblocks'] if clang else []
     with tempfile.TemporaryDirectory(prefix='shen-source-context-') as directory:
         root = Path(directory)
         (root / 'include').mkdir()
         (root / 'include/api.h').write_text(
             '#if FAST\n#define NEXT fast\n#else\n#define NEXT slow\n#endif\n'
-            'int (NEXT)(void);\nextern int (*indirect)(void);\n'
+            'int (NEXT)(void) __attribute__((warn_unused_result));\n'
+            'int logmsg(const char *, ...) __attribute__((format(printf, 1, 2)));\n'
+            'extern int (*indirect)(void);\n'
+            '#ifdef __clang__\nextern int (^ _Nullable hook)(int);\n'
+            'extern void * _Null_unspecified optional_data;\n#endif\n'
             'static inline int helper(void) { return NEXT(); }\n', encoding='utf-8')
         (root / 'a.c').write_text('#include "api.h"\nint start(void) { return helper(); }\n', encoding='utf-8')
         (root / 'b.c').write_text('#if FAST\nint fast(void) { return 10; }\n'
@@ -60,7 +67,7 @@ def main():
                 output, dependency = file + '.o', file + '.d'
                 (root / output).write_text('preserve object', encoding='utf-8')
                 (root / dependency).write_text('preserve dependency', encoding='utf-8')
-                args = compiler + ['-std=c11', '-O0', '-I', 'include', f'-DFAST={mode}', '-DLABEL="spaces ; $()"',
+                args = compiler + dialect + ['-std=c11', '-O0', '-I', 'include', f'-DFAST={mode}', '-DLABEL="spaces ; $()"',
                                    '-MMD', '-MF', dependency, '-MT', output, '-c', file, '-o', output]
                 commands.append(dict(directory=str(root), file=file, arguments=args))
             database.write_text(json.dumps(commands), encoding='utf-8')
@@ -73,7 +80,7 @@ def main():
                 assert (root / (file + '.o')).read_text(encoding='utf-8') == 'preserve object'
                 assert (root / (file + '.d')).read_text(encoding='utf-8') == 'preserve dependency'
                 # Independently ask the compiler for the exact bytes, retaining no application flags parser.
-                preprocessed = subprocess.check_output(compiler + ['-std=c11', '-O0', '-I', 'include',
+                preprocessed = subprocess.check_output(compiler + dialect + ['-std=c11', '-O0', '-I', 'include',
                                                        f'-DFAST={mode}', '-DLABEL="spaces ; $()"', '-E', '-P', '-x', 'c', file], cwd=root)
                 path = next(r['path'] for r in records if r['kind'] == 'file' and Path(r['path']).name == file)
                 for record in records:
@@ -90,11 +97,15 @@ def main():
             assert summary['configured_units'] == 3 and summary['excluded_files'] == 0
             assert summary['functions'] == 5 and summary['edges'] == 3 and summary['resolved_calls'] == 3
             declarations = {r['name'] for r in records if r['kind'] == 'declaration'}
-            assert declarations == {'fast' if mode else 'slow', 'unexported'}, declarations
+            assert declarations == {'fast' if mode else 'slow', 'unexported', 'logmsg'}, declarations
             assert {r['name'] for r in records if r['kind'] == 'definition'} == {
                 'helper', 'start', 'fast' if mode else 'slow', 'unexported', 'other'}
             assert {r['configuration'] for r in rows if r['kind'] == 'context'} == {f'mode-{mode}'}
-            checks += 5
+            metadata = next(r['parse'] for r in records if r['kind'] == 'file' and Path(r['path']).name == 'a.c')
+            assert metadata['profile'] == 'c-facts-v1' and metadata['error_count'] == 0
+            assert metadata['normalizations'] == dict(attributes=2, nullability=2 if clang else 0,
+                                                      block_pointers=1 if clang else 0)
+            checks += 6
 
         original_facts, original_report = facts.read_bytes(), report.read_bytes()
         valid = json.loads(database.read_text(encoding='utf-8'))
@@ -140,6 +151,29 @@ def main():
         assert rows[0]['edges'] == 2
         assert [r['reason'] for r in rows if r['kind'] == 'unresolved_call'] == ['missing-external-declaration']
         checks += 1
+        # A preprocessing success can still contain invalid C: export bounded, useful diagnostics.
+        (root / 'broken.c').write_text(''.join(f'int bad{i}(void) {{ return 1 }}\n' for i in range(12)), encoding='utf-8')
+        database.write_text(json.dumps([dict(directory=str(root), file='broken.c',
+                                              arguments=compiler + ['-c', 'broken.c'])]), encoding='utf-8')
+        extract('syntax-errors')
+        records = oracle.read(facts)
+        header = next(r for r in records if r['kind'] == 'file')
+        assert header['syntax_error'] and header['parse']['error_count'] >= 12
+        assert len(header['parse']['errors']) == 8
+        original = subprocess.check_output(compiler + ['-E', '-P', 'broken.c'], cwd=root)
+        for diagnostic in header['parse']['errors']:
+            start = diagnostic['start_byte']
+            assert diagnostic['kind'] == 'missing' and diagnostic['node_kind'] == ';'
+            assert diagnostic['end_byte'] == start
+            assert diagnostic['row'] == original[:start].count(b'\n')
+            assert diagnostic['column'] == len(original[:start].rsplit(b'\n', 1)[-1])
+            assert diagnostic['excerpt']
+        analyze()
+        rows = oracle.read(report)
+        oracle.check_report(rows, records)
+        assert rows[0]['excluded_files'] == 1 and rows[0]['diagnostic_samples'] == 8
+        assert rows[0]['functions'] == 0
+        checks += 3
         print(f'{checks} passed, 0 failed (configured compiler bytes/behavior, declarations and safe failures)', flush=True)
 
 

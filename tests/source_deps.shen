@@ -75,7 +75,8 @@
 (let Db (<-address (value sd-test.analysis) 2)
      Naive (datalog.run-naive source-deps.program (<-address (value sd-test.data) 1))
   (do (map (/. Rel (sd-test.check Rel (= (datalog.sorted Db Rel) (datalog.sorted Naive Rel))))
-        [source-file source-format source-context source-declaration source-definition source-call usable-file excluded-file legacy-file
+        [source-file source-format source-context source-parse source-diagnostic source-declaration
+         source-definition source-call usable-file excluded-file legacy-file
          raw-definition invalid-owner defined definition-linkage visible function
          call-file call local-count global-count unique-local unique-owner unique-global owned unowned
          global-allowed resolved ambiguous unresolved unresolved-reason edge file-edge])
@@ -278,6 +279,7 @@
   [(sd-test.configured-file "b.c" "release") (sd-test.v2-file "b.c") (sd-test.file "b.c" false)])
 
 (load "example-apps/source-facts/build.shen")
+(load "example-apps/source-facts/syntax.shen")
 (sd-test.check "compiler outputs stripped and source spelling preserved"
   (= (source-build.flags ["-I" "include" "-DNAME=a b" "-c" "a.c" "-MMD" "-MF" "dep.d" "-oout.o"]
        "/project" "/project/a.c" 0)
@@ -288,5 +290,77 @@
   [["@response" "a.c"] ["-x" "c++" "a.c"] ["-Xclang" "plugin" "a.c"]
    ["-Wp,-MD,dep.d" "a.c"] ["-fplugin=plugin.so" "a.c"] ["-save-temps" "a.c"]
    ["a.c" "a.c"] ["other.c"] ["-c"] ["-o"] ["-xc++" "a.c"] ["--language=c++" "a.c"]])
+
+(let Prefix "/* _Nullable */c#13;c#10;int x = (a ^ b); char *s = c#34;_Nullable __attribute__((x)) (^x)c#34;;c#13;c#10;"
+     Text (cn Prefix "void (^ _Nullable block)(void) __attribute__((annotate(c#34;)c#34;)));")
+     Input (buffer.from-string Text)
+     Profile (source-syntax.profile Input)
+     Clean (buffer.wrap (<-address Profile 0))
+  (do (sd-test.check "annotation profile counts"
+        (and (= (<-address Profile 1) 1) (= (<-address Profile 2) 1) (= (<-address Profile 3) 1)))
+      (sd-test.check "normalization owns a copy" (= (buffer.string Input) Text))
+      (sd-test.check "normalization preserves offsets" (= (buffer.length Input) (buffer.length Clean)))
+      (sd-test.check "normalization preserves line breaks and literals"
+        (buffer.equal? (buffer.slice Clean 0 (buffer.length (buffer.from-string Prefix)))
+                       (buffer.from-string Prefix)))
+      (sd-test.check "block pointer syntax uses the original position"
+        (= (buffer.string (buffer.slice Clean (buffer.length (buffer.from-string Prefix)) 7)) "void (*"))))
+
+(map (/. Text
+       (let Profile (source-syntax.profile (buffer.from-string Text))
+         (sd-test.check "literal, comment and directive text stays intact"
+           (= (buffer.string (buffer.wrap (<-address Profile 0))) Text))))
+  ["// _Nullable c#92;c#13;c#10;__attribute__((x))c#10;int x;"
+   "#define X c#92;c#10;__attribute__((x))c#10;int x;"
+   "char c = 'c#92;''; char *s = c#34;c#92;c#34;_Nullablec#34;;"
+   "int value = (^{ return 1; });"
+   "__attribute__((unfinished"
+   "int value = (x ^ y);"])
+
+(let Profile (source-syntax.profile (buffer.from-string "__attribute((unused)) int * _Null_unspecified p;"))
+  (sd-test.check "alternate attribute spelling and nullability"
+    (and (= (<-address Profile 1) 1) (= (<-address Profile 2) 1))))
+(sd-test.check "diagnostic excerpts preserve arbitrary bytes"
+  (= (source-syntax.excerpt (buffer.wrap (shen-jit.u8! (shen-jit.u8! (shen-jit.bytes 2) 0 255) 1 0)) 0)
+     "c#92;xffc#92;x00"))
+
+(set sd-test.parse
+  [object ["profile" "c"] ["normalizations" [object ["attributes" 0] ["nullability" 0] ["block_pointers" 0]]]
+          ["error_count" 1]
+          ["errors" [[object ["kind" "missing"] ["node_kind" ";"] ["start_byte" 10] ["end_byte" 10]
+                            ["row" 0] ["column" 10] ["excerpt" "return 1 }"]]]]
+          ["ignored_captures" [object ["annotation" 2] ["preprocessor" 1]]]])
+(let Header (sd-test.extra (sd-test.extra (sd-test.file "bad.c" true) [["schema_version" 2]])
+              [["parse" (value sd-test.parse)]])
+     Data (sd-test.ok (sd-test.read (sd-test.lines [Header]) 1 (source-deps.limits)))
+     Db (<-address (sd-test.ok (source-deps.analyze Data [])) 2)
+  (do (sd-test.check "parse metadata survives analysis" (= (datalog.count Db source-parse) 1))
+      (sd-test.check "parse diagnostic survives analysis"
+        (datalog.holds? Db [source-diagnostic [at "bad.c" 10 10 0 10] missing ";" "return 1 }"]))
+      (sd-test.check "diagnosed file remains excluded" (= (datalog.count Db excluded-file) 1))))
+(sd-test.check "diagnostics must agree with syntax_error"
+  (= (sd-test.domain (sd-test.read
+       (sd-test.lines [(sd-test.extra (sd-test.v2-file "bad.c") [["parse" (value sd-test.parse)]])])
+       1 (source-deps.limits))) format))
+
+(define sd-test.put
+  [object | Fields] Key Value ->
+    [object | (map (/. Field (if (= (hd Field) Key) [Key Value] Field)) Fields)])
+(map (/. Parse
+       (sd-test.check "invalid parse metadata rejected"
+         (= (sd-test.domain (sd-test.read
+              (sd-test.lines [(sd-test.extra (sd-test.file "bad.c" true)
+                               [["schema_version" 2] ["parse" Parse]])]) 3 (source-deps.limits))) format)))
+  [(sd-test.put (value sd-test.parse) "profile" "unknown")
+   (sd-test.put (value sd-test.parse) "error_count" 2)
+   (sd-test.put (value sd-test.parse) "normalizations"
+     [object ["attributes" 1] ["nullability" 0] ["block_pointers" 0]])
+   (sd-test.put (value sd-test.parse) "ignored_captures" [object ["annotation" -1] ["preprocessor" 0]])
+   (sd-test.put (value sd-test.parse) "errors"
+     [[object ["kind" "missing"] ["node_kind" ";"] ["start_byte" 10] ["end_byte" 11]
+              ["row" 0] ["column" 10] ["excerpt" "bad"]]])
+   (sd-test.put (value sd-test.parse) "errors"
+     [[object ["kind" "error"] ["node_kind" "ERROR"] ["start_byte" 10001] ["end_byte" 10001]
+              ["row" 0] ["column" 10001] ["excerpt" "bad"]]])])
 
 (output "~A passed, ~A failed~%" (value sd-test.passed) (value sd-test.failed))

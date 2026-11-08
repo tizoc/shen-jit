@@ -78,7 +78,7 @@ Run what the change can break, and nothing more: CI runs everything on every pus
 | A library others load: `buffer`, `io`, `io-file`, `grammar`, `json`, `memory`, `socket`, `deadline`, `clock` or `fs` | `make test-libs` (about 30 s) |
 | `datalog`, `http-*`, `process*`, `tree-sitter`, `curl` | `make test-datalog`, `test-http`, `test-process`, `test-tree-sitter`, `test-curl` |
 | `frame`; `cursor`; `mmap`, `handle`, `sqlite` | `make test-io`; `test-buffer`; `test-ffi`, and `test-http` for `sqlite` |
-| An application in `example-apps/` | The suite that runs its `test.sh`: `test-http` for `sqlite-http`, `test-datalog` for `depends` |
+| An application in `example-apps/` | `test-http` for `sqlite-http`, `test-datalog` for `depends` and `source-deps`, `test-tree-sitter` for `source-facts` |
 | A test, `Makefile`, `tools/` or CI | What the edit touches |
 | Documentation only | Nothing; `make guide` if a rendered page's layout changed, and the examples you changed |
 

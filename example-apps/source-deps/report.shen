@@ -15,6 +15,8 @@
               ["syntax_errors" "exclude-files"]
               ["legacy_files" (datalog.count Db legacy-file)]
               ["configured_units" (datalog.count Db source-context)]
+              ["parse_metadata_files" (datalog.count Db source-parse)]
+              ["diagnostic_samples" (datalog.count Db source-diagnostic)]
               ["input_records" (<-address Data 2)] ["input_bytes" (<-address Data 3)]
               ["files" (datalog.count Db source-file)] ["excluded_files" (datalog.count Db excluded-file)]
               ["input_definitions" (datalog.count Db source-definition)]
@@ -26,6 +28,13 @@
               ["edges" (datalog.count Db edge)] ["file_edges" (datalog.count Db file-edge)]]))
 
 (define source-deps.row
+  source-parse [File Profile Errors Attributes Nullability Blocks Annotation Preprocessor] ->
+    [object ["kind" "parse"] ["file" File] ["profile" Profile] ["error_count" Errors]
+            ["normalizations" [object ["attributes" Attributes] ["nullability" Nullability] ["block_pointers" Blocks]]]
+            ["ignored_captures" [object ["annotation" Annotation] ["preprocessor" Preprocessor]]]]
+  source-diagnostic [Site Kind Node Text] ->
+    [object ["kind" "parse_diagnostic"] ["site" (source-deps.site-value Site)]
+            ["diagnostic" (str Kind)] ["node_kind" Node] ["excerpt" Text]]
   source-context [File Configuration Coordinates] ->
     [object ["kind" "context"] ["file" File] ["configuration" Configuration] ["coordinates" (str Coordinates)]]
   excluded-file [File] -> [object ["kind" "excluded_file"] ["file" File] ["reason" "syntax_error"]]
@@ -47,7 +56,8 @@
             ["candidates" Count] ["scope" (str Scope)]]
   unowned [Site Owner Name Count] ->
     [object ["kind" "unowned_call"] ["site" (source-deps.site-value Site)]
-            ["container" Owner] ["target" Name] ["owner_candidates" Count]])
+            ["container" Owner] ["target" Name] ["owner_candidates" Count]
+            ["reason" (if (= Owner "") "outside-function" "missing-or-ambiguous-owner")]])
 
 (define source-deps.write-result
   [accepted _] -> [ok done]
@@ -100,7 +110,8 @@
          State (io.record [0 0])
       (io.let-ok _ (source-deps.emit Writer Limits State (source-deps.summary Analysis))
         (io.let-ok _ (source-deps.relations Writer Limits State (<-address Analysis 2)
-                      [source-context excluded-file definition-linkage edge file-edge resolved unresolved-reason ambiguous unowned])
+                      [source-context source-parse source-diagnostic excluded-file definition-linkage
+                       edge file-edge resolved unresolved-reason ambiguous unowned])
           (io.let-ok _ (source-deps.query-report Writer Limits State (<-address Analysis 4)
                         (<-address Analysis 3))
             [ok (<-address State 1)])))))

@@ -1826,6 +1826,41 @@ execution remains CI's responsibility; no new platform ABI or instruction was in
   load. A test with a clock that advances at each reading puts the expiry between each pair in turn;
   without the fix it fails for two of its six budgets.
 
+### Source-analysis stabilization (2026-11-08, M3 Max, macOS and Linux arm64)
+
+- Rebased the three source-analysis commits onto the current runtime/CI changes, including process
+  timeout cleanup and the core/library test split. Kept the batch application scope fixed: existing
+  raw/configured exports, graph/reach/impact queries and explicit partial coverage. The new code
+  remains Shen over the existing libraries; there are no new runtime primitives or native adapters.
+- The C grammar rejects SDK nullability qualifiers, some GNU attributes and block-pointer types.
+  Added the explicit `c-facts-v1` parser profile for configured units: a bounded byte scanner blanks
+  attribute groups and three nullability qualifiers and substitutes pointer syntax for block-pointer
+  declarators. It preserves byte positions, line breaks, literals, comments, directives, XOR and
+  block expressions. Only a private parser input changes; compiler arguments/output stay original.
+  Exports/reports count each normalization category. Annotation semantics remain outside the model.
+- File records carry total parser errors/missing tokens, at most eight located samples with bounded
+  ASCII-escaped excerpts, and counts of annotation/preprocessor captures omitted from executable-call
+  facts. Reports preserve this metadata across machines and distinguish outside-function captures
+  from missing/ambiguous legacy owners. Older exports without metadata remain accepted. Strict
+  shape/range/count validation and existing publication/output bounds apply to the new fields.
+- The complete twelve-unit macOS runtime audit improves from eleven exclusions/no usable functions
+  to zero exclusions, 3689 functions and 2404 edges; all 98 compiler-emitted global function symbols
+  are represented. Only one outside-function capture remains. Linux/GCC 12 reports 674 functions,
+  1073 edges and four excluded units, with all 51 compiled global function symbols in usable units
+  represented. Its exclusions now expose GNU `__const` vector parameters, `__signed__` aliases and
+  unnamed bitfields with locations/excerpts. Broader grammar/semantic coverage remains separate work.
+- A checked-in reference driver derives actual Make compilation commands, checks the graph against
+  an independent oracle, compiles each usable unit and compares global symbols. The ordinary suite
+  requires heap/reader/dictionary units to parse without exclusions; `--all` additionally audits the
+  remaining units with explicit diagnostics. This avoids making future SDK coverage implicit.
+- 224 application checks and 152 Tree-sitter/application checks pass on macOS and Linux, including
+  27 configured compiler-byte/behavior/profile/diagnostic checks and the three reference checks.
+  Static Linux passes 158 managed application checks and 26 binding checks with the compiler disabled,
+  skipping native work before adapter compilation. The 1000-function chain still fits a 32 MiB heap
+  cap, leaving 5290 KiB live. Saved-model collection at every allocation also passes; it now follows
+  the test split's `TEST_GC_STRESS=1` contract and is included in `test-lib-stress`. Core/library tiers,
+  source/binary package checks, guide and the publication scan pass. The CI matrix includes Windows.
+
 ### Configured C translation units (2026-11-08, M3 Max, macOS and Linux arm64)
 
 - Added an optional compilation-database mode to the source-fact application. Shen validates argv

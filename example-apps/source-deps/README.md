@@ -100,6 +100,14 @@ or `legacy`); site objects retain byte ranges and zero-based byte row/column pos
 `input_declarations` count build context. Unresolved calls include `reason`: `missing-target`,
 `unknown-scope` or `missing-external-declaration`.
 
+New exports also produce `parse` and `parse_diagnostic` records before graph records. They identify
+the parser profile, normalization/ignored-capture counts and total parse errors, with at most eight
+error/missing-token samples per file. Each sample has a site, node kind and bounded ASCII-escaped
+excerpt in the export's coordinate system. Join these with `excluded_file` records to see why a unit
+was excluded. The summary counts `parse_metadata_files` and distinct `diagnostic_samples`; older
+exports without this optional metadata still work. Unowned calls distinguish `outside-function`
+from `missing-or-ambiguous-owner` rather than presenting header expressions as graph edges.
+
 The reader validates the extractor's exact record fields, integer ranges, text, source ranges,
 definition/container agreement, versioned linkage/caller fields and per-file syntax flags. Each file
 record must precede its sites. Named version 2/3 caller references are validated against all raw

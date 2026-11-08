@@ -140,6 +140,55 @@
 (define source-deps.fact
   State Fact -> (address-> State 0 [Fact | (<-address State 0)]))
 
+(define source-deps.object
+  [object | Members] Keys -> (do (source-deps.keys Members Keys) Members)
+  _ _ -> (error "expected metadata object"))
+
+(define source-deps.valid-range?
+  Bytes Start End Row Column ->
+    (and (<= Start End) (<= End Bytes) (<= Row Start) (<= Column (- Start Row))
+         (or (> Row 0) (= Column Start))))
+
+(define source-deps.diagnostic
+  State Path Bytes Value ->
+    (let Fields (source-deps.object Value ["kind" "node_kind" "start_byte" "end_byte" "row" "column" "excerpt"])
+         Kind (source-deps.member Fields "kind")
+         _ (if (element? Kind ["error" "missing"]) true (error "invalid parse diagnostic kind"))
+         Node (source-deps.text (source-deps.member Fields "node_kind") false)
+         Start (source-deps.uint (source-deps.member Fields "start_byte"))
+         End (source-deps.uint (source-deps.member Fields "end_byte"))
+         Row (source-deps.uint (source-deps.member Fields "row"))
+         Column (source-deps.uint (source-deps.member Fields "column"))
+         Text (source-deps.text (source-deps.member Fields "excerpt") true)
+         _ (if (and (source-deps.valid-range? Bytes Start End Row Column)
+                    (or (= Kind "error") (= Start End))
+                    (<= (shen-jit.bytes-length (shen-jit.string->bytes Text)) 480)) true
+               (error "invalid parse diagnostic range or excerpt"))
+      (source-deps.fact State [source-diagnostic [at Path Start End Row Column]
+                              (if (= Kind "error") error missing) Node Text])))
+
+(define source-deps.parse-record
+  State Path Bytes Error Value ->
+    (let Fields (source-deps.object Value ["profile" "normalizations" "error_count" "errors" "ignored_captures"])
+         Profile (source-deps.member Fields "profile")
+         _ (if (element? Profile ["c" "c-facts-v1"]) true (error "unsupported parser profile"))
+         Counts (source-deps.object (source-deps.member Fields "normalizations")
+                  ["attributes" "nullability" "block_pointers"])
+         Attributes (source-deps.uint (source-deps.member Counts "attributes"))
+         Nullability (source-deps.uint (source-deps.member Counts "nullability"))
+         Blocks (source-deps.uint (source-deps.member Counts "block_pointers"))
+         _ (if (or (= Profile "c-facts-v1") (and (= Attributes 0) (= Nullability 0) (= Blocks 0)))
+               true (error "raw parser profile cannot normalize syntax"))
+         N (source-deps.uint (source-deps.member Fields "error_count"))
+         Errors (source-deps.member Fields "errors")
+         _ (if (and (= Error (if (= N 0) 0 1)) (= (length Errors) (io.min N 8))) true
+               (error "parse diagnostics disagree with syntax_error"))
+         Ignored (source-deps.object (source-deps.member Fields "ignored_captures") ["annotation" "preprocessor"])
+         Annotation (source-deps.uint (source-deps.member Ignored "annotation"))
+         Preprocessor (source-deps.uint (source-deps.member Ignored "preprocessor"))
+         _ (map (/. Diagnostic (source-deps.diagnostic State Path Bytes Diagnostic)) Errors)
+      (source-deps.fact State [source-parse Path Profile N Attributes Nullability Blocks Annotation Preprocessor])))
+
 (define source-deps.context
   State Version Path Members ->
     (let Context (if (< Version 3) [raw]
@@ -165,6 +214,8 @@
          Keys ["kind" "path" "byte_count" "syntax_error"]
          Keys (if (= Version 1) Keys ["schema_version" | Keys])
          Keys (if (= Version 3) (append Keys ["configuration" "coordinates" "directory" "arguments"]) Keys)
+         Detailed (and (> Version 1) (element? "parse" (map (function hd) Members)))
+         Keys (if Detailed ["parse" | Keys] Keys)
          _ (source-deps.keys Members Keys)
          Path (source-deps.text (source-deps.member Members "path") false)
          Bytes (source-deps.uint (source-deps.member Members "byte_count"))
@@ -173,6 +224,7 @@
                 (error "duplicate file record: ~A" Path))
          _ (if (< (<-address State 8) (<-address Limits 3)) true (error "file count limit exceeded"))
          _ (source-deps.context State Version Path Members)
+         _ (if Detailed (source-deps.parse-record State Path Bytes Error (source-deps.member Members "parse")) true)
          _ (shen.dict-> (<-address State 1) Path (io.record [Path Bytes Error Version]))
          _ (address-> State 8 (+ (<-address State 8) 1))
       (do (source-deps.fact State [source-file Path Bytes Error])
@@ -205,9 +257,8 @@
          Linkage (if (= Version 1) legacy
                      (if (not (= Kind "call"))
                          (source-deps.linkage (source-deps.member Members "linkage")) unknown))
-         _ (if (and (<= Start End) (<= End (<-address Meta 1))
+         _ (if (and (source-deps.valid-range? (<-address Meta 1) Start End Row Column)
                     (= (- End Start) (shen-jit.bytes-length (shen-jit.string->bytes Name)))
-                    (<= Row Start) (<= Column (- Start Row)) (or (> Row 0) (= Column Start))
                     (= Error (<-address Meta 2))) true (error "inconsistent site range or syntax_error"))
          _ (if (and (= Kind "definition") (not (= Name Owner)))
                (error "definition container must be its name") true)

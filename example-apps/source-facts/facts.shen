@@ -107,6 +107,10 @@
 (define source-facts.captures
   _ _ _ _ _ _ At End -> [ok done] where (> At End)
   Writer State Path T Error StaticNames At End ->
+    (source-facts.captures Writer State Path T Error StaticNames (+ At 1) End)
+      where (and (= (treesitter.capture-name T At) "call")
+                 (not (= (source-syntax.capture-reason T (treesitter.capture-node T At)) [])))
+  Writer State Path T Error StaticNames At End ->
     (let ID (treesitter.capture-node T At)
          Result (if (= (source-facts.enclosing-function T ID) 0)
                     (source-facts.declarations Writer State Path T Error StaticNames (treesitter.children T ID))
@@ -139,7 +143,8 @@
                            Path (treesitter.error-message E))]
   Writer State Path [ok T] ->
     (let Error (treesitter.has-error? T 1)
-         Fields [["path" Path] ["kind" "file"] ["syntax_error" Error] ["byte_count" (treesitter.end-byte T 1)]]
+         Fields [["path" Path] ["kind" "file"] ["syntax_error" Error] ["byte_count" (treesitter.end-byte T 1)]
+                 ["parse" (source-facts.parse-info T State)]]
          Context (<-address State 3)
          Extra (if (= Context []) [["schema_version" 2]]
                    [["schema_version" 3] ["configuration" Context] ["coordinates" "preprocessed"]
@@ -153,8 +158,9 @@
 (define source-facts.file
   Language Writer State Path ->
     (io.let-ok Input (io.read-file Path 8388608)
-      (source-facts.parsed Writer State Path
-        (treesitter.query Language Input (value source-facts.query) []))))
+      (do (address-> State 6 Input)
+          (source-facts.parsed Writer State Path
+            (treesitter.query Language Input (value source-facts.query) [])))))
 
 (define source-facts.visit-result
   [ok _] -> continue
@@ -171,7 +177,7 @@
 
 (define source-facts.extract
   Language Root Out ->
-    (let State (io.record [0 0 0 [] "" []])
+    (let State (io.record [0 0 0 [] "" [] [] []])
          Writer (io.writer Out [[chunk-size 4096]])
       (io.let-ok _ (fs.walk Root [[entry-limit 10000] [depth-limit 64] [name-byte-limit 16777216]]
                     (/. Info Depth (source-facts.visit Language Writer State Info Depth)))

@@ -5,6 +5,8 @@
   (relation source-file [string integer integer])
   (relation source-format [string integer])
   (relation source-context [string string symbol])
+  (relation source-parse [string string integer integer integer integer integer integer])
+  (relation source-diagnostic [site symbol string string])
   (relation source-declaration [site string symbol])
   (relation source-definition [site string symbol])
   (relation source-call [site string integer string])
