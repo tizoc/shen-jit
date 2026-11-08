@@ -61,7 +61,10 @@
                       (and (> N 1) (= (shen-jit.u8 B 1) 58)))))))
 
 (define io.file-path
-  Path ->
+  Path -> (io.file-path-at Path (value *home-directory*)))
+
+(define io.file-path-at
+  Path Home ->
     (let _ (if (string? Path) true (error "io: path must be a string"))
          B (shen-jit.string->bytes Path)
          N (shen-jit.bytes-length B)
@@ -72,7 +75,6 @@
                    true
                    (error "io: Windows drive-relative paths are unsupported"))
                true)
-         Home (value *home-directory*)
       (if (or (io.file-absolute? B N) (= Home ""))
           Path
           (let H (shen-jit.string->bytes Home)

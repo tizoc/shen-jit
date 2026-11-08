@@ -1644,6 +1644,40 @@ execution remains CI's responsibility; no new platform ABI or instruction was in
   `test-io` target includes the new suites, with native socket cases explicitly skipped on static
   builds. API references live on their own framing and socket pages linked from the guide.
 
+### Filesystem operations (2026-11-08, M3 Max, macOS and Linux arm64)
+
+- Added optional `lib/fs.shen` over our I/O endpoints, with paths, owned metadata, sorted bounded
+  listings, a bounded walker, directory creation/removal, temporary files, rename, replacement and
+  copying. Shen owns traversal, budgets, temporary-file policy and cleanup. A small adapter uses
+  native headers for metadata/directory layouts, Unicode paths and rename operations; it depends
+  only on the public C API and the system libraries. No runtime or kernel I/O changes were needed.
+- Resolution shares the file module's home-prefix helper, snapshots the home setting once, and
+  prepares absolute paths without changing the native cwd. POSIX keeps dot components; Windows
+  uses its native full-path API. Metadata keeps exact sizes and seconds/nanoseconds, including
+  negative seconds. The adapter copies inputs before releasing the VM lock, closes native directory
+  resources before allocating results, and roots values across collection while building lists.
+- Listing budgets fail without returning truncated success. Walk budgets count scheduled siblings
+  across all directories; traversal skips links/reparse points and supports pruning and early stop.
+  This is a changing-tree traversal, without a confinement guarantee against concurrent replacement.
+  No-overwrite rename uses native exclusion rather than an existence check; replacement does not
+  fall back to a cross-filesystem copy. Linux's optional adapter needs glibc 2.28 for `renameat2`.
+- Temporary names use 128 random bits, exclusive creation, 64 collision attempts and the existing
+  binary, non-inheritable file backend. Scoped output closes before replacement and preserves primary
+  errors, secondary cleanup errors and acknowledged byte counts. Copying uses 64 KiB chunks and a
+  total quota. Replacement provides native name semantics, without metadata preservation or crash
+  durability. A 20 MiB copy passes byte-for-byte comparison under a 16 MiB heap cap on both platforms;
+  this checks bounded storage, rather than claiming a throughput improvement over an earlier version.
+- The filesystem suite passes 117 checks on macOS and 118 on Linux arm64 with gcc 10 in Docker,
+  including typing, independent metadata/byte oracles, sparse sizes above 32 bits, Unicode paths,
+  symlink loops, permission errors, failed cleanup, images and concurrent collection. Linux also
+  exercises raw non-UTF-8 names, which the macOS filesystem rejects. The pure checks pass on static
+  Linux and explicitly skip native cases before adapter compilation. The Windows x86-64 adapter
+  cross-compiles with MinGW gcc 10.2; declaring the Windows version before any headers exposes its
+  strict Unicode conversion flags. Windows execution awaits CI.
+- The fast tier and ASan/UBSan pass on macOS, with the new adapter instrumented. The copy application
+  and adapter build work from an extracted release package. API documentation has its own page,
+  linked from the guide and included in source and binary archives.
+
 ### Independent bounded chunk I/O (2026-11-07, M3 Max, macOS arm64)
 
 - Added optional `lib/io.shen` and `lib/io-file.shen`, over existing buffers and FFI only: no runtime

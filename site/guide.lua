@@ -11,6 +11,7 @@ local PAGES = {
   buffers = 'Buffers and cursors',
   grammar = 'Grammars over bytes',
   io = 'Chunk I/O',
+  fs = 'Filesystem operations',
   framing = 'Binary framing',
   ['io-sockets'] = 'Socket I/O endpoints',
   deadlines = 'Operation deadlines',

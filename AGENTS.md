@@ -29,6 +29,8 @@ checkout's own workflow, and git ignores it.
 
 `lib/curl.shen` is another optional library, with `lib/curl.c` as its callback adapter over the public
 C API. `make curl` builds it; `lib/build-curl.sh` also builds it from a binary release's sources.
+`lib/fs.shen` adds paths, metadata, bounded traversal, temporary files and replacement over the I/O
+library. `make fs` builds its platform-layout adapter, `lib/fs.c`, with only the system C library.
 
 ## Priorities
 
@@ -60,12 +62,14 @@ A commit message says what changed and what it measured.
 Run the fast tier after every change; it takes about 20 s and catches nearly everything:
 
 ```bash
-make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-http test-datalog test-ffi test-curl test-overrides
+make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-fs test-http test-datalog test-ffi test-curl test-overrides
 ```
 
 `make test-curl` builds the optional adapter with libcurl's development headers, then runs an independent
 loopback HTTP/TLS fixture with Python 3 and the `openssl` command. Static builds run the pure checks and
 explicitly skip the native part. `make curl` builds the adapter for applications; ordinary builds do not need it.
+`make test-fs` needs a C compiler and Python 3. It exercises native filesystem operations, I/O cleanup,
+typed clients, images/GC and a bounded copy application; static builds run only the pure path checks.
 
 `make test-overrides` (a second) runs each kernel function that the port replaces beside the kernel's own definition, taken from the KLambda, over generated values, as compiled and through C. They must agree exactly: 1 and 1.0 differ, and a value and an error, but not the text of two errors. What differs on purpose is listed in `o.known` in `tests/overrides.shen`, with its reason, as narrowly as it can be. A difference that no longer shows fails, and so does a new override that the test does not name, so a new one joins it there or `o.left-out`.
 

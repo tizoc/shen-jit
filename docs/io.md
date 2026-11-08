@@ -41,7 +41,8 @@ Windows drive-relative paths such as `C:name` are rejected. POSIX descriptors us
 File reads/writes release the VM lock when other Shen threads exist. They retry EINTR, but do not promise
 cancellation or deadlines: a blocking file operation can wait indefinitely. Close is never blindly retried.
 This backend supplies files; [socket endpoints](io-sockets.md) use a separate adapter. Pipes, seeking,
-durability sync, filesystem operations and process spawning remain separate work. `flush` delivers buffered
+durability sync and process spawning remain separate work. [Filesystem operations](fs.md) add metadata,
+bounded traversal, temporary files and replacement over these endpoints. `flush` delivers buffered
 output to the endpoint, not to stable storage. An error from `write-file` may leave a partial file and does not roll back output.
 
 ## Direct transfers

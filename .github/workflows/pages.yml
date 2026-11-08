@@ -15,6 +15,7 @@ on:
       - docs/buffers.md
       - docs/grammar.md
       - docs/io.md
+      - docs/fs.md
       - docs/framing.md
       - docs/io-sockets.md
       - docs/deadlines.md

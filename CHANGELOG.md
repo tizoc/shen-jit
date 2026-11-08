@@ -7,6 +7,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Optional `lib/fs.shen`: paths, owned metadata, sorted bounded listings and traversal, exclusive temporary
+  files/directories, rename without overwrite, replacement and bounded copying through our I/O endpoints.
+  Build its platform adapter with `make fs`; [the reference](docs/fs.md) includes the API and `tools/fs-copy.shen`.
 - Optional `lib/curl.shen`, with a small C adapter over libcurl: bounded HTTP(S) requests, reusable clients,
   binary bodies, headers and trailers, timeouts, TLS verification and explicit redirect limits. Responses can
   stream into independent I/O sinks with backpressure, bounded chunks and exact partial-write progress.

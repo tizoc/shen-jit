@@ -378,6 +378,13 @@ covers connection limits and controlled shutdown, with a SQLite counter applicat
 [JSON](https://github.com/tizoc/shen-jit/blob/main/docs/json.md) provides bounded UTF-8 decoding and encoding,
 lossless number tokens and typed values. HTTP request bodies can use Content-Length or bounded chunked framing.
 
+### Filesystem operations
+
+Optional `lib/fs.shen` adds path helpers, metadata, bounded directory traversal, exclusive temporary
+files, copying and replacement over our I/O endpoints. `make fs` builds its platform adapter.
+[Filesystem operations](https://github.com/tizoc/shen-jit/blob/main/docs/fs.md) covers the API, ownership
+and `tools/fs-copy.shen`, a bounded copy application.
+
 ### HTTP clients with libcurl
 
 Optional `lib/curl.shen` provides bounded HTTP(S) requests, reusable clients, binary bodies, TLS verification
@@ -858,7 +865,7 @@ its sources.
 The fast tier takes about 20 s, and catches nearly everything:
 
 ```sh
-make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-http test-datalog test-ffi test-curl test-overrides
+make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-fs test-http test-datalog test-ffi test-curl test-overrides
 ```
 
 | Target | What it does |
@@ -878,6 +885,7 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make test-datalog-swipl` | The same generated programs against SWI-Prolog's tabling, if `swipl` is there |
 | `make test-ffi` | C functions called from Shen and C written for Shen, against `tests/ffi_lib.c`, memory outside the heap, and the SQLite and socket libraries |
 | `make test-curl` | Optional libcurl adapter, independent loopback HTTP/TLS fixtures, downloader, typing, threads and images/GC; needs libcurl development headers, Python 3 and `openssl` |
+| `make test-fs` | Filesystem metadata, paths, bounded traversal, replacement, cleanup, typing, images/GC and the copy application; needs a C compiler and Python 3 |
 | `make test-overrides` | Each kernel function that Shen/JIT replaces beside the kernel's own definition, over generated values, as compiled and through C |
 | `make check-lowerer` | Checks the stage 0 output against the lowerer's invariants |
 | `make check-generated` | Compares the generated files with `generated.sha256`. `make update-generated` rewrites it after a change to the lowerer, the port or the lowered test programs |
@@ -901,7 +909,7 @@ To run the test suites from a source tarball, point `KERNEL_DIR` at a directory 
 
 ```sh
 make stlib
-make KERNEL_DIR=/path/to/kernel check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-http test-datalog test-ffi test-curl test-overrides
+make KERNEL_DIR=/path/to/kernel check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-fs test-http test-datalog test-ffi test-curl test-overrides
 ```
 
 Windows CI runs these suites and GC stress. `tests/cli.sh` leaves out the tests that
