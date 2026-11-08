@@ -16,6 +16,7 @@ on:
       - docs/grammar.md
       - docs/io.md
       - docs/fs.md
+      - docs/tree-sitter.md
       - docs/framing.md
       - docs/io-sockets.md
       - docs/deadlines.md

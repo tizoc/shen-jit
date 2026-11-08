@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.."
 KERNEL_DIR=$(cd "${KERNEL_DIR:-.deps/kernel}" && pwd)
 IMAGE_arm64=gcc@sha256:fb2568a8cc0609134396aeb1eae1f3a91c8ceec54aaee67c798d9602593abd66
 IMAGE_amd64=gcc@sha256:3ae7320d7dd41f446a48930e1edf4e7a41c7be5ae43a5ddbf017c53fe6495738
-SUITES="check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-fs test-http test-datalog test-ffi test-curl test-overrides test-differential test-kernel-stress test-kl-stress test-san"
+SUITES="check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-fs test-tree-sitter test-http test-datalog test-ffi test-curl test-overrides test-differential test-kernel-stress test-kl-stress test-san"
 
 make dist < /dev/null > /dev/null
 tarball=$(ls -t build/shen-jit-*.tar.gz | head -1)
@@ -30,6 +30,7 @@ for arch in ${@:-arm64 amd64}; do
     echo "== linux/$arch, $(basename "$tarball")"
     if docker run --rm --platform "linux/$arch" -v "$src:/src" -v "$KERNEL_DIR:/kernel:ro" -w /src "$image" \
         sh -c 'apt-get update && apt-get install -y libcurl4-openssl-dev pkg-config python3 openssl &&
+               sh tools/tree-sitter-deps.sh .deps &&
                exec make BOOTSTRAP=false KERNEL_DIR=/kernel "$@"' sh $SUITES < /dev/null > "$work.log" 2>&1; then
         grep -E 'passed|failed|cases|match' "$work.log" | grep -v '^\s' | tr '\n' ' '
         echo
