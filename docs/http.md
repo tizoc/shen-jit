@@ -48,7 +48,8 @@ progress is zero. Invalid view/limit arguments and unexpected failures raise.
 first: the request line, the fields and the blank line are parsed in place, in the reader's buffer, with
 [a grammar](grammar.md#reading-as-input-arrives), and the body's bytes stay in the reader. It gives what
 `http.parse-request` gives for the same head, `[eof]` when the input ended before a head, and 431 for a head
-past HeadLimit, which must fit the reader's capacity.
+past HeadLimit, which must fit the reader's capacity. Outcomes use `(grammar.read-result http.request)`:
+`[ok Request]`, `[eof]` or `[error Error]`.
 
 The request type is opaque. Reading a body returns a new complete request; it does not mutate a parsed
 request or its metadata. Method and target remain case-sensitive. Targets are retained without percent

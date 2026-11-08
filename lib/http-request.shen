@@ -493,6 +493,7 @@
   B D V [ok N] -> (io.let-ok _ (http.body-budget B D N) [ok (http.complete-request (<-address B 2) V)]))
 
 (declare http.parse-request [buffer.view --> [number --> [io.result http.request]]])
+(declare http.read-request [io.reader --> [number --> [number --> [grammar.read-result http.request]]]])
 (declare http.method [http.request --> string])
 (declare http.target [http.request --> string])
 (declare http.version [http.request --> string])
