@@ -44,6 +44,7 @@ and a value, then perhaps `where` and a guard:
 | `<rule>` | That rule |
 | `(<rule> Arguments...)` | That rule, given arguments for its parameters |
 | `<e>` | Nothing: an empty alternative |
+| `<end>` | Nothing, at the end of the input |
 | `(* Item)`, `(+ Item)` | Item as many times as it matches, or at least once |
 | `(? Item)` | Item, or nothing |
 | `(text <rule>)`, `(span <rule>)` | The rule, whose name then stands for the string, or the view, of the bytes it matched |
@@ -136,9 +137,33 @@ table from then on, so a class's guard must depend only on its byte; one that ra
 deep. So define a grammar's parts before the rules that use them; a rule redefined later is not seen where an
 earlier definition was compiled in place.
 
+## Reading as input arrives
+
+`(grammar.read <rule> Reader Fail)` parses one value from an [I/O reader](io.md) as its bytes arrive, with
+`io.shen` loaded. It does not need the value framed first, and it never parses again from the start: a rule
+that reaches the end of what has arrived waits for the reader to fill more, under the reader's own deadline,
+and goes on where it was.
+
+| Result | When |
+| --- | --- |
+| `[ok Value]` | The rule matched; its bytes are consumed, and what follows stays in the reader |
+| `[eof]` | The input ended before a value began |
+| `[error Error]` | The reader failed or timed out; nothing is consumed, so a later read can try again |
+| `(Fail Position Message)` | A syntax error, at its position in the stream; `"input ended"` if the input ended inside a value |
+
+The parse reads in place, in the reader's buffer, and consumes nothing until the value is complete, so a
+value can be no larger than the reader's capacity: a larger one fails with `"input exceeds the reader's
+capacity"`. Views made by `span` own their bytes here, as the reader's buffer is reused. The rule matches a
+prefix of the input, so a rule that should stop only at the end says so with `<end>`.
+
+The first `grammar.read` of a rule compiles a second version of it, and of the rules it calls, whose bounds
+checks wait for input; parsing a complete view is unchanged by it. A task blocks while its parse waits, as it
+does for any read, so each connection reads in a task of its own.
+
 ## Compared with defcc
 
 `defgrammar` keeps `defcc`'s notation where the meaning is the same: alternatives ended by `;`, `:=`,
 `where`, `<e>`, variables, `_`, and a rule named in a value standing for its value. It reads bytes, not
 lists, so a number or a string is a terminal, and patterns in brackets are not. It has no `<!>` and no type
-signatures, and adds parameters, repetition, captures, requires and binary fields.
+signatures, and adds parameters, repetition, captures, requires, binary fields and reading from a reader as
+input arrives.

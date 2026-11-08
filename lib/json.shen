@@ -185,6 +185,19 @@
 
 (defgrammar json.<token> (text json.<number>) := [number json.<number>];)
 
+\\ From a reader: the whitespace before a value, and the value; what follows stays unread, as
+\\ reading on would wait for the next value. Whitespace and then the end is the end.
+(defgrammar (json.<next> Limit)
+  json.<ws> <end> := json.end;
+  json.<ws> (require (json.<value> 0 Limit) "expected value") := json.<value>;)
+
+(define json.read
+  R Options -> (json.read-result (grammar.read (json.<next> (snd (json.options Options))) R (function json.scan-fail))))
+
+(define json.read-result
+  [ok json.end] -> [eof]
+  Result -> Result)
+
 (define json.decode-view
   View DepthLimit -> (grammar.parse (json.<document> DepthLimit) View (/. At Message (json.syntax View At Message))))
 

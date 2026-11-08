@@ -1308,6 +1308,47 @@ and the scanner it replaced, under a load average of 2.5 to 3.8. The third does 
   ordinary parse a JSON string with escapes no longer builds the text before its first escape, as the first
   alternative did: 500 such strings 158 to 160 µs against 162 to 164, four rounds; the other documents did not move.
 
+### Reading as input arrives (2026-11-08, M3 Max, macOS arm64, against framing and restarting)
+
+`(grammar.read <rule> Reader Fail)` parses a value from a reader as its bytes arrive, without a frame and without
+parsing again from the start, and `json.read` reads JSON values that way.
+
+- **Suspension is the reader's wait.** A bounds check that finds the end of what has arrived fills the reader, which
+  waits under its deadline, and the parse goes on where it was; its state is its own call stack. A server gives each
+  connection a task already, so blocking that task is the suspension. One task driving many parses would need
+  continuations captured, which this does not do.
+- **In place, in the reader's buffer.** `io.window` moves the queue to the start of the buffer once; fills only append,
+  as nothing is consumed until the value is complete, so positions stay valid, nothing is copied, a value is bounded by
+  the reader's capacity, and bytes read ahead stay in the queue for the next read.
+- **A second variant of each rule, rewritten from the first** at its first streaming call: each `(< P End)` compares
+  with the end of what has arrived, in a record the rule gets as its end, and fills on the path where it fails; calls go
+  to streaming variants, and spans copy. Complete parsing is unchanged, and a program that never streams compiles
+  nothing more. 75 lines, bringing the macro to 488, with `<end>`, an item that matches at the end of the input.
+- **"Input ended" is exact here:** a parse that read into the end, with the reader at EOF, could have matched with
+  more, whichever rule failed. A first version used the grammar's message unless the failing require began at the end,
+  and so called `tru` an invalid literal.
+- **Speed,** `tests/bench/json-streaming.shen`, every strategy through the same reader, warmed, three runs each,
+  under a load of 1.8 to 2.2; restarting from the comparison above:
+
+  | Input, chunk size | Restart | Frame, then decode | Read in place |
+  | --- | ---: | ---: | ---: |
+  | 64 KiB string, 4,096 bytes | 3.5 ms | 0.3 ms | 0.1 ms |
+  | 64 KiB string, 256 | 35 ms | 1.6 to 1.9 ms | 1.4 to 1.5 ms |
+  | 64 KiB string, 16 | 525 ms | 11.9 ms | 6.8 to 7.0 ms |
+  | 64 KiB string, 1 | 8.0 s | 173 to 184 ms | 85 ms |
+  | 28.8 KB of objects, 16 | | 2.9 to 3.0 ms | 1.0 ms |
+  | 28.8 KB of objects, 1 | | 45 to 46 ms | 23 ms |
+
+  Reading in place scans each byte once and copies nothing; framing scans for the newline, copies into a builder and
+  decodes. The first streaming read of a grammar compiles its variants, about 2 ms for JSON, which an unwarmed first run
+  showed.
+- **Found on the way: each read allocates a scratch as large as the reader's free space,** up to the endpoint's bound,
+  which a backend fills and the reader copies in. With small deliveries this dominates: a byte at a time made 72
+  collections in 85 ms, and 2,014 in 2.25 s with an endpoint bound of 1 MiB. Framing pays it too. Not changed here.
+- **Checked:** every chunk size from 1 to the whole of a 250-byte stream of thirteen documents gives the complete
+  decoder's values; the remainder after a value, eof, errors at their stream offsets, capacity, a reader's error with
+  nothing consumed, arguments to the entry rule, a rule defined again, and spans that outlive the reader's buffer.
+
 ### Shen features in the SQLite example (2026-11-08, M3 Max, macOS arm64)
 
 A read of the libraries and the example found code that reads like Scheme or ML: index loops, records reached by slot

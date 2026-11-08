@@ -120,10 +120,13 @@
          _ (map (function grammar.arity) (mapcan (function grammar.called) (map (function hd) Rules)))
          Buf (gensym (protect Buf)) At (gensym (protect At)) End (gensym (protect End))
          S (gensym (protect S)) Count (address-> (absvector 1) 0 0)
-      (append [define Name Buf At End S | Params]
-              [-> (grammar.alternatives
-                    (map (/. R (grammar.rule [Name Buf End S Count (grammar.values Name R) [] Params false []] R [At 0]))
-                         Rules))])))
+         Def (append [define Name Buf At End S | Params]
+                     [-> (grammar.alternatives
+                           (map (/. R (grammar.rule [Name Buf End S Count (grammar.values Name R) [] Params false []]
+                                                    R [At 0]))
+                                Rules))])
+         _ (put Name grammar.code Def)
+      Def))
 
 \\ A byte class, B where Guard and nothing else, is tested in place by the rules read after it.
 (define grammar.class
@@ -152,7 +155,7 @@
 \\ The rules items call, each with the arity of the call.
 (define grammar.called
   [] -> []
-  [X | Items] -> [[X | 4] | (grammar.called Items)] where (and (grammar.nonterminal? X) (not (= X <e>)))
+  [X | Items] -> [[X | 4] | (grammar.called Items)] where (and (grammar.nonterminal? X) (not (element? X [<e> <end>])))
   [[R | Args] | Items] -> [[R | (+ 4 (length Args))] | (grammar.called Items)] where (grammar.nonterminal? R)
   [[F | Args] | Items] -> (append (grammar.called (if (= F require) (grammar.butlast Args) Args))
                                   (grammar.called Items)) where (element? F [* + ? text span require])
@@ -314,6 +317,7 @@
                [let X [shen-jit.u8 (grammar.buf C) (grammar.pos Pos)]
                  (grammar.seq (grammar.bind C X) Items (grammar.next Pos) Fail Done)])
            (= X <e>) (grammar.seq C Items Pos Fail Done)
+           (= X <end>) [if [< (grammar.pos Pos) (grammar.end C)] Fail (grammar.seq C Items Pos Fail Done)]
            (grammar.nonterminal? X)
              (let Class (trap-error (get X grammar.class) (/. E []))
                (if (empty? Class)
@@ -518,6 +522,9 @@
   [grammar.parse Rule View Fail] -> (grammar.parse-form Rule View Fail) where (grammar.rule-form? Rule)
   [grammar.match? Rule View] -> (grammar.match-form Rule View) where (grammar.rule-form? Rule)
   [grammar.parse-range Rule Buffer At End Fail] -> (grammar.range-form Rule Buffer At End Fail)
+    where (grammar.rule-form? Rule)
+  [grammar.read Rule Reader Fail] ->
+    [grammar.read-from (grammar.rule-name Rule) (grammar.list (grammar.rule-args Rule)) Reader Fail]
     where (grammar.rule-form? Rule))
 
 \\ A call of a rule from outside a grammar: Rule is <rule>, or (<rule> Arguments...).
@@ -547,3 +554,94 @@
     (let B (gensym (protect B)) A (gensym (protect A)) E (gensym (protect E)) S (gensym (protect S))
       [let B Buffer A At E End S [grammar.state]
         (grammar.finish (grammar.call-rule Rule B A E S) S A E Fail)]))
+
+\\ Reading from an I/O reader as input arrives. A rule's streaming variant, <rule>/stream, is its
+\\ code rewritten at the first streaming call: each bounds check compares with the end of what has
+\\ arrived, kept in slot 0 of a stream record that the rule gets as its end, and fills the reader
+\\ when it fails; calls go to streaming variants, and views of captures copy their bytes, as the
+\\ reader's buffer is reused after the value. The parse reads in place, in the reader's buffer, and
+\\ consumes the value's bytes only when it is complete. Load io.shen to use it.
+
+(define grammar.read
+  Rule Reader Fail -> (grammar.read-from Rule [] Reader Fail))
+
+(define grammar.read-from
+  Rule Args R Fail ->
+    (let G (grammar.stream Rule)
+         Storage (io.window R)
+         Start (io.position R)
+         E (address-> (address-> (address-> (absvector 3) 0 (io.window-fill R 0)) 1 R) 2 [])
+         S (grammar.state)
+         P (grammar.apply (fn G) [Storage 0 E S | Args])
+      (grammar.read-result P S E Start Fail)))
+
+\\ A parse that read into the end of the input could have matched with more: at EOF, that is
+\\ "input ended", whichever rule failed. One that did not is the grammar's own failure.
+(define grammar.read-result
+  P S E Start Fail ->
+    (let R (<-address E 1) Why (<-address E 2) End (<-address E 0)
+      (cases (>= P 0) (do (io.consume R P) [ok (<-address S 0)])
+             (= Why capacity) (Fail (+ Start End) "input exceeds the reader's capacity")
+             (and (= End 0) (= Why [eof])) [eof]
+             (and (cons? Why) (not (= Why [eof]))) (io.reader-terminal R)
+             (= Why [eof]) (Fail (+ Start End) "input ended")
+             (= P -2) (Fail (+ Start (<-address S 1)) (<-address S 2))
+             true (Fail Start "no match"))))
+
+\\ A bounds check that failed: fill towards the byte at X, and say why there is none if there is not.
+(define grammar.refill
+  E X -> (let R (<-address E 1)
+              N (io.window-fill R (+ X 1))
+              _ (address-> E 0 N)
+           (or (> N X)
+               (do (address-> E 2 (if (>= X (io.window-size R)) capacity (<-address R 5))) false))))
+
+(define grammar.copy-span
+  Buf At End -> (buffer.wrap (shen-jit.copy-bytes (shen-jit.bytes (- End At)) 0 Buf At (- End At))))
+
+(define grammar.source
+  F -> (let Code (trap-error (get F grammar.code) (/. E []))
+         (if (empty? Code) (trap-error (get F grammar.loop) (/. E [])) Code)))
+
+\\ F's streaming variant, defined as a stub that compiles it at its first call, again if F changed.
+(define grammar.stream
+  F -> (let G (intern (cn (str F) "/stream"))
+            Def (grammar.source F)
+            _ (if (empty? Def) (error "grammar: ~A is not a grammar rule" F) skip)
+            _ (if (shen-jit.same? (trap-error (get G grammar.made-from) (/. E [])) Def)
+                  skip
+                  (let Params (grammar.parameters Def)
+                       _ (shen.store-arity G (length Params))
+                       _ (put G grammar.made-from Def)
+                    (eval (append [define G | Params] [-> [grammar.compile-stream G F (grammar.list Params)]]))))
+         G))
+
+(define grammar.parameters
+  [define _ | Rest] -> (grammar.before (intern "->") Rest))
+
+(define grammar.before
+  X [X | _] -> []
+  X [Y | Ys] -> [Y | (grammar.before X Ys)])
+
+(define grammar.compile-stream
+  G F Args ->
+    (let Def (grammar.source F)
+         Params (grammar.parameters Def)
+         Buf (hd Params)
+         End (hd (tl (tl Params)))
+         Body (hd (tl (grammar.from (intern "->") Def)))
+      (do (eval (grammar.tables (append [define G | Params] [-> (grammar.rewrite Buf End Body)])))
+          (grammar.apply (fn G) Args))))
+
+(define grammar.from
+  X [X | Rest] -> [X | Rest]
+  X [_ | Rest] -> (grammar.from X Rest))
+
+(define grammar.rewrite
+  Buf End [< X End] -> (let Y (grammar.rewrite Buf End X) [or [< Y [<-address End 0]] [grammar.refill End Y]])
+  Buf End [buffer.make Buf A Z] -> [grammar.copy-span Buf (grammar.rewrite Buf End A) (grammar.rewrite Buf End Z)]
+  Buf End [F Buf A End S | Rest] ->
+    [(grammar.stream F) Buf (grammar.rewrite Buf End A) End S | (map (/. X (grammar.rewrite Buf End X)) Rest)]
+    where (and (symbol? F) (cons? (grammar.source F)))
+  Buf End [X | Y] -> (map (/. Z (grammar.rewrite Buf End Z)) [X | Y])
+  _ _ X -> X)
