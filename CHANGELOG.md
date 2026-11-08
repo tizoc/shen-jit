@@ -7,6 +7,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Optional subprocess and pipeline libraries, `lib/process.shen` and `lib/process-io.shen`: explicit argv,
+  environment/cwd, owned children, bounded waits, cancellable pipes, concurrent communication, streaming
+  sinks, output limits and process-group/job cleanup. `make process` builds their adapter. The
+  [reference](docs/processes.md) includes `tools/process-filter.shen`, which publishes output after exit 0.
 - Optional `lib/fs.shen`: paths, owned metadata, sorted bounded listings and traversal, exclusive temporary
   files/directories, rename without overwrite, replacement and bounded copying through our I/O endpoints.
   Build its platform adapter with `make fs`; [the reference](docs/fs.md) includes the API and `tools/fs-copy.shen`.

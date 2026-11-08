@@ -1,6 +1,7 @@
 /* The primitive table and the general implementations that native code falls
    back to (docs/semantics.md). */
 #define _DEFAULT_SOURCE /* sigaction under -std=c11 with glibc */
+#include "file.h"
 #include "jit.h"
 #include "ops.h"
 #include "reader.h"
@@ -882,7 +883,7 @@ static char *home_path(VM *vm)
 static FILE *open_path(VM *vm, const char *mode)
 {
     char *name = home_path(vm);
-    FILE *f = name ? fopen(name, mode) : NULL;
+    FILE *f = name ? sj_fopen(name, mode) : NULL;
     free(name);
     return f;
 }

@@ -267,6 +267,8 @@ if it had been made then. *Deviation:* until then, reading the
 - `(open Path Direction)`: Path is a string, Direction is `in` or `out`. The file
   opened is `(cn (value *home-directory*) Path)`, resolved by the operating
   system. `out` creates or truncates. Failures raise errors.
+  Linux runtime files are opened with close-on-exec, including files used for
+  loading code and saving images, so they do not leak into spawned children.
 - `*home-directory*` starts as "", so relative paths resolve against the process's
   working directory, as in Shen/Scheme. Startup does not change it, and
   `shen-jit.save-executable` saves it as "".
