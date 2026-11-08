@@ -2113,6 +2113,14 @@ Soufflé chooses a few sorted orders so that one serves several searches: an ord
 - **Explanations** give `[Tuple lattice]` for a value joined from others, which no single rule instance derives.
 - **Checked:** two lattices, the union of bit sets and a flat lattice for constant propagation, by hand and on 20 random graphs, through native and KL joins, adds and removals, against the reference, and explanations and a demand query. Planted, storing the new value instead of the bound fails 117 checks, readers in the same stratum as the lattice in the reference 2. Generating lattice plans natively first only falls back to KL, which changes no result.
 
+### Deleting and rederiving, rejected (2026-11-08, Apple M3 Max)
+
+`datalog.remove` evaluates again each component a removal reaches, which costs about a run of it: 98 ms to remove one edge from the sparse closure, whose run takes about 90. Deleting and rederiving would delete everything with a derivation through the removed facts, rebuild the relations without it, derive again what still holds, and go on semi-naively from that.
+
+- **What it would delete,** for a removed edge from A to B, every tuple from what reaches A to what B reaches: over 20 edges spread across the sparse closure, half of them 1,385,804 of its 1,388,324 tuples, the giant cycle, and the others 1 to 9,208; over 20 calls of the kernel's call graph, most under 400 of 125,617 and two 116,963.
+- **The floor is rebuilding:** storage only grows, so deleting means making a relation again from what is left. Copying the closure's 1,388,324 tuples into a new relation from Shen took 89.5 ms, about a run; a kernel might take a third of that.
+- **Rejected:** for the half of removals that delete little, the gain is at most about three times, all of it the rebuilding's floor; for the other half, deleting nearly everything and deriving it again costs about two runs, where evaluating again costs one. Deleting without rebuilding needs tombstones, checked in every scan, probe and chain of every kernel, programs that never remove included, which the relations of one tuple a key were designed to avoid. Counting derivations instead, for relations outside recursion, would need a count kept with every tuple. If removals from large relations that reach little turn out to matter, a removal could choose between the two by the size of what it would delete, which it can count first, as here.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.
