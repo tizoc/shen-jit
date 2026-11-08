@@ -34,10 +34,14 @@ SHEN_JIT_IMAGE="$dir/listener.img" "$SHEN" eval \
     -e '(output "saved: ~A~%" (trap-error (http.stop (value listener-image.server)) (/. X (error-to-string X))))' \
     > "$dir/load.out" 2>&1
 grep -qxF 'saved: http: saved servers must be recreated' "$dir/load.out"
-SHEN_JIT_IMAGE="$dir/listener.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval \
-    -l tests/http_listener_gc.shen > "$dir/gc.out" 2>&1
-grep -qxF 'listener gc ok' "$dir/gc.out"
-SHEN_JIT_IMAGE="$dir/listener.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval \
-    -s export-gc.path "\"$dir/export-gc.db\"" -l tests/http_export_gc.shen > "$dir/export-gc.out" 2>&1
-grep -qxF 'export gc ok' "$dir/export-gc.out"
-echo '3 passed, 0 failed'
+gc=0
+if [ "${TEST_GC_STRESS:-}" = 1 ]; then # a collection at every allocation: make test-lib-stress
+    SHEN_JIT_IMAGE="$dir/listener.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval \
+        -l tests/http_listener_gc.shen > "$dir/gc.out" 2>&1
+    grep -qxF 'listener gc ok' "$dir/gc.out"
+    SHEN_JIT_IMAGE="$dir/listener.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval \
+        -s export-gc.path "\"$dir/export-gc.db\"" -l tests/http_export_gc.shen > "$dir/export-gc.out" 2>&1
+    grep -qxF 'export gc ok' "$dir/export-gc.out"
+    gc=2
+fi
+echo "$((1 + gc)) passed, 0 failed"

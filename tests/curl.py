@@ -247,10 +247,12 @@ def main():
                     '(curl.streamed? (value curl-image.streamed)) (curl.body-length (value curl-image.streamed)) '
                     '(= (curl.trailers (value curl-image.streamed)) [["x-trail" "yes"]]))'],env=env)
                 assert 'saved: 1024 true true 5 true' in restored.stdout,restored.stdout[-1000:]
-                gc = run([str(executable),'eval','-l','tests/curl_gc.shen'],
-                         env={**env,'SHEN_JIT_GC_STRESS':'1'})
-                assert 'curl gc ok' in gc.stdout and 'curl stream gc ok' in gc.stdout,gc.stdout[-1000:]
-                print('8 passed, 0 failed',flush=True)
+                stress = os.environ.get('TEST_GC_STRESS') == '1' # a collection at every allocation: make test-lib-stress
+                if stress:
+                    gc = run([str(executable),'eval','-l','tests/curl_gc.shen'],
+                             env={**env,'SHEN_JIT_GC_STRESS':'1'})
+                    assert 'curl gc ok' in gc.stdout and 'curl stream gc ok' in gc.stdout,gc.stdout[-1000:]
+                print(f'{7 + stress} passed, 0 failed',flush=True)
                 destination = directory/'download.bin'
                 for path,success in [('/bulk/20971520',True),('/binary',True),('/error',False),('/redirect',False),('/partial',False)]:
                     argv='['+' '.join(map(shen_string,['tools/curl-fetch.shen',base+path,destination]))+']'

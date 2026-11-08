@@ -10,12 +10,16 @@ if command -v cygpath > /dev/null; then dir=$(cygpath -m "$dir"); fi
 SHEN_JIT_IMAGE="$dir/frame.img" "$SHEN" eval \
   -e '(let F (value frame-image.reader) Result (frame.next F) (output "saved: ~A ~A ~A ~A~%" (hd (tl Result)) (buffer.string (hd (tl (tl Result)))) (frame.position F) (frame.next F)))' > "$dir/load.out" 2>&1
 grep -qxF 'saved: 2 bc 15 [eof]' "$dir/load.out"
-SHEN_JIT_IMAGE="$dir/frame.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval -l tests/frame_gc.shen > "$dir/gc.out" 2>&1
-grep -qxF 'frame gc ok' "$dir/gc.out"
+gc=0
+if [ "${TEST_GC_STRESS:-}" = 1 ]; then # a collection at every allocation: make test-lib-stress
+    SHEN_JIT_IMAGE="$dir/frame.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval -l tests/frame_gc.shen > "$dir/gc.out" 2>&1
+    grep -qxF 'frame gc ok' "$dir/gc.out"
+    gc=1
+fi
 printf '(define wrong-frame {number --> frame.result} N -> (frame.next N))\n' > "$dir/wrong.shen"
 if "$SHEN" eval -l lib/buffer.shen -l lib/io.shen -l lib/frame.shen -e '(tc +)' -l "$dir/wrong.shen" > "$dir/wrong.out" 2>&1; then
   echo 'typed framing misuse was accepted'
   exit 1
 fi
 grep -q 'type error' "$dir/wrong.out"
-echo '3 passed, 0 failed'
+echo "$((2 + gc)) passed, 0 failed"

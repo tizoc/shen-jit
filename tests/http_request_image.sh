@@ -20,10 +20,14 @@ SHEN_JIT_IMAGE="$dir/request.img" "$SHEN" eval \
         (output "saved chunked: ~A ~A~%" (buffer.string (http.body Q)) (= (http.trailers Q) [["x" "yes"]])))' \
   > "$dir/chunked.out" 2>&1
 grep -qxF 'saved chunked: abc true' "$dir/chunked.out"
-SHEN_JIT_IMAGE="$dir/request.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval \
-  -l tests/http_request_gc.shen > "$dir/gc.out" 2>&1
-grep -qxF 'request gc ok' "$dir/gc.out"
-grep -qxF 'chunked gc ok' "$dir/gc.out"
+gc=0
+if [ "${TEST_GC_STRESS:-}" = 1 ]; then # a collection at every allocation: make test-lib-stress
+    SHEN_JIT_IMAGE="$dir/request.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval \
+      -l tests/http_request_gc.shen > "$dir/gc.out" 2>&1
+    grep -qxF 'request gc ok' "$dir/gc.out"
+    grep -qxF 'chunked gc ok' "$dir/gc.out"
+    gc=1
+fi
 printf '(define wrong-request {number --> string} N -> (http.method N))\n' > "$dir/wrong.shen"
 if "$SHEN" eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -l lib/http-head.shen -l lib/http-request.shen \
      -e '(tc +)' -l "$dir/wrong.shen" > "$dir/wrong.out" 2>&1; then
@@ -31,4 +35,4 @@ if "$SHEN" eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -l lib/htt
   exit 1
 fi
 grep -q 'type error' "$dir/wrong.out"
-echo '5 passed, 0 failed'
+echo "$((4 + gc)) passed, 0 failed"

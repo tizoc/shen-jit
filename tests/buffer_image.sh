@@ -14,9 +14,13 @@ SHEN_JIT_IMAGE="$dir/managed.img" "$SHEN" eval \
   > "$dir/load.out" 2>&1
 grep -qxF 'saved: 2 99 abcdef' "$dir/load.out" || { cat "$dir/load.out"; exit 1; }
 
-SHEN_JIT_IMAGE="$dir/managed.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval \
-  -l tests/buffer_gc.shen > "$dir/gc.out" 2>&1
-grep -qxF 'gc ok' "$dir/gc.out" || { cat "$dir/gc.out"; exit 1; }
+gc=0
+if [ "${TEST_GC_STRESS:-}" = 1 ]; then # a collection at every allocation: make test-lib-stress
+    SHEN_JIT_IMAGE="$dir/managed.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval \
+      -l tests/buffer_gc.shen > "$dir/gc.out" 2>&1
+    grep -qxF 'gc ok' "$dir/gc.out" || { cat "$dir/gc.out"; exit 1; }
+    gc=1
+fi
 
 "$SHEN" --save "$dir/foreign.img" eval -l lib/ffi.shen -l lib/memory.shen -l lib/buffer.shen \
   -e '(set buffer-saved.foreign (trap-error (buffer.wrap (memory.alloc 8)) (/. E (if (= (error-to-string E) "foreign: this static build cannot load libraries") [] (simple-error (error-to-string E))))))' \
@@ -44,4 +48,4 @@ if "$SHEN" eval -l lib/buffer.shen -l lib/cursor.shen -e '(tc +)' -l "$dir/wrong
   exit 1
 fi
 grep -q 'type error' "$dir/wrong.out" || { cat "$dir/wrong.out"; exit 1; }
-echo '5 passed, 0 failed'
+echo "$((4 + gc)) passed, 0 failed"

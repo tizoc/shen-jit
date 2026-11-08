@@ -60,7 +60,7 @@ SHA256 := $(shell command -v sha256sum 2>/dev/null || echo shasum -a 256)
 # An image loads only into the build that wrote it.
 BUILD_ID := $(shell cat $(RUNTIME_SRC) $(RUNTIME_HDR) | $(SHA256) | cut -c1-16)
 
-.PHONY: all release install stlib test-stlib test-thorn test-native test-buffer test-json test-io test-http test-datalog test-datalog-swipl bench-datalog bench-datalog-souffle test-ffi test-differential test-overrides differential-scheme fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-ctrlc-windows test-linux bench bench-independent bench-numeric stage0 check-lowerer measure load-kernel clean
+.PHONY: all release install stlib test-stlib test-thorn test-native test-buffer test-json test-io test-http test-datalog test-datalog-swipl bench-datalog bench-datalog-souffle test-ffi test-differential test-overrides differential-scheme fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-lib-stress test-core test-libs test-ctrlc-windows test-linux bench bench-independent bench-numeric stage0 check-lowerer measure load-kernel clean
 
 all: $(BUILD)/shen-jit
 
@@ -312,6 +312,21 @@ test-kernel-stress:
 	$(MAKE) test-native GC_STRESS=1000
 	$(MAKE) test-ffi GC_STRESS=1000
 	cd $(BUILD) && SHEN_JIT_GC_STRESS=1 ./shen-jit eval -l ../lib/ffi.shen -l ../tests/ffi_c.shen | $(FFI_RESULT)
+
+# What a change to the runtime, the JIT, the lowerer or the port must pass (about 20 s).
+test-core: test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn \
+  test-native test-ffi test-overrides
+
+# Every library's suite, without the collections test-lib-stress adds (about 30 s).
+test-libs: test-buffer test-json test-io test-fs test-process test-tree-sitter test-http test-datalog test-curl
+
+# The libraries' saved images reloaded with a collection at every allocation, which their own suites
+# leave out for speed.
+LIB_IMAGE_TESTS = buffer_image json_image io_image frame_image io_socket_image http_image \
+  http_request_image http_stream_image http_listener
+test-lib-stress: $(BUILD)/shen-jit
+	for t in $(LIB_IMAGE_TESTS); do TEST_GC_STRESS=1 sh tests/$$t.sh $(SHEN_JIT) || exit 1; done
+	TEST_GC_STRESS=1 CC="$(CC)" sh tests/curl.sh $(SHEN_JIT)
 
 # The optional standard library: an executable of its own, with the kernel's
 # precompiled stlib in its image (docs/guide.md, "The standard library").

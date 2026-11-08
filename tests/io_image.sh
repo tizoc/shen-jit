@@ -24,13 +24,17 @@ if ! grep -qxF 'native unavailable' "$dir/load.out"; then
   grep -qxF 'stale: true' "$dir/load.out"
   grep -qxF 'fresh: [ok 3] xyz' "$dir/load.out"
 fi
-SHEN_JIT_IMAGE="$dir/io.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval -l tests/io_gc.shen > "$dir/gc.out" 2>&1
-grep -qxF 'managed gc ok' "$dir/gc.out"
-grep -q '^native gc ' "$dir/gc.out"
+gc=0
+if [ "${TEST_GC_STRESS:-}" = 1 ]; then # a collection at every allocation: make test-lib-stress
+    SHEN_JIT_IMAGE="$dir/io.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval -l tests/io_gc.shen > "$dir/gc.out" 2>&1
+    grep -qxF 'managed gc ok' "$dir/gc.out"
+    grep -q '^native gc ' "$dir/gc.out"
+    gc=1
+fi
 printf '(define wrong-reader {number --> io.chunk-result} N -> (io.read-chunk N))\n' > "$dir/wrong.shen"
 if "$SHEN" eval -l lib/buffer.shen -l lib/io.shen -e '(tc +)' -l "$dir/wrong.shen" > "$dir/wrong.out" 2>&1; then
   echo 'typed I/O misuse was accepted'
   exit 1
 fi
 grep -q 'type error' "$dir/wrong.out"
-echo '4 passed, 0 failed'
+echo "$((3 + gc)) passed, 0 failed"

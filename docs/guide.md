@@ -878,10 +878,11 @@ These can be set on the command line, or in a file `local.mk`, which git ignores
 `make bench` also needs Shen/Scheme, as above, and `sh tools/ci-deps.sh shen-scheme-src .deps/shen-scheme-src` fetches
 its sources.
 
-The fast tier takes about 20 s, and catches nearly everything:
+`make test-core` checks the runtime, the compiler and the port, in about 20 s, and `make test-libs` the libraries,
+in about 30 s:
 
 ```sh
-make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-fs test-process test-tree-sitter test-http test-datalog test-ffi test-curl test-overrides
+make test-core test-libs
 ```
 
 Run `make deps-tree-sitter` once for the optional binding's pinned native test dependencies, or set
@@ -889,6 +890,8 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 
 | Target | What it does |
 | --- | --- |
+| `make test-core` | `test`, `test-jit`, `test-ops`, `test-kl`, `check-lowerer`, `check-generated`, `test-kernel`, `test-stlib`, `test-thorn`, `test-native`, `test-ffi` and `test-overrides` |
+| `make test-libs` | `test-buffer`, `test-json`, `test-io`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog` and `test-curl` |
 | `make test` | The runtime's unit tests |
 | `make test-jit`, `make test-ops` | The JIT and the instructions, on small programs |
 | `make test-kl` | The `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
@@ -911,6 +914,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make check-lowerer` | Checks the stage 0 output against the lowerer's invariants |
 | `make check-generated` | Compares the generated files with `generated.sha256`. `make update-generated` rewrites it after a change to the lowerer, the port or the lowered test programs |
 | `make test-kl-stress`, `make test-kernel-stress` | The same with frequent collections |
+| `make test-lib-stress` | The libraries' saved images reloaded with a collection at every allocation, which their own suites leave out |
 | `make test-san` | `test`, `test-jit`, `test-ops`, `test-kl`, FFI, libcurl, filesystem, subprocess and Tree-sitter adapters under AddressSanitizer and UBSan |
 | `make test-x86` | The same five, built as x86-64 code (under Rosetta on Apple silicon) |
 | `make test-differential` | Each primitive over generated values, however it is compiled and through C, and properties they must keep. `make differential-scheme` lists what differs from Shen/Scheme, to read and not to pass |
@@ -931,7 +935,7 @@ To run the test suites from a source tarball, point `KERNEL_DIR` at a directory 
 ```sh
 make stlib
 make deps-tree-sitter
-make KERNEL_DIR=/path/to/kernel check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-fs test-process test-tree-sitter test-http test-datalog test-ffi test-curl test-overrides
+make KERNEL_DIR=/path/to/kernel test-core test-libs
 ```
 
 Windows CI runs these suites and GC stress. `tests/cli.sh` leaves out the tests that

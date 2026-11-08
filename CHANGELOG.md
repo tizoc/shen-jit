@@ -62,6 +62,9 @@ All notable changes to this project are documented in this file. The format is b
   such question makes and the database keeps, where they read the whole relation.
 - Datalog derives each combination of tuples once in a rule with several atoms of its own recursion, such as
   `(path X Z) <-- (path X Y) (path Y Z)`, where it derived those that were new together once for each.
+- `make test-core` runs the suites of the runtime, the compiler and the port, and `make test-libs` those of the libraries.
+  The libraries' saved images reloaded with a collection at every allocation moved to `make test-lib-stress`, so their
+  suites take seconds where `make test-http` took over a minute.
 - On arm64, a loop in code written by hand keeps the memory of eight parameters at hand, where it kept four, and gives its
   last registers to words before the bases and limits of that memory, and first to words it carries from one iteration to
   the next. Datalog's larger evaluations take 9 to 21% less time.

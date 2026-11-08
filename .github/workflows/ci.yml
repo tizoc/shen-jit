@@ -114,7 +114,7 @@ jobs:
         run: make test-differential
       - name: GC stress
         if: github.ref_type != 'tag'
-        run: make "KERNEL_DIR=$KERNEL_DIR" test-kernel-stress test-kl-stress
+        run: make "KERNEL_DIR=$KERNEL_DIR" test-kernel-stress test-kl-stress test-lib-stress
       # Ubuntu's address space layout has more random bits than AddressSanitizer accepts.
       - name: Sanitizers
         if: matrix.heavy && github.ref_type != 'tag'

@@ -13,12 +13,16 @@ SHEN_JIT_IMAGE="$dir/json.img" "$SHEN" eval \
     -e '(output "json saved: ~A ~A~%" (= (json.stringify (value json-image.value) []) "[1,-0,true,c#34;c#195;c#169; c#92;u0000c#34;]") (buffer.string (buffer.finish (buffer.append! (value json-image.builder) (buffer.from-string "cd")))))' \
     > "$dir/load.out" 2>&1
 grep -qxF 'json saved: true abcd' "$dir/load.out"
-SHEN_JIT_IMAGE="$dir/json.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval -l tests/json_gc.shen > "$dir/gc.out" 2>&1
-grep -qxF 'json gc ok' "$dir/gc.out"
+gc=0
+if [ "${TEST_GC_STRESS:-}" = 1 ]; then # a collection at every allocation: make test-lib-stress
+    SHEN_JIT_IMAGE="$dir/json.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval -l tests/json_gc.shen > "$dir/gc.out" 2>&1
+    grep -qxF 'json gc ok' "$dir/gc.out"
+    gc=1
+fi
 printf '(define wrong-json {symbol --> buffer.view} X -> (json.encode X []))\n' > "$dir/wrong.shen"
 if "$SHEN" eval -l lib/buffer.shen -l lib/grammar.shen -l lib/json.shen -e '(tc +)' -l "$dir/wrong.shen" > "$dir/wrong.out" 2>&1; then
     echo 'typed JSON misuse was accepted'
     exit 1
 fi
 grep -q 'type error' "$dir/wrong.out"
-echo '3 passed, 0 failed'
+echo "$((2 + gc)) passed, 0 failed"

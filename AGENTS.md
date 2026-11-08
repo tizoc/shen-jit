@@ -67,11 +67,28 @@ A commit message says what changed and what it measured.
 
 ## Testing
 
-Run the fast tier after every change; it takes about 20 s and catches nearly everything:
+Run what the change can break, and nothing more: CI runs everything on every push.
 
-```bash
-make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-fs test-process test-tree-sitter test-http test-datalog test-ffi test-curl test-overrides
-```
+| What changed | What to run |
+| --- | --- |
+| The runtime, the JIT, the lowerer, the port, `vendor/` or the generated files | `make test-core` (about 20 s) |
+| The C API (`include/shen.h`, `src/runtime/ffi.c`), images or threads, which libraries and their adapters use too | `make test-core test-libs` |
+| `lib/native.shen` | `make test-native test-datalog` |
+| `lib/ffi.shen` | `make test-ffi test-libs` |
+| A library others load: `buffer`, `io`, `io-file`, `grammar`, `json`, `memory`, `socket`, `deadline`, `clock` or `fs` | `make test-libs` (about 30 s) |
+| `datalog`, `http-*`, `process*`, `tree-sitter`, `curl` | `make test-datalog`, `test-http`, `test-process`, `test-tree-sitter`, `test-curl` |
+| `frame`; `cursor`; `mmap`, `handle`, `sqlite` | `make test-io`; `test-buffer`; `test-ffi`, and `test-http` for `sqlite` |
+| An application in `example-apps/` | The suite that runs its `test.sh`: `test-http` for `sqlite-http`, `test-datalog` for `depends` |
+| A test, `Makefile`, `tools/` or CI | What the edit touches |
+| Documentation only | Nothing; `make guide` if a rendered page's layout changed, and the examples you changed |
+
+`make test-core` is `test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn
+test-native test-ffi test-overrides`, and `make test-libs` is `test-buffer test-json test-io test-fs test-process
+test-tree-sitter test-http test-datalog test-curl`.
+
+Keep each suite fast. A check that needs a collection at every allocation, a long wait or a large input goes in a
+stress target that CI runs, as `test-lib-stress` holds the libraries' saved images reloaded under GC stress: a test
+script runs such a part only when `TEST_GC_STRESS=1`.
 
 `make test-curl` builds the optional adapter with libcurl's development headers, then runs an independent
 loopback HTTP/TLS fixture with Python 3 and the `openssl` command. Static builds run the pure checks and
@@ -91,6 +108,7 @@ CI runs the heavier suites on every push, or the same thing natively, so leave t
 
 - `make test-kernel-stress test-kl-stress` (GC stress, about 2 minutes): changes to allocation, the collector or the heap pointer.
   Under `test-kl-stress` every allocation collects, so keep allocation loops in eval cases short, and under `test-kernel-stress` every 1000 words. The old space is overwritten after each collection, so a stale pointer fails at once.
+- `make test-lib-stress` (about 2 minutes): changes to how a library keeps native state across a saved image or a collection, such as handles, finalizers or adapters. It reloads each library's saved image with a collection at every allocation.
 - `make test-san` (sanitizers): changes to C code that handles memory.
 - `make test-x86` (x86-64 under Rosetta): new kinds of SLJIT instructions or calls in the JIT, and changes to how `src/runtime/ffi.c` calls C.
 - `make fuzz-native` (mutated code objects, a few minutes): changes to what the JIT assumes about bytecode, which the checker in `lib/native.shen` must then enforce for code written by hand.

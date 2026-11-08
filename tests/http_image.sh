@@ -14,8 +14,12 @@ SHEN_JIT_IMAGE="$dir/http.img" "$SHEN" eval \
   -e '(let H (http.read-head (value http-image.head)) B (io.read-all (value http-image.reader) 4) (output "saved: ~A ~A~%" (buffer.length (hd (tl H))) (buffer.string (hd (tl B)))))' > "$dir/load.out" 2>&1
 grep -qxF 'budget stale: true' "$dir/load.out"
 grep -qxF 'saved: 5 body' "$dir/load.out"
-SHEN_JIT_IMAGE="$dir/http.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval -l tests/http_gc.shen > "$dir/gc.out" 2>&1
-grep -qxF 'http gc ok' "$dir/gc.out"
+gc=0
+if [ "${TEST_GC_STRESS:-}" = 1 ]; then # a collection at every allocation: make test-lib-stress
+    SHEN_JIT_IMAGE="$dir/http.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval -l tests/http_gc.shen > "$dir/gc.out" 2>&1
+    grep -qxF 'http gc ok' "$dir/gc.out"
+    gc=1
+fi
 printf '(define wrong-head {number --> http.head-result} N -> (http.read-head N))\n' > "$dir/wrong.shen"
 if "$SHEN" eval -l lib/buffer.shen -l lib/io.shen -l lib/http-head.shen \
      -e '(tc +)' -l "$dir/wrong.shen" > "$dir/wrong.out" 2>&1; then
@@ -23,4 +27,4 @@ if "$SHEN" eval -l lib/buffer.shen -l lib/io.shen -l lib/http-head.shen \
   exit 1
 fi
 grep -q 'type error' "$dir/wrong.out"
-echo '3 passed, 0 failed'
+echo "$((2 + gc)) passed, 0 failed"

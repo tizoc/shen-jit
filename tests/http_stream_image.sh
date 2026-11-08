@@ -12,6 +12,10 @@ SHEN_JIT_IMAGE="$dir/stream.img" "$SHEN" eval \
     -e '(output "stale: ~A~%" (trap-error (http.source-close (value stream-image.source)) (/. X (error-to-string X))))' \
     > "$dir/stale.out" 2>&1
 grep -qxF 'stale: http: saved response sources must be recreated' "$dir/stale.out"
-SHEN_JIT_IMAGE="$dir/stream.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval -l tests/http_stream_gc.shen > "$dir/gc.out" 2>&1
-grep -qxF 'stream gc ok' "$dir/gc.out"
-echo '2 passed, 0 failed'
+gc=0
+if [ "${TEST_GC_STRESS:-}" = 1 ]; then # a collection at every allocation: make test-lib-stress
+    SHEN_JIT_IMAGE="$dir/stream.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval -l tests/http_stream_gc.shen > "$dir/gc.out" 2>&1
+    grep -qxF 'stream gc ok' "$dir/gc.out"
+    gc=1
+fi
+echo "$((1 + gc)) passed, 0 failed"

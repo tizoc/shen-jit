@@ -9,7 +9,11 @@ if command -v cygpath > /dev/null; then dir=$(cygpath -m "$dir"); fi
   -l tests/io_socket_image.shen -e '(io-socket-image.save)' > "$dir/save.out" 2>&1
 SHEN_JIT_IMAGE="$dir/socket.img" "$SHEN" eval -e '(io-socket-image.reload)' > "$dir/load.out" 2>&1
 grep -qxE 'socket image (ok|unavailable)' "$dir/load.out"
-SHEN_JIT_IMAGE="$dir/socket.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval \
-  -e '(io-socket-image.gc)' > "$dir/gc.out" 2>&1
-grep -qxE 'socket gc (ok|unavailable)' "$dir/gc.out"
-echo '2 passed, 0 failed'
+gc=0
+if [ "${TEST_GC_STRESS:-}" = 1 ]; then # a collection at every allocation: make test-lib-stress
+    SHEN_JIT_IMAGE="$dir/socket.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval \
+      -e '(io-socket-image.gc)' > "$dir/gc.out" 2>&1
+    grep -qxE 'socket gc (ok|unavailable)' "$dir/gc.out"
+    gc=1
+fi
+echo "$((1 + gc)) passed, 0 failed"
