@@ -24,6 +24,10 @@ All notable changes to this project are documented in this file. The format is b
   `lib/grammar.shen` must be loaded before either. JSON decoding is 1.2 to 4 times as fast, most for strings without
   escapes. Some invalid inputs are reported with a different message or offset: what was expected where it failed.
 
+### Fixed
+
+- Static Linux builds run curl's pure checks and skip its native tests before building an adapter or starting fixtures.
+
 ## [0.5] - 2026-11-07
 
 ### Added

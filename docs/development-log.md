@@ -964,6 +964,12 @@ the Ryzen VM, in 214 s. macOS had hidden everything below. Timing is in the JIT 
   but loads a second libc (`/proc/self/maps` shows it), and a library calling into a static executable gets `undefined symbol`.
   So a static build refuses to load libraries, and says so. Release jobs became dynamic, built on an old glibc to run on newer
   ones, with static ones beside them until they cost more than they give.
+- **Curl checks on static Linux (2026-11-08).** Both static CI jobs passed the 29 pure checks, then failed the library probe:
+  the shell searched for "a static build", while the runtime says "this static build". The probe now catches only the
+  static-build error in Shen and prints an explicit marker; other loading errors still fail. On Linux arm64 with gcc 10
+  in Docker on an M3 Max, the old harness fails and the new one skips native checks after all 29 pure checks pass, with
+  adapter compilation disabled and neither Python nor pkg-config installed. The 191 dynamic curl checks and fast tier pass
+  on macOS arm64; an intentionally missing native symbol still fails the probe.
 - **CI (2026-11-04).** One job makes the tarball, the only one to run Shen/Scheme, and each platform builds it with a C compiler
   alone and runs every suite and GC stress. CI runners are not used for timing.
 - **CI was rehearsed** with actionlint, in containers and on the Mac, before any run on GitHub. That found the

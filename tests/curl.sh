@@ -11,13 +11,15 @@ grep '^[0-9]* passed' "$dir/pure.out" | awk '{ print } END { exit !/ 0 failed/ }
 "$SHEN" eval -l lib/ffi.shen \
   -e '(shen-jit.library curl-probe ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])' \
   -e '(define-foreign curl-probe.abs curl-probe "abs" (int32) --> int32)' \
-  -e '(output "curl shared: ~A~%" (curl-probe.abs -1))' > "$dir/probe.out" 2>&1 || {
-    if grep -q 'a static build' "$dir/probe.out"; then
-        echo 'curl: native checks skipped (a static build cannot load libraries)'
-        exit 0
-    fi
-    exit 1
-  }
+  -e '(output "curl shared: ~A~%"
+        (trap-error (curl-probe.abs -1)
+          (/. E (if (= (error-to-string E) "foreign: this static build cannot load libraries")
+                    static
+                    (simple-error (error-to-string E))))))' > "$dir/probe.out" 2>&1
+if grep -q '^curl shared: static' "$dir/probe.out"; then
+    echo 'curl: native checks skipped (a static build cannot load libraries)'
+    exit 0
+fi
 grep -q '^curl shared: 1' "$dir/probe.out"
 adapter="$dir/shen-curl.so"
 if [ "${OS:-}" = Windows_NT ]; then adapter="$dir/shen-curl.dll"; fi
