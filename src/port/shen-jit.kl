@@ -623,6 +623,20 @@ read-file-as-string joins the bytes with one cn each. Paths are relative to
 
 (defun read-file-as-string (File) (shen-jit.read-file File false))
 
+"pr writes a string to a byte stream at once: its bytes copied to a buffer,
+then one shen-jit.write-bytes, where the kernel's takes a write-byte and a pos
+under a handler for each byte, and finds the end by the error the last raises.
+As there, a value that is not a string, or the empty string, writes nothing,
+to any stream."
+
+(defun pr (S Stream)
+  (cond ((value *hush*) S)
+        ((char-stream? Stream) (write-string S Stream))
+        ((and (string? S) (not (= S "")))
+         (let Bytes (shen-jit.string->bytes S)
+           (do (shen-jit.write-bytes Bytes 0 (shen-jit.bytes-length Bytes) Stream) S)))
+        (true S)))
+
 "shen.record-kl, behind every definition, adds the name to shen.*userdefs*
 with adjoin, which looks through the whole list, so loading n new
 definitions took time growing with n squared. A name without a shen.source

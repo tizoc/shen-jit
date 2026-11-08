@@ -22,7 +22,7 @@ The functions that Shen/Scheme 0.54 replaces in its `src/overrides.shen`, with w
 | `integer?` | Chez `integer?` | a primitive, inline for fixnums | Done |
 | `not`, `boolean?` | native | the kernel's, small enough to inline | Not needed |
 | `shen.numbyte?`, `shen.byte->digit` | native | the kernel's `shen.digit?` and `shen.byte->digit`, small enough to inline | Not needed |
-| `pr` | writes the string at once | the kernel's, one `write-byte` per byte | Not now: 2 MB of output took 40 ms, against 41 ms in Shen/Scheme. Worth it only for output-heavy programs |
+| `pr` | writes the string at once | the port's: the string's bytes copied to a buffer and written by one `shen-jit.write-bytes`, where the kernel's takes a `write-byte` and a `pos` under a handler for each byte | Done |
 | `read-file-as-bytelist`, `read-file-as-string` | native | C (`shen-jit.read-file`) | Done |
 | `char-stream?`, `read-unit-string`, `write-string` | no character streams | the same | Done |
 | `input+` | `shen.input-h+` | the port's | Done |

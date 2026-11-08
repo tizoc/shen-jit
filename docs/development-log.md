@@ -696,7 +696,7 @@ all that Shen/Scheme and the earlier prototype replace.
 
 - **Left as the kernel's** (2026-11-02, Apple M3 Max, against Shen/Scheme 0.52). `not`, `boolean?` and
   `shen.byte->digit` inline as they are. `pr`: 2 MB of output in 40 ms against 41; writing a string at once waits for
-  an output-heavy program. `element?`: 1.1 ns per element against 2.4.
+  an output-heavy program (done later: `pr` at once, below). `element?`: 1.1 ns per element against 2.4.
 - **`symbol?`** (2026-11-01). The kernel's relies on `str` raising on non-atoms, which `str` here never does, as in
   Shen/Scheme, so closures and Prolog variables read as symbols: all 12 first failures of the kernel suite.
 - **Numbers** (2026-11-01). Integers are fixnums and overflow raises, where Shen/Scheme has bignums. Literals beyond
@@ -714,6 +714,14 @@ all that Shen/Scheme and the earlier prototype replace.
   lowerer; 150410 bytes together) retired 21.04 to 1.54 G instructions, with the same number of forms.
   The kernel suite and reading those files from disk were within 0.2%. Empty strings, UTF-8, embedded NUL
   and the non-string error are checked in the eval cases.
+- **`pr` at once** (2026-11-08, Apple M3 Max, against the build before, two alternating rounds of five). The kernel's
+  writes a byte at a time, each a `write-byte` and a `pos` under a handler, and finds the end by the error the last
+  `pos` raises. The port's copies the string to a byte buffer and writes it by one `shen-jit.write-bytes`. 2 MB in
+  40,000 calls to a file 40 → 4.0 ms; 40,000 lines of `output`, formatting included, to a pipe 41.5 → 5.6 ms. The same
+  bytes are written. `make test-overrides` runs both into files of their own over every one-byte string and some
+  others, non-strings, a closed stream and non-streams, each with and without `*hush*`; planted, `*hush*` ignored fails
+  5,140 checks, the empty string written to what is not a stream 4, the last byte dropped and the count returned
+  1,028 each. Not tried: a primitive that writes a string with no copy.
 - **`append` in C, `reverse` not** (Apple M3 Max, against the kernel's). `append` copies in one pass into the free
   space (2026-11-02): 32 elements 61 → 32 ns (Shen/Scheme 43), one element 0.5 ns slower. The same for `reverse`
   (2026-11-03) was rejected: 37 → 32 ns at 32 elements, but 2.4 → 3.3 ns at one and 233 → 320 ns at 256.
@@ -2152,7 +2160,7 @@ On one thread, ahead everywhere but the skewed join, which is even, and the shor
 `shen-jit.write-bytes B I N Stream`, a primitive, writes a range of a byte buffer by one `fwrite`. The kernel's `pr` writes a string a byte at a time and finds its end by an error caught at each character, about 27 ns a byte, and `write-byte` takes a call a byte, about 19 ns; joining lines into chunks for `pr` changed nothing. It is the last primitive, so no other's number moves; Shen/Scheme as the host makes the same generated files.
 
 - **Fact files:** `datalog.write-facts` writes each line through it, 275 ms for the sparse closure's 1,388,324 lines against 455. Soufflé 2.5's compiled program writes the same relation in about 276 ms, its run with the output less its read, as without an output it skips the read too. Building the lines, decoding each tuple and its numbers into text, is most of what is left.
-- **Not done:** `pr` itself through it. Every program's output would gain, but `pr` is the kernel's, and an override must agree with it under `make test-overrides`; worth its own change.
+- **Not done:** `pr` itself through it. Every program's output would gain, but `pr` is the kernel's, and an override must agree with it under `make test-overrides`; worth its own change (done later, under "Kernel overrides").
 
 ### Native bit-set lattices (2026-11-08, Apple M3 Max, against the commit before)
 

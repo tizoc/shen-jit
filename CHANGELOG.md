@@ -7,6 +7,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- `pr`, through which `output` and `print` write, writes a string at once, not a byte at a time.
 - Datalog derives each combination of tuples once in a rule with several atoms of its own recursion, such as
   `(path X Z) <-- (path X Y) (path Y Z)`, where it derived those that were new together once for each.
 
