@@ -91,6 +91,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Windows command-line arguments preserve Unicode as UTF-8, including saved executables, so
+  programs using the I/O library can open Unicode paths supplied as arguments.
+
 - Static Linux builds run curl's pure checks and skip its native tests before building an adapter or starting fixtures.
 
 ## [0.5] - 2026-11-07

@@ -353,10 +353,26 @@ static void raise_on_broken_pipes(void)
 static void raise_on_broken_pipes(void) {}
 #endif
 
-int main(int argc, char **argv)
+static int start(int argc, char **argv)
 {
     if (argc == 4 && strcmp(argv[1], "--stage1") == 0)
         return stage1(argv[2], argv[3]);
     raise_on_broken_pipes();
     return run(argc, argv);
 }
+
+#ifdef _WIN32
+int wmain(int argc, wchar_t **wide)
+{
+    char **argv = win_arguments(argc, wide);
+    if (!argv) {
+        fprintf(stderr, "shen-jit: cannot encode Windows command-line arguments as UTF-8\n");
+        return 1;
+    }
+    int result = start(argc, argv);
+    win_arguments_free(argc, argv);
+    return result;
+}
+#else
+int main(int argc, char **argv) { return start(argc, argv); }
+#endif

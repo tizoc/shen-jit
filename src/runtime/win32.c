@@ -5,7 +5,35 @@
 #include <fcntl.h>
 #include <io.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <windows.h>
+
+/* The narrow CRT argument list uses the active ANSI code page and loses names
+   before our UTF-8 I/O can see them. Convert the wide entry point's arguments. */
+void win_arguments_free(int argc, char **argv)
+{
+    if (!argv)
+        return;
+    for (int i = 0; i < argc; i++)
+        free(argv[i]);
+    free(argv);
+}
+
+char **win_arguments(int argc, wchar_t **wide)
+{
+    char **argv = calloc((size_t)argc + 1, sizeof *argv);
+    if (!argv)
+        return NULL;
+    for (int i = 0; i < argc; i++) {
+        int n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide[i], -1, NULL, 0, NULL, NULL);
+        if (!n || !(argv[i] = malloc((size_t)n)) ||
+            !WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide[i], -1, argv[i], n, NULL, NULL)) {
+            win_arguments_free(argc, argv);
+            return NULL;
+        }
+    }
+    return argv;
+}
 
 /* Windows opens the standard streams in text mode, which would turn \n into
    \r\n. Byte streams see the same bytes as elsewhere. */

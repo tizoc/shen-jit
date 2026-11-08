@@ -9,6 +9,7 @@ CFLAGS ?= -std=c11 -O2 -g -Wall -Wextra -Wno-unused-parameter -falign-functions=
 ifeq ($(OS),Windows_NT)
 # Static, so that the executable needs nothing but Windows, with the C stack of Linux's default.
 LDLIBS ?= -static -lm -lpthread -Wl,--stack,8388608
+MAIN_FLAGS := -municode
 # Windows runs only what is named .exe, so executables are written under both names.
 AS_EXE = cp $(1) $(1).exe
 EXE := .exe
@@ -107,7 +108,7 @@ test-tree-sitter: $(BUILD)/shen-jit
 # The runtime alone, and the image stage 1 writes with it from the stage 0
 # output.
 $(BUILD)/runtime: src/runtime/main.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(RUNTIME_HDR) VERSION
-	$(CC) $(CFLAGS) $(SLJIT_FLAGS) -DSJ_VERSION='"$(VERSION)"' -o $@ src/runtime/main.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(LDLIBS)
+	$(CC) $(CFLAGS) $(SLJIT_FLAGS) $(MAIN_FLAGS) -DSJ_VERSION='"$(VERSION)"' -o $@ src/runtime/main.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(LDLIBS)
 
 $(BUILD)/shen-jit.img: $(BUILD)/runtime $(BUILD)/stage0/.done
 	$(BUILD)/runtime --stage1 $(BUILD)/stage0 $@

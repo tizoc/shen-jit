@@ -566,6 +566,20 @@ echo "status $?" >> "$dir/app.out"
 check save-exe-args "$dir/app.out" 'args ["--seal" "x"]'
 check save-exe-kept "$dir/app.out" "kept 5"
 check save-exe-run "$dir/app.out" "status 0"
+# Arguments arrive as UTF-8 on every platform, including supplementary Unicode scalars on Windows.
+cat > "$dir/utf8-main.shen" <<'EOF'
+(define utf8.main
+  -> (if (= (tl (value *argv*)) ["c#206;c#187;" "c#240;c#159;c#152;c#128;" ""])
+         (output "unicode argv ok~%")
+         (error "command-line arguments changed")))
+EOF
+printf '(load "%s/utf8-main.shen")\n(utf8.main)\n' "$dir" > "$dir/utf8-script.shen"
+"$SHEN" script "$dir/utf8-script.shen" 'λ' '😀' '' > "$dir/utf8-script.out" 2>&1
+check utf8-script-args "$dir/utf8-script.out" "unicode argv ok"
+"$SHEN" eval -l "$dir/utf8-main.shen" \
+    -e "(shen-jit.save-executable \"$dir/utf8-app\" utf8.main)" > "$dir/utf8-save.out" 2>&1
+"$dir/utf8-app" 'λ' '😀' '' > "$dir/utf8-app.out" 2>&1
+check utf8-saved-args "$dir/utf8-app.out" "unicode argv ok"
 # With a collection at every allocation, nothing but its value keeps the entry point's
 # global alive while the image is written.
 SHEN_JIT_GC_STRESS=1 "$SHEN" script "$dir/app.shen" > /dev/null 2>&1

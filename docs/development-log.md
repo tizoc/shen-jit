@@ -1826,6 +1826,20 @@ execution remains CI's responsibility; no new platform ABI or instruction was in
   load. A test with a clock that advances at each reading puts the expiry between each pair in turn;
   without the fix it fails for two of its six budgets.
 
+### Windows command-line encoding (2026-11-08, macOS checks and Windows CI)
+
+- The native source-dependency CLI exposes a runtime boundary bug: Windows' narrow CRT argument
+  list turns the fixture's Unicode data filename into `facts ?.ndjson` before our UTF-8 I/O sees it.
+  Parser/profile/reference checks already pass on Windows; the saved program cannot open that
+  corrupted name. The input fixture stays Unicode rather than weakening the test to ASCII.
+- The Windows executable now uses the wide CRT entry point and converts each UTF-16 argument to
+  UTF-8 with checked allocations and cleanup on failure/normal return. The Makefile selects the
+  wide startup only for the runtime executable; test binaries retain their own entry points.
+  Scripts and saved programs share the same conversion. POSIX keeps its existing byte arguments.
+- Added direct script/saved-program regressions for a Greek character, a supplementary Unicode
+  scalar and an empty argument. The source-dependency driver also exercises Unicode data paths in
+  both launch forms. Core/library checks pass on macOS; the CI matrix checks native Windows behavior.
+
 ### Source-analysis stabilization (2026-11-08, M3 Max, macOS and Linux arm64)
 
 - Rebased the three source-analysis commits onto the current runtime/CI changes, including process

@@ -126,6 +126,9 @@ shen-jit script prog.shen a b          # *argv* is ["prog.shen" "a" "b"]
 shen-jit eval -l prog.shen -e '(main)' # load a file, evaluate an expression
 ```
 
+On Windows, the wide command line is converted to UTF-8 before arguments enter Shen, including
+programs made with `shen-jit.save-executable`.
+
 The commands come from the kernel's launcher (`shen-jit --help`):
 
 | Command | What it does |

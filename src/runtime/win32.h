@@ -8,6 +8,8 @@
 #include <stddef.h>
 
 void win_startup(void);
+char **win_arguments(int argc, wchar_t **wide);
+void win_arguments_free(int argc, char **argv);
 double win_run_seconds(void);
 double win_unix_seconds(void);
 bool win_executable(char *path, size_t size);
