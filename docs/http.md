@@ -227,7 +227,7 @@ does not accept a second request or add an accept loop. The [bounded listener](h
 the persistent variant below with a connection cap and controlled shutdown.
 The [streaming response reference](http-streaming.md) covers source ownership and output chunk limits.
 
-`read-buffer-size` bounds the connection's input reader and each read scratch allocation. It is independent
+`read-buffer-size` bounds the connection's input reader and the chunks its reads borrow. It is independent
 of head/body limits: larger heads and bodies span refills, and pipelined bytes remain in the same reader.
 Small values trade more reads/copies for less live input memory. It applies to both connection drivers
 and `http.listen`; the general I/O reader defaults are unchanged.

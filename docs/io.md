@@ -178,8 +178,9 @@ using a descriptor, so old descriptor numbers cannot alias a new process's files
 ## Custom backends and types
 
 `io.endpoint Name Mode Capacity Read Write Close` creates an endpoint; modes are `read`, `write` and
-`read-write`. Read and Write each receive fresh managed raw bytes starting at zero, with length at most
-Capacity. Read returns `[read N]`, `[eof]` or `[error Error]`; Write returns `[written N]` or `[error Error]`.
+`read-write`. Read and Write each receive managed raw bytes starting at zero, with length at most
+Capacity. Write's are fresh. Read's are a chunk the endpoint keeps and lends to later reads, so Read
+copies into it and returns, and keeps no reference to it. Read returns `[read N]`, `[eof]` or `[error Error]`; Write returns `[written N]` or `[error Error]`.
 N must be positive and no larger than the supplied chunk. A zero write becomes a no-progress error;
 a zero nonempty read is an invalid backend result. Deliver progress first, then report a later terminal
 condition on the next call. Expected failures must use these results rather than throwing after a transfer.

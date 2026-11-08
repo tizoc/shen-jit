@@ -29,6 +29,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- A read lends the backend a chunk that the endpoint keeps, where it allocated a fresh one as large as the reader's
+  free space each time. Small reads into a large reader are 3 to 8 times as fast, an HTTP head takes 15 to 32% less time,
+  and a JSON value read a byte at a time as it arrives 6.6 times. A custom backend's Read must not keep its chunk.
 - `lib/http-request.shen` parses the request line with a grammar, and `lib/json.shen` decodes with one, so
   `lib/grammar.shen` must be loaded before either. JSON decoding is 1.2 to 4 times as fast, most for strings without
   escapes. Some invalid inputs are reported with a different message or offset: what was expected where it failed.

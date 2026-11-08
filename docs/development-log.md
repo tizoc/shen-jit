@@ -1350,7 +1350,8 @@ parsing again from the start, and `json.read` reads JSON values that way.
   showed.
 - **Found on the way: each read allocates a scratch as large as the reader's free space,** up to the endpoint's bound,
   which a backend fills and the reader copies in. With small deliveries this dominates: a byte at a time made 72
-  collections in 85 ms, and 2,014 in 2.25 s with an endpoint bound of 1 MiB. Framing pays it too. Not changed here.
+  collections in 85 ms, and 2,014 in 2.25 s with an endpoint bound of 1 MiB. Framing pays it too. Not changed here,
+  but in "Read chunks kept by the endpoint" below.
 - **Checked:** every chunk size from 1 to the whole of a 250-byte stream of thirteen documents gives the complete
   decoder's values; the remainder after a value, eof, errors at their stream offsets, capacity, a reader's error with
   nothing consumed, arguments to the entry rule, a rule defined again, and spans that outlive the reader's buffer.
@@ -1374,6 +1375,41 @@ parsing again from the start, and `json.read` reads JSON values that way.
 - **Same answers:** 44 heads from the request tests, at chunks of 1, 3 and 1,000 bytes, give `http.parse-request`'s
   status and request and leave the same bytes unread; with eof, a cut head, the head limit, a 414 and a 431, 137 checks
   in `tests/http_read.shen`. Messages for malformed line endings may differ, all 400. The macro is 509 lines.
+
+### Read chunks kept by the endpoint (2026-11-08, M3 Max, macOS arm64, against a fresh chunk per read)
+
+Each read gave the backend a fresh chunk as large as the reader's free space, up to the endpoint's bound, and copied
+what it returned into the reader: a 92-byte packet into a 16 KiB reader allocated and zeroed 16 KiB, and into a
+64 KiB one 64 KiB.
+
+- **The endpoint keeps its chunks.** A reader asks for its whole free space: the same size read after read while it
+  keeps up, which now gets the largest chunk asked for, kept by the endpoint. While it waits for more of a value, its
+  free space shrinks with each read, and a chunk of that exact size would be new every time, so those reads get the
+  largest power of two below it, kept apart: two chunks at most, at most one and a half times the reader's size, and
+  each read at least half as large as it was. The backend contract said the chunk was fresh; now it is lent again,
+  which every backend here allowed, as none keeps it. 14 lines in `lib/io.shen`.
+- **Not done: reading straight into the reader's buffer,** which would save the copy too. A backend takes raw bytes
+  from offset zero, so it would need an offset in every backend's signature, or the reader's own storage lent while
+  its queue is empty, which a backend that kept it could write into later. The copy is the small part.
+- **Speed,** three runs each, under a load of 2.0 to 2.5. Packets of one size, one per read, 100,000 of them, over an
+  endpoint bounded at 64 KiB, and the JSON cases of `tests/bench/json-streaming.shen`:
+
+  | Case | Fresh chunk | Kept chunk |
+  | --- | ---: | ---: |
+  | 92-byte packets into 16 KiB, `io.read-chunk` | 0.89 to 0.93 µs | 0.29 µs |
+  | 486-byte packets into 16 KiB | 0.90 to 0.97 µs | 0.30 µs |
+  | 92-byte packets into 64 KiB | 2.29 to 2.38 µs | 0.27 to 0.28 µs |
+  | A three-field head, `http.read-request` | 2.07 to 2.14 µs | 1.42 to 1.43 µs |
+  | A browser's head, 486 bytes | 4.45 to 4.54 µs | 3.83 to 3.85 µs |
+  | 64 KiB JSON string a byte at a time, read in place | 88 to 89 ms | 13.0 to 13.6 ms |
+  | The same, framed | 172 to 174 ms | 29.5 ms |
+  | 64 KiB JSON string in 16-byte chunks, read in place | 7.1 to 7.3 ms | 0.9 ms |
+  | The same, framed | 12.3 to 12.6 ms | 2.0 ms |
+  | 28.8 KB of objects in 16-byte chunks, read in place / framed | 0.6 / 1.1 ms | 0.3 to 0.4 / 0.7 to 0.8 ms |
+
+  The packet runs made 466 collections, 33% of the CPU, and now 23, 3.4%. Kept chunks alone left reading in place at
+  89 ms a byte at a time, slower than framing's 29: the powers of two brought it to 13. Reading in place stays ahead
+  of framing at every chunk size.
 
 ### Typed grammars (2026-11-08, M3 Max, macOS arm64, against the same grammar untyped)
 

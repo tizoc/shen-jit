@@ -72,14 +72,15 @@
     [io-error Op Domain Code Resource Message N (append Secondary [Other])])
 
 \\ Endpoint slots: tag, name, mode, capacity, read/write/close callbacks, state,
-\\ remembered close result, reader/writer leases, in-flight flag, optional native guard and backend context.
+\\ remembered close result, reader/writer leases, in-flight flag, optional native guard and backend context,
+\\ and the read chunks.
 (define io.endpoint
   Name Mode Capacity Read Write Close ->
     (let Cap (io.capacity Capacity)
          _ (if (and (string? Name) (element? Mode [read write read-write]))
                true
                (error "io: invalid endpoint name or mode"))
-      (io.record [io.endpoint Name Mode Cap Read Write Close open [] [] [] false [] []])))
+      (io.record [io.endpoint Name Mode Cap Read Write Close open [] [] [] false [] [] [] []])))
 
 (define io.endpoint-check
   E -> (if (io.tag? E io.endpoint) E (error "io: not an endpoint")))
@@ -135,6 +136,28 @@
           [read Count]))
   _ _ _ _ -> (error "io: invalid backend read result"))
 
+\\ A read's chunk, which the endpoint keeps and lends again; the backend copies into it and the read
+\\ copies out at once. A reader asks for its whole free space: the same size while it keeps up, which
+\\ gets the largest chunk asked for, and less while it waits for more of a value, which gets the
+\\ largest power of two below, kept apart: a few chunks, each read at least half as large.
+(define io.scratch
+  E Size -> (let Full (<-address E 14)
+              (cases (or (= Full []) (> Size (shen-jit.bytes-length Full))) (io.keep E 14 (shen-jit.bytes Size))
+                     (= Size (shen-jit.bytes-length Full)) Full
+                     true (io.scratch-below E (io.power-below Size 1)))))
+
+(define io.scratch-below
+  E Size -> (let Kept (<-address E 15)
+              (if (and (not (= Kept [])) (= (shen-jit.bytes-length Kept) Size))
+                  Kept
+                  (io.keep E 15 (shen-jit.bytes Size)))))
+
+(define io.power-below
+  Size P -> (if (> (* 2 P) Size) P (io.power-below Size (* 2 P))))
+
+(define io.keep
+  E Slot B -> (do (address-> E Slot B) B))
+
 (define io.read-raw
   E V Lease ->
     (let _ (io.check E read Lease)
@@ -142,7 +165,7 @@
          N (buffer.length V)
       (if (= N 0)
           [read 0]
-          (let Chunk (shen-jit.bytes (io.min N (<-address E 3)))
+          (let Chunk (io.scratch E (io.min N (<-address E 3)))
                Read (<-address E 4)
                Result (io.invoke E (freeze (Read Chunk)))
             (io.read-result E V Chunk Result)))))
