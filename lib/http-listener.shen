@@ -38,6 +38,7 @@
   Host Port Handler Options ->
     (let Config (http.listener-options Options)
          _ (clock.monotonic)
+         _ (grammar.prepare http.<head>)
          L (socket.listen Host Port)
       (socket.closing-on-error L (freeze (http.listener-start L Handler Config)))))
 

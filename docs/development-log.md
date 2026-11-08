@@ -1362,7 +1362,9 @@ parsing again from the start, and `json.read` reads JSON values that way.
   grammar's streaming variants compiled at that request, inside its 5 s head deadline, and compiling with a collection
   at every allocation took longer. `grammar.prepare` compiles a rule's variant and every one it calls ahead; the server
   calls it as a connection starts, before its deadline, and `grammar.read` before it reads. A real server's first
-  request no longer pays the compiling either.
+  request no longer pays the compiling either. That still compiled them in the test, at its first connection, under
+  GC stress: 5.5 minutes for a test that took seconds. `http.listen` now prepares them too, so a saved image holds
+  them: `make test-http` took 1 minute 37 s under a load of 4.3, from over 7 minutes.
 - **Same answers:** 44 heads from the request tests, at chunks of 1, 3 and 1,000 bytes, give `http.parse-request`'s
   status and request and leave the same bytes unread; with eof, a cut head, the head limit, a 414 and a 431, 137 checks
   in `tests/http_read.shen`. Messages for malformed line endings may differ, all 400. The macro is 509 lines.

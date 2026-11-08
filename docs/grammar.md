@@ -160,7 +160,7 @@ only at the end says so with `<end>`.
 
 The first `grammar.read` of a rule compiles a second version of it, and of the rules it calls, whose bounds
 checks wait for input; parsing a complete view is unchanged by it. `(grammar.prepare <rule>)` compiles them
-ahead, outside any deadline, as a server does when it starts a connection. A task blocks while its parse
+ahead, outside any deadline, as a server does when it starts listening. A task blocks while its parse
 waits, as it does for any read, so each connection reads in a task of its own.
 
 ## Compared with defcc
