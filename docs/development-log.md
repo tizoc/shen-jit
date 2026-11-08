@@ -1348,6 +1348,24 @@ parsing again from the start, and `json.read` reads JSON values that way.
 - **Checked:** every chunk size from 1 to the whole of a 250-byte stream of thirteen documents gives the complete
   decoder's values; the remainder after a value, eof, errors at their stream offsets, capacity, a reader's error with
   nothing consumed, arguments to the entry rule, a rule defined again, and spans that outlive the reader's buffer.
+- **The HTTP head, read in place, kept.** `http.<head>`, the request line, the fields as a grammar and the blank line,
+  each line within 8,192 bytes through a new item, `(at P)`, that binds a position, and at most 100 fields through a
+  count parameter, is read by `http.read-request` within the head limit (`grammar.read-within`). The framer scanned
+  every byte for CRLFCRLF and copied the head twice, and the parser scanned it again; this reads each byte once. The
+  server uses it when the head limit fits its read buffer, 16 KiB both by default, and frames as before otherwise, as a
+  socket bounds a reader at 64 KiB. Three runs, through the same reader, load 3.4, framing then parsing against reading
+  in place: a three-field head 4.4 to 4.7 µs against 2.7 to 2.9, and a browser's eleven fields 10.0 to 10.7 against 5.5
+  to 5.8, whole; in 16-byte chunks 7.7 to 8.3 against 5.4 to 5.8, and 44 to 46 against 32 to 35; a byte at a time 75 to
+  80 against 60 to 67, and 553 to 586 against 439 to 474. The field grammar, rejected for a framed head, wins here, as
+  the framer had already read every byte of a value.
+- **Compiled before the deadline.** The listener's saved image, under GC stress, failed at its first request: the head
+  grammar's streaming variants compiled at that request, inside its 5 s head deadline, and compiling with a collection
+  at every allocation took longer. `grammar.prepare` compiles a rule's variant and every one it calls ahead; the server
+  calls it as a connection starts, before its deadline, and `grammar.read` before it reads. A real server's first
+  request no longer pays the compiling either.
+- **Same answers:** 44 heads from the request tests, at chunks of 1, 3 and 1,000 bytes, give `http.parse-request`'s
+  status and request and leave the same bytes unread; with eof, a cut head, the head limit, a 414 and a 431, 137 checks
+  in `tests/http_read.shen`. Messages for malformed line endings may differ, all 400. The macro is 509 lines.
 
 ### Shen features in the SQLite example (2026-11-08, M3 Max, macOS arm64)
 

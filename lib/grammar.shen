@@ -448,6 +448,8 @@
         (/. P (grammar.seq C Items P Fail Done))))
     where (cons? Rest)
   C [where G] Items Pos Fail Done -> [if (grammar.subst C G) (grammar.seq C Items Pos Fail Done) Fail]
+  C [at V] Items Pos Fail Done -> [let V (grammar.pos Pos) (grammar.seq (grammar.bind C V) Items Pos Fail Done)]
+    where (variable? V)
   C [u16-be V] Items Pos Fail Done -> (grammar.fixed C V 2 Items Pos Fail Done) where (variable? V)
   C [u32-be V] Items Pos Fail Done -> (grammar.fixed C V 4 Items Pos Fail Done) where (variable? V)
   _ [F | Items] _ _ _ _ -> (error "defgrammar: (~A Item) takes one item: name a sequence as a rule, in ~R"
@@ -524,7 +526,10 @@
   [grammar.parse-range Rule Buffer At End Fail] -> (grammar.range-form Rule Buffer At End Fail)
     where (grammar.rule-form? Rule)
   [grammar.read Rule Reader Fail] ->
-    [grammar.read-from (grammar.rule-name Rule) (grammar.list (grammar.rule-args Rule)) Reader Fail]
+    [grammar.read-from (grammar.rule-name Rule) (grammar.list (grammar.rule-args Rule)) Reader [io.window-size Reader] Fail]
+    where (grammar.rule-form? Rule)
+  [grammar.read-within Rule Reader Limit Fail] ->
+    [grammar.read-from (grammar.rule-name Rule) (grammar.list (grammar.rule-args Rule)) Reader Limit Fail]
     where (grammar.rule-form? Rule))
 
 \\ A call of a rule from outside a grammar: Rule is <rule>, or (<rule> Arguments...).
@@ -563,14 +568,19 @@
 \\ consumes the value's bytes only when it is complete. Load io.shen to use it.
 
 (define grammar.read
-  Rule Reader Fail -> (grammar.read-from Rule [] Reader Fail))
+  Rule Reader Fail -> (grammar.read-from Rule [] Reader (io.window-size Reader) Fail))
 
+(define grammar.read-within
+  Rule Reader Limit Fail -> (grammar.read-from Rule [] Reader Limit Fail))
+
+\\ The stream record: what has arrived, the reader, why there is no more, and the limit.
 (define grammar.read-from
-  Rule Args R Fail ->
-    (let G (grammar.stream Rule)
+  Rule Args R Limit Fail ->
+    (let G (grammar.prepare Rule)
          Storage (io.window R)
          Start (io.position R)
-         E (address-> (address-> (address-> (absvector 3) 0 (io.window-fill R 0)) 1 R) 2 [])
+         Bound (io.min (buffer.index Limit) (io.window-size R))
+         E (address-> (address-> (address-> (address-> (absvector 4) 0 (io.window-fill R 0)) 1 R) 2 []) 3 Bound)
          S (grammar.state)
          P (grammar.apply (fn G) [Storage 0 E S | Args])
       (grammar.read-result P S E Start Fail)))
@@ -581,7 +591,7 @@
   P S E Start Fail ->
     (let R (<-address E 1) Why (<-address E 2) End (<-address E 0)
       (cases (>= P 0) (do (io.consume R P) [ok (<-address S 0)])
-             (= Why capacity) (Fail (+ Start End) "input exceeds the reader's capacity")
+             (= Why limit) (Fail (+ Start End) "input exceeds the limit")
              (and (= End 0) (= Why [eof])) [eof]
              (and (cons? Why) (not (= Why [eof]))) (io.reader-terminal R)
              (= Why [eof]) (Fail (+ Start End) "input ended")
@@ -591,10 +601,11 @@
 \\ A bounds check that failed: fill towards the byte at X, and say why there is none if there is not.
 (define grammar.refill
   E X -> (let R (<-address E 1)
-              N (io.window-fill R (+ X 1))
+              Limit (<-address E 3)
+              N (io.min (io.window-fill R (io.min (+ X 1) Limit)) Limit)
               _ (address-> E 0 N)
            (or (> N X)
-               (do (address-> E 2 (if (>= X (io.window-size R)) capacity (<-address R 5))) false))))
+               (do (address-> E 2 (if (>= X Limit) limit (<-address R 5))) false))))
 
 (define grammar.copy-span
   Buf At End -> (buffer.wrap (shen-jit.copy-bytes (shen-jit.bytes (- End At)) 0 Buf At (- End At))))
@@ -613,8 +624,18 @@
                   (let Params (grammar.parameters Def)
                        _ (shen.store-arity G (length Params))
                        _ (put G grammar.made-from Def)
+                       _ (put G grammar.stream-of F)
                     (eval (append [define G | Params] [-> [grammar.compile-stream G F (grammar.list Params)]]))))
          G))
+
+\\ Compiles F's streaming variant and every one it calls now, rather than at their first calls, so
+\\ that the compiling happens before a parse, and outside any deadline. A variant compiled for
+\\ the current definition is left as it is.
+(define grammar.prepare
+  F -> (let G (grammar.stream F)
+         (if (shen-jit.same? (trap-error (get G grammar.compiled) (/. E [])) (grammar.source F))
+             G
+             (do (map (function grammar.prepare) (grammar.install G F)) G))))
 
 (define grammar.parameters
   [define _ | Rest] -> (grammar.before (intern "->") Rest))
@@ -624,14 +645,22 @@
   X [Y | Ys] -> [Y | (grammar.before X Ys)])
 
 (define grammar.compile-stream
-  G F Args ->
+  G F Args -> (do (grammar.install G F) (grammar.apply (fn G) Args)))
+
+\\ Defines G from F's code rewritten, and gives the rules whose streaming variants it calls.
+(define grammar.install
+  G F ->
     (let Def (grammar.source F)
          Params (grammar.parameters Def)
          Buf (hd Params)
          End (hd (tl (tl Params)))
-         Body (hd (tl (grammar.from (intern "->") Def)))
-      (do (eval (grammar.tables (append [define G | Params] [-> (grammar.rewrite Buf End Body)])))
-          (grammar.apply (fn G) Args))))
+         Code (grammar.rewrite Buf End (hd (tl (grammar.from (intern "->") Def))))
+         _ (eval (grammar.tables (append [define G | Params] [-> Code])))
+         _ (put G grammar.compiled Def)
+      (grammar.unique (mapcan (/. X (let Of (trap-error (get X grammar.stream-of) (/. E []))
+                                      (if (and (symbol? Of) (not (= X G))) [Of] [])))
+                              (grammar.symbols Code))
+                      [])))
 
 (define grammar.from
   X [X | Rest] -> [X | Rest]

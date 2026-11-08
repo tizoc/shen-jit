@@ -356,6 +356,8 @@ test-http: $(BUILD)/shen-jit
 	  -l lib/http-request.shen -l lib/http-response.shen -l tests/http_chunked.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -l lib/http-head.shen \
 	  -l lib/http-request.shen -l lib/http-response.shen -l tests/http_request.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/deadline.shen -l lib/grammar.shen -l lib/http-head.shen \
+	  -l lib/http-request.shen -l tests/http_read.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
 	  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/grammar.shen -l lib/http-head.shen \
 	  -l lib/http-request.shen -l lib/http-response.shen -l lib/http-server.shen \

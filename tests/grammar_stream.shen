@@ -66,7 +66,7 @@
   (freeze (grammar.read <s.literal> (stream-test.reader "tre" 1) (function stream-test.fail))))
 (stream-test.check "lookahead that backtracked" [ok tree]
   (freeze (grammar.read <s.literal> (stream-test.reader "tree" 1) (function stream-test.fail))))
-(stream-test.check "a value larger than the reader's buffer" [fail 8 "input exceeds the reader's capacity"]
+(stream-test.check "a value larger than the reader's buffer" [fail 8 "input exceeds the limit"]
   (freeze (grammar.read <s.word> (io.reader (stream-test.feed (buffer.from-string "1234567890;") 3 [eof]) [[chunk-size 8]])
                         (function stream-test.fail))))
 (stream-test.check "the reader's error, with nothing consumed" [error "broken" 0]

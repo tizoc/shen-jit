@@ -50,6 +50,7 @@ and a value, then perhaps `where` and a guard:
 | `(text <rule>)`, `(span <rule>)` | The rule, whose name then stands for the string, or the view, of the bytes it matched |
 | `(require Items... Message)` | The items, or the parse stops with Message |
 | `(where Guard)` | Nothing, when Guard is true |
+| `(at P)` | Nothing, binding P to the position, so that a guard can bound a length |
 | `(u16-be N)`, `(u32-be N)` | Two or four bytes, bound to N as an unsigned big-endian number |
 
 Alternatives are tried in order, and the first that matches wins: a later failure never comes back to
@@ -152,13 +153,15 @@ and goes on where it was.
 | `(Fail Position Message)` | A syntax error, at its position in the stream; `"input ended"` if the input ended inside a value |
 
 The parse reads in place, in the reader's buffer, and consumes nothing until the value is complete, so a
-value can be no larger than the reader's capacity: a larger one fails with `"input exceeds the reader's
-capacity"`. Views made by `span` own their bytes here, as the reader's buffer is reused. The rule matches a
-prefix of the input, so a rule that should stop only at the end says so with `<end>`.
+value can be no larger than the reader's capacity: a larger one fails with `"input exceeds the limit"`.
+`(grammar.read-within <rule> Reader Limit Fail)` sets a smaller limit. Views made by `span` own their bytes
+here, as the reader's buffer is reused. The rule matches a prefix of the input, so a rule that should stop
+only at the end says so with `<end>`.
 
 The first `grammar.read` of a rule compiles a second version of it, and of the rules it calls, whose bounds
-checks wait for input; parsing a complete view is unchanged by it. A task blocks while its parse waits, as it
-does for any read, so each connection reads in a task of its own.
+checks wait for input; parsing a complete view is unchanged by it. `(grammar.prepare <rule>)` compiles them
+ahead, outside any deadline, as a server does when it starts a connection. A task blocks while its parse
+waits, as it does for any read, so each connection reads in a task of its own.
 
 ## Compared with defcc
 
