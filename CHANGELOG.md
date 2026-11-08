@@ -8,6 +8,8 @@ All notable changes to this project are documented in this file. The format is b
 ### Changed
 
 - `pr`, through which `output` and `print` write, writes a string at once, not a byte at a time.
+- `datalog.ask` and `datalog.match` find the tuples of a pattern with constants by an index on their columns, which the first
+  such question makes and the database keeps, where they read the whole relation.
 - Datalog derives each combination of tuples once in a rule with several atoms of its own recursion, such as
   `(path X Z) <-- (path X Y) (path Y Z)`, where it derived those that were new together once for each.
 
@@ -28,7 +30,8 @@ All notable changes to this project are documented in this file. The format is b
   it is given, by union-find, stored as classes and not as their pairs, so that a class of k values takes room for k, not k squared.
 - Datalog functions: integer `/` and `%`, `band`, `bor`, `bxor`, `bshl` and `bshr`, `cat`, `strlen`, `substr`, `to-number` and
   `to-string` on strings, and the `mean` aggregate.
-- `datalog.query`: a Datalog query computed by demand, through magic sets, deriving only what bears on its constants.
+- `datalog.query`: a Datalog query computed by demand, through magic sets, deriving only what bears on its constants, and
+  `datalog.demand-db`, a database that answers queries so, keeping what earlier ones derived through adds and removals.
 - Datalog records and types of several constructors: `(type shape [circle point integer] [rect point point])`, values such as
   `[rect [pt 1 2] [pt 4 6]]`, taken apart in a rule's body and made in its head or by `=`, recursive types included.
 - Optional `lib/curl.shen`, with a small C adapter over libcurl: bounded HTTP(S) requests, reusable clients,

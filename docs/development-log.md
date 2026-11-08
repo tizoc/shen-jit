@@ -2029,7 +2029,7 @@ Soufflé has records and algebraic data types. Here a type is `(type shape [circ
 - **Where it gains little:** `(path X 7)` demands the paths into every node that reaches 7, which in a graph this connected is most of `path`. That is magic sets, not this code: Soufflé's take 431 ms there, against its 664 without them, and ours 75.
 - **Against Soufflé,** the same facts, its compiled programs, startup taken away, best of seven: `(path 1774 X)` 1.3 ms with `--magic-transform=*` against 0.3 here, warm, and 422 ms without the transformation. Its transformation did not apply while the answer fed a count, as the query was first written, so that form showed no gain at all; `--show=transformed-datalog` explained it.
 - **Complete relations are whole:** a relation read under a negation or an aggregate keeps its own rules, with all it depends on, and no copy reads it. Copies of it would need demand through the negation, which also risks a cycle through negation in the rewritten program; computing it whole is always stratified and correct, and the analysis rows show it costs little where those relations are small.
-- **Not done:** demand for a database that `datalog.add` keeps current. A query is a run of its own.
+- **Not done:** demand for a database that `datalog.add` keeps current. A query is a run of its own (done later, under "A database by demand, and asking by index").
 - **Checked:** fixtures with recursion, mutual recursion, negation, aggregates, records and constants in heads, and on each of the 300 generated programs a query of a random relation, with constants, repeated variables and `_`, against the reference. Planted, copies never read fail 20 checks, copies without their relation's facts 133, negated relations not made complete 2, a magic rule passing its head's values in place of its atom's raises, and an adornment reversed is refused by the checker. Leaving out what a complete relation depends on passed until a fixture negated a relation whose own dependency is derived; it fails that one now.
 
 ### More functions in rules (2026-11-08, Apple M3 Max, against the commit before)
@@ -2222,6 +2222,20 @@ A larger equivalence, 200,000 random links among 300,000 values, whose largest c
 ### Laying out classes natively, rejected (2026-11-08, Apple M3 Max)
 
 A kernel could write a layout's positions, where Shen writes five words a value. Measured under timers on the largest equivalence above, 200,000 links among 300,000 values, after class sizes were kept: of 222 ms, joining classes takes 139 and laying them out 52, and of a full layout, writing the positions takes 8 ms and the table by value 2.6, already a kernel. The rest is the lists and dictionaries of the classes that changed, and finding each value's old class by the table, which a kernel cannot do from Shen's dictionaries. A kernel for the positions would save at most 8 ms in 222, about 4%, for a new kind of kernel: rejected. What would move this workload is the union-find itself, 63% of it, kept in bytes with a native table from values to roots; not tried.
+
+### A database by demand, and asking by index (2026-11-08, Apple M3 Max, against queries run afresh and the commit before)
+
+`(datalog.demand-db Name Facts)` answers `datalog.ask` and `datalog.match` by demand, keeping, for each adornment asked, a database of the rewritten program. A later query of that adornment adds its constants as a fact of the magic relation, which `datalog.add` takes from what grew, so only what it reaches anew is derived; adds and removals go to every kept database. Asking any database now reads the tuples a pattern may match by an index on the columns of its constants, started by the first such question and kept by later adds, found by the index's table and walked along its chain, where it read the whole relation. About 70 lines of code.
+
+| ms, the sparse closure's 2,000 edges over 3,000 nodes | Afresh, `datalog.query` | Demand database | Run, then `datalog.ask` |
+| --- | --- | --- | --- |
+| 200 queries `(path K X)` of random K, 97,980 answers | 59 to 63 | 14 | 92 to 98 for the run, then 7.4 to 7.9; before, 3,960 |
+| 20 adds of an edge, each followed by `(path K X)` of one K, about 1,150 answers each | 7.1 to 7.3 | 1.3 | 17.6 to 18.1; before, 461 to 465 |
+
+- **Reading every tuple was the cost,** in both columns. The demand database's answering copy holds the answers to every query before, so reading all of it and matching made the 200 queries 177 ms, three times running them afresh: 135 of that was reading tuples, 26 matching and 12 the adds. A full database read all of `path`'s 1,388,324 tuples for each question, 21.6 ms; the 20 adds themselves take 8.9 ms. The index costs 7.2 ms to start on `path`, a third of one whole read.
+- **An index a question starts stays,** kept by every later add of that database, which costs memory and a little upkeep; another run of the program starts it only if asked. A pattern with no constant reads the whole relation, one of only constants is a probe of the relation's table, and an equivalence's is read whole.
+- **Only asking:** other questions of a demand database, `datalog.count`, `datalog.tuples` or `datalog.explain`, raise; its queries' constants stay as facts, so it grows with the patterns asked.
+- **Checked:** a fixture querying, adding, querying another pattern and removing, against the reference on the facts at each step, and that a query computes only what it reaches; and on each of the 300 generated programs, a demand database of a third of the facts, two random queries, the rest added, one asked again, and the middle third removed, against the reference, beside the asks of every other test, now by index. Planted, adds that skip kept databases fail 194 checks, removals that skip them 76, later queries that add no constants 23, and a chain read only to its first tuple 37.
 
 ## Benchmark results
 

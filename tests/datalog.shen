@@ -1287,6 +1287,52 @@
 (dt.raises "a query of no relation" "no relation nope" (freeze (datalog.solve dt.dep [] [nope a])))
 (dt.raises "a query's arity" "takes 2 values, not 1" (freeze (datalog.solve dt.dep [] [depends a])))
 
+\* A database by demand answers what a run of its facts would, as facts come and go, for each
+   pattern asked, and computes only what its queries reach. *\
+(define dt.kept
+  Label Kept Facts Pattern
+  -> (dt.check (make-string "~A ~R" Label (datalog.atom->form Pattern))
+               (datalog.sort (datalog.match Kept Pattern)) (datalog.sort (datalog.match (datalog.run-naive dt.dep Facts) Pattern))))
+(let Kept (datalog.demand-db dt.dep [[imports a b] [imports b c]])
+     _ (dt.kept "by demand" Kept [[imports a b] [imports b c]] [depends a [var "X"]])
+     _ (dt.kept "by demand, another value" Kept [[imports a b] [imports b c]] [depends b [var "X"]])
+     _ (dt.kept "by demand, again" Kept [[imports a b] [imports b c]] [depends a [var "X"]])
+     _ (datalog.add Kept [[imports c d] [imports d a]])
+     All [[imports a b] [imports b c] [imports c d] [imports d a]]
+     _ (dt.kept "by demand, after an add" Kept All [depends a [var "X"]])
+     _ (dt.kept "by demand, another pattern" Kept All [depends [var "X"] d])
+     _ (datalog.remove Kept [[imports b c]])
+     Left [[imports a b] [imports c d] [imports d a]]
+     _ (dt.kept "by demand, after a removal" Kept Left [depends a [var "X"]])
+     _ (dt.kept "by demand, after a removal" Kept Left [depends [var "X"] d])
+     _ (dt.kept "by demand, everything" Kept Left [depends [var "X"] [var "Y"]])
+     _ (dt.raises "by demand, a count" "answers datalog.ask and datalog.match" (freeze (datalog.count Kept depends)))
+  (dt.check "by demand, a query as written" (datalog.sort (datalog.ask Kept (depends c X))) [[c a] [c b] [c d]]))
+(let Kept (datalog.demand-db dt.graph (value dt.graph-facts))
+     _ (datalog.match Kept [reach 20 [var "X"]])
+  (dt.check "by demand, computing less" (datalog.count (shen.<-dict (<-address (hd (tl (tl Kept))) 1) (datalog.demand dt.graph reach [b f])) reach@bf) 5))
+
+\* Asking by index: what a question's index finds is what the relation holds, after an add that
+   replaces a key's tuple. *\
+(defdatalog dt.asked
+  (relation edge [symbol symbol integer])
+  (relation start [symbol])
+  (relation dist [symbol integer] min)
+  (relation via [symbol symbol] choice)
+  (rule (dist X 0) <-- (start X))
+  (rule (dist Y D) <-- (dist X D0) (edge X Y W) (= D (+ D0 W)))
+  (rule (via Y X) <-- (dist X _) (edge X Y _)))
+(define dt.with-first
+  _ [] -> []
+  V [T | Ts] -> (if (= (hd T) V) [T | (dt.with-first V Ts)] (dt.with-first V Ts)))
+(let Db (datalog.run dt.asked [[start a] [edge a b 5] [edge b c 5] [edge a d 1]])
+     _ (dt.check "asked by index" (datalog.ask Db (dist c D)) [[c 10]])
+     _ (dt.check "asked by index, a choice" (datalog.ask Db (via c X)) [[c b]])
+     Added (datalog.add Db [[edge d b 1] [edge d c 1]])
+  (map (/. V (dt.check (make-string "asked by index after an add, ~A" V) (datalog.sort (datalog.match Added [dist V [var "D"]]))
+                       (datalog.sort (dt.with-first V (datalog.tuples Added dist)))))
+       [a b c d]))
+
 \* Errors, each when the program is defined. *\
 (dt.raises "undeclared" "no relation nope"
   (freeze (datalog.define dt.bad [[rule [nope a] []]])))
@@ -1408,6 +1454,16 @@
             _ (set datalog.*native* false)
             _ (dt.check (make-string "generated ~A query ~R" N (datalog.atom->form Pattern))
                 (datalog.sort (datalog.solve Name Facts Pattern)) (datalog.sort (datalog.match Reference Pattern)))
+            Kept (datalog.demand-db Name (dt.take (dt.third (length Facts)) Facts))
+            Other [(hd Rel) | (dtg.map (function dt.query-term) (tl Rel))]
+            _ (datalog.match Kept Pattern)
+            _ (datalog.match Kept Other)
+            _ (datalog.add Kept (dt.drop (dt.third (length Facts)) Facts))
+            _ (dt.check (make-string "generated ~A kept query ~R" N (datalog.atom->form Other))
+                (datalog.sort (datalog.match Kept Other)) (datalog.sort (datalog.match Reference Other)))
+            _ (datalog.remove Kept (dt.middle Facts))
+            _ (dt.check (make-string "generated ~A kept query ~R after a removal" N (datalog.atom->form Pattern))
+                (datalog.sort (datalog.match Kept Pattern)) (datalog.sort (datalog.match Left Pattern)))
             _ (set datalog.*native* true)
             _ (dt.compare-all N [Fixed Db Kl Added Readded] Reference Relations)
             _ (dt.compare-relation N Shuffled Reference Relations)

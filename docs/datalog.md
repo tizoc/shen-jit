@@ -44,8 +44,9 @@ false
 | `(datalog.count Db Relation)` | How many tuples it has |
 | `(datalog.holds? Db [Relation Value ...])` | Whether a tuple is there |
 | `(datalog.explain Db [Relation Value ...])` | Why it is: `[Tuple fact]`, `[Tuple Rule Proof ...]` with a proof of each tuple the rule's atoms read, `[Tuple equivalence]`, or `[Tuple lattice]` for a value joined from others; `[]` if it is not there |
-| `(datalog.ask Db (Relation Term ...))` | The tuples that match, in no particular order, with variables, constants and `_` |
+| `(datalog.ask Db (Relation Term ...))` | The tuples that match, in no particular order, with variables, constants and `_`, found by an index on the columns of the constants, which the first such question makes and the database keeps |
 | `(datalog.query Name Facts (Relation Term ...))` | The same tuples as asking a run of these facts, computing only what the query needs |
+| `(datalog.demand-db Name Facts)` | A database that answers `datalog.ask` and `datalog.match` by demand, keeping what earlier queries derived, and that `datalog.add` and `datalog.remove` change as they change any |
 | `(datalog.define Name Items)`, `(datalog.match Db Pattern)`, `(datalog.solve Name Facts Pattern)` | The same as `defdatalog`, `datalog.ask` and `datalog.query` with the program as data, where a variable is `[var "X"]` and `_` is `[any]`. `ask` and `query` read their pattern as written, so a Shen variable in it is a Datalog one: to ask about a value a function holds, build the pattern, as `[depends F [var "X"]]` |
 | `(datalog.plans Name)`, `(datalog.code Name)` | Each rule's order of joins with no sizes to go by, and the code that gives: each kernel as written for `lib/native.shen`, and the KL that calls it |
 | `(datalog.stats Db)` | The rounds, how many plans were made, and each relation's tuples, the derivations that made them and its indexes |
@@ -169,8 +170,10 @@ With nodes `a` and `b`, an edge from `a` to `b` and costs 3 and 5 for `a`, `degr
   what bears on `a`: the program is rewritten for the query's pattern of constants, by magic sets, once for each pattern,
   and kept with the program. A relation read under a negation or an aggregate is still computed whole, with all it depends
   on. It gains most when the constants select a small part, and little when what they reach is most of a relation, as
-  `(path X c)` is when nearly every node reaches `c`. Each query runs on its facts afresh: for many queries over the same
-  facts, a run and `datalog.ask` may cost less.
+  `(path X c)` is when nearly every node reaches `c`. Each query runs on its facts afresh. A database from
+  `(datalog.demand-db dependencies Facts)` keeps what its queries derive, for each pattern of constants and variables: a later
+  query computes only what it reaches that those before it did not, and adds and removals change only what they reach of
+  that. Other questions, such as `datalog.count`, need a run.
 - **Explanations:** `(datalog.explain Db [depends a c])` gives
   `[[depends a c] [[depends X Z] <-- [imports X Y] [depends Y Z]] [[imports a b] fact] [[depends b c] ...]]`: a rule as written
   and a proof of each tuple its atoms read, down to the facts given; negations, comparisons and aggregates hold in it but have no

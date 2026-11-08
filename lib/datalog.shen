@@ -3630,6 +3630,9 @@
 \\ nothing that changed stays as it is. The database changes in place.
 
 (define datalog.add
+  [demand Name Kept] New -> (do (address-> Kept 0 (append (<-address Kept 0) New))
+                                (datalog.each-kept Kept (/. Db (datalog.add Db New)))
+                                [demand Name Kept])
   [db Name S Interned Rounds Plans Facts] New
   -> (let Program (datalog.program Name)
           Relations (datalog.nth 3 Program)
@@ -3767,6 +3770,9 @@
 \\ order, and the rest stay. A fact the database does not have is no change.
 
 (define datalog.remove
+  [demand Name Kept] Gone -> (do (address-> Kept 0 (hd (datalog.split-facts (<-address Kept 0) (datalog.fact-set Gone (shen.dict 8)) [] [])))
+                                 (datalog.each-kept Kept (/. Db (datalog.remove Db Gone)))
+                                 [demand Name Kept])
   [db Name S Interned Rounds Plans Facts] Gone
   -> (let Program (datalog.program Name)
           Relations (datalog.nth 3 Program)
@@ -3803,6 +3809,7 @@
            (datalog.remove-components Cs Rules Run Facts Lost Again Rounds))))
 
 (define datalog.relation-of
+  [demand | _] _ -> (datalog.only-asked)
   [db Name S | _] Rel
   -> (let Relations (datalog.nth 3 (datalog.program Name))
        (if (cons? (assoc Rel Relations))
@@ -3825,7 +3832,11 @@
   -> (datalog.read-tuples (+ P 1) To Tuples Stride Types Values
        [(datalog.tuple-at Tuples (* P Stride) Types Values) | Acc]))
 
+(define datalog.only-asked
+  -> (error "datalog: a database by demand answers datalog.ask and datalog.match; datalog.run makes one for the rest"))
+
 (define datalog.tuples
+  [demand | _] _ -> (datalog.only-asked)
   [naive _ Tables] Rel
   -> (let Table (assoc Rel Tables)
        (if (empty? Table) (error "datalog: no relation ~A" Rel) (tl Table)))
@@ -3843,6 +3854,7 @@
   Db Rel -> (datalog.size-of (datalog.relation-of Db Rel)))
 
 (define datalog.holds?
+  [demand | _] _ -> (datalog.only-asked)
   [naive | Rest] [Rel | Values] -> (element? Values (datalog.tuples [naive | Rest] Rel))
   [db Name S Interned | Rest] [Rel | Values]
   -> (let Rec (datalog.relation-of [db Name S Interned | Rest] Rel)
@@ -3853,7 +3865,18 @@
               true (> (Find Rec Ids) 0))))
 
 (define datalog.match
+  [demand Name Kept] Pattern -> (datalog.match-demand Name Kept Pattern)
+  [db | Rest] [Rel | Terms] -> (datalog.match-tuples (datalog.tuples-for [db | Rest] Rel Terms) Terms [])
   Db [Rel | Terms] -> (datalog.match-tuples (datalog.tuples Db Rel) Terms []))
+
+\\ The tuples a pattern may match: by the relation's table if it has no variable, by an index on the
+\\ columns of its constants, or all; an equivalence's, all.
+(define datalog.tuples-for
+  Db Rel Terms
+  -> (let Keys (datalog.key-columns Terms 1 [])
+       (cases (or (empty? Keys) (datalog.classes? (datalog.relation-of Db Rel))) (datalog.tuples Db Rel)
+              (= (length Keys) (length Terms)) (if (datalog.holds? Db [Rel | Terms]) [Terms] [])
+              true (datalog.tuples-at Db Rel Keys (map (/. K (datalog.nth K Terms)) Keys)))))
 
 (define datalog.match-tuples
   [] _ Acc -> Acc
@@ -3862,6 +3885,7 @@
 
 \\ Rounds, plans made, and for each relation its tuples, its derivations and its indexes.
 (define datalog.stats
+  [demand | _] -> (datalog.only-asked)
   [db Name S _ Rounds Plans | _]
   -> (let Relations (datalog.nth 3 (datalog.program Name))
        [[rounds Rounds] [plans Plans]
@@ -3879,6 +3903,7 @@
 \\ is, so that a proof never goes round in a circle.
 
 (define datalog.explain
+  [demand | _] _ -> (datalog.only-asked)
   [db Name S Interned Rounds Plans Facts] [Rel | Values]
   -> (let Program (datalog.program Name)
           _ (if (cons? (assoc Rel (datalog.nth 3 Program))) skip (error "datalog: no relation ~A" Rel))
@@ -4157,9 +4182,23 @@
 \\ complete, and an equivalence or a relation of one tuple a key is right only as a whole, so these
 \\ are computed in full, by their
 \\ own rules, with all they depend on. The query's constants are the one fact of its magic relation.
+\\
+\\ (datalog.demand-db Name Facts) is a database that answers datalog.ask and datalog.match by demand.
+\\ It keeps the facts, and for each adornment asked, a database of the program rewritten for it,
+\\ which the first query of that adornment runs; a later one adds its constants as a fact of the
+\\ magic relation, so that it derives only what the queries before it did not. datalog.add and
+\\ datalog.remove change every database it keeps, as they change any.
 
 (define datalog.solve
   Name Facts [Rel | Terms]
+  -> (let Asked (datalog.asked Name [Rel | Terms])
+          Db (datalog.run (hd Asked) [(hd (tl Asked)) | Facts])
+       (datalog.match-tuples (datalog.tuples Db (hd (tl (tl Asked)))) Terms [])))
+
+\\ For a query: the program rewritten for its adornment, the fact that asks it, and the relation that
+\\ answers.
+(define datalog.asked
+  Name [Rel | Terms]
   -> (let Program (datalog.program Name)
           Types (assoc Rel (datalog.nth 3 Program))
           _ (cases (empty? Types) (error "datalog: no relation ~A" Rel)
@@ -4167,10 +4206,64 @@
                    (error "datalog: ~A takes ~A values, not ~A" Rel (length (tl Types)) (length Terms))
                    true skip)
           Adorn (map (/. T (if (datalog.known? T []) b f)) Terms)
-          Demand (datalog.demand Name Rel Adorn)
-          Seed [(datalog.magic-name Rel Adorn) | (datalog.at-bound Terms Adorn)]
-          Db (datalog.run Demand [Seed | Facts])
-       (datalog.match-tuples (datalog.tuples Db (datalog.adorned-name Rel Adorn)) Terms [])))
+       [(datalog.demand Name Rel Adorn) [(datalog.magic-name Rel Adorn) | (datalog.at-bound Terms Adorn)]
+        (datalog.adorned-name Rel Adorn)]))
+
+(define datalog.demand-db
+  Name Facts -> (let _ (datalog.program Name)
+                     Kept (absvector 2)
+                     _ (address-> Kept 0 Facts)
+                     _ (address-> Kept 1 (shen.dict 8))
+                  [demand Name Kept]))
+
+(define datalog.match-demand
+  Name Kept [Rel | Terms]
+  -> (let Asked (datalog.asked Name [Rel | Terms])
+          Seed (hd (tl Asked))
+          Entry (datalog.dict-find (<-address Kept 1) (hd Asked))
+          Db (cases (not (cons? Entry)) (datalog.run (hd Asked) [Seed | (<-address Kept 0)])
+                    (datalog.holds? (tl Entry) Seed) (tl Entry)
+                    true (datalog.add (tl Entry) [Seed]))
+          _ (shen.dict-> (<-address Kept 1) (hd Asked) Db)
+       (datalog.match-tuples (datalog.tuples-for Db (hd (tl (tl Asked))) Terms) Terms [])))
+
+\\ The tuples whose columns Keys hold these values, by an index on them, started if there is none
+\\ and kept as the relation grows: its table finds the newest, and its chain the rest.
+(define datalog.tuples-at
+  [db Name S Interned | Rest] Rel Keys Values
+  -> (let Program (datalog.program Name)
+          Relations (datalog.nth 3 Program)
+          Types (datalog.types-of Name Rel)
+          Records [S | (datalog.nth 7 Program)]
+          Ids (datalog.find-values Values (map (/. K (datalog.nth K Types)) Keys) Interned Records)
+       (if (= Ids no)
+           []
+           (let _ (datalog.use-index Rel Keys [Name Relations (datalog.nth 5 Program) S])
+                Rec (<-address S (datalog.relation-slot Rel Relations))
+                I (<-address Rec (datalog.index-slot Rel Keys (get Name datalog.indexes)))
+             (datalog.chain-tuples ((datalog.index-finder (length Types) Keys) I (<-address Rec 2) Ids) I Rec Types Records [])))))
+
+(define datalog.chain-tuples
+  0 _ _ _ _ Acc -> Acc
+  P I Rec Types Records Acc
+  -> (datalog.chain-tuples (shen-jit.u32 (<-address I 1) (* 4 (- P 1))) I Rec Types Records
+       [(datalog.tuple-at (<-address Rec 2) (* (- P 1) (<-address Rec 7)) Types Records) | Acc]))
+
+\\ A closure of the find kernel for an index on Keys, given the index, the tuples and the values.
+(define datalog.index-finder
+  Arity Keys
+  -> (let Name (intern (make-string "datalog.index-finder.~A.~A" Arity Keys))
+          Known (datalog.dict-find (value datalog.*kernels*) Name)
+       (if (cons? Known)
+           (tl Known)
+           (let Find (datalog.find-kernel Arity Keys)
+                F (eval-kl [lambda i [lambda t [lambda l [Find [<-address i 0] t [<-address i 2] | (datalog.list-forms (length Keys) l)]]]])
+                _ (shen.dict-> (value datalog.*kernels*) Name F)
+             F))))
+
+(define datalog.each-kept
+  Kept F -> (map (/. D (shen.dict-> (<-address Kept 1) D (F (tl (datalog.dict-find (<-address Kept 1) D)))))
+                 (shen.dict-keys (<-address Kept 1))))
 
 (define datalog.demand
   Name Rel Adorn
