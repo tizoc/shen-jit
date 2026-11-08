@@ -869,7 +869,7 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make test-buffer` | Buffer/cursor bounds, copying, foreign lifetime, typed clients, format examples and images/GC |
 | `make test-io` | Bounded chunk I/O, binary files and framing, socket endpoints/echo, native lifetimes, typed results and images/GC |
 | `make test-http` | Request/response framing, streaming, persistent connections, shutdown, SQLite example, typing and images/GC |
-| `make test-datalog` | `lib/datalog.shen`: answers written by hand, its errors, and generated programs against its plain evaluator |
+| `make test-datalog` | `lib/datalog.shen`: answers written by hand, its errors, and generated programs against its plain evaluator; and the dependency analyser of `example-apps/depends` |
 | `make test-datalog-swipl` | The same generated programs against SWI-Prolog's tabling, if `swipl` is there |
 | `make test-ffi` | C functions called from Shen and C written for Shen, against `tests/ffi_lib.c`, memory outside the heap, and the SQLite and socket libraries |
 | `make test-curl` | Optional libcurl adapter, independent loopback HTTP/TLS fixtures, downloader, typing, threads and images/GC; needs libcurl development headers, Python 3 and `openssl` |

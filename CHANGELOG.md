@@ -12,6 +12,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `example-apps/depends/`, a dependency analyser over Shen and KL source files, built over `lib/datalog.shen` as one
+  executable: what calls what, cycles between files, dead code from roots, call depths, and why one function reaches another.
 - Datalog lattices: `(relation reached [symbol integer] (lattice F))` keeps for each key the least upper bound, by a Shen
   function, of the values derived.
 - Datalog relations that keep one tuple a key: `(relation dist [symbol integer] min)`, `max` and `choice`, by which shortest

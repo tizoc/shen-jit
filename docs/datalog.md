@@ -45,7 +45,7 @@ false
 | `(datalog.explain Db [Relation Value ...])` | Why it is: `[Tuple fact]`, `[Tuple Rule Proof ...]` with a proof of each tuple the rule's atoms read, `[Tuple equivalence]`, or `[Tuple lattice]` for a value joined from others; `[]` if it is not there |
 | `(datalog.ask Db (Relation Term ...))` | The tuples that match, in no particular order, with variables, constants and `_` |
 | `(datalog.query Name Facts (Relation Term ...))` | The same tuples as asking a run of these facts, computing only what the query needs |
-| `(datalog.define Name Items)`, `(datalog.match Db Pattern)`, `(datalog.solve Name Facts Pattern)` | The same as `defdatalog`, `datalog.ask` and `datalog.query` with the program as data, where a variable is `[var "X"]` and `_` is `[any]` |
+| `(datalog.define Name Items)`, `(datalog.match Db Pattern)`, `(datalog.solve Name Facts Pattern)` | The same as `defdatalog`, `datalog.ask` and `datalog.query` with the program as data, where a variable is `[var "X"]` and `_` is `[any]`. `ask` and `query` read their pattern as written, so a Shen variable in it is a Datalog one: to ask about a value a function holds, build the pattern, as `[depends F [var "X"]]` |
 | `(datalog.plans Name)`, `(datalog.code Name)` | Each rule's order of joins with no sizes to go by, and the code that gives: each kernel as written for `lib/native.shen`, and the KL that calls it |
 | `(datalog.stats Db)` | The rounds, how many plans were made, and each relation's tuples, the derivations that made them and its indexes |
 | `(datalog.run-naive Name Facts)` | The same result by the plain definition, slowly: what the rest is tested against |
@@ -178,4 +178,6 @@ With nodes `a` and `b`, an edge from `a` to `b` and costs 3 and 5 for `a`, `degr
   `[pt 1 2]`, and one that does not fit raises, naming the file and line. A `.csv` file quotes a field as RFC 4180 does, so it can
   hold commas, quotes and line breaks; a tab-separated one cannot hold a tab or a line break, and writing one raises. Blank lines
   are skipped, and a line may end in a carriage return.
-- **Saving:** a program saved with `--save` runs in the saved image.
+- **Saving:** a program saved with `--save` runs in the saved image, and one saved as an executable runs on its own:
+  [example-apps/depends](https://github.com/tizoc/shen-jit/blob/main/example-apps/depends/README.md) is a dependency analyser
+  over Shen and KL sources, built so, which uses most of the above.
