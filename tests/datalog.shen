@@ -1201,6 +1201,52 @@
 (dt.same "an equivalence read late" (value dt.late-eq-facts) dt.late-eq h
   [[2 2] [2 10] [2 20] [3 3] [3 30] [3 40] [10 2] [10 10] [10 20]])
 (dt.same "an equivalence read late" (value dt.late-eq-facts) dt.late-eq k [[2 10] [10 2]])
+\* Negation and aggregates over an equivalence, as kernels, with no column known, one or both. Its
+   rules are recursive, so that it settles before they read it. *\
+(defdatalog dt.eq-folds
+  (relation link [integer integer])
+  (relation item [integer])
+  (relation pair [integer integer])
+  (relation same [integer integer] equivalence)
+  (relation lone [integer])
+  (relation lone2 [integer])
+  (relation apart [integer integer])
+  (relation none [])
+  (relation size [integer integer])
+  (relation weight [integer integer])
+  (relation least [integer integer])
+  (relation most [integer integer])
+  (relation inside [integer integer])
+  (relation one [integer])
+  (relation pairs [integer])
+  (relation sum-all [integer])
+  (rule (same X Y) <-- (link X Y))
+  (rule (same Y Z) <-- (same X Y) (link Y Z))
+  (rule (lone X) <-- (item X) (not (same X _)))
+  (rule (lone2 Y) <-- (item Y) (not (same _ Y)))
+  (rule (apart X Y) <-- (pair X Y) (not (same X Y)))
+  (rule (none) <-- (item _) (not (same _ _)))
+  (rule (size X N) <-- (item X) (= N (count (same X _))))
+  (rule (weight Y N) <-- (item Y) (= N (sum Z (same Z Y))))
+  (rule (least X N) <-- (item X) (= N (min Y (same X Y))))
+  (rule (most X N) <-- (item X) (= N (max Y (same X Y))))
+  (rule (inside X Y) <-- (pair X Y) (one N) (= N (count (same X Y))))
+  (rule (pairs N) <-- (= N (count (same _ _))))
+  (rule (sum-all N) <-- (= N (sum X (same X _)))))
+(set dt.eq-fold-facts (append [[link 1 2] [link 2 3] [link 5 6] [link 8 8] [one 1] [pair 1 3] [pair 1 5] [pair 4 4] [pair 5 6] [pair 9 1]]
+                              (map (/. I [item I]) (datalog.upto 1 9))))
+(map (/. R (dt.same "an equivalence negated or folded" (value dt.eq-fold-facts) dt.eq-folds (hd R) (tl R)))
+     [[lone [4] [7] [9]] [lone2 [4] [7] [9]] [apart [1 5] [4 4] [9 1]] [none]
+      [size [1 3] [2 3] [3 3] [4 0] [5 2] [6 2] [7 0] [8 1] [9 0]]
+      [weight [1 6] [2 6] [3 6] [4 0] [5 11] [6 11] [7 0] [8 8] [9 0]]
+      [least [1 1] [2 1] [3 1] [5 5] [6 5] [8 8]] [most [1 3] [2 3] [3 3] [5 6] [6 6] [8 8]]
+      [inside [1 3] [5 6]] [pairs [14]] [sum-all [48]]])
+(dt.same "an empty equivalence negated" [[item 1]] dt.eq-folds none [[]])
+(dt.same "an empty equivalence folded" [[item 1]] dt.eq-folds pairs [[0]])
+(dt.check "an equivalence negated or folded by kernels"
+  (length (mapcan (/. F (if (= (hd F) define-native) [F] [])) (datalog.code dt.eq-folds)))
+  (length (datalog.all-steps (datalog.plans dt.eq-folds))))
+
 (dt.raises "an equivalence of two types" "two of one type"
   (freeze (datalog.define dt.bad [[relation e [symbol integer] equivalence]])))
 (dt.raises "an equivalence of three columns" "two of one type"

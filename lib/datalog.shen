@@ -2092,17 +2092,11 @@
 \\ and has no way to say that a value is missing.
 (define datalog.kl-only?
   [] -> false
-  [Step | _] -> true where (datalog.reads-classes? Step)
   [[emit Rel | _] | _] -> (and (cons? (datalog.keyed-mode Rel)) (not (datalog.native-lattice? (datalog.keyed-mode Rel))))
   [[filter _ A B] | Steps] -> (or (datalog.kl-only-term? A) (datalog.kl-only-term? B) (datalog.kl-only? Steps))
   [[assign _ E] | Steps] -> (or (datalog.kl-only-term? E) (datalog.kl-only? Steps))
   [[fold _ _ mean | _] | _] -> true
   [_ | Steps] -> (datalog.kl-only? Steps))
-
-(define datalog.reads-classes?
-  [absent Rel | _] -> (datalog.equivalence? Rel)
-  [fold _ _ _ _ Rel | _] -> (datalog.equivalence? Rel)
-  _ -> false)
 
 (define datalog.kl-only-term?
   [Op A B] -> (or (not (integer? B)) (< B 0) (> B 31) (datalog.kl-only-term? A)) where (element? Op [bshl bshr])
@@ -2287,6 +2281,8 @@
             (datalog.native-steps Steps [Relations Constants | More]
               [[V | (datalog.native-value E Env Constants)] | Env] Level Outer))
   [[absent Rel Keys Terms] | Steps] Ctx Env Level Outer
+  -> (datalog.native-class-absent Rel Keys Terms Steps Ctx Env Level Outer) where (datalog.equivalence? Rel)
+  [[absent Rel Keys Terms] | Steps] Ctx Env Level Outer
   -> (datalog.native-absent Rel Keys Terms Steps Ctx Env Level Outer)
   [[fold Mode V Op Target Rel Keys Terms Columns] | Steps] Ctx Env Level Outer
   -> (datalog.native-fold [Mode V Op Target Rel Keys Terms Columns] Steps Ctx Env Level Outer)
@@ -2386,10 +2382,36 @@
                (datalog.class-range X B Source Q
                  (datalog.guarded (hd (tl Cols)) (datalog.native-steps Steps Ctx (hd Cols) (+ Level 1) Outer))))))))
 
-\\ Found, with B the byte of V's position, if the classes have V.
+\\ Found, with B the byte of V's position, if the classes have V, and then the probe ends, unless
+\\ Found leaves already.
 (define datalog.class-probe
   Probe V [X H Mask | _] B Found
-  -> (datalog.probe-loop Probe [V] H Mask B 20 [[= [u32 X B] V]] (append Found [[exit Probe]])))
+  -> (datalog.probe-loop Probe [V] H Mask B 20 [[= [u32 X B] V]]
+       (if (= (hd (hd (reverse Found))) exit) Found (append Found [[exit Probe]]))))
+
+\\ Found if two values are in one class: by their positions, whose classes start at one place.
+(define datalog.class-pair
+  [V W] [X | Params] Found
+  -> (datalog.class-probe (datalog.native-label "probe") V [X | Params] (protect Ca)
+       (datalog.class-probe (datalog.native-label "probe") W [X | Params] (protect Cb)
+         [[when [= [u32 X [+ (protect Cb) 4]] [u32 X [+ (protect Ca) 4]]] | Found]])))
+
+\\ The steps after a negated atom of an equivalence, which no pair matches: none at all, none of a
+\\ value in no class, and none of two values in two.
+(define datalog.native-class-absent
+  Rel Keys Terms Steps [Relations Constants Indexes N] Env Level Outer
+  -> (let Ctx [Relations Constants Indexes N]
+          Params (datalog.class-params (datalog.relation-slot Rel Relations))
+          Rest (datalog.native-steps Steps Ctx Env Level Outer)
+          Parts (datalog.native-terms Terms Env Ctx Outer)
+          Values (hd (tl Parts))
+          Block (datalog.native-label "absent")
+       (append (hd Parts)
+               (cases (empty? Keys) [[when [= (datalog.nth 4 Params) 0] | Rest]]
+                      (= Keys [1 2]) [[block Block | (append (datalog.class-pair Values Params [[exit Block]]) Rest)]]
+                      true [[block Block | (append (datalog.class-probe (datalog.native-label "probe") (hd Values) Params
+                                                     (protect Ca) [[exit Block]])
+                                                   Rest)]]))))
 
 \\ Only a scan at the outermost level can start again partway: below any other step, a kernel with
 \\ no room starts again from the beginning.
@@ -2477,12 +2499,13 @@
           Values (hd (tl Parts))
           P (datalog.word-name "P" Level)
           Q (datalog.word-name "Q" Level)
-          Cols (datalog.native-columns Columns Tuples Q Env Constants [])
-          Update (datalog.guarded (hd (tl Cols))
-                   (datalog.native-fold-update Op Acc (if (= Target none) 0 (datalog.native-integer [var Target] (hd Cols) Ctx))))
-          Loop (cases (empty? Keys)
+          Update (/. T B (let Cols (datalog.native-columns Columns T B Env Constants [])
+                           (datalog.guarded (hd (tl Cols))
+                             (datalog.native-fold-update Op Acc (if (= Target none) 0 (datalog.native-integer [var Target] (hd Cols) Ctx))))))
+          Loop (cases (datalog.equivalence? Rel) (datalog.class-fold-loop Slot Keys Values Update Level)
+                      (empty? Keys)
                       [[for P 0 (datalog.param (datalog.word-name "Size" Slot) [<-address (datalog.record-form Slot) 6])
-                         [word Q [* P Stride]] | Update]]
+                         [word Q [* P Stride]] | (Update Tuples Q)]]
                       (datalog.whole-tuple? Rel Keys Relations)
                       (let Probe (datalog.native-label "probe")
                         (datalog.probe-loop Probe Values
@@ -2501,7 +2524,7 @@
                                      [[word P [bit-and (protect E) (datalog.mask)]] [exit Probe]])
                                    [[while (datalog.native-label "chain") [> P 0]
                                       [word Q [* [- P 1] Stride]]
-                                      [do | Update]
+                                      [do | (Update Tuples Q)]
                                       [word P [u32 (datalog.param (datalog.index-name "Inext" Slot Field) [<-address Index 1])
                                                    [shift-left [- P 1] 2]]]]])]))
           Checked (if (= Op sum)
@@ -2514,6 +2537,23 @@
                        [[when [!= Acc (datalog.fold-start Op)] | (datalog.native-steps Steps Ctx Bound Level Outer)]]
                        true (datalog.native-steps Steps Ctx Bound Level Outer))
        (append (hd Parts) [[word Acc (datalog.fold-start Op)] | (append Loop (append Checked After))])))
+
+\\ A fold over an equivalence's pairs: every position and its class, a value's class, or two values'
+\\ one pair.
+(define datalog.class-fold-loop
+  Slot Keys Values Update Level
+  -> (let Params (datalog.class-params Slot)
+          X (hd Params)
+          P (datalog.word-name "P" Level)
+          Q (datalog.word-name "Eq" Level)
+          B (datalog.word-name "B" Level)
+       (cases (empty? Keys)
+              [[for P 0 (datalog.nth 4 Params)
+                 | (datalog.class-range X [* P 20] all Q (Update X [eq [u32 X [* P 20]] [u32 X [* Q 20]]]))]]
+              (= Keys [1 2]) (datalog.class-pair Values Params (Update X [eq (hd Values) (hd (tl Values))]))
+              true (datalog.class-probe (datalog.native-label "probe") (hd Values) Params B
+                     (datalog.class-range X B all Q
+                       (Update X (if (= Keys [1]) [eq (hd Values) [u32 X [* Q 20]]] [eq [u32 X [* Q 20]] (hd Values)])))))))
 
 (define datalog.fold-start
   min -> 2147483648

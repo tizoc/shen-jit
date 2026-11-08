@@ -131,7 +131,7 @@ With nodes `a` and `b`, an edge from `a` to `b` and costs 3 and 5 for `a`, `degr
   from that being an equivalence: `[same a b]` gives `[same b a]`, `[same a a]` and `[same b b]`, and with `[same b c]` all nine pairs
   of `a`, `b` and `c`. A rule can read and add to it in the same recursion, as congruence closure does with
   `(rule (same A B) <-- (same X Y) (f X A) (f Y B))`. Classes are joined by union-find as pairs arrive, and kept as classes, not as
-  their pairs: a class of thousands of values takes room in proportion to its values, and rules read its pairs from it. A negation or an aggregate over an equivalence is evaluated as KL, more slowly than a join.
+  their pairs: a class of thousands of values takes room in proportion to its values, and rules read its pairs from it.
 - **One tuple a key:** `(relation dist [symbol integer] min)` keeps, for each value of the columns before the last, the tuple
   whose last column is least, `max` the greatest, and `choice` the first derived, whichever that is. A tuple that is not better
   than its key's is not added, so a shortest path needs no bound to end on a graph with cycles:
