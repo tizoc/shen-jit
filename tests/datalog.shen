@@ -124,6 +124,65 @@
 (dt.same "nonlinear chain" [[edge a b] [edge b c] [edge c d] [edge d e]] dt.nonlinear path
   [[a b] [a c] [a d] [a e] [b c] [b d] [b e] [c d] [c e] [d e]])
 
+\* Each combination of tuples is derived once, by the variant of the first atom that reads a new
+   one, as the atoms before it read only the old tuples: by a lookup and its chain, a scan, and a
+   probe of the table. With joins as KL nothing is derived twice, though an insert that finds no
+   room counts again once it has grown it, at most 16 times here; a native kernel that has to grow
+   its head starts again where it stood, which repeats at most Slack. *\
+(define dt.derived
+  Db Rel -> (hd (tl (tl (assoc Rel (datalog.stats Db))))))
+
+(define dt.derived-once
+  Label Name Facts Rel Want Slack
+  -> (let Kl (dt.derived (dt.run-kl Name Facts) Rel)
+          Native (dt.derived (datalog.run Name Facts) Rel)
+          Exact (Want (datalog.run Name Facts))
+       (do (dt.check (cn Label ", KL") (dt.within? Kl Exact 16) true)
+           (dt.check (cn Label ", native") (dt.within? Native Kl Slack) true))))
+
+(define dt.within?
+  X Low Slack -> (and (>= X Low) (<= X (+ Low Slack))))
+
+(define dt.joined
+  [] _ -> 0
+  [[_ Y] | Ts] Paths -> (+ (length (dt.from Y Paths)) (dt.joined Ts Paths)))
+
+(define dt.from
+  _ [] -> []
+  Y [[Y Z] | Ts] -> [[Y Z] | (dt.from Y Ts)]
+  Y [_ | Ts] -> (dt.from Y Ts))
+
+(define dt.formula-edges
+  N N Acc -> Acc
+  I N Acc -> (dt.formula-edges (+ I 1) N [[e I (shen.mod (+ (* I 7) 3) N)] [e I (shen.mod (+ (* I 5) 1) N)] | Acc]))
+
+(defdatalog dt.closure2
+  (relation e [integer integer])
+  (relation p [integer integer])
+  (rule (p X Y) <-- (e X Y))
+  (rule (p X Z) <-- (p X Y) (p Y Z)))
+
+(defdatalog dt.cross
+  (relation e [integer integer])
+  (relation p [integer integer])
+  (rule (p X Y) <-- (e X Y))
+  (rule (p X Z) <-- (p X _) (p _ Z)))
+
+(defdatalog dt.sym
+  (relation e [integer integer])
+  (relation p [integer integer])
+  (relation q [integer integer])
+  (rule (p X Y) <-- (e X Y))
+  (rule (p Y X) <-- (q X Y))
+  (rule (q X Y) <-- (p X Y) (p Y X)))
+
+(dt.derived-once "nonlinear derives once" dt.closure2 (dt.formula-edges 0 16 []) p
+  (/. Db (+ (datalog.count Db e) (dt.joined (datalog.tuples Db p) (datalog.tuples Db p)))) 100)
+(dt.derived-once "a cross product derives once" dt.cross (dt.formula-edges 0 10 []) p
+  (/. Db (+ (datalog.count Db e) (* (datalog.count Db p) (datalog.count Db p)))) 100)
+(dt.derived-once "a member derives once" dt.sym (dt.formula-edges 0 24 [[e 1 2] [e 2 1] [e 5 5]]) q
+  (/. Db (datalog.count Db q)) 4)
+
 \* Mutual recursion, with a head outside the cycle reading it. *\
 (defdatalog dt.mutual
   (relation succ [integer integer])
@@ -345,7 +404,7 @@
                  (dt.chains Index (<-address R 2) Find Counts (shen.dict-keys Counts) (* 4 (- Column 1)) 0) 0)))
 
 (define dt.kernel-test
-  -> (let R (datalog.new-relation 2)
+  -> (let R (datalog.new-relation 2 false)
           Add (datalog.adder 2)
           Seen (dt.fill-relation R 300000 Add (shen.dict 8))
           Tuples (shen.dict-keys Seen)
@@ -619,6 +678,661 @@
 \* Native kernels run, and the plans that fall back to KL are few. *\
 (dt.check "native kernels ran" (< (value datalog.*fallbacks*) 20) true)
 
+\* Records and types of several constructors: taken apart in bodies, at any depth and with a
+   variable bound in another column, made in heads, by =, as a lookup's key and in a negation,
+   compared, counted, and as recursive values that only grow while a bound holds. *\
+(defdatalog dt.shapes
+  (type point [pt integer integer])
+  (type shape [circle point integer] [rect point point] [blank])
+  (relation drawn [symbol shape])
+  (relation centre [symbol point])
+  (relation wide [symbol integer])
+  (relation corner [symbol integer integer])
+  (relation at [point symbol])
+  (relation near [symbol symbol])
+  (relation unit [symbol shape])
+  (relation lonely [symbol])
+  (relation diagonal [symbol])
+  (relation same-place [symbol symbol])
+  (relation circles [integer])
+  (relation blanks [symbol])
+  (rule (centre S P) <-- (drawn S [circle P _]))
+  (rule (wide S W) <-- (drawn S [rect [pt X1 _] [pt X2 _]]) (= W (- X2 X1)))
+  (rule (corner S X Y) <-- (drawn S [rect [pt X Y] _]))
+  (rule (corner S X Y) <-- (drawn S [circle [pt X Y] _]))
+  (rule (diagonal S) <-- (drawn S [rect [pt X X] [pt Y Y]]))
+  (rule (near S T) <-- (corner S X Y) (at [pt X Y] T))
+  (rule (unit S [circle P 1]) <-- (centre S P))
+  (rule (unit S Q) <-- (corner S X Y) (= Q [rect [pt X Y] [pt (+ X 1) (+ Y 1)]]))
+  (rule (lonely S) <-- (corner S X Y) (not (at [pt X Y] _)))
+  (rule (same-place S T) <-- (drawn S A) (drawn T B) (= A B) (!= S T))
+  (rule (circles N) <-- (= N (count (drawn _ [circle _ _]))))
+  (rule (blanks S) <-- (drawn S [blank])))
+
+(set dt.shapes-facts
+  [[drawn a [circle [pt 0 0] 5]] [drawn b [rect [pt 1 2] [pt 4 6]]] [drawn c [rect [pt 3 3] [pt 7 7]]]
+   [drawn d [circle [pt 9 9] 1]] [drawn e [blank]] [drawn f [rect [pt 1 2] [pt 4 6]]]
+   [at [pt 1 2] home] [at [pt 9 9] work]])
+(dt.same "records" (value dt.shapes-facts) dt.shapes centre [[a [pt 0 0]] [d [pt 9 9]]])
+(dt.same "records" (value dt.shapes-facts) dt.shapes wide [[b 3] [c 4] [f 3]])
+(dt.same "records" (value dt.shapes-facts) dt.shapes diagonal [[c]])
+(dt.same "records" (value dt.shapes-facts) dt.shapes near [[b home] [d work] [f home]])
+(dt.same "records" (value dt.shapes-facts) dt.shapes unit
+  [[a [circle [pt 0 0] 1]] [a [rect [pt 0 0] [pt 1 1]]] [b [rect [pt 1 2] [pt 2 3]]] [c [rect [pt 3 3] [pt 4 4]]]
+   [d [circle [pt 9 9] 1]] [d [rect [pt 9 9] [pt 10 10]]] [f [rect [pt 1 2] [pt 2 3]]]])
+(dt.same "records" (value dt.shapes-facts) dt.shapes lonely [[a] [c]])
+(dt.same "records" (value dt.shapes-facts) dt.shapes same-place [[b f] [f b]])
+(dt.same "records" (value dt.shapes-facts) dt.shapes circles [[2]])
+(dt.same "records" (value dt.shapes-facts) dt.shapes blanks [[e]])
+
+(let Db (datalog.run dt.shapes (value dt.shapes-facts))
+  (do (dt.check "a record asked" (datalog.sort (datalog.ask Db (drawn X [rect [pt 1 Y] _]))) [[b [rect [pt 1 2] [pt 4 6]]] [f [rect [pt 1 2] [pt 4 6]]]])
+      (dt.check "a record holds" (datalog.holds? Db [drawn d [circle [pt 9 9] 1]]) true)
+      (dt.check "a record does not hold" (datalog.holds? Db [drawn d [circle [pt 9 9] 2]]) false)
+      (dt.check "a record never made" (datalog.holds? Db [drawn d [circle [pt 8 8] 1]]) false)
+      (dt.check "a record of the wrong type" (datalog.holds? Db [drawn d [pt 9 9]]) false)))
+
+\* A list type, built up along paths and taken apart again, bounded by its length. *\
+(defdatalog dt.lists
+  (type path [nil] [cons symbol path])
+  (relation edge [symbol symbol])
+  (relation start [symbol])
+  (relation route [symbol path integer])
+  (relation second [symbol symbol])
+  (rule (route X [cons X [nil]] 1) <-- (start X))
+  (rule (route Y [cons Y P] N) <-- (route X P M) (edge X Y) (= N (+ M 1)) (<= N 4))
+  (rule (second X Y) <-- (route X [cons X [cons Y _]] _)))
+
+(dt.same "lists" [[start a] [edge a b] [edge b c] [edge b a] [edge c a]] dt.lists route
+  [[a [cons a [cons b [cons a [nil]]]] 3] [a [cons a [cons c [cons b [cons a [nil]]]]] 4] [a [cons a [nil]] 1]
+   [b [cons b [cons a [cons b [cons a [nil]]]]] 4] [b [cons b [cons a [nil]]] 2]
+   [c [cons c [cons b [cons a [nil]]]] 3]])
+(dt.same "lists" [[start a] [edge a b] [edge b c] [edge b a] [edge c a]] dt.lists second
+  [[a b] [a c] [b a] [c b]])
+
+\* Many records made inside kernels, so that their tables grow while a kernel runs. *\
+(defdatalog dt.counting
+  (type nat [z] [s nat])
+  (relation up [integer nat])
+  (relation back [integer integer])
+  (rule (up 0 [z]))
+  (rule (up N [s P]) <-- (up M P) (= N (+ M 1)) (<= N 3000))
+  (rule (back N M) <-- (up N [s [s P]]) (up M P)))
+(let Db (datalog.run dt.counting [])
+  (do (dt.check "records made while running" (datalog.count Db up) 3001)
+      (dt.check "records taken apart" (datalog.count Db back) 2999)
+      (dt.check "a deep record" (datalog.holds? Db [back 2 0]) true)))
+(let Db (dt.run-kl dt.counting [])
+  (dt.check "records made while running, KL" (datalog.count Db back) 2999))
+
+\* Division, remainder and bit operations, natively where a kernel can and in KL where not, and
+   string functions and mean, in KL. *\
+(defdatalog dt.functions
+  (relation n [integer])
+  (relation word [string])
+  (relation divided [integer integer integer])
+  (relation bits [integer integer integer integer integer integer])
+  (relation joined [string string string])
+  (relation sizes [string integer])
+  (relation parts [string string])
+  (relation numbers [string integer])
+  (relation texts [integer string])
+  (relation middle [integer])
+  (relation even-big [integer])
+  (rule (divided A B Q) <-- (n A) (n B) (!= B 0) (= Q (/ A B)))
+  (rule (divided A B R) <-- (n A) (n B) (> B 0) (= R (+ 1000 (% A B))))
+  (rule (bits A B C D E F) <-- (n A) (n B) (>= B 0) (<= B 5)
+                               (= C (band A B)) (= D (bor A B)) (= E (bxor A (bshl B 2))) (= F (bshr A B)))
+  (rule (joined X Y Z) <-- (word X) (word Y) (= Z (cat X (cat "-" Y))))
+  (rule (sizes X N) <-- (word X) (= N (strlen X)))
+  (rule (parts X P) <-- (word X) (= P (substr X 1 2)))
+  (rule (numbers X N) <-- (word X) (= X (to-string N0)) (n N0) (= N (to-number X)))
+  (rule (texts N T) <-- (n N) (= T (to-string (* N 2))))
+  (rule (middle M) <-- (= M (mean A (n A))))
+  (rule (even-big A) <-- (n A) (= 0 (% A 2)) (> (bshl A 1) 4)))
+
+(set dt.functions-facts [[n -7] [n -2] [n 0] [n 3] [n 4] [n 9] [word "ab"] [word "c"] [word "hello"] [word "-2"] [word "9"]])
+(dt.same "functions" (value dt.functions-facts) dt.functions divided
+  [[-7 -7 1] [-7 -2 3] [-7 3 -2] [-7 3 999] [-7 4 -1] [-7 4 997] [-7 9 0] [-7 9 993] [-2 -7 0] [-2 -2 1]
+   [-2 3 0] [-2 3 998] [-2 4 0] [-2 4 998] [-2 9 0] [-2 9 998] [0 -7 0] [0 -2 0] [0 3 0] [0 3 1000] [0 4 0]
+   [0 4 1000] [0 9 0] [0 9 1000] [3 -7 0] [3 -2 -1] [3 3 1] [3 3 1000] [3 4 0] [3 4 1003] [3 9 0] [3 9 1003]
+   [4 -7 0] [4 -2 -2] [4 3 1] [4 3 1001] [4 4 1] [4 4 1000] [4 9 0] [4 9 1004] [9 -7 -1] [9 -2 -4] [9 3 3]
+   [9 3 1000] [9 4 2] [9 4 1001] [9 9 1] [9 9 1000]])
+(dt.same "functions" (value dt.functions-facts) dt.functions bits
+  [[-7 0 0 -7 -7 -7] [-7 3 1 -5 -11 -1] [-7 4 0 -3 -23 -1]
+   [-2 0 0 -2 -2 -2] [-2 3 2 -1 -14 -1] [-2 4 4 -2 -18 -1]
+   [0 0 0 0 0 0] [0 3 0 3 12 0] [0 4 0 4 16 0]
+   [3 0 0 3 3 3] [3 3 3 3 15 0] [3 4 0 7 19 0]
+   [4 0 0 4 4 4] [4 3 0 7 8 0] [4 4 4 4 20 0]
+   [9 0 0 9 9 9] [9 3 1 11 5 1] [9 4 0 13 25 0]])
+(dt.same "functions" (value dt.functions-facts) dt.functions sizes [["-2" 2] ["9" 1] ["ab" 2] ["c" 1] ["hello" 5]])
+(dt.same "functions" (value dt.functions-facts) dt.functions parts [["-2" "2"] ["9" ""] ["ab" "b"] ["c" ""] ["hello" "el"]])
+(dt.same "functions" (value dt.functions-facts) dt.functions numbers [["-2" -2] ["9" 9]])
+(dt.same "functions" (value dt.functions-facts) dt.functions texts [[-7 "-14"] [-2 "-4"] [0 "0"] [3 "6"] [4 "8"] [9 "18"]])
+(dt.same "functions" (value dt.functions-facts) dt.functions middle [[1]])
+(dt.same "functions" (value dt.functions-facts) dt.functions even-big [[4]])
+(let Db (datalog.run dt.functions (value dt.functions-facts))
+  (do (dt.check "strings made while running" (datalog.holds? Db [joined "ab" "hello" "ab-hello"]) true)
+      (dt.check "strings made, counted" (datalog.count Db joined) 25)))
+(dt.same "a mean of nothing" [[word "x"]] dt.functions middle [])
+(defdatalog dt.native-bits
+  (relation n [integer])
+  (relation masked [integer integer])
+  (rule (masked A M) <-- (n A) (= M (bxor (band A 6) (bshl (bor A 1) 2))) (> (bshr M 1) -9)))
+(dt.same "native bits" [[n -7] [n -2] [n 0] [n 3] [n 4] [n 9]] dt.native-bits masked [[-2 -6] [0 4] [3 14] [4 16] [9 36]])
+(dt.check "bit operations run natively" (datalog.kl-only? (datalog.plan-rule (hd (datalog.nth 4 (datalog.program dt.native-bits))) [])) false)
+(defdatalog dt.partial
+  (relation n [integer])
+  (relation w [string])
+  (relation q [integer integer integer])
+  (relation num [string integer])
+  (relation shifted [integer integer integer integer])
+  (rule (q A B C) <-- (n A) (n B) (= C (/ A B)) (!= B 0))
+  (rule (q A B C) <-- (n A) (n B) (= C (+ 100 (% A B))) (> (/ 6 B) 0))
+  (rule (num S N) <-- (w S) (= N (+ 1 (to-number S))))
+  (rule (shifted A B C D) <-- (n A) (n B) (= C (bshl A B)) (= D (bshr A B)))
+  (relation unguarded [integer integer integer])
+  (rule (unguarded A B C) <-- (n A) (n B) (= C (% A B)))
+  (relation g [symbol integer])
+  (relation avg [symbol integer])
+  (rule (avg K M) <-- (g K _) (= M (mean V (g K V)))))
+(dt.same "no value" [[n 0] [n 2] [n -3] [w "12"] [w "1x"] [w ""] [w "-"]] dt.partial q
+  [[-3 -3 1] [-3 2 -1] [-3 2 99] [0 -3 0] [0 2 0] [0 2 100] [2 -3 0] [2 2 1] [2 2 100]])
+(dt.same "no value" [[n 0] [n 2] [n -3] [w "12"] [w "1x"] [w ""] [w "-"]] dt.partial num [["12" 13]])
+(dt.same "no value" [[n 0] [n 2] [n -3] [w "12"] [w "1x"] [w ""] [w "-"]] dt.partial shifted
+  [[-3 -3 -1 -24] [-3 0 -3 -3] [-3 2 -12 -1] [0 -3 0 0] [0 0 0 0] [0 2 0 0] [2 -3 0 16] [2 0 2 2] [2 2 8 0]])
+(dt.same "no value" [[n 0] [n 2] [n -3]] dt.partial unguarded
+  [[-3 -3 0] [-3 2 -1] [0 -3 0] [0 2 0] [2 -3 2] [2 2 0]])
+(dt.same "a mean truncates" [[g a 1] [g a 2] [g b -7] [g b -2] [g c 5]] dt.partial avg [[a 1] [b -4] [c 5]])
+(dt.raises "a shift too far" "outside 32 bits"
+  (freeze (datalog.run (datalog.define dt.bad [[relation a [integer]] [rule [a [var "Y"]] [[a [var "X"]] [= [var "Y"] [bshl 1 [var "X"]]] [< [var "Y"] 0]]]]) [[a 40]])))
+(dt.raises "a shift too far, natively" "outside 32 bits"
+  (freeze (datalog.run (datalog.define dt.bad [[relation a [integer]] [relation b [integer]] [rule [b [var "Y"]] [[a [var "X"]] [= [var "Y"] [bshl [var "X"] 31]]]]]) [[a 4]])))
+(dt.raises "a string function's types" "cat takes"
+  (freeze (datalog.define dt.bad [[relation a [string]] [rule [a [var "S"]] [[a [var "T"]] [= [var "S"] [cat [var "T"] 1]]]]])))
+(dt.raises "a string function's arity" "strlen takes 1 values, not 2"
+  (freeze (datalog.define dt.bad [[relation a [integer]] [relation w [string]] [rule [a [var "N"]] [[w [var "T"]] [= [var "N"] [strlen [var "T"] [var "T"]]]]]])))
+(dt.raises "a function as a constructor" "cannot name a constructor"
+  (freeze (datalog.define dt.bad [[type t [cat integer]]])))
+
+\* Explanations: each proof is a rule instance whose atoms' tuples are proved in turn, every
+   tuple holding in the reference and every condition true, down to the facts given. *\
+(define dt.valid?
+  Name Facts Ref [T fact] -> (element? T Facts)
+  Name Facts Ref [[Rel | Values] lattice] -> (and (cons? (assoc Rel (datalog.nth 9 (datalog.program Name))))
+                                                  (element? Values (datalog.tuples Ref Rel)))
+  Name Facts Ref [[Rel | Values] equivalence] -> (and (element? Rel (datalog.nth 8 (datalog.program Name)))
+                                                      (element? Values (datalog.tuples Ref Rel)))
+  Name Facts Ref [[Rel | Values] Form | Subs]
+  -> (let Rules (mapcan (/. R (if (= (datalog.rule->form (hd R) (hd (tl R))) Form) [R] []))
+                        (datalog.nth 4 (datalog.program Name)))
+       (and (cons? Rules)
+            (element? Values (datalog.tuples Ref Rel))
+            (dt.valid-instance? (hd Rules) Values (map (function hd) Subs) Ref)
+            (dt.all-valid? Name Facts Ref Subs))))
+
+(define dt.all-valid?
+  _ _ _ [] -> true
+  Name Facts Ref [P | Ps] -> (and (dt.valid? Name Facts Ref P) (dt.all-valid? Name Facts Ref Ps)))
+
+(define dt.valid-instance?
+  [[Rel | Terms] Body] Values Tuples [naive N Tables]
+  -> (let Env (dt.match-atoms (datalog.atoms Body) Tuples (datalog.naive-match Terms Values []))
+          Conditions (datalog.conditions Body)
+          Bound (if (= Env no) no (datalog.naive-bind Conditions Env Conditions false Tables))
+       (and (not (= Bound no)) (datalog.naive-true? Conditions Bound Tables))))
+
+(define dt.match-atoms
+  _ _ no -> no
+  [] [] Env -> Env
+  [[Rel | Terms] | Atoms] [[Rel | Values] | Tuples] Env -> (dt.match-atoms Atoms Tuples (datalog.naive-match Terms Values Env))
+  _ _ _ -> no)
+
+\* Every tuple of every relation explained and its proof checked, and a tuple that does not hold
+   explained by []. *\
+(define dt.explain-all
+  Label Name Facts
+  -> (let Db (datalog.run Name Facts)
+          Ref (datalog.run-naive Name Facts)
+          Tuples (mapcan (/. R (map (/. V [(hd R) | V]) (datalog.tuples Db (hd R)))) (datalog.nth 3 (datalog.program Name)))
+          Bad (mapcan (/. T (if (dt.valid? Name Facts Ref (datalog.explain Db T)) [] [T])) Tuples)
+       (dt.check Label Bad [])))
+
+(dt.explain-all "explained" dt.dep (value dt.dep-facts))
+(dt.explain-all "explained" dt.nonlinear [[edge a b] [edge b c] [edge c d] [edge d a] [edge x y]])
+(dt.explain-all "explained" dt.mutual [[succ 0 1] [succ 1 2] [succ 2 0]])
+(dt.explain-all "explained" dt.mixed (value dt.mixed-facts))
+(dt.explain-all "explained" dt.shapes (value dt.shapes-facts))
+(dt.explain-all "explained" dt.functions (value dt.functions-facts))
+\* A probe of a relation of the rule's own recursion reads only what earlier rounds merged, as scans
+   do, so that each tuple comes after all it was derived from: here t's rule probes r, which an
+   earlier rule of the same round adds to, in either order of declaration. *\
+(defdatalog dt.round-a
+  (relation start [symbol]) (relation u [symbol]) (relation t [symbol]) (relation r [symbol])
+  (rule (u X) <-- (start X))
+  (rule (u X) <-- (t X))
+  (rule (r X) <-- (u X))
+  (rule (t X) <-- (u X) (r X)))
+(defdatalog dt.round-b
+  (relation start [symbol]) (relation u [symbol]) (relation r [symbol]) (relation t [symbol])
+  (rule (u X) <-- (start X))
+  (rule (u X) <-- (t X))
+  (rule (r X) <-- (u X))
+  (rule (t X) <-- (u X) (r X)))
+(dt.explain-all "explained, probing this round" dt.round-a [[start a] [start b]])
+(dt.explain-all "explained, probing this round" dt.round-b [[start a] [start b]])
+(set datalog.*native* false)
+(datalog.forget-code dt.round-a)
+(datalog.forget-code dt.round-b)
+(dt.explain-all "explained, probing this round, KL" dt.round-a [[start a] [start b]])
+(dt.explain-all "explained, probing this round, KL" dt.round-b [[start a] [start b]])
+(set datalog.*native* true)
+(datalog.forget-code dt.round-a)
+(datalog.forget-code dt.round-b)
+(let Db (datalog.run dt.dep (value dt.dep-facts))
+  (do (dt.check "explained, not holding" (datalog.explain Db [depends d a]) [])
+      (dt.check "explained, a fact" (datalog.explain Db [imports a b]) [[imports a b] fact])
+      (let Forms (map (/. R (datalog.rule->form (hd R) (hd (tl R)))) (datalog.nth 4 (datalog.program dt.dep)))
+        (dt.check "explained, as written" (datalog.explain Db [depends a c])
+                  [[depends a c] (hd (tl Forms))
+                   [[imports a b] fact]
+                   [[depends b c] (hd Forms) [[imports b c] fact]]]))))
+(let Db (datalog.add (datalog.run dt.dep [[imports a b]]) [[imports b c]])
+  (dt.check "explained after an add" (dt.valid? dt.dep [[imports a b] [imports b c]] (datalog.run-naive dt.dep [[imports a b] [imports b c]])
+                                       (datalog.explain Db [depends a c])) true))
+
+\* Fact files: what is written is read back the same, of every type and in both formats, as files
+   or as bytes, and what does not fit its columns is refused, naming the file or the bytes and the
+   line. A file that cannot hold a field is left as it was. *\
+(defdatalog dt.files
+  (type point [pt integer integer] [no-point])
+  (relation row [symbol string integer point])
+  (relation copy [symbol string integer point])
+  (rule (copy A B C D) <-- (row A B C D)))
+(set dt.file-facts [[row a "plain" 1 [pt 1 2]] [row b "with, comma" -2147483648 [no-point]]
+                    [row c "with c#34;quotesc#34; and c#9;tab" 2147483647 [pt -3 4]] [row d "" 0 [pt 0 0]]])
+(let Db (datalog.run dt.files (value dt.file-facts))
+  (do (dt.check "a file written" (datalog.write-facts Db copy "build/datalog-facts.csv") 4)
+      (dt.check "a file read" (datalog.sort (datalog.read-facts dt.files copy "build/datalog-facts.csv"))
+                (datalog.sort (map (/. F [copy | (tl F)]) (value dt.file-facts))))
+      (let B (datalog.relation->bytes Db copy csv)
+        (do (dt.check "bytes, as the file" (shen-jit.bytes->string B 0 (shen-jit.bytes-length B))
+                      (read-file-as-string "build/datalog-facts.csv"))
+            (dt.check "bytes read" (datalog.sort (datalog.bytes->facts dt.files copy B csv))
+                      (datalog.sort (map (/. F [copy | (tl F)]) (value dt.file-facts))))))
+      (dt.raises "a format" "neither tsv nor csv" (freeze (datalog.relation->bytes Db copy json)))
+      (let Plain [(hd (value dt.file-facts)) (hd (tl (value dt.file-facts))) (hd (reverse (value dt.file-facts)))]
+        (do (datalog.write-facts (datalog.run dt.files Plain) copy "build/datalog-facts.tsv")
+            (dt.check "a tab-separated file read" (datalog.sort (datalog.read-facts dt.files copy "build/datalog-facts.tsv"))
+                      (datalog.sort (map (/. F [copy | (tl F)]) Plain)))
+            (dt.raises "a tab in a tab-separated file" "cannot hold" (freeze (datalog.write-facts Db copy "build/datalog-facts.tsv")))
+            (dt.check "a file left as it was" (datalog.sort (datalog.read-facts dt.files copy "build/datalog-facts.tsv"))
+                      (datalog.sort (map (/. F [copy | (tl F)]) Plain)))
+            (dt.check "tab-separated bytes read" (datalog.sort (datalog.bytes->facts dt.files copy (datalog.relation->bytes (datalog.run dt.files Plain) copy tsv) tsv))
+                      (datalog.sort (map (/. F [copy | (tl F)]) Plain)))))))
+(define dt.write-file
+  Path Text -> (let S (open Path out) (do (pr Text S) (close S) Path)))
+(dt.check "lines with returns and gaps" (datalog.read-facts dt.files row (dt.write-file "build/datalog-facts.tsv" "e	x	5	[pt 1 1]c#13;c#10;c#10;f	y	6	[no-point]"))
+          [[row e "x" 5 [pt 1 1]] [row f "y" 6 [no-point]]])
+(dt.raises "a file's field count" "line 2, has 3 fields"
+  (freeze (datalog.read-facts dt.files row (dt.write-file "build/datalog-facts.tsv" "e	x	5	[pt 1 1]c#10;f	y	6"))))
+(dt.raises "a file's integer" "line 1: c#34;5xc#34; is not an integer"
+  (freeze (datalog.read-facts dt.files row (dt.write-file "build/datalog-facts.tsv" "e	x	5x	[pt 1 1]"))))
+(dt.raises "a file's record" "is not of type point"
+  (freeze (datalog.read-facts dt.files row (dt.write-file "build/datalog-facts.tsv" "e	x	5	[pt 1]"))))
+(dt.raises "a file's relation" "no relation nope" (freeze (datalog.read-facts dt.files nope "build/datalog-facts.tsv")))
+(dt.raises "bytes' field count" "bytes of row, line 2, has 3 fields"
+  (freeze (datalog.bytes->facts dt.files row (shen-jit.string->bytes "e	x	5	[pt 1 1]c#10;f	y	6") tsv)))
+
+\* Relations of one tuple a key: the least or greatest last column, or the first tuple derived, on
+   graphs with cycles, where a shortest path needs no bound to end. *\
+(defdatalog dt.paths
+  (relation edge [integer integer integer])
+  (relation start [integer])
+  (relation dist [integer integer] min)
+  (relation widest [integer integer] max)
+  (relation via [integer integer] choice)
+  (relation step [integer integer])
+  (relation near [integer])
+  (rule (dist X 0) <-- (start X))
+  (rule (dist Y D) <-- (dist X D0) (edge X Y W) (= D (+ D0 W)))
+  (rule (widest X 1000) <-- (start X))
+  (rule (widest Y W) <-- (widest X B0) (edge X Y W) (< W B0))
+  (rule (widest Y B0) <-- (widest X B0) (edge X Y W) (>= W B0))
+  (rule (step X Y) <-- (edge X Y _))
+  (rule (via Y X) <-- (step X Y))
+  (rule (near X) <-- (dist X D) (<= D 3)))
+
+(define dt.weighted
+  0 _ Acc -> Acc
+  M N Acc -> (dt.weighted (- M 1) N [[edge (dtg.random N) (dtg.random N) (dtg.random 10)] | Acc]))
+(dt.same "least" [[start 1] [edge 1 2 5] [edge 1 3 1] [edge 3 2 1] [edge 2 4 1] [edge 4 1 1] [edge 3 4 10]] dt.paths dist
+  [[1 0] [2 2] [3 1] [4 3]])
+(dt.same "greatest" [[start 1] [edge 1 2 5] [edge 1 3 1] [edge 3 2 1] [edge 2 4 1] [edge 4 1 1] [edge 3 4 10]] dt.paths widest
+  [[1 1000] [2 5] [3 1] [4 1]])
+(dt.same "read by a later stratum" [[start 1] [edge 1 2 5] [edge 1 3 1] [edge 3 2 1] [edge 2 4 1] [edge 4 1 1] [edge 3 4 10]] dt.paths near
+  [[1] [2] [3] [4]])
+
+\* On random graphs, against the reference, which keeps the best of each key round by round. *\
+(define dt.random-paths
+  0 -> ok
+  K -> (let Facts [[start (dtg.random 12)] | (dt.weighted 30 12 [])]
+            Ref (datalog.run-naive dt.paths Facts)
+            _ (map (/. Db (do (dt.check (make-string "random paths ~A dist" K) (datalog.sorted Db dist) (datalog.sorted Ref dist))
+                              (dt.check (make-string "random paths ~A widest" K) (datalog.sorted Db widest) (datalog.sorted Ref widest))))
+                   [(datalog.run dt.paths Facts) (dt.run-kl dt.paths Facts) (dt.run-added dt.paths Facts) (dt.run-readded dt.paths Facts)])
+         (dt.random-paths (- K 1))))
+(dt.random-paths 30)
+(defdatalog dt.signs
+  (relation v [symbol integer])
+  (relation low [symbol integer] min)
+  (relation high [symbol integer] max)
+  (rule (low K X) <-- (v K X))
+  (rule (high K X) <-- (v K X)))
+(dt.same "least, signed" [[v a 5] [v a -3] [v a 2] [v b -2147483648] [v b 7] [v c 2147483647]] dt.signs low [[a -3] [b -2147483648] [c 2147483647]])
+(dt.same "greatest, signed" [[v a 5] [v a -3] [v a 2] [v b -2147483648] [v b 7] [v c 2147483647]] dt.signs high [[a 5] [b 7] [c 2147483647]])
+
+\* choice keeps one tuple of each key, which some rule derives. *\
+(let Facts [[start 0] [edge 0 1 1] [edge 2 1 1] [edge 3 1 1] [edge 1 2 1] [edge 0 2 1]]
+     Db (datalog.run dt.paths Facts)
+     Via (datalog.sorted Db via)
+  (do (dt.check "a choice a key" (map (function hd) Via) [1 2])
+      (dt.check "a choice derived" (datalog.subset? (map (/. T [(hd (tl T)) (hd T)]) Via) (datalog.tuples Db step)) true)
+      (dt.check "a choice explained" (dt.valid? dt.paths Facts (datalog.run-naive dt.paths Facts) (datalog.explain Db [via 1 (hd (tl (hd Via)))])) true)))
+(dt.explain-all "explained, least" dt.paths [[start 1] [edge 1 2 5] [edge 1 3 1] [edge 3 2 1] [edge 2 4 1] [edge 4 1 1] [edge 3 4 10]])
+\* Lattices: the union of bit sets, for which starts reach each node, and a flat lattice, a value
+   or 2147483647 for many, for constant propagation. *\
+(define dt.union A B -> (shen-jit.bit-or A B))
+(define dt.flat A A -> A _ _ -> 2147483647)
+(defdatalog dt.lattices
+  (relation edge [integer integer])
+  (relation start [integer integer])
+  (relation reached-by [integer integer] (lattice dt.union))
+  (relation assign [integer integer])
+  (relation copy [integer integer])
+  (relation const [integer integer] (lattice dt.flat))
+  (relation known [integer])
+  (rule (reached-by X M) <-- (start X I) (= M (bshl 1 I)))
+  (rule (reached-by Y M) <-- (reached-by X M) (edge X Y))
+  (rule (const X C) <-- (assign X C))
+  (rule (const Y C) <-- (copy X Y) (const X C))
+  (rule (known X) <-- (const X C) (!= C 2147483647)))
+(set dt.lattice-facts [[start 1 0] [start 4 1] [edge 1 2] [edge 2 3] [edge 4 3] [edge 3 5] [edge 5 3]
+                       [assign 10 7] [assign 11 7] [assign 12 8] [copy 10 13] [copy 11 13] [copy 12 14] [copy 13 15] [copy 12 15]])
+(dt.same "lattice" (value dt.lattice-facts) dt.lattices reached-by [[1 1] [2 1] [3 3] [4 2] [5 3]])
+(dt.same "lattice" (value dt.lattice-facts) dt.lattices const [[10 7] [11 7] [12 8] [13 7] [14 8] [15 2147483647]])
+(dt.same "lattice" (value dt.lattice-facts) dt.lattices known [[10] [11] [12] [13] [14]])
+(define dt.random-lattice
+  0 -> ok
+  K -> (let Facts (append [[start (dtg.random 10) 0] [start (dtg.random 10) 1] [start (dtg.random 10) 2]]
+                          (map (/. E [edge (hd (tl E)) (hd (tl (tl E)))]) (dt.weighted 18 10 [])))
+         (do (dt.same (make-string "random lattice ~A" K) Facts dt.lattices reached-by (datalog.sorted (datalog.run-naive dt.lattices Facts) reached-by))
+             (dt.random-lattice (- K 1)))))
+(dt.random-lattice 20)
+
+\* The bit operations as lattices, which kernels join: bor for which starts reach a node, and band
+   for the tags every way into a node carries. Each plan is a kernel. *\
+(defdatalog dt.bits
+  (relation edge [integer integer])
+  (relation start [integer integer])
+  (relation tag [integer integer])
+  (relation reached [integer integer] (lattice bor))
+  (relation common [integer integer] (lattice band))
+  (rule (reached X M) <-- (start X M))
+  (rule (reached Y M) <-- (reached X M) (edge X Y))
+  (rule (common X M) <-- (tag X M))
+  (rule (common Y M) <-- (common X M) (edge X Y)))
+(dt.same "bit lattices" [[start 1 1] [start 4 2] [edge 1 2] [edge 2 3] [edge 4 3] [edge 3 5] [edge 5 3]] dt.bits reached
+  [[1 1] [2 1] [3 3] [4 2] [5 3]])
+(dt.same "bit lattices" [[tag 1 7] [tag 4 5] [tag 3 12] [edge 1 2] [edge 2 3] [edge 4 3] [edge 3 5] [edge 5 3]] dt.bits common
+  [[1 7] [2 7] [3 4] [4 5] [5 4]])
+(define dt.random-bits
+  0 -> ok
+  K -> (let Edges (map (/. E [edge (hd (tl E)) (hd (tl (tl E)))]) (dt.weighted 18 10 []))
+            Facts (append [[start (dtg.random 10) 1] [start (dtg.random 10) 4] [tag (dtg.random 10) 13] [tag (dtg.random 10) 7] [tag (dtg.random 10) 2147483647]] Edges)
+            Ref (datalog.run-naive dt.bits Facts)
+         (do (dt.same (make-string "random bits ~A" K) Facts dt.bits reached (datalog.sorted Ref reached))
+             (dt.same (make-string "random bits ~A" K) Facts dt.bits common (datalog.sorted Ref common))
+             (dt.random-bits (- K 1)))))
+(dt.random-bits 20)
+(dt.check "bit lattices are kernels"
+  (length (mapcan (/. F (if (= (hd F) define-native) [F] [])) (datalog.code dt.bits)))
+  (length (datalog.all-steps (datalog.plans dt.bits))))
+(dt.explain-all "explained, lattice" dt.lattices (value dt.lattice-facts))
+(dt.raises "a lattice of symbols" "must be an integer"
+  (freeze (datalog.define dt.bad [[relation a [integer symbol] [lattice dt.union]]])))
+(dt.raises "a least of symbols" "must be an integer"
+  (freeze (datalog.define dt.bad [[relation a [integer symbol] min]])))
+(dt.raises "a key with no value" "two columns or more"
+  (freeze (datalog.define dt.bad [[relation a [integer] choice]])))
+(dt.raises "an unknown way to keep" "neither equivalence, min, max, choice nor (lattice F)"
+  (freeze (datalog.define dt.bad [[relation a [integer integer] best]])))
+
+\* Queries by demand give what a whole run would, and compute less. *\
+(define dt.query
+  Label Name Facts Pattern
+  -> (dt.check (make-string "~A ~R" Label (datalog.atom->form Pattern))
+       (datalog.sort (datalog.solve Name Facts Pattern))
+       (datalog.sort (datalog.match (datalog.run-naive Name Facts) Pattern))))
+
+(dt.query "demand" dt.dep (value dt.dep-facts) [depends a [var "X"]])
+(dt.query "demand" dt.dep (value dt.dep-facts) [depends [var "X"] d])
+(dt.query "demand" dt.dep (value dt.dep-facts) [depends x x])
+(dt.query "demand" dt.dep (value dt.dep-facts) [depends [var "X"] [var "X"]])
+(dt.query "demand" dt.dep (value dt.dep-facts) [cyclic [var "X"]])
+(dt.query "demand" dt.dep (value dt.dep-facts) [imports b [any]])
+(dt.query "demand" dt.dep (value dt.dep-facts) [depends nowhere [var "X"]])
+(dt.query "demand" dt.nonlinear [[edge a b] [edge b c] [edge c d] [edge d a] [edge x y]] [path b [var "X"]])
+(dt.query "demand" dt.mutual [[succ 0 1] [succ 1 2] [succ 2 3] [succ 3 4]] [odd [var "X"]])
+(dt.query "demand" dt.mutual [[succ 0 1] [succ 1 2] [succ 2 0]] [both 1])
+(map (/. R (dt.query "demand" dt.mixed (value dt.mixed-facts) [R | (map (/. T [any]) (tl (assoc R (datalog.nth 3 (datalog.program dt.mixed)))))]))
+     [big self linked pair named fixed seeded])
+(dt.query "demand" dt.mixed (value dt.mixed-facts) [fixed b [var "N"]])
+(dt.query "demand" dt.mixed (value dt.mixed-facts) [pair c [var "Y"]])
+(dt.query "demand" dt.shapes (value dt.shapes-facts) [unit [var "S"] [rect [pt 1 2] [pt 2 3]]])
+(dt.query "demand" dt.shapes (value dt.shapes-facts) [near b [var "T"]])
+(dt.query "demand" dt.shapes (value dt.shapes-facts) [lonely [var "S"]])
+(dt.query "demand" dt.lists [[start a] [edge a b] [edge b c] [edge b a] [edge c a]] [route c [var "P"] [var "N"]])
+(let Db (datalog.run dt.dep (value dt.dep-facts))
+  (dt.check "a query as written" (datalog.sort (datalog.query dt.dep (value dt.dep-facts) (depends a X)))
+            (datalog.sort (datalog.ask Db (depends a X)))))
+
+\* Equivalences: closed as they grow, from facts, from rules, and through a rule that reads one, as
+   congruence closure does: if X and Y are the same, so are what f gives for each. *\
+(defdatalog dt.equal
+  (relation same [symbol symbol] equivalence)
+  (relation link [symbol symbol])
+  (relation f [symbol symbol])
+  (relation big [symbol])
+  (relation near-big [symbol])
+  (relation classes [symbol integer])
+  (rule (same X Y) <-- (link X Y))
+  (rule (same A B) <-- (same X Y) (f X A) (f Y B))
+  (rule (near-big X) <-- (same X Y) (big Y) (!= X Y))
+  (rule (classes X N) <-- (same X _) (= N (count (same X _)))))
+(set dt.equal-facts [[same a b] [link b c] [link x y] [f a p] [f c q] [f x r] [f s t] [same q u] [big c] [big r]])
+(dt.same "equivalence" (value dt.equal-facts) dt.equal same
+  [[a a] [a b] [a c] [b a] [b b] [b c] [c a] [c b] [c c]
+   [p p] [p q] [p u] [q p] [q q] [q u] [r r] [u p] [u q] [u u] [x x] [x y] [y x] [y y]])
+(dt.same "equivalence" (value dt.equal-facts) dt.equal near-big [[a] [b]])
+(dt.same "equivalence" (value dt.equal-facts) dt.equal classes [[a 3] [b 3] [c 3] [p 3] [q 3] [r 1] [u 3] [x 2] [y 2]])
+(dt.query "demand" dt.equal (value dt.equal-facts) [same a [var "X"]])
+(dt.query "demand" dt.paths [[start 1] [edge 1 2 5] [edge 1 3 1] [edge 3 2 1] [edge 2 4 1]] [dist 4 [var "D"]])
+(dt.query "demand" dt.paths [[start 1] [edge 1 2 5] [edge 1 3 1] [edge 3 2 1] [edge 2 4 1]] [near [var "X"]])
+(dt.query "demand" dt.lattices (value dt.lattice-facts) [known [var "X"]])
+(dt.query "demand" dt.equal (value dt.equal-facts) [near-big [var "X"]])
+(dt.query "demand" dt.equal (value dt.equal-facts) [classes [var "X"] 2])
+(let Db (datalog.run dt.equal [[same a b] [same c d]])
+     _ (dt.check "equivalence, classes apart" (datalog.count Db same) 8)
+     Added (datalog.add Db [[link b c]])
+     _ (dt.check "equivalence, joined by an add" (datalog.count Added same) 16)
+  (dt.check "equivalence, after a removal" (datalog.count (datalog.remove Added [[link b c]]) same) 8))
+(let Db (datalog.run dt.equal (map (/. I [link a (intern (cn "n" (str I)))]) (datalog.upto 1 300)))
+  (dt.check "a large class" (datalog.count Db same) 90601))
+(dt.explain-all "explained" dt.equal (value dt.equal-facts))
+
+\* An equivalence whose classes change early, one in the round after the other, in a component that
+   goes on growing: h and k read its old pairs, by a scan and by a member check, beside l, which
+   reaches 10 several rounds later. never has no tuples, and only keeps h and k in the component. *\
+(defdatalog dt.late-eq
+  (relation step [integer integer])
+  (relation start [integer])
+  (relation link [integer integer])
+  (relation pairup [integer integer])
+  (relation cand [integer integer])
+  (relation never [integer])
+  (relation same [integer integer] equivalence)
+  (relation l [integer])
+  (relation h [integer integer])
+  (relation lp [integer integer])
+  (relation k [integer integer])
+  (rule (l X) <-- (start X))
+  (rule (l Y) <-- (l X) (step X Y))
+  (rule (same X Y) <-- (link X Y))
+  (rule (same X Y) <-- (l X) (pairup X Y))
+  (rule (h X Y) <-- (same X Y) (l X))
+  (rule (lp X Y) <-- (l X) (l Y) (cand X Y))
+  (rule (k X Y) <-- (same X Y) (lp X Y))
+  (rule (l Y) <-- (h X Y) (never Y))
+  (rule (l Y) <-- (k X Y) (never Y)))
+(set dt.late-eq-facts (append (map (/. I [step I (+ I 1)]) (datalog.upto 0 11))
+                              [[start 0] [link 10 20] [pairup 2 10] [link 30 40] [pairup 3 30]
+                               [cand 10 2] [cand 2 10]]))
+(dt.same "an equivalence read late" (value dt.late-eq-facts) dt.late-eq h
+  [[2 2] [2 10] [2 20] [3 3] [3 30] [3 40] [10 2] [10 10] [10 20]])
+(dt.same "an equivalence read late" (value dt.late-eq-facts) dt.late-eq k [[2 10] [10 2]])
+\* Negation and aggregates over an equivalence, as kernels, with no column known, one or both. Its
+   rules are recursive, so that it settles before they read it. *\
+(defdatalog dt.eq-folds
+  (relation link [integer integer])
+  (relation item [integer])
+  (relation pair [integer integer])
+  (relation same [integer integer] equivalence)
+  (relation lone [integer])
+  (relation lone2 [integer])
+  (relation apart [integer integer])
+  (relation none [])
+  (relation size [integer integer])
+  (relation weight [integer integer])
+  (relation least [integer integer])
+  (relation most [integer integer])
+  (relation inside [integer integer])
+  (relation one [integer])
+  (relation pairs [integer])
+  (relation sum-all [integer])
+  (rule (same X Y) <-- (link X Y))
+  (rule (same Y Z) <-- (same X Y) (link Y Z))
+  (rule (lone X) <-- (item X) (not (same X _)))
+  (rule (lone2 Y) <-- (item Y) (not (same _ Y)))
+  (rule (apart X Y) <-- (pair X Y) (not (same X Y)))
+  (rule (none) <-- (item _) (not (same _ _)))
+  (rule (size X N) <-- (item X) (= N (count (same X _))))
+  (rule (weight Y N) <-- (item Y) (= N (sum Z (same Z Y))))
+  (rule (least X N) <-- (item X) (= N (min Y (same X Y))))
+  (rule (most X N) <-- (item X) (= N (max Y (same X Y))))
+  (rule (inside X Y) <-- (pair X Y) (one N) (= N (count (same X Y))))
+  (rule (pairs N) <-- (= N (count (same _ _))))
+  (rule (sum-all N) <-- (= N (sum X (same X _)))))
+(set dt.eq-fold-facts (append [[link 1 2] [link 2 3] [link 5 6] [link 8 8] [one 1] [pair 1 3] [pair 1 5] [pair 4 4] [pair 5 6] [pair 9 1]]
+                              (map (/. I [item I]) (datalog.upto 1 9))))
+(map (/. R (dt.same "an equivalence negated or folded" (value dt.eq-fold-facts) dt.eq-folds (hd R) (tl R)))
+     [[lone [4] [7] [9]] [lone2 [4] [7] [9]] [apart [1 5] [4 4] [9 1]] [none]
+      [size [1 3] [2 3] [3 3] [4 0] [5 2] [6 2] [7 0] [8 1] [9 0]]
+      [weight [1 6] [2 6] [3 6] [4 0] [5 11] [6 11] [7 0] [8 8] [9 0]]
+      [least [1 1] [2 1] [3 1] [5 5] [6 5] [8 8]] [most [1 3] [2 3] [3 3] [5 6] [6 6] [8 8]]
+      [inside [1 3] [5 6]] [pairs [14]] [sum-all [48]]])
+(dt.same "an empty equivalence negated" [[item 1]] dt.eq-folds none [[]])
+(dt.same "an empty equivalence folded" [[item 1]] dt.eq-folds pairs [[0]])
+(dt.check "an equivalence negated or folded by kernels"
+  (length (mapcan (/. F (if (= (hd F) define-native) [F] [])) (datalog.code dt.eq-folds)))
+  (length (datalog.all-steps (datalog.plans dt.eq-folds))))
+
+(dt.raises "an equivalence of two types" "two of one type"
+  (freeze (datalog.define dt.bad [[relation e [symbol integer] equivalence]])))
+(dt.raises "an equivalence of three columns" "two of one type"
+  (freeze (datalog.define dt.bad [[relation e [symbol symbol symbol] equivalence]])))
+
+\* Negation and an aggregate read complete relations, beside the copies a query makes. *\
+(defdatalog dt.graph
+  (relation edge [integer integer])
+  (relation node [integer])
+  (relation reach [integer integer])
+  (relation sink [integer])
+  (relation far [integer integer])
+  (relation degree [integer integer])
+  (rule (reach X Y) <-- (edge X Y))
+  (rule (reach X Z) <-- (reach X Y) (edge Y Z))
+  (rule (sink X) <-- (node X) (not (edge X _)))
+  (rule (far X Y) <-- (reach X Y) (sink Y) (not (reach Y X)))
+  (rule (degree X N) <-- (reach X _) (= N (count (reach X _))))
+  (relation out [integer])
+  (relation lone [integer])
+  (rule (out X) <-- (reach X _))
+  (rule (lone X) <-- (node X) (not (out X))))
+(define dt.chain-int
+  N N Acc -> Acc
+  I N Acc -> (dt.chain-int (+ I 1) N [[edge I (+ I 1)] [node I] | Acc]))
+(set dt.graph-facts (append (dt.chain-int 0 25 []) [[edge 70 71] [edge 71 70] [edge 5 70] [node 25] [node 71] [node 3]]))
+(dt.query "demand" dt.graph (value dt.graph-facts) [reach 20 [var "Y"]])
+(dt.query "demand" dt.graph (value dt.graph-facts) [far 15 [var "Y"]])
+(dt.query "demand" dt.graph (value dt.graph-facts) [far [var "X"] 25])
+(dt.query "demand" dt.graph (value dt.graph-facts) [degree 23 [var "N"]])
+(dt.query "demand" dt.graph (value dt.graph-facts) [degree [var "X"] 3])
+(dt.query "demand" dt.graph (value dt.graph-facts) [lone [var "X"]])
+(let D (datalog.demand dt.graph reach [b f])
+     Db (datalog.run D [[magic@reach@bf 20] | (value dt.graph-facts)])
+  (do (dt.check "demand computes less" (datalog.count Db reach@bf) 5)
+      (dt.check "demand leaves the rest" (datalog.count Db reach) 0)))
+(dt.check "a rewritten program is kept" (datalog.demand dt.graph reach [b f]) (datalog.demand dt.graph reach [b f]))
+(dt.raises "a query of no relation" "no relation nope" (freeze (datalog.solve dt.dep [] [nope a])))
+(dt.raises "a query's arity" "takes 2 values, not 1" (freeze (datalog.solve dt.dep [] [depends a])))
+
+\* A database by demand answers what a run of its facts would, as facts come and go, for each
+   pattern asked, and computes only what its queries reach. *\
+(define dt.kept
+  Label Kept Facts Pattern
+  -> (dt.check (make-string "~A ~R" Label (datalog.atom->form Pattern))
+               (datalog.sort (datalog.match Kept Pattern)) (datalog.sort (datalog.match (datalog.run-naive dt.dep Facts) Pattern))))
+(let Kept (datalog.demand-db dt.dep [[imports a b] [imports b c]])
+     _ (dt.kept "by demand" Kept [[imports a b] [imports b c]] [depends a [var "X"]])
+     _ (dt.kept "by demand, another value" Kept [[imports a b] [imports b c]] [depends b [var "X"]])
+     _ (dt.kept "by demand, again" Kept [[imports a b] [imports b c]] [depends a [var "X"]])
+     _ (datalog.add Kept [[imports c d] [imports d a]])
+     All [[imports a b] [imports b c] [imports c d] [imports d a]]
+     _ (dt.kept "by demand, after an add" Kept All [depends a [var "X"]])
+     _ (dt.kept "by demand, another pattern" Kept All [depends [var "X"] d])
+     _ (datalog.remove Kept [[imports b c]])
+     Left [[imports a b] [imports c d] [imports d a]]
+     _ (dt.kept "by demand, after a removal" Kept Left [depends a [var "X"]])
+     _ (dt.kept "by demand, after a removal" Kept Left [depends [var "X"] d])
+     _ (dt.kept "by demand, everything" Kept Left [depends [var "X"] [var "Y"]])
+     _ (dt.raises "by demand, a count" "answers datalog.ask and datalog.match" (freeze (datalog.count Kept depends)))
+  (dt.check "by demand, a query as written" (datalog.sort (datalog.ask Kept (depends c X))) [[c a] [c b] [c d]]))
+(let Kept (datalog.demand-db dt.graph (value dt.graph-facts))
+     _ (datalog.match Kept [reach 20 [var "X"]])
+  (dt.check "by demand, computing less" (datalog.count (shen.<-dict (<-address (hd (tl (tl Kept))) 1) (datalog.demand dt.graph reach [b f])) reach@bf) 5))
+
+\* Asking by index: what a question's index finds is what the relation holds, after an add that
+   replaces a key's tuple. *\
+(defdatalog dt.asked
+  (relation edge [symbol symbol integer])
+  (relation start [symbol])
+  (relation dist [symbol integer] min)
+  (relation via [symbol symbol] choice)
+  (rule (dist X 0) <-- (start X))
+  (rule (dist Y D) <-- (dist X D0) (edge X Y W) (= D (+ D0 W)))
+  (rule (via Y X) <-- (dist X _) (edge X Y _)))
+(define dt.with-first
+  _ [] -> []
+  V [T | Ts] -> (if (= (hd T) V) [T | (dt.with-first V Ts)] (dt.with-first V Ts)))
+(let Db (datalog.run dt.asked [[start a] [edge a b 5] [edge b c 5] [edge a d 1]])
+     _ (dt.check "asked by index" (datalog.ask Db (dist c D)) [[c 10]])
+     _ (dt.check "asked by index, a choice" (datalog.ask Db (via c X)) [[c b]])
+     Added (datalog.add Db [[edge d b 1] [edge d c 1]])
+  (map (/. V (dt.check (make-string "asked by index after an add, ~A" V) (datalog.sort (datalog.match Added [dist V [var "D"]]))
+                       (datalog.sort (dt.with-first V (datalog.tuples Added dist)))))
+       [a b c d]))
+
 \* Errors, each when the program is defined. *\
 (dt.raises "undeclared" "no relation nope"
   (freeze (datalog.define dt.bad [[rule [nope a] []]])))
@@ -660,6 +1374,37 @@
   (freeze (datalog.run dt.reach [[edge 1 (+ 0.5 0.5)]])))
 (dt.raises "no such program" "no program"
   (freeze (datalog.run dt.nope [])))
+(dt.raises "an unknown constructor" "is not a value"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [relation a [t]] [rule [a [j 1]] []]])))
+(dt.raises "a constructor's arity" "takes 1 values, not 2"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [relation a [t]] [rule [a [k 1 2]] []]])))
+(dt.raises "a record of another type" "is not of type"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [type u [j integer]] [relation a [t]] [rule [a [j 1]] []]])))
+(dt.raises "a record in a column of integers" "is not of type"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [relation a [integer]] [rule [a [k 1]] []]])))
+(dt.raises "a record's field" "is not of type"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [relation a [t]] [rule [a [k b]] []]])))
+(dt.raises "_ in a head's record" "cannot hold _"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [relation a [t]] [rule [a [k [any]]] [[a [var "X"]]]]])))
+(dt.raises "_ in a negated record" "cannot hold _"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [relation a [t]] [relation b [integer]]
+                                  [rule [b [var "N"]] [[b [var "N"]] [not [a [k [any]]]]]]])))
+(dt.raises "a constructor declared twice" "declared twice"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [type u [k symbol]]])))
+(dt.raises "a type declared twice" "declared twice"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [type t [j symbol]]])))
+(dt.raises "a reserved constructor" "cannot name a constructor"
+  (freeze (datalog.define dt.bad [[type t [+ integer integer]]])))
+(dt.raises "a base type redeclared" "cannot name a type"
+  (freeze (datalog.define dt.bad [[type integer [k integer]]])))
+(dt.raises "an unknown field type" "not a list of"
+  (freeze (datalog.define dt.bad [[type t [k real]]])))
+(dt.raises "ordering records" "orders integers"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [relation a [t]] [rule [a [var "X"]] [[a [var "X"]] [< [var "X"] [k 1]]]]])))
+(dt.raises "a fact's record" "in a column of type t"
+  (freeze (datalog.run (datalog.define dt.bad [[type t [k integer]] [relation a [t]]]) [[a [k b]]])))
+(dt.raises "a fact's constructor" "in a column of type t"
+  (freeze (datalog.run (datalog.define dt.bad [[type t [k integer]] [type u [j integer]] [relation a [t]]]) [[a [j 1]]])))
 
 \* ---- Generated programs (tests/datalog-generate.shen) against the plain definition. *\
 
@@ -674,6 +1419,14 @@
   Seed [Db | Dbs] Reference Relations
   -> (do (dt.compare-relation Seed Db Reference Relations)
          (dt.compare-all Seed Dbs Reference Relations)))
+
+\* A query's term: a constant, a variable, which may repeat, or _. A query of each generated program
+   runs with KL joins, which compile faster than kernels: what it tests is the rewriting. *\
+(define dt.query-term
+  Type -> (let R (dtg.random 6)
+            (cases (< R 3) (dtg.value Type)
+                   (< R 5) [var (dtg.choose ["X" "Y"])]
+                   true [any])))
 
 (define dt.generated
   0 -> ok
@@ -696,8 +1449,28 @@
             _ (datalog.define Name2 (append (dtg.items (dtg.shuffle Relations) [])
                                             (dtg.rule-items (dtg.shuffle (dtg.shuffle-bodies Rules)))))
             Shuffled (datalog.run Name2 (dtg.shuffle Facts))
+            Rel (dtg.choose Relations)
+            Pattern [(hd Rel) | (dtg.map (function dt.query-term) (tl Rel))]
+            _ (set datalog.*native* false)
+            _ (dt.check (make-string "generated ~A query ~R" N (datalog.atom->form Pattern))
+                (datalog.sort (datalog.solve Name Facts Pattern)) (datalog.sort (datalog.match Reference Pattern)))
+            Kept (datalog.demand-db Name (dt.take (dt.third (length Facts)) Facts))
+            Other [(hd Rel) | (dtg.map (function dt.query-term) (tl Rel))]
+            _ (datalog.match Kept Pattern)
+            _ (datalog.match Kept Other)
+            _ (datalog.add Kept (dt.drop (dt.third (length Facts)) Facts))
+            _ (dt.check (make-string "generated ~A kept query ~R" N (datalog.atom->form Other))
+                (datalog.sort (datalog.match Kept Other)) (datalog.sort (datalog.match Reference Other)))
+            _ (datalog.remove Kept (dt.middle Facts))
+            _ (dt.check (make-string "generated ~A kept query ~R after a removal" N (datalog.atom->form Pattern))
+                (datalog.sort (datalog.match Kept Pattern)) (datalog.sort (datalog.match Left Pattern)))
+            _ (set datalog.*native* true)
             _ (dt.compare-all N [Fixed Db Kl Added Readded] Reference Relations)
             _ (dt.compare-relation N Shuffled Reference Relations)
+            Unproved (mapcan (/. R (mapcan (/. V (if (dt.valid? Name Facts Reference (datalog.explain Db [(hd R) | V])) [] [[(hd R) | V]]))
+                                           (dt.take 4 (datalog.tuples Db (hd R)))))
+                             Relations)
+            _ (dt.check (make-string "generated ~A explained" N) Unproved [])
          (dt.generated (- N 1))))
 
 (dt.generated 300)

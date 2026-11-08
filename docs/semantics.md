@@ -282,6 +282,7 @@ if it had been made then. *Deviation:* until then, reading the
   reads is such a failure, and does not end the process, so that `shen-jit script f | head` can
   end with `write-byte: Broken pipe` and status 1 if nothing catches it. Output still buffered
   when the process ends is dropped silently. A child process finds `SIGPIPE` at its default.
+  `(shen-jit.write-bytes B I N S)` writes N bytes of a buffer from I the same way, at once, and returns N.
 - Reading from an output stream, writing to an input stream, or using a closed
   stream raises an error. `(close S)` returns the empty list, and raises an error if what was
   left to write could not be written; the stream is closed either way. Closing a closed stream

@@ -1,0 +1,3 @@
+(defun c.back (N) (if (= N 0) (b.stop) (b.step N)))
+
+(defun c.alone () (let X 1 (c.alone)))

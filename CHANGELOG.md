@@ -10,6 +10,25 @@ All notable changes to this project are documented in this file. The format is b
 - Optional `lib/fs.shen`: paths, owned metadata, sorted bounded listings and traversal, exclusive temporary
   files/directories, rename without overwrite, replacement and bounded copying through our I/O endpoints.
   Build its platform adapter with `make fs`; [the reference](docs/fs.md) includes the API and `tools/fs-copy.shen`.
+- `shen-jit.write-bytes`: a range of a byte buffer written to a stream at once, where `write-byte` takes a call a byte.
+- `example-apps/depends/`, a dependency analyser over Shen and KL source files, built over `lib/datalog.shen` as one
+  executable: what calls what, cycles between files, dead code from roots, call depths, and why one function reaches another.
+- Datalog lattices: `(relation reached [symbol integer] (lattice F))` keeps for each key the least upper bound, by a Shen
+  function, of the values derived; `(lattice bor)` and `(lattice band)`, unions and intersections of bit sets, are native.
+- Datalog relations that keep one tuple a key: `(relation dist [symbol integer] min)`, `max` and `choice`, by which shortest
+  paths end without a bound.
+- `datalog.explain`: why a Datalog tuple holds, as a proof down to the facts given.
+- `datalog.read-facts` and `datalog.write-facts`: Datalog relations from and to tab-separated or CSV files, each field read as
+  its column's type says; `datalog.bytes->facts` and `datalog.relation->bytes` do the same with the files' bytes, for a
+  program that writes its files itself, as with the I/O library.
+- Datalog equivalences: `(relation same [symbol symbol] equivalence)` keeps the reflexive, symmetric and transitive closure of what
+  it is given, by union-find, stored as classes and not as their pairs, so that a class of k values takes room for k, not k squared.
+- Datalog functions: integer `/` and `%`, `band`, `bor`, `bxor`, `bshl` and `bshr`, `cat`, `strlen`, `substr`, `to-number` and
+  `to-string` on strings, and the `mean` aggregate.
+- `datalog.query`: a Datalog query computed by demand, through magic sets, deriving only what bears on its constants, and
+  `datalog.demand-db`, a database that answers queries so, keeping what earlier ones derived through adds and removals.
+- Datalog records and types of several constructors: `(type shape [circle point integer] [rect point point])`, values such as
+  `[rect [pt 1 2] [pt 4 6]]`, taken apart in a rule's body and made in its head or by `=`, recursive types included.
 - Optional `lib/curl.shen`, with a small C adapter over libcurl: bounded HTTP(S) requests, reusable clients,
   binary bodies, headers and trailers, timeouts, TLS verification and explicit redirect limits. Responses can
   stream into independent I/O sinks with backpressure, bounded chunks and exact partial-write progress.
@@ -29,6 +48,12 @@ All notable changes to this project are documented in this file. The format is b
   `http.read-request` are declared, and grammars can be loaded under `(tc +)`.
 
 ### Changed
+
+- `pr`, through which `output` and `print` write, writes a string at once, not a byte at a time.
+- `datalog.ask` and `datalog.match` find the tuples of a pattern with constants by an index on their columns, which the first
+  such question makes and the database keeps, where they read the whole relation.
+- Datalog derives each combination of tuples once in a rule with several atoms of its own recursion, such as
+  `(path X Z) <-- (path X Y) (path Y Z)`, where it derived those that were new together once for each.
 
 - A read lends the backend a chunk that the endpoint keeps, where it allocated a fresh one as large as the reader's
   free space each time. Small reads into a large reader are 3 to 8 times as fast, an HTTP head takes 15 to 32% less time,

@@ -231,6 +231,7 @@ enum Prim {
     P_ERRNO, P_C_ERRNO, P_POINTER_KILL, P_POINTER_SIZED, P_SET_POINTER,
     P_POINTER_GUARD, P_POINTER_OWNER, P_POINTERS_DEAD, P_POINTER_READ_ONLY,
     P_COLLECT, /* shen-jit.collect */
+    P_WRITE_BYTES, /* shen-jit.write-bytes: a range of a buffer to a stream, at once */
     P_COUNT
 };
 #define PRIM_RAISE_COND P_COUNT

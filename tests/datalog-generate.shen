@@ -32,22 +32,37 @@
 
 (define dtg.value
   symbol -> (dtg.choose [p q r s t])
-  integer -> (dtg.choose [-2 -1 0 1 2 3]))
+  integer -> (dtg.choose [-2 -1 0 1 2 3])
+  pair -> (if (= 0 (dtg.random 2)) [pr (dtg.value symbol) (dtg.value integer)] [one (dtg.value symbol)]))
+
+\* Every program has a type of two constructors, pair, whose fields are not pairs, so that its
+   records are finitely many. *\
+(define dtg.fields
+  pr -> [symbol integer]
+  one -> [symbol])
 
 \* Variables of a type have names of their own, so that a rule is well typed by construction. *\
 (define dtg.vars
   symbol -> ["A" "B" "C" "D"]
-  integer -> ["M" "N"])
+  integer -> ["M" "N"]
+  pair -> ["P" "Q"])
 
 (define dtg.type
-  -> (if (= 0 (dtg.random 3)) integer symbol))
+  -> (let R (dtg.random 6)
+       (cases (< R 2) integer
+              (= R 2) pair
+              true symbol)))
 
 (define dtg.relation
   I -> (let Arity (+ 1 (dtg.random 3))
          [(dtg.numbered "r" I) | (dtg.times Arity (freeze (dtg.type)))]))
 
-\* A body term: mostly a variable, some constants and some _. *\
+\* A body term: mostly a variable, some constants and some _, and for a pair sometimes a record
+   of such terms. *\
 (define dtg.term
+  pair -> (let C (dtg.choose [pr one])
+            [C | (dtg.map (function dtg.term) (dtg.fields C))])
+          where (< (dtg.random 10) 3)
   Type -> (let R (dtg.random 10)
             (cases (< R 7) [var (dtg.choose (dtg.vars Type))]
                    (< R 9) (dtg.value Type)
@@ -60,6 +75,7 @@
 (define dtg.bound
   [] _ Acc -> Acc
   [[var V] | Ts] [Type | Types] Acc -> (dtg.bound Ts Types (adjoin [V | Type] Acc))
+  [[C | Args] | Ts] [pair | Types] Acc -> (dtg.bound Ts Types (dtg.bound Args (dtg.fields C) Acc)) where (element? C [pr one])
   [_ | Ts] [_ | Types] Acc -> (dtg.bound Ts Types Acc))
 
 (define dtg.body-bound
@@ -74,6 +90,9 @@
 
 \* A head from variables the body binds, or constants where it binds none of that type. *\
 (define dtg.head-term
+  pair Bound -> (let C (dtg.choose [pr one])
+                  [C | (dtg.map (/. T (dtg.head-term T Bound)) (dtg.fields C))])
+                where (< (dtg.random 10) 4)
   Type Bound -> (let Vars (dtg.of-type Bound Type)
                   (if (or (empty? Vars) (= 0 (dtg.random 5)))
                       (dtg.value Type)
@@ -86,8 +105,11 @@
 (define dtg.comparison
   Bound -> (let Numbers (dtg.of-type Bound integer)
                 Symbols (dtg.of-type Bound symbol)
-                R (dtg.random 8)
-             (cases (and (< R 2) (cons? Numbers))
+                Pairs (dtg.of-type Bound pair)
+                R (dtg.random 9)
+             (cases (and (= R 8) (cons? Pairs))
+                    [[(dtg.choose [= !=]) [var (dtg.choose Pairs)] (dtg.head-term pair Bound)]]
+                    (and (< R 2) (cons? Numbers))
                     [[(dtg.choose [< > <= >= = !=]) [var (dtg.choose Numbers)]
                       (if (= 0 (dtg.random 2)) [var (dtg.choose Numbers)] (dtg.value integer))]]
                     (and (< R 4) (cons? Symbols))
@@ -103,6 +125,7 @@
                          []))
 
 (define dtg.negated-term
+  pair Bound -> (dtg.head-term pair Bound) where (< (dtg.random 10) 3)
   Type Bound -> (let Vars (dtg.of-type Bound Type)
                      R (dtg.random 10)
                   (cases (and (< R 5) (cons? Vars)) [var (dtg.choose Vars)]
@@ -115,11 +138,16 @@
   Bound -> (let Numbers (dtg.of-type Bound integer)
                 R (dtg.random 6)
              (cases (empty? Numbers) []
-                    (< R 2) [[= [var "K"] [(dtg.choose [+ - *]) [var (dtg.choose Numbers)] (dtg.operand Numbers)]]
-                             [<= [var "K"] 4] [>= [var "K"] -4]]
-                    (= R 2) [[(dtg.choose [< >= = !=]) [(dtg.choose [+ - *]) [var (dtg.choose Numbers)] (dtg.operand Numbers)]
-                              (dtg.value integer)]]
+                    (< R 2) [[= [var "K"] (dtg.expression Numbers)] [<= [var "K"] 4] [>= [var "K"] -4]]
+                    (= R 2) [[(dtg.choose [< >= = !=]) (dtg.expression Numbers) (dtg.value integer)]]
                     true [])))
+
+\* An operation on an integer the body binds. A divisor may be 0, where there is no value, and a
+   shift is by a constant. *\
+(define dtg.expression
+  Numbers -> (let Op (dtg.choose [+ - * / % band bor bxor bshl bshr])
+               [Op [var (dtg.choose Numbers)]
+                   (if (element? Op [bshl bshr]) (dtg.choose [0 1 2 3]) (dtg.operand Numbers))]))
 
 (define dtg.operand
   Numbers -> (if (= 0 (dtg.random 2)) [var (dtg.choose Numbers)] (dtg.value integer)))
@@ -137,7 +165,7 @@
   -> (if (= 0 (dtg.random 5))
          (let Rel (dtg.choose Relations)
               Atom [(hd Rel) | (dtg.map (/. T (dtg.aggregate-term T Bound)) (tl Rel))]
-              Op (if (element? [var "W"] Atom) (dtg.choose [count sum min max]) count)
+              Op (if (element? [var "W"] Atom) (dtg.choose [count sum min max mean]) count)
               Agg (if (= Op count) [count Atom] [Op [var "W"] Atom])
               Numbers (dtg.of-type Bound integer)
            (if (and (cons? Numbers) (= 0 (dtg.random 4)))
@@ -152,6 +180,7 @@
                          (< R 6) (dtg.value Type)
                          (< R 8) [any]
                          (= Type integer) [var "W"]
+                         (= Type pair) [any]
                          true [var "L"])))
 
 (define dtg.binds-g?
@@ -217,11 +246,23 @@
   Rules -> (map (/. R [rule (hd R) (hd (tl R))]) Rules))
 
 (define dtg.items
-  Relations Rules -> (append (map (/. R [relation (hd R) (tl R)]) Relations)
+  Relations Rules -> (append [[type pair [pr symbol integer] [one symbol]] | (map (function dtg.declare) Relations)]
                              (dtg.rule-items Rules)))
+
+\* A relation of two columns of one type is sometimes an equivalence: the last program's are here. *\
+(set dtg.*equivalences* [])
+
+(define dtg.declare
+  R -> (if (element? (hd R) (value dtg.*equivalences*)) [relation (hd R) (tl R) equivalence] [relation (hd R) (tl R)]))
+
+(define dtg.equivalences
+  [] -> []
+  [[Rel A A] | Rs] -> [Rel | (dtg.equivalences Rs)] where (= 0 (dtg.random 3))
+  [_ | Rs] -> (dtg.equivalences Rs))
 
 (define dtg.program
   -> (let Relations (dtg.map (function dtg.relation) (dtg.upto (+ 2 (dtg.random 3))))
+          _ (set dtg.*equivalences* (dtg.equivalences Relations))
           Rules (dtg.stratified Relations (dtg.times (+ 1 (dtg.random 5)) (freeze (dtg.rule Relations))))
           Facts (dtg.times (dtg.random 25) (freeze (dtg.fact (dtg.choose Relations))))
        [Relations Rules Facts]))

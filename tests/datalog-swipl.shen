@@ -14,6 +14,7 @@
 (define swi.term
   [var V] -> (cn "V" V)
   [any] -> "_"
+  [C | Args] -> (swi.atom-form [C | Args])
   X -> (str X) where (number? X)
   X -> (swi.atom X))
 
@@ -30,23 +31,41 @@
    by then, as its table is, so plain negation is enough. *\
 (define swi.comparison
   [not Atom] -> (cn "\+ " (swi.atom-form Atom))
-  [Op A B] -> (cn (swi.expr A) (cn (swi.arith-op Op) (swi.expr B)))
+  [Op A B] -> (cn (swi.guards [A B]) (cn (swi.expr A) (cn (swi.arith-op Op) (swi.expr B))))
               where (or (datalog.expression? A) (datalog.expression? B))
   [Op A B] -> (cn (swi.term A) (cn (swi.op Op) (swi.term B))))
 
 \* What binds a variable is is, after the atoms and before what reads it. Generated programs bind
    only from what the atoms bind. *\
 (define swi.binding
-  [= [var V] E] -> (cn "V" (cn V (cn " is " (swi.expr E)))))
+  [= [var V] E] -> (cn (swi.guards [E]) (cn "V" (cn V (cn " is " (swi.expr E))))))
+
+\* A division by zero has no value, so the rule fails there, as Prolog's would raise. *\
+(define swi.guards
+  [] -> ""
+  [[Op A B] | Es] -> (cn (swi.guards [A B]) (cn (swi.expr B) (cn " =\= 0, " (swi.guards Es)))) where (element? Op [/ %])
+  [[Op A B] | Es] -> (swi.guards [A B | Es]) where (datalog.arithmetic? Op)
+  [_ | Es] -> (swi.guards Es))
 
 (define swi.binding?
   [= [var "K"] _] -> true
   _ -> false)
 
 (define swi.expr
-  [Op A B] -> (cn "(" (cn (swi.expr A) (cn (cn " " (cn (str Op) " ")) (cn (swi.expr B) ")"))))
+  [Op A B] -> (cn "(" (cn (swi.expr A) (cn (cn " " (cn (swi.operator Op) " ")) (cn (swi.expr B) ")"))))
               where (datalog.arithmetic? Op)
   T -> (swi.term T))
+
+\* SWI-Prolog's // truncates toward zero and rem takes the dividend's sign, as / and % do. *\
+(define swi.operator
+  / -> "//"
+  % -> "rem"
+  band -> "/\"
+  bor -> "\/"
+  bxor -> "xor"
+  bshl -> "<<"
+  bshr -> ">>"
+  Op -> (str Op))
 
 (define swi.arith-op
   = -> " =:= "
@@ -74,6 +93,9 @@
    that bind its keys: a tabled relation's answers are a set, so each tuple counts once. *\
 (define swi.aggregate
   [= [var V] [count Atom]] -> (make-string "aggregate_all(count, ~A, V~A)" (swi.atom-form Atom) V)
+  [= [var V] [mean [var W] Atom]]
+  -> (make-string "aggregate_all(count, ~A, V~Ac), V~Ac > 0, aggregate_all(sum(V~A), ~A, V~As), V~A is V~As // V~Ac"
+                  (swi.atom-form Atom) V V W (swi.atom-form Atom) V V V V)
   [= [var V] [Op [var W] Atom]] -> (make-string "aggregate_all(~A(V~A), ~A, V~A)" Op W (swi.atom-form Atom) V))
 
 (define swi.filter
@@ -123,7 +145,10 @@
           _ (swi.write-all S (map (function swi.no-clause) Relations))
           _ (swi.write-all S (map (/. F (cn (swi.atom-form F) ".c#10;")) Facts))
           _ (swi.write-all S (map (function swi.rule) Rules))
-          _ (pr "output(Rel, Values) :- atomic_list_concat([Rel | Values], ' ', Line), writeln(Line).c#10;" S)
+          _ (swi.write-all S (map (function swi.rule) (mapcan (function datalog.equivalence-rules) (value dtg.*equivalences*))))
+          _ (pr "text(T, S) :- compound(T), !, T =.. Parts, maplist(text, Parts, Texts), atomic_list_concat(Texts, ' ', In), atomic_list_concat(['[', In, ']'], S).c#10;" S)
+          _ (pr "text(X, X).c#10;" S)
+          _ (pr "output(Rel, Values) :- maplist(text, Values, Texts), atomic_list_concat([Rel | Texts], ' ', Line), writeln(Line).c#10;" S)
           _ (swi.write-all S (map (function swi.print) Relations))
           _ (pr "main :- (c#10;" S)
           _ (pr (swi.run-all Relations) S)
@@ -131,7 +156,12 @@
        (close S)))
 
 (define swi.line
-  Rel Tuple -> (swi.join (map (function str) [Rel | Tuple]) " "))
+  Rel Tuple -> (swi.join (map (function swi.text) [Rel | Tuple]) " "))
+
+\* A record as the Prolog side writes it: [one p], [pr p 2]. *\
+(define swi.text
+  [C | Args] -> (cn "[" (cn (swi.join (map (function swi.text) [C | Args]) " ") "]"))
+  X -> (str X))
 
 (define swi.results
   Path Db Relations

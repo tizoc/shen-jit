@@ -43,7 +43,7 @@
            (/. File (o.for-each
                       (/. Form (shen.dict-> (value o.*kernel*) (hd (tl Form)) Form))
                       (o.defuns (cn Dir (cn "/klambda/" (cn File ".kl"))))))
-           ["core" "dict" "prolog" "reader" "sys" "yacc" "toplevel" "extension-launcher"]))
+           ["core" "dict" "prolog" "reader" "sys" "writer" "yacc" "toplevel" "extension-launcher"]))
 
 (define o.for-each
   _ [] -> done
@@ -379,7 +379,7 @@
   -> [shen.+string? shen.+vector? shen.misc? shen.str->bytes shen.<-out shen.hds=? <-vector @p append
       tuple? vector vector? symbol? variable? shen.compute-E shen.compute-fraction-h shen.compute-integer
       shen.<alphanums> shen.<atom> shen.<digits> shen.<shortnatters> shen.<whitespaces>
-      read-file read-file-as-bytelist read-file-as-string get fn hash shen.update-lambdatable
+      read-file read-file-as-bytelist read-file-as-string pr get fn hash shen.update-lambdatable
       shen.record-kl shen.record-and-evaluate shen.shendef->kldef-h])
 
 (define o.any-values
@@ -545,6 +545,52 @@ a")
            (do (o.run read-file-as-bytelist 1 Cases)
                (o.run read-file-as-string 1 Cases)
                (o.run read-file 1 Cases))))
+
+\\ pr: each call writes to a file of its own, opened as its arguments are made, and its outcome
+\\ is its value and what the file holds. Others are a closed stream and values that are not
+\\ streams, and each again with *hush*, which is set as the arguments are made, and unset after.
+
+(set o.*out* [])
+(set o.*outs* 0)
+
+(define o.no-out
+  -> (do (if (cons? (value o.*out*)) (close (hd (value o.*out*))) skip)
+         (set o.*out* [])
+         (set *hush* false)))
+
+(define o.fresh-out
+  -> (let _ (o.no-out)
+          N (set o.*outs* (+ 1 (value o.*outs*)))
+          Path (cn (value o.*dir*) (make-string "/pr~A" N))
+          S (open Path out)
+          _ (set o.*out* [S Path])
+       S))
+
+(define o.closed-out
+  -> (let _ (o.no-out)
+          S (open (cn (value o.*dir*) "/closed") out)
+       (do (close S) S)))
+
+(define o.written
+  X -> (let Out (value o.*out*)
+            _ (set *hush* false)
+         (if (cons? Out)
+             (do (close (hd Out))
+                 (set o.*out* [])
+                 [X (read-file-as-bytelist (hd (tl Out)))])
+             X)))
+
+(define o.hushed
+  [Name F] -> [(make-string "hushed ~A" Name) (freeze (let V (thaw F) (do (set *hush* true) V)))])
+
+(define o.pr
+  All -> (let Texts (append (map (/. S (o.v S)) (append ["" "abc" "a
+b" (n->string 0) (n->string 255)] (o.strings)))
+                            (o.named [n0 sym nil one-list bs] All))
+              Others (map (/. V (let F (hd (tl V)) [(hd V) (freeze (do (o.no-out) (thaw F)))])) (o.named [n0 sym nil] All))
+              Streams (append [["out" (freeze (o.fresh-out))] ["closed" (freeze (o.closed-out))]] Others)
+              _ (o.run-post pr 2 (function o.written) (o.cases2 Texts (append Streams (map (function o.hushed) Streams))))
+       (o.no-out)))
 
 \\ ---------------------------------------------------------------------------
 \\ get and fn
@@ -1043,6 +1089,7 @@ a")
            (o.rules All)
            (o.numbers All)
            (o.files All)
+           (o.pr All)
            (o.get All)
            (o.fn All)
            (o.hash Plain)

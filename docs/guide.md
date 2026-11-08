@@ -309,8 +309,9 @@ inlined too, and patched when a function is redefined.
 
 ### Datalog
 
-The optional `lib/datalog.shen` evaluates relations, facts and recursive rules bottom up, to a fixed point, with each
-rule compiled through the JIT and its join order chosen from the sizes of the relations as it runs.
+The optional `lib/datalog.shen` evaluates relations, facts and recursive rules bottom up, to a fixed point, over symbols,
+strings, integers and records, with each rule compiled through the JIT and its join order chosen from the sizes of the
+relations as it runs, and answers a query by deriving only what bears on it.
 [Datalog](https://github.com/tizoc/shen-jit/blob/main/docs/datalog.md) covers loading, the language, the API and an example.
 
 ## Close to the machine
@@ -342,6 +343,7 @@ them.
 | `(shen-jit.string->bytes S)` | A new buffer with S's bytes |
 | `(shen-jit.bytes->string B I N)` | A new string of the N bytes from I |
 | `(shen-jit.copy-bytes To I From J N)` | Copies N bytes from J in From to I in To, which may overlap, and returns To |
+| `(shen-jit.write-bytes B I N S)` | Writes the N bytes from I to the output stream S at once, and returns N |
 
 On a fixnum's 62 bits: `shen-jit.bit-and`, `bit-or`, `bit-xor`, `bit-not`, `shift-left`, `shift-right`, `rotate32`,
 `bswap32`, `popcount`, `clz` and `ctz`.
@@ -881,7 +883,7 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make test-buffer` | Buffer/cursor bounds, copying, foreign lifetime, typed clients, format examples, grammars, typed grammars and images/GC |
 | `make test-io` | Bounded chunk I/O, binary files and framing, socket endpoints/echo, native lifetimes, typed results and images/GC |
 | `make test-http` | Request/response framing, streaming, persistent connections, shutdown, SQLite example, typing and images/GC |
-| `make test-datalog` | `lib/datalog.shen`: answers written by hand, its errors, and generated programs against its plain evaluator |
+| `make test-datalog` | `lib/datalog.shen`: answers written by hand, its errors, and generated programs against its plain evaluator; and the dependency analyser of `example-apps/depends` |
 | `make test-datalog-swipl` | The same generated programs against SWI-Prolog's tabling, if `swipl` is there |
 | `make test-ffi` | C functions called from Shen and C written for Shen, against `tests/ffi_lib.c`, memory outside the heap, and the SQLite and socket libraries |
 | `make test-curl` | Optional libcurl adapter, independent loopback HTTP/TLS fixtures, downloader, typing, threads and images/GC; needs libcurl development headers, Python 3 and `openssl` |
