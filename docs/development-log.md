@@ -2206,6 +2206,19 @@ A negated atom of an equivalence and an aggregate over one were KL, which asks f
 - **Checked:** a fixture of each shape, negated with no column known, one and both, and `count`, `sum`, `min` and `max` with each, against answers written by hand and every evaluator, and that every plan is a kernel; and the generated programs and SWI-Prolog. Planted, two values in one class never found fails 9 checks, a value never found 8, an empty equivalence's test inverted 8, a class read as its old part 12, columns swapped 12, and positions read only from where the changed classes start 0, until the fixture's equivalence was made recursive, so that it settles before it is read: 8.
 - **An unreachable exit:** in the first version one plan fell back to KL, as the probe of a negated value ended its loop after the found case had left the block already, which the assembler refuses. That version took 1,177 ms, more than KL alone; why was not looked into, as the fix made that plan a kernel too.
 
+### Class sizes kept, and old classes found by position (2026-11-08, Apple M3 Max, against the commit before)
+
+A larger equivalence, 200,000 random links among 300,000 values, whose largest class holds most of them and 18,540,343,824 pairs, took 6.5 s to close. Sampled, 98% of it was `length` on the members lists, as each join measured both classes, the largest at over 100,000 values. Each root's class size is now kept beside its members, so a join costs the smaller class. That left the layout at about a third, most of it remembering each value's root in a dictionary, so that the next layout could tell which part of a class it was in; that is where its position's class starts, which the table by value finds, so the dictionary is gone. A class whose values are all new is one part, not grouped by a dictionary of its own. Three lines fewer.
+
+| ms | Before | After |
+| --- | --- | --- |
+| The closure of 200,000 links | 6,520 to 6,560 | 195 to 207 |
+| The closure alone, 2,500 and 3,000 links of the 3,000-node graphs | 2.6 to 2.8, 3.8 to 3.9 | 1.5, 1.7 (Soufflé 1.2, 1.4) |
+| A join reading them twice, best of five, three rounds | 163 to 167, 331 to 344 | 163 to 179, 329 to 337 |
+
+- **Of the 200,000 links' 222 ms,** under timers, joining classes takes 139 and laying them out 52; of a full layout, finding each value's old class 13 ms, writing the positions 8 and the table 2.6, the rest the lists and dictionaries of the classes that changed.
+- **A shortcut first counted a class of new values as unchanged,** which put it before the changed ones, where no new pair is read; the timers showed it, as remembering roots fell to nothing, and planted, it fails 32 checks.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.

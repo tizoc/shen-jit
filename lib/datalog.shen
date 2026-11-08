@@ -2830,19 +2830,19 @@
            (> To From)))
 
 \\ An equivalence keeps classes, not pairs. Rules add pairs to its own storage as to any relation's,
-\\ an inbox, which each merge empties into a union-find: a root for each value and each root's
-\\ members, a class joining the larger. The classes that changed are then laid out again at the end
-\\ of a buffer X of five u32 a position: a value, its class's range of positions, and the range of
-\\ the part it was in when last laid out, values new since being a part of their own, whose range is
-\\ empty. So the pairs of a class are its range, the old ones a value's part, and the new ones the
-\\ rest, all from the positions where the changed classes start. Their earlier positions become
-\\ holes, whose ranges are empty, and a table by value, H, an index of X's first column, finds a
-\\ value's latest position. When X is full, H half full or holes outnumber values, every class is
-\\ laid out again, into new ones. The record: 0 roots, 1 members, 2 the root each value had when last
-\\ laid out, 3 X, 4 H, 5 H's mask, 6 how many positions, holes included, 7 where the classes that
-\\ changed start, 8 how many pairs, 9 whether the last merge laid any out, 10 the size of a pair's
-\\ class on average, or -1 until asked for, 11 the roots of classes changed since, 12 how many
-\\ holes, 13 H's chains.
+\\ an inbox, which each merge empties into a union-find: a root for each value, each root's members
+\\ and its class's size, a class joining the larger. The classes that changed are then laid out
+\\ again at the end of a buffer X of five u32 a position: a value, its class's range of positions,
+\\ and the range of the part of it that was one class when last laid out, values new since being a
+\\ part of their own, whose range is empty. So the pairs of a class are its range, the old ones a
+\\ value's part, and the new ones the rest, all from the positions where the changed classes start.
+\\ Their earlier positions become holes, whose ranges are empty, and a table by value, H, an index of
+\\ X's first column, finds a value's latest position, and so the class it was in. When X is full, H
+\\ half full or holes outnumber values, every class is laid out again, into new ones. The record:
+\\ 0 roots, 1 members, 2 each root's class size, 3 X, 4 H, 5 H's mask, 6 how many positions, holes
+\\ included, 7 where the classes that changed start, 8 how many pairs, 9 whether the last merge laid
+\\ any out, 10 the size of a pair's class on average, or -1 until asked for, 11 the roots of classes
+\\ changed since, 12 how many holes, 13 H's chains.
 (define datalog.new-classes
   -> (let C (absvector 14)
           _ (address-> C 0 (shen.dict 64))
@@ -2899,17 +2899,18 @@
            (datalog.join-pairs Rec C (+ P 1) N (or New Changed)))))
 
 \\ Joins two values' classes: whether that changed a class or made one. The pairs grow by twice the
-\\ product of the classes' sizes, or by one for a new value.
+\\ product of the classes' sizes, or by one for a new value. Sizes are kept, as a class's members
+\\ may be many and its smaller partner few.
 (define datalog.join
   C A B -> (let NewA (datalog.ensure-class C A)
                 NewB (datalog.ensure-class C B)
                 RA (tl (datalog.dict-find (<-address C 0) A))
                 RB (tl (datalog.dict-find (<-address C 0) B))
-                MA (tl (datalog.dict-find (<-address C 1) RA))
-                MB (tl (datalog.dict-find (<-address C 1) RB))
+                SA (tl (datalog.dict-find (<-address C 2) RA))
+                SB (tl (datalog.dict-find (<-address C 2) RB))
              (cases (= RA RB) (and (or NewA NewB) (datalog.changed C RA))
-                    (< (length MA) (length MB)) (datalog.join-into C RB MB RA MA)
-                    true (datalog.join-into C RA MA RB MB))))
+                    (< SA SB) (datalog.join-into C RB SB RA SA)
+                    true (datalog.join-into C RA SA RB SB))))
 
 (define datalog.changed
   C Root -> (do (address-> C 11 [Root | (<-address C 11)]) true))
@@ -2919,16 +2920,20 @@
              false
              (do (shen.dict-> (<-address C 0) X X)
                  (shen.dict-> (<-address C 1) X [X])
+                 (shen.dict-> (<-address C 2) X 1)
                  (address-> C 8 (+ (<-address C 8) 1))
                  true)))
 
 (define datalog.join-into
   C Root Big Old Small
-  -> (do (map (/. Y (shen.dict-> (<-address C 0) Y Root)) Small)
-         (shen.dict-> (<-address C 1) Root (append Small Big))
-         (shen.dict-rm (<-address C 1) Old)
-         (address-> C 8 (+ (<-address C 8) (* 2 (* (length Small) (length Big)))))
-         (datalog.changed C Root)))
+  -> (let Members (tl (datalog.dict-find (<-address C 1) Old))
+       (do (map (/. Y (shen.dict-> (<-address C 0) Y Root)) Members)
+           (shen.dict-> (<-address C 1) Root (append Members (tl (datalog.dict-find (<-address C 1) Root))))
+           (shen.dict-rm (<-address C 1) Old)
+           (shen.dict-> (<-address C 2) Root (+ Big Small))
+           (shen.dict-rm (<-address C 2) Old)
+           (address-> C 8 (+ (<-address C 8) (* 2 (* Small Big))))
+           (datalog.changed C Root))))
 
 \\ The classes that changed, each once, at the end of X; or every class again, into a new X and H,
 \\ if there is no room or the holes would outnumber the values.
@@ -2957,7 +2962,6 @@
           Changed (datalog.filter-parts true (map (/. Ms (datalog.parts C Ms)) Classes))
           _ (map (/. Ps (map (/. Part (map (/. V (datalog.hole C X V)) (tl Part))) (tl Ps))) Changed)
           End (datalog.place-classes X Changed From)
-          _ (datalog.remember-roots C Changed)
           _ ((datalog.index-function 5 [1]) (<-address C 4) (<-address C 13) X (<-address C 5) From End)
           _ (address-> C 6 End)
           _ (address-> C 7 From)
@@ -2973,7 +2977,6 @@
           X (shen-jit.bytes (* 20 Room))
           From (datalog.place-classes X (datalog.filter-parts false Parts) 0)
           End (datalog.place-classes X Changed From)
-          _ (datalog.remember-roots C Changed)
           Size (datalog.power-at-least 16 (* 2 Room))
           H (shen-jit.bytes (* 8 Size))
           Next (shen-jit.bytes (* 4 Room))
@@ -2999,19 +3002,14 @@
                       _ (shen-jit.u32! X (+ B 16) 0)
                    (address-> C 12 (+ (<-address C 12) 1))))))
 
-(define datalog.remember-roots
-  C Changed -> (map (/. Ps (map (/. Part (map (/. V (shen.dict-> (<-address C 2) V (tl (datalog.dict-find (<-address C 0) V))))
-                                              (tl Part)))
-                                (tl Ps)))
-                    Changed))
-
-\\ A class's parts: [Changed [Old Values] ... [new Values]], Old a root when last laid out.
+\\ A class's parts: [Changed [Old Values] ... [new Values]], Old where the class each was in when
+\\ last laid out starts, before X changes.
 (define datalog.parts
-  C Ms -> (let Prev (<-address C 2)
-               Roots (map (/. V (let E (datalog.dict-find Prev V) (if (cons? E) (tl E) new))) Ms)
-            (if (and (not (element? new Roots)) (datalog.all-same? (tl Roots) (hd Roots)))
-                [false [(hd Roots) | Ms]]
-                [true | (datalog.group-parts Roots Ms (shen.dict 8))])))
+  C Ms -> (let X (<-address C 3)
+               Olds (map (/. V (let P (datalog.class-position C V) (if (= P 0) new (shen-jit.u32 X (- (* 20 P) 16))))) Ms)
+            (cases (not (datalog.all-same? (tl Olds) (hd Olds))) [true | (datalog.group-parts Olds Ms (shen.dict 8))]
+                   (= (hd Olds) new) [true [new | Ms]]
+                   true [false [(hd Olds) | Ms]])))
 
 (define datalog.all-same?
   [] _ -> true
@@ -3064,7 +3062,7 @@
 (define datalog.pair-class-size
   C -> (if (< (<-address C 10) 0)
            (let S (<-address C 8)
-                W (shen.dict-fold (/. _ Ms W (let K (length Ms) (+ W (* K (/ (* K K) S))))) (<-address C 1) 0)
+                W (shen.dict-fold (/. _ K W (+ W (* K (/ (* K K) S)))) (<-address C 2) 0)
                 _ (address-> C 10 W)
              W)
            (<-address C 10)))
