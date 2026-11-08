@@ -33,7 +33,7 @@ false
 
 | Form | Meaning |
 | --- | --- |
-| `(defdatalog Name Item ...)` | Defines a program, checked now. An item is `(relation Name [Types])` or `(rule Head <-- Body ...)`, or `(rule Head)` for one that always holds |
+| `(defdatalog Name Item ...)` | Defines a program, checked now. An item is `(relation Name [Types])`, `(type Name [Constructor Types] ...)` or `(rule Head <-- Body ...)`, or `(rule Head)` for one that always holds |
 | `(datalog.run Name Facts)` | A database from facts such as `[imports a b]` |
 | `(datalog.add Db Facts)` | The database with these facts added and what follows from them, changed in place and given back |
 | `(datalog.remove Db Facts)` | The same with these facts removed, and what no longer follows; a fact it does not have is no change |
@@ -46,11 +46,30 @@ false
 | `(datalog.stats Db)` | The rounds, how many plans were made, and each relation's tuples, the derivations that made them and its indexes |
 | `(datalog.run-naive Name Facts)` | The same result by the plain definition, slowly: what the rest is tested against |
 
-- **Columns** are `symbol`, `string` or `integer`, and a value of another type raises when it is given. An integer is 32 bits, signed:
-  from -2147483648 to 2147483647.
+- **Columns** are `symbol`, `string`, `integer` or a declared type, and a value of another type raises when it is given. An integer
+  is 32 bits, signed: from -2147483648 to 2147483647.
 - **Rules:** a body has atoms, negated atoms and comparisons: `<`, `>`, `<=` and `>=` on integers, and `=` and `!=` on values of one
   type. A variable in a head, a comparison or a negated atom must appear in an atom of the body, or be bound by `=`, and each `_` is a variable of its own.
-  There are no terms inside a column.
+- **Records:** `(type shape [circle point integer] [rect point point] [blank])` declares a type and its constructors, each with the
+  types of its fields, which may be the type itself. A value of it is a list headed by a constructor, as `[rect [pt 1 2] [pt 4 6]]`
+  or `[blank]`; a record is a type of one constructor, as `point` here. In a rule, brackets are a record: in an atom of the body it
+  matches, so `(drawn S [rect [pt X _] _])` binds `X`, and in a head, or on one side of `=`, it is made, from what is bound.
+  Records are equal when their constructors and fields are, and are compared only with `=` and `!=`. A record in a negated atom
+  cannot hold `_`, and `=` makes a record but does not take one apart. As with arithmetic, a recursive rule that makes records
+  makes new values, so it should bound them, as `(<= N 4)` does here:
+
+```shen
+(defdatalog routes
+  (type path [nil] [cons symbol path])
+  (relation edge [symbol symbol])
+  (relation start [symbol])
+  (relation route [symbol path integer])
+  (rule (route X [cons X [nil]] 1) <-- (start X))
+  (rule (route Y [cons Y P] N) <-- (route X P M) (edge X Y) (= N (+ M 1)) (<= N 4)))
+```
+
+  With `a` a start and edges from `a` to `b` and `b` to `c`, `route` holds `[c [cons c [cons b [cons a [nil]]]] 3]`, among
+  others. `datalog.sorted` orders records after other values, by constructor name and then by fields.
 - **Arithmetic:** `(+ A B)`, `(- A B)` and `(* A B)` on integers, nested as deep as wanted, can stand on either side of a comparison.
   `(= D (+ D0 W))` binds `D` when nothing else has, and compares otherwise; a binding can use what another binds, in any order.
   An operation whose result is not 32 bits raises. Arithmetic makes new values, so a recursive rule that uses it should bound them,

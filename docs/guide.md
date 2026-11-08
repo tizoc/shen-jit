@@ -309,8 +309,9 @@ inlined too, and patched when a function is redefined.
 
 ### Datalog
 
-The optional `lib/datalog.shen` evaluates relations, facts and recursive rules bottom up, to a fixed point, with each
-rule compiled through the JIT and its join order chosen from the sizes of the relations as it runs.
+The optional `lib/datalog.shen` evaluates relations, facts and recursive rules bottom up, to a fixed point, over symbols,
+strings, integers and records, with each rule compiled through the JIT and its join order chosen from the sizes of the
+relations as it runs.
 [Datalog](https://github.com/tizoc/shen-jit/blob/main/docs/datalog.md) covers loading, the language, the API and an example.
 
 ## Close to the machine

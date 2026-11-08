@@ -14,6 +14,7 @@
 (define swi.term
   [var V] -> (cn "V" V)
   [any] -> "_"
+  [C | Args] -> (swi.atom-form [C | Args])
   X -> (str X) where (number? X)
   X -> (swi.atom X))
 
@@ -123,7 +124,9 @@
           _ (swi.write-all S (map (function swi.no-clause) Relations))
           _ (swi.write-all S (map (/. F (cn (swi.atom-form F) ".c#10;")) Facts))
           _ (swi.write-all S (map (function swi.rule) Rules))
-          _ (pr "output(Rel, Values) :- atomic_list_concat([Rel | Values], ' ', Line), writeln(Line).c#10;" S)
+          _ (pr "text(T, S) :- compound(T), !, T =.. Parts, maplist(text, Parts, Texts), atomic_list_concat(Texts, ' ', In), atomic_list_concat(['[', In, ']'], S).c#10;" S)
+          _ (pr "text(X, X).c#10;" S)
+          _ (pr "output(Rel, Values) :- maplist(text, Values, Texts), atomic_list_concat([Rel | Texts], ' ', Line), writeln(Line).c#10;" S)
           _ (swi.write-all S (map (function swi.print) Relations))
           _ (pr "main :- (c#10;" S)
           _ (pr (swi.run-all Relations) S)
@@ -131,7 +134,12 @@
        (close S)))
 
 (define swi.line
-  Rel Tuple -> (swi.join (map (function str) [Rel | Tuple]) " "))
+  Rel Tuple -> (swi.join (map (function swi.text) [Rel | Tuple]) " "))
+
+\* A record as the Prolog side writes it: [one p], [pr p 2]. *\
+(define swi.text
+  [C | Args] -> (cn "[" (cn (swi.join (map (function swi.text) [C | Args]) " ") "]"))
+  X -> (str X))
 
 (define swi.results
   Path Db Relations

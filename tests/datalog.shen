@@ -678,6 +678,93 @@
 \* Native kernels run, and the plans that fall back to KL are few. *\
 (dt.check "native kernels ran" (< (value datalog.*fallbacks*) 20) true)
 
+\* Records and types of several constructors: taken apart in bodies, at any depth and with a
+   variable bound in another column, made in heads, by =, as a lookup's key and in a negation,
+   compared, counted, and as recursive values that only grow while a bound holds. *\
+(defdatalog dt.shapes
+  (type point [pt integer integer])
+  (type shape [circle point integer] [rect point point] [blank])
+  (relation drawn [symbol shape])
+  (relation centre [symbol point])
+  (relation wide [symbol integer])
+  (relation corner [symbol integer integer])
+  (relation at [point symbol])
+  (relation near [symbol symbol])
+  (relation unit [symbol shape])
+  (relation lonely [symbol])
+  (relation diagonal [symbol])
+  (relation same-place [symbol symbol])
+  (relation circles [integer])
+  (relation blanks [symbol])
+  (rule (centre S P) <-- (drawn S [circle P _]))
+  (rule (wide S W) <-- (drawn S [rect [pt X1 _] [pt X2 _]]) (= W (- X2 X1)))
+  (rule (corner S X Y) <-- (drawn S [rect [pt X Y] _]))
+  (rule (corner S X Y) <-- (drawn S [circle [pt X Y] _]))
+  (rule (diagonal S) <-- (drawn S [rect [pt X X] [pt Y Y]]))
+  (rule (near S T) <-- (corner S X Y) (at [pt X Y] T))
+  (rule (unit S [circle P 1]) <-- (centre S P))
+  (rule (unit S Q) <-- (corner S X Y) (= Q [rect [pt X Y] [pt (+ X 1) (+ Y 1)]]))
+  (rule (lonely S) <-- (corner S X Y) (not (at [pt X Y] _)))
+  (rule (same-place S T) <-- (drawn S A) (drawn T B) (= A B) (!= S T))
+  (rule (circles N) <-- (= N (count (drawn _ [circle _ _]))))
+  (rule (blanks S) <-- (drawn S [blank])))
+
+(set dt.shapes-facts
+  [[drawn a [circle [pt 0 0] 5]] [drawn b [rect [pt 1 2] [pt 4 6]]] [drawn c [rect [pt 3 3] [pt 7 7]]]
+   [drawn d [circle [pt 9 9] 1]] [drawn e [blank]] [drawn f [rect [pt 1 2] [pt 4 6]]]
+   [at [pt 1 2] home] [at [pt 9 9] work]])
+(dt.same "records" (value dt.shapes-facts) dt.shapes centre [[a [pt 0 0]] [d [pt 9 9]]])
+(dt.same "records" (value dt.shapes-facts) dt.shapes wide [[b 3] [c 4] [f 3]])
+(dt.same "records" (value dt.shapes-facts) dt.shapes diagonal [[c]])
+(dt.same "records" (value dt.shapes-facts) dt.shapes near [[b home] [d work] [f home]])
+(dt.same "records" (value dt.shapes-facts) dt.shapes unit
+  [[a [circle [pt 0 0] 1]] [a [rect [pt 0 0] [pt 1 1]]] [b [rect [pt 1 2] [pt 2 3]]] [c [rect [pt 3 3] [pt 4 4]]]
+   [d [circle [pt 9 9] 1]] [d [rect [pt 9 9] [pt 10 10]]] [f [rect [pt 1 2] [pt 2 3]]]])
+(dt.same "records" (value dt.shapes-facts) dt.shapes lonely [[a] [c]])
+(dt.same "records" (value dt.shapes-facts) dt.shapes same-place [[b f] [f b]])
+(dt.same "records" (value dt.shapes-facts) dt.shapes circles [[2]])
+(dt.same "records" (value dt.shapes-facts) dt.shapes blanks [[e]])
+
+(let Db (datalog.run dt.shapes (value dt.shapes-facts))
+  (do (dt.check "a record asked" (datalog.sort (datalog.ask Db (drawn X [rect [pt 1 Y] _]))) [[b [rect [pt 1 2] [pt 4 6]]] [f [rect [pt 1 2] [pt 4 6]]]])
+      (dt.check "a record holds" (datalog.holds? Db [drawn d [circle [pt 9 9] 1]]) true)
+      (dt.check "a record does not hold" (datalog.holds? Db [drawn d [circle [pt 9 9] 2]]) false)
+      (dt.check "a record never made" (datalog.holds? Db [drawn d [circle [pt 8 8] 1]]) false)
+      (dt.check "a record of the wrong type" (datalog.holds? Db [drawn d [pt 9 9]]) false)))
+
+\* A list type, built up along paths and taken apart again, bounded by its length. *\
+(defdatalog dt.lists
+  (type path [nil] [cons symbol path])
+  (relation edge [symbol symbol])
+  (relation start [symbol])
+  (relation route [symbol path integer])
+  (relation second [symbol symbol])
+  (rule (route X [cons X [nil]] 1) <-- (start X))
+  (rule (route Y [cons Y P] N) <-- (route X P M) (edge X Y) (= N (+ M 1)) (<= N 4))
+  (rule (second X Y) <-- (route X [cons X [cons Y _]] _)))
+
+(dt.same "lists" [[start a] [edge a b] [edge b c] [edge b a] [edge c a]] dt.lists route
+  [[a [cons a [cons b [cons a [nil]]]] 3] [a [cons a [cons c [cons b [cons a [nil]]]]] 4] [a [cons a [nil]] 1]
+   [b [cons b [cons a [cons b [cons a [nil]]]]] 4] [b [cons b [cons a [nil]]] 2]
+   [c [cons c [cons b [cons a [nil]]]] 3]])
+(dt.same "lists" [[start a] [edge a b] [edge b c] [edge b a] [edge c a]] dt.lists second
+  [[a b] [a c] [b a] [c b]])
+
+\* Many records made inside kernels, so that their tables grow while a kernel runs. *\
+(defdatalog dt.counting
+  (type nat [z] [s nat])
+  (relation up [integer nat])
+  (relation back [integer integer])
+  (rule (up 0 [z]))
+  (rule (up N [s P]) <-- (up M P) (= N (+ M 1)) (<= N 3000))
+  (rule (back N M) <-- (up N [s [s P]]) (up M P)))
+(let Db (datalog.run dt.counting [])
+  (do (dt.check "records made while running" (datalog.count Db up) 3001)
+      (dt.check "records taken apart" (datalog.count Db back) 2999)
+      (dt.check "a deep record" (datalog.holds? Db [back 2 0]) true)))
+(let Db (dt.run-kl dt.counting [])
+  (dt.check "records made while running, KL" (datalog.count Db back) 2999))
+
 \* Errors, each when the program is defined. *\
 (dt.raises "undeclared" "no relation nope"
   (freeze (datalog.define dt.bad [[rule [nope a] []]])))
@@ -719,6 +806,37 @@
   (freeze (datalog.run dt.reach [[edge 1 (+ 0.5 0.5)]])))
 (dt.raises "no such program" "no program"
   (freeze (datalog.run dt.nope [])))
+(dt.raises "an unknown constructor" "is not a value"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [relation a [t]] [rule [a [j 1]] []]])))
+(dt.raises "a constructor's arity" "takes 1 values, not 2"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [relation a [t]] [rule [a [k 1 2]] []]])))
+(dt.raises "a record of another type" "is not of type"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [type u [j integer]] [relation a [t]] [rule [a [j 1]] []]])))
+(dt.raises "a record in a column of integers" "is not of type"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [relation a [integer]] [rule [a [k 1]] []]])))
+(dt.raises "a record's field" "is not of type"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [relation a [t]] [rule [a [k b]] []]])))
+(dt.raises "_ in a head's record" "cannot hold _"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [relation a [t]] [rule [a [k [any]]] [[a [var "X"]]]]])))
+(dt.raises "_ in a negated record" "cannot hold _"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [relation a [t]] [relation b [integer]]
+                                  [rule [b [var "N"]] [[b [var "N"]] [not [a [k [any]]]]]]])))
+(dt.raises "a constructor declared twice" "declared twice"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [type u [k symbol]]])))
+(dt.raises "a type declared twice" "declared twice"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [type t [j symbol]]])))
+(dt.raises "a reserved constructor" "cannot name a constructor"
+  (freeze (datalog.define dt.bad [[type t [+ integer integer]]])))
+(dt.raises "a base type redeclared" "cannot name a type"
+  (freeze (datalog.define dt.bad [[type integer [k integer]]])))
+(dt.raises "an unknown field type" "not a list of"
+  (freeze (datalog.define dt.bad [[type t [k real]]])))
+(dt.raises "ordering records" "orders integers"
+  (freeze (datalog.define dt.bad [[type t [k integer]] [relation a [t]] [rule [a [var "X"]] [[a [var "X"]] [< [var "X"] [k 1]]]]])))
+(dt.raises "a fact's record" "in a column of type t"
+  (freeze (datalog.run (datalog.define dt.bad [[type t [k integer]] [relation a [t]]]) [[a [k b]]])))
+(dt.raises "a fact's constructor" "in a column of type t"
+  (freeze (datalog.run (datalog.define dt.bad [[type t [k integer]] [type u [j integer]] [relation a [t]]]) [[a [j 1]]])))
 
 \* ---- Generated programs (tests/datalog-generate.shen) against the plain definition. *\
 
