@@ -290,6 +290,24 @@
                                                      (io.min N Maximum))))]
           (io.reader-terminal R))))
 
+\\ For a parser that reads the queue in place: the queue moves to the start of the reader's buffer,
+\\ and fills append to it until something is consumed, so positions in the window stay valid.
+\\ io.window gives the buffer's storage, io.window-fill fills it towards Need bytes, as far as the
+\\ input and the buffer allow, and gives how many it holds, and io.window-size is its capacity.
+(define io.window
+  R -> (let _ (io.reader-check R)
+            B (<-address R 2) At (<-address R 3) End (<-address R 4)
+            _ (if (> At 0)
+                  (do (buffer.copy! B 0 B At (- End At)) (address-> R 3 0) (address-> R 4 (- End At)))
+                  true)
+         (buffer.owner B)))
+
+(define io.window-fill
+  R Need -> (do (io.fill-reader R (io.min Need (buffer.length (<-address R 2)))) (<-address R 4)))
+
+(define io.window-size
+  R -> (buffer.length (<-address R 2)))
+
 (define io.consume
   R Count ->
     (let _ (io.reader-check R)

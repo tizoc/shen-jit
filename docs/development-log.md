@@ -1314,6 +1314,95 @@ and the scanner it replaced, under a load average of 2.5 to 3.8. The third does 
   ordinary parse a JSON string with escapes no longer builds the text before its first escape, as the first
   alternative did: 500 such strings 158 to 160 µs against 162 to 164, four rounds; the other documents did not move.
 
+### Reading as input arrives (2026-11-08, M3 Max, macOS arm64, against framing and restarting)
+
+`(grammar.read <rule> Reader Fail)` parses a value from a reader as its bytes arrive, without a frame and without
+parsing again from the start, and `json.read` reads JSON values that way.
+
+- **Suspension is the reader's wait.** A bounds check that finds the end of what has arrived fills the reader, which
+  waits under its deadline, and the parse goes on where it was; its state is its own call stack. A server gives each
+  connection a task already, so blocking that task is the suspension. One task driving many parses would need
+  continuations captured, which this does not do.
+- **In place, in the reader's buffer.** `io.window` moves the queue to the start of the buffer once; fills only append,
+  as nothing is consumed until the value is complete, so positions stay valid, nothing is copied, a value is bounded by
+  the reader's capacity, and bytes read ahead stay in the queue for the next read.
+- **A second variant of each rule, rewritten from the first** at its first streaming call: each `(< P End)` compares
+  with the end of what has arrived, in a record the rule gets as its end, and fills on the path where it fails; calls go
+  to streaming variants, and spans copy. Complete parsing is unchanged, and a program that never streams compiles
+  nothing more. 75 lines, bringing the macro to 488, with `<end>`, an item that matches at the end of the input.
+- **"Input ended" is exact here:** a parse that read into the end, with the reader at EOF, could have matched with
+  more, whichever rule failed. A first version used the grammar's message unless the failing require began at the end,
+  and so called `tru` an invalid literal.
+- **Speed,** `tests/bench/json-streaming.shen`, every strategy through the same reader, warmed, three runs each,
+  under a load of 1.8 to 2.2; restarting from the comparison above:
+
+  | Input, chunk size | Restart | Frame, then decode | Read in place |
+  | --- | ---: | ---: | ---: |
+  | 64 KiB string, 4,096 bytes | 3.5 ms | 0.3 ms | 0.1 ms |
+  | 64 KiB string, 256 | 35 ms | 1.6 to 1.9 ms | 1.4 to 1.5 ms |
+  | 64 KiB string, 16 | 525 ms | 11.9 ms | 6.8 to 7.0 ms |
+  | 64 KiB string, 1 | 8.0 s | 173 to 184 ms | 85 ms |
+  | 28.8 KB of objects, 16 | | 2.9 to 3.0 ms | 1.0 ms |
+  | 28.8 KB of objects, 1 | | 45 to 46 ms | 23 ms |
+
+  Reading in place scans each byte once and copies nothing; framing scans for the newline, copies into a builder and
+  decodes. The first streaming read of a grammar compiles its variants, about 2 ms for JSON, which an unwarmed first run
+  showed.
+- **Found on the way: each read allocates a scratch as large as the reader's free space,** up to the endpoint's bound,
+  which a backend fills and the reader copies in. With small deliveries this dominates: a byte at a time made 72
+  collections in 85 ms, and 2,014 in 2.25 s with an endpoint bound of 1 MiB. Framing pays it too. Not changed here.
+- **Checked:** every chunk size from 1 to the whole of a 250-byte stream of thirteen documents gives the complete
+  decoder's values; the remainder after a value, eof, errors at their stream offsets, capacity, a reader's error with
+  nothing consumed, arguments to the entry rule, a rule defined again, and spans that outlive the reader's buffer.
+- **The HTTP head, read in place, kept.** `http.<head>`, the request line, the fields as a grammar and the blank line,
+  each line within 8,192 bytes through a new item, `(at P)`, that binds a position, and at most 100 fields through a
+  count parameter, is read by `http.read-request` within the head limit (`grammar.read-within`). The framer scanned
+  every byte for CRLFCRLF and copied the head twice, and the parser scanned it again; this reads each byte once. The
+  server uses it when the head limit fits its read buffer, 16 KiB both by default, and frames as before otherwise, as a
+  socket bounds a reader at 64 KiB. Three runs, through the same reader, load 3.4, framing then parsing against reading
+  in place: a three-field head 4.4 to 4.7 µs against 2.7 to 2.9, and a browser's eleven fields 10.0 to 10.7 against 5.5
+  to 5.8, whole; in 16-byte chunks 7.7 to 8.3 against 5.4 to 5.8, and 44 to 46 against 32 to 35; a byte at a time 75 to
+  80 against 60 to 67, and 553 to 586 against 439 to 474. The field grammar, rejected for a framed head, wins here, as
+  the framer had already read every byte of a value.
+- **Compiled before the deadline.** The listener's saved image, under GC stress, failed at its first request: the head
+  grammar's streaming variants compiled at that request, inside its 5 s head deadline, and compiling with a collection
+  at every allocation took longer. `grammar.prepare` compiles a rule's variant and every one it calls ahead; the server
+  calls it as a connection starts, before its deadline, and `grammar.read` before it reads. A real server's first
+  request no longer pays the compiling either. That still compiled them in the test, at its first connection, under
+  GC stress: 5.5 minutes for a test that took seconds. `http.listen` now prepares them too, so a saved image holds
+  them: `make test-http` took 1 minute 37 s under a load of 4.3, from over 7 minutes.
+- **Same answers:** 44 heads from the request tests, at chunks of 1, 3 and 1,000 bytes, give `http.parse-request`'s
+  status and request and leave the same bytes unread; with eof, a cut head, the head limit, a 414 and a 431, 137 checks
+  in `tests/http_read.shen`. Messages for malformed line endings may differ, all 400. The macro is 509 lines.
+
+### Typed grammars (2026-11-08, M3 Max, macOS arm64, against the same grammar untyped)
+
+A rule takes a signature after its name, as a `defcc` rule does: `{==> Value}`, or `{T1 --> T2 ==> Value}` with
+parameters. Under `(tc +)` each alternative is checked: its value has the value's type, guards are booleans, messages
+strings, and arguments to a typed rule's parameters have their types; bytes, `(at P)` and binary fields are numbers,
+`(text <r>)` a string, `(span <r>)` a `buffer.view`, and a typed rule's value has its type.
+
+- **Checked as the clauses of a function, not as the rule.** `defcc` types its generated function, whose input and
+  value are a pair. A grammar rule's value goes through one state record for every rule, so its function cannot be
+  typed. Each typed rule instead gives the loader `<rule>.types`, a function of everything its alternatives name,
+  with one clause per alternative, whose body checks the guards, messages and arguments and gives the value. A
+  first version annotated a lambda per alternative with `(type ...)`, and its errors said only `type error`; as
+  clauses they say `type error in rule 2 of <rule>.types`, as `defcc`'s do.
+- **Every rule is a stub under `(tc +)`.** The loader refuses a `define` without a signature, so under `(tc +)` a
+  rule is defined as a stub when it is read and compiled at its first call, as loops already were. This also lets
+  untyped grammars load under `(tc +)` at all. Under `(tc -)` a signature changes nothing in how a rule runs.
+- **Typed clients.** The signature declares `<rule>.parse` and `<rule>.match?`, defined from the same code that
+  `grammar.parse` and `grammar.match?` expand to, and under `(tc +)` those two expand to them for a typed rule.
+  `grammar.read` stays untyped: its results mix values with `[eof]` and errors.
+- **Speed unchanged:** 3,000 parses of a list of 1,000 numbers took 114 to 118 ms, three runs of three under a load of
+  2.3, untyped, typed under `(tc -)` through `grammar.parse` and through `<rule>.parse`, and typed under `(tc +)`,
+  where each rule was compiled at its first call.
+- **Size:** 98 lines, bringing the macro to 607, with untyped grammars under `(tc +)`. A first version, with messages
+  that repeated the signature and split it by groups of tokens, took 124.
+- **Checked:** `tests/grammar_typed.shen`, 13 checks of typed rules from typed code, and `tests/grammar_typed.sh`,
+  14 grammars and clients refused with the message expected, and a typed file's rules read from a reader under
+  `(tc -)`.
+
 ### Shen features in the SQLite example (2026-11-08, M3 Max, macOS arm64)
 
 A read of the libraries and the example found code that reads like Scheme or ML: index loops, records reached by slot

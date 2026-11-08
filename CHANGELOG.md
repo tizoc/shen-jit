@@ -20,6 +20,12 @@ All notable changes to this project are documented in this file. The format is b
   as strings or views, binary fields, and `require`, which stops a parse with a message and a position. See the guide.
 - `io.let-ok` in `lib/io.shen` binds the values of `[ok X]` results in order and returns the first other result, in
   place of a function per step that passes errors on.
+- `grammar.read` parses a value from an I/O reader as its bytes arrive, in the reader's buffer, without framing
+  it first, and `json.read` reads JSON values that way, leaving what follows unread. `http.read-request` reads a
+  request head that way, and the server uses it when the head limit fits its read buffer, as by default.
+- Typed grammars: a signature after a rule's name, `{==> Value}` or `{T1 --> T2 ==> Value}`, as in `defcc`, and
+  under `(tc +)` each alternative is checked: its value, its guards, its messages and the arguments it passes. Typed
+  code parses with `grammar.parse` and `grammar.match?` of a typed rule, and grammars can be loaded under `(tc +)`.
 
 ### Changed
 

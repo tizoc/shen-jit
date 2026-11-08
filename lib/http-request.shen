@@ -82,7 +82,7 @@
 (defgrammar http.<hex> B where (http.hex? B);)
 (defgrammar http.<pchar> 37 http.<hex> http.<hex>; B where (http.uri-byte? B);)
 (defgrammar http.<origin> 47 (* http.<pchar>);)
-(defgrammar http.<not-space> B where (not (= B 32));)
+(defgrammar http.<not-space> B where (or (>= B 128) (and (> B 32) (< B 127)));)
 (defgrammar http.<authority> (+ http.<not-space>);)
 (defgrammar http.<version> "HTTP/" http.<digit> "." http.<digit>;)
 
@@ -110,6 +110,32 @@
          Start (http.trim-start B (+ Colon 1) End)
          Finish (http.trim-end B Start End)
       [(http.lower (http.text B At Colon)) (http.text B Start Finish)]))
+
+\\ A whole head read as it arrives, by http.read-request: the request line, the fields and the blank
+\\ line, each line within its limit and ended by CRLF.
+(defgrammar http.<ws> B where (http.ows? B);)
+(defgrammar http.<ows> (* http.<ws>);)
+(defgrammar http.<vchar> B where (or (>= B 128) (and (> B 32) (< B 127)));)
+(defgrammar http.<word> (+ http.<vchar>);)
+(defgrammar http.<spaced-word> (+ http.<ws>) http.<word>;)
+(defgrammar http.<field-value> http.<word> (* http.<spaced-word>); <e>;)
+(defgrammar http.<field-line>
+  (text http.<token>) (require ":" "invalid field name or whitespace before colon")
+    http.<ows> (text http.<field-value>) http.<ows> := [(http.lower http.<token>) http.<field-value>];)
+(defgrammar http.<eol>
+  13 (require 10 "CR without LF");
+  B (require (where false) (if (or (< B 32) (= B 127)) (if (= B 10) "bare LF" "control byte in head")
+                               "invalid line"));)
+(defgrammar (http.<fields> Count)
+  13 (require 10 "CR without LF") := [];
+  (require (where (< Count 100)) "too many fields")
+    (at A) (require http.<field-line> "invalid field name or whitespace before colon") (at B)
+    (require (where (<= (- B A) 8192)) "field line too long") http.<eol> (http.<fields> (+ Count 1))
+    := [http.<field-line> | http.<fields>];)
+(defgrammar http.<head>
+  (at A) (require http.<request-line> "invalid request line") (at B)
+    (require (where (<= (- B A) 8192)) "request line too long") http.<eol>
+    (http.<fields> 0) := [http.<request-line> http.<fields>];)
 
 (define http.fields
   B At End Count Acc ->
@@ -323,12 +349,30 @@
          B (shen-jit.string->bytes Text)
          N (shen-jit.bytes-length B)
       (if (and (>= N 13) (= (http.text B 0 13) "http syntax: "))
-          (let Message (http.text B 13 N)
-               Status (cond ((= Message "request line too long") 414)
-                            ((element? Message ["field line too long" "too many fields"]) 431)
-                            (true 400))
-            (http.problem Status Message))
+          (let Message (http.text B 13 N) (http.problem (http.head-status Message) Message))
           (simple-error Text))))
+
+(define http.head-status
+  "request line too long" -> 414
+  "field line too long" -> 431
+  "too many fields" -> 431
+  "head exceeds byte limit" -> 431
+  _ -> 400)
+
+\\ A request read from R as its head arrives, in the reader's buffer: [ok Request], [eof] when the
+\\ input ended before a head, or [error Error], with the statuses of http.parse-request.
+(define http.read-request
+  R HeadLimit BodyLimit ->
+    (let Limit (buffer.index BodyLimit)
+         Head (grammar.read-within http.<head> R HeadLimit (/. At Message [problem Message]))
+      (http.read-head-result Head Limit)))
+
+(define http.read-head-result
+  [ok [Line Fields]] Limit -> (trap-error (http.validate-request Line Fields Limit) (function http.syntax-error))
+  [problem "input ended"] _ -> (http.problem 400 "incomplete head")
+  [problem "input exceeds the limit"] _ -> (http.problem 431 "head exceeds byte limit")
+  [problem Message] _ -> (http.problem (http.head-status Message) Message)
+  Result _ -> Result)
 
 (define http.parse-request
   V BodyLimit ->
@@ -617,8 +661,6 @@
   B -> (or (= B 9) (and (>= B 32) (not (= B 127)))))
 
 \\ Extensions are named and ignored: ; name, or ; name = token or quoted string, with optional whitespace.
-(defgrammar http.<ws> B where (http.ows? B);)
-(defgrammar http.<ows> (* http.<ws>);)
 (defgrammar http.<text-byte> B where (http.text-byte? B);)
 (defgrammar http.<qdtext> B where (and (http.text-byte? B) (not (= B 34)) (not (= B 92)));)
 (defgrammar http.<quoted> 34 http.<quoted-rest>;)

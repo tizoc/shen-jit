@@ -131,21 +131,25 @@
 (define http.connection
   E Handler Config Stop ->
     (do (io.socket-check E)
+        (grammar.prepare http.<head>)
         (io.with-endpoint E
           (/. Peer (let R (io.reader Peer [[chunk-size (<-address Config 17)]])
                        C (io.record [Peer R Handler Config Stop
                                      (clock.deadline (<-address Config 16)) 0 0])
                     (http.connection-read C))))))
 
+\\ A head that fits the reader is read in place as it arrives; a larger limit frames it first.
 (define http.connection-read
   C ->
     (if (thaw (<-address C 4))
         [ok (<-address C 7)]
         (let Config (<-address C 3)
+             R (<-address C 1)
              D (deadline.within (<-address C 5) (<-address Config 4))
              _ (io.socket-deadline (<-address C 0) D)
-             F (http.head-reader (<-address C 1) (<-address Config 0))
-          (http.connection-head C (http.read-head-until F D)))))
+          (if (<= (<-address Config 0) (io.window-size R))
+              (http.connection-parsed C (http.read-request R (<-address Config 0) (<-address Config 1)))
+              (http.connection-head C (http.read-head-until (http.head-reader R (<-address Config 0)) D))))))
 
 (define http.connection-head
   C [eof] -> [ok (<-address C 7)]
@@ -154,6 +158,7 @@
     (http.connection-parsed C (http.parse-request V (<-address (<-address C 3) 1))))
 
 (define http.connection-parsed
+  C [eof] -> [ok (<-address C 7)]
   C [error Error] -> (http.connection-fail C Error)
   C [ok Q] ->
     (let Config (<-address C 3)

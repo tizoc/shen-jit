@@ -317,6 +317,9 @@ test-native: $(BUILD)/shen-jit
 test-buffer: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen -l tests/buffer.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/grammar.shen -l tests/grammar.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -l tests/grammar_stream.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/grammar.shen -e '(tc +)' -l tests/grammar_typed.shen | $(FFI_RESULT)
+	sh tests/grammar_typed.sh $(SHEN_JIT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen \
 	  -l lib/grammar.shen -l lib/json.shen -l tools/buffer-parsers.shen -l tests/buffer_examples.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen -e '(tc +)' -l tests/buffer_typed.shen | $(FFI_RESULT)
@@ -327,6 +330,7 @@ test-buffer: $(BUILD)/shen-jit
 # Complete UTF-8 JSON and bounded output, without FFI or kernel streams.
 test-json: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/grammar.shen -l lib/json.shen -l tests/json.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -l lib/json.shen -l tests/json_stream.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/grammar.shen -l lib/json.shen -e '(tc +)' -l tests/json_typed.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l lib/buffer.shen -l lib/grammar.shen -l lib/json.shen \
 	  -l tests/json_memory.shen | $(FFI_RESULT)
@@ -364,6 +368,8 @@ test-http: $(BUILD)/shen-jit
 	  -l lib/http-request.shen -l lib/http-response.shen -l tests/http_chunked.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -l lib/http-head.shen \
 	  -l lib/http-request.shen -l lib/http-response.shen -l tests/http_request.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/deadline.shen -l lib/grammar.shen -l lib/http-head.shen \
+	  -l lib/http-request.shen -l tests/http_read.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
 	  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/grammar.shen -l lib/http-head.shen \
 	  -l lib/http-request.shen -l lib/http-response.shen -l lib/http-server.shen \

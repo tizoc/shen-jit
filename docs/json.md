@@ -18,6 +18,20 @@ value with optional JSON whitespace before/after it. They reject trailing values
 syntax. Text syntax follows [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259.html), with strict UTF-8,
 paired surrogate escapes and duplicate-key rejection. A BOM is rejected.
 
+`json.read Reader Options` reads one value from an [I/O reader](io.md) as it arrives, with `io.shen` loaded:
+the whitespace before it and the value, leaving what follows unread, so concatenated or newline-delimited
+values need no framing.
+
+```shen
+(let R (io.reader (io.input-buffer (buffer.from-string "{c#34;nc#34;:1} c#10;[2] 3")) [])
+  [(json.read R []) (json.read R []) (json.read R []) (json.read R [])])
+```
+
+This returns `[ok [object ["n" [number "1"]]]]`, `[ok [[number "2"]]]`, `[ok [number "3"]]` and `[eof]`.
+It gives `[error Error]` when the reader fails, and raises for a syntax error as `json.decode` does, with an
+offset counted in the stream, or `"input ended"` when the input stops inside a value. The value must fit
+the reader's capacity, which takes the place of `byte-limit`; `depth-limit` applies.
+
 ## Values and numbers
 
 | JSON | Shen value |

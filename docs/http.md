@@ -44,6 +44,12 @@ progress is zero. Invalid view/limit arguments and unexpected failures raise.
 | `http.trailers Request` | Ordered, separate trailer fields after reading the body |
 | `http.body Request` | Owned body view after a successful body read; raises before that |
 
+`http.read-request Reader HeadLimit BodyLimit` reads a head from a reader as it arrives, without framing it
+first: the request line, the fields and the blank line are parsed in place, in the reader's buffer, with
+[a grammar](grammar.md#reading-as-input-arrives), and the body's bytes stay in the reader. It gives what
+`http.parse-request` gives for the same head, `[eof]` when the input ended before a head, and 431 for a head
+past HeadLimit, which must fit the reader's capacity.
+
 The request type is opaque. Reading a body returns a new complete request; it does not mutate a parsed
 request or its metadata. Method and target remain case-sensitive. Targets are retained without percent
 decoding, path normalization or routing interpretation.
@@ -212,7 +218,8 @@ Rejections remain `[error Error]` even when an error response was sent successfu
 | `response-body-limit` | 1048576 bytes |
 | `head-timeout`, `body-timeout`, `write-timeout` | 5000 ms each |
 
-Options are `[Name Number]` pairs, for example `[[body-limit 65536] [body-timeout 2000]]`.
+Options are `[Name Number]` pairs, for example `[[body-limit 65536] [body-timeout 2000]]`. When the head limit fits
+the read buffer, as by default, a head is read in place as it arrives; a larger one is framed first, then parsed.
 Unknown, duplicate and invalid options raise before ownership transfers. Each phase gets an absolute
 deadline spanning short progress, capped by the total connection budget. Handler execution cannot be
 interrupted; its elapsed time is charged to that total and checked before output. This convenience

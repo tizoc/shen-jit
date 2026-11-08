@@ -86,6 +86,10 @@ positive fixnums, at most 1048576 bytes, and cannot exceed the endpoint's own bo
 | `io.reader-exact R View` | Fill View, or `[eof Total]` / `[error Error Total]` |
 | `io.read-all R Limit` | `[ok OwnedView]` or `[error Error]`; aggregate up to the explicit limit |
 
+`io.window R`, `io.window-fill R Need` and `io.window-size R` let a parser read the queue in place, as
+[`grammar.read`](grammar.md) does: the queue moves to the start of the reader's buffer and fills append to it
+until something is consumed, so positions stay valid while the parser waits for more.
+
 `io.peek` Count cannot exceed reader capacity. `io.peek-up-to` accepts any nonnegative maximum and
 copies at most that many available bytes; it waits for one byte, without waiting to fill the maximum. Peek can return a shorter view at EOF/error; queued bytes
 are delivered before the pending terminal condition. EOF and hard errors are remembered; timeouts are
