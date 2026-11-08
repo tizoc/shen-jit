@@ -164,6 +164,40 @@ def timeout(args, root):
     checks(run(args + ['-l', 'lib/io.shen', '-l', 'lib/io-file.shen', '-e', expression]))
 
 
+def source_analysis(args, grammar, fs_adapter, root):
+    directory = root / 'graph-λ'
+    directory.mkdir()
+    (directory / 'a.c').write_text('int main(void) { return helper(); }\nint helper(void) { return target(); }\n')
+    (directory / 'b.c').write_text('int helper(void) { return 0; }\nint target(void) { return 1; }\n')
+    (directory / 'bad.c').write_text('int broken(void) { return 1 }\n')
+    facts, report = root / 'graph-facts.ndjson', root / 'graph-report.ndjson'
+    adapter_files = args[args.index('treesitter.*adapter-files*') + 1]
+    producer_argv = '[' + ' '.join(map(string, ['source-facts', grammar, directory, facts])) + ']'
+    run(args[:2] + ['-s', 'treesitter.*adapter-files*', adapter_files,
+                   '-s', 'fs.*adapter-files*', '[' + string(fs_adapter) + ']',
+                   '-s', '*argv*', producer_argv, '-l', 'example-apps/source-facts/main.shen'])
+    records = [json.loads(line) for line in facts.read_text(encoding='utf-8').splitlines()]
+    paths = {Path(r['path']).name: r['path'] for r in records if r['kind'] == 'file'}
+    options = [[], ['--reach', paths['a.c'], 'main'], ['--impact', paths['b.c'], 'target']]
+    for query in options:
+        argv = '[' + ' '.join(map(string, ['source-deps', facts, report, *query])) + ']'
+        run(args[:2] + ['-s', 'fs.*adapter-files*', '[' + string(fs_adapter) + ']',
+                       '-s', '*argv*', argv, '-l', 'example-apps/source-deps/main.shen'])
+        rows = [json.loads(line) for line in report.read_text(encoding='utf-8').splitlines()]
+        assert rows[0]['functions'] == 4 and rows[0]['resolved_calls'] == 2 and rows[0]['excluded_files'] == 1
+        edges = {((r['from']['file'], r['from']['name']), (r['to']['file'], r['to']['name']))
+                 for r in rows if r['kind'] == 'edge'}
+        assert edges == {((paths['a.c'], 'main'), (paths['a.c'], 'helper')),
+                         ((paths['a.c'], 'helper'), (paths['b.c'], 'target'))}
+        if query:
+            mode = query[0][2:]
+            answers = {(r['function']['file'], r['function']['name']) for r in rows if r['kind'] == mode}
+            expected = {(paths['a.c'], 'helper'), (paths['b.c'], 'target')} if mode == 'reach' else {
+                (paths['a.c'], 'main'), (paths['a.c'], 'helper')}
+            assert answers == expected
+    print('4 passed, 0 failed (C source → Tree-sitter facts → Datalog reach and impact)', flush=True)
+
+
 def main():
     executable, adapter, grammar, fixture, native_oracle, fs_adapter = [Path(p).resolve() for p in sys.argv[1:7]]
     args = [executable, 'eval', '-l', 'lib/ffi.shen', '-l', 'lib/buffer.shen',
@@ -185,6 +219,7 @@ def main():
         images(executable, args, root)
         documentation(args, grammar, root)
         application(args, grammar, fs_adapter, root)
+        source_analysis(args, grammar, fs_adapter, root)
 
 
 if __name__ == '__main__':

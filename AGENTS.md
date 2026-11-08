@@ -97,6 +97,9 @@ explicitly skip the native part. `make curl` builds the adapter for applications
 typed clients, images/GC and a bounded copy application; static builds run only the pure path checks.
 `make test-tree-sitter` needs a C compiler, Python 3 and `make deps-tree-sitter` once, or explicit
 runtime/grammar source roots. Static builds run pure validation and skip before native dependencies.
+`make test-datalog` also checks `example-apps/source-deps/`: managed NDJSON/model checks on every
+build, and a saved executable, independent graph/BFS oracles, I/O and image/GC on shared-capable
+builds (C compiler and Python 3). The Tree-sitter suite checks the complete extraction/analysis path.
 
 `make test-overrides` (a second) runs each kernel function that the port replaces beside the kernel's own definition, taken from the KLambda, over generated values, as compiled and through C. They must agree exactly: 1 and 1.0 differ, and a value and an error, but not the text of two errors. What differs on purpose is listed in `o.known` in `tests/overrides.shen`, with its reason, as narrowly as it can be. A difference that no longer shows fails, and so does a new override that the test does not name, so a new one joins it there or `o.left-out`.
 

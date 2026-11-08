@@ -1826,6 +1826,35 @@ execution remains CI's responsibility; no new platform ABI or instruction was in
   load. A test with a clock that advances at each reading puts the expiry between each pair in turn;
   without the fix it fails for two of its six budgets.
 
+### Source facts in Datalog (2026-11-08, M3 Max, macOS and Linux arm64)
+
+- Added `example-apps/source-deps/`, a complete Shen application reading the Tree-sitter export through
+  our I/O/JSON libraries. It validates bounded NDJSON one record at a time, shares canonical paths/names,
+  deduplicates identical sites and rejects inconsistent ranges/flags, duplicate file headers and
+  conflicting site records. Input closes before analysis; output uses bounded buffering and filesystem
+  replacement only after successful encoding, writes and close. No runtime or C changes were needed.
+- Function identity keeps file, name and definition byte. Datalog counts candidates, matches a unique
+  same-file target before a unique name across the input, and retains unresolved, ambiguous and
+  unowned calls explicitly. Syntax-error files are excluded as a whole. These are syntactic matches,
+  without C linkage/preprocessing or symbol resolution. Reports expose that policy rather than
+  classifying every missing target as an external function.
+- Reachability and reverse impact use a separate Datalog program with one root/direction. The default
+  graph report never materializes all-pairs transitive closure. It emits function/call/file edges and
+  diagnostics as bounded NDJSON; databases and validated facts still grow with graph size. A 1000-function,
+  999-edge chain, including its 999 reachability answers, passes under a 32 MiB heap cap and leaves
+  5070 KiB live after collection on macOS. This is storage evidence, not a throughput improvement claim.
+  A real export of 20 runtime files supplies 5361 records: the analyser keeps 252 usable functions and
+  749 matched edges, excludes five syntax-error files and reports 404 unresolved, two ambiguous and
+  14 unowned calls. Those counts describe the chosen partial/syntactic policy, not compiler coverage.
+- The new application passes 97 checks on macOS and Linux arm64, including all model relations against
+  the naive evaluator, an independent Python name-matching/BFS oracle, cycles, same-named functions,
+  exact chunk boundaries, quotas, malformed input, Unicode paths, saved executables and images/GC.
+  Static Linux passes 69 managed checks and skips native work before compilers/Python. The Tree-sitter
+  suite adds four complete C-to-facts-to-Datalog checks for graph edges, exclusions, reach and impact.
+- The full fast tier, guide rendering/examples, publication scan and release-package checks pass.
+  Windows execution is left to CI. The application has its own README, linked from the library pages
+  and guide, and can run as a script or saved executable without Tree-sitter at analysis time.
+
 ### Tree-sitter batch snapshots (2026-11-08, M3 Max, macOS and Linux arm64)
 
 - Added optional `lib/tree-sitter.shen` and a public-C-API adapter over Tree-sitter 0.25 or later.

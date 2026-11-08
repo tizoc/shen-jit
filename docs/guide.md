@@ -314,6 +314,9 @@ strings, integers and records, with each rule compiled through the JIT and its j
 relations as it runs, and answers a query by deriving only what bears on it.
 [Datalog](https://github.com/tizoc/shen-jit/blob/main/docs/datalog.md) covers loading, the language, the API and an example.
 
+[Source facts in Datalog](https://github.com/tizoc/shen-jit/blob/main/example-apps/source-deps/README.md)
+connects Tree-sitter's C export to file-scoped call matching, diagnostics, reachability and reverse impact queries.
+
 ## Close to the machine
 
 ### Bytes and bits
@@ -903,7 +906,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-buffer` | Buffer/cursor bounds, copying, foreign lifetime, typed clients, format examples, grammars, typed grammars and images/GC |
 | `make test-io` | Bounded chunk I/O, binary files and framing, socket endpoints/echo, native lifetimes, typed results and images/GC |
 | `make test-http` | Request/response framing, streaming, persistent connections, shutdown, SQLite example, typing and images/GC |
-| `make test-datalog` | `lib/datalog.shen`: answers written by hand, its errors, and generated programs against its plain evaluator; and the dependency analyser of `example-apps/depends` |
+| `make test-datalog` | Datalog answers/errors/generated programs against its plain evaluator; Shen/KL dependency analysis and source-fact matching/reach/impact with independent graph oracles |
 | `make test-datalog-swipl` | The same generated programs against SWI-Prolog's tabling, if `swipl` is there |
 | `make test-ffi` | C functions called from Shen and C written for Shen, against `tests/ffi_lib.c`, memory outside the heap, and the SQLite and socket libraries |
 | `make test-curl` | Optional libcurl adapter, independent loopback HTTP/TLS fixtures, downloader, typing, threads and images/GC; needs libcurl development headers, Python 3 and `openssl` |

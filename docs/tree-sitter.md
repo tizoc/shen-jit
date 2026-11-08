@@ -192,3 +192,5 @@ the filesystem library, reads one bounded file at a time through our own I/O, an
 files, function definitions and direct calls. Output uses bounded buffering and safe filesystem
 replacement. This is a starting fact source for Datalog or repository tooling; it does not resolve
 C names, preprocessing, indirect calls or dependencies semantically.
+[Source facts in Datalog](../example-apps/source-deps/README.md) consumes that export and adds
+explicit call matching, diagnostics, reachability and reverse impact queries.

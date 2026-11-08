@@ -31,7 +31,9 @@ destination and removes the temporary output; replacement is not a crash-durabil
 
 Facts describe syntax, without evaluating the preprocessor or resolving symbols. Function-pointer
 calls, field calls and declarations without bodies are outside this example's query. Use the binding's
-query/traversal API to extend the fact schema, then load the resulting relations into Datalog.
+query/traversal API to extend the fact schema. [Source facts in Datalog](../../example-apps/source-deps/README.md)
+consumes this export, reports matched/unresolved/ambiguous calls and answers reachability/impact
+queries while keeping file/name/definition identity explicit.
 
 `make test-tree-sitter` exercises this application with independent JSON/byte-range checks, failed
 input preserving the destination, Unicode paths, malformed source and repeated files under a heap cap.
