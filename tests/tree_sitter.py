@@ -38,7 +38,7 @@ def checks(result):
 def oracle(args, executable, root, source_bytes=SOURCE, query_text=QUERY):
     source, query = root / 'input.c', root / 'query.scm'
     source.write_bytes(source_bytes)
-    query.write_text(query_text)
+    query.write_text(query_text, encoding='utf-8')
     reference = run([executable, source, query]).stdout.splitlines()
     expression = '(ts-test.dump (ts-test.ok (treesitter.query (value ts-test.language) '
     # Length-counted Shen escapes preserve CRLF, NUL and malformed source independently of files.
@@ -77,7 +77,8 @@ def documentation(args, grammar, root):
     if not reference.is_file():
         return
     examples = root / 'examples.shen'
-    examples.write_text('\n'.join(re.findall(r'```shen\n(.*?)```', reference.read_text(), re.S)))
+    examples.write_text('\n'.join(re.findall(r'```shen\n(.*?)```', reference.read_text(encoding='utf-8'), re.S)),
+                        encoding='utf-8')
     expression = '(let Language (ts-test.ok (example.language [' + string(grammar) + '])) '
     expression += 'T (ts-test.ok (example.parse Language)) '
     expression += 'Q (ts-test.ok (example.definitions Language (treesitter.source T))) '
@@ -107,7 +108,7 @@ def application(args, grammar, fs_adapter, root):
                       '-s', '*argv*', argv, '-l', 'example-apps/source-facts/main.shen']
     result = run(call, env={'SHEN_JIT_SEMISPACE': '4M', 'SHEN_JIT_MAX_HEAP': '16M'})
     assert 'Extracted 9 records from 3 files' in result.stdout, result.stdout[-1000:]
-    facts = [json.loads(line) for line in output.read_text().splitlines()]
+    facts = [json.loads(line) for line in output.read_text(encoding='utf-8').splitlines()]
     assert len(facts) == 9
     names = {(f['kind'], f.get('name'), f.get('container')) for f in facts}
     assert ('definition', 'sum', 'sum') in names and ('call', 'helper', 'sum') in names

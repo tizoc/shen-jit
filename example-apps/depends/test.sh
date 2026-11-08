@@ -5,6 +5,7 @@ SHEN=$1
 KLAMBDA=$2
 dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
+if command -v cygpath > /dev/null; then dir=$(cygpath -m "$dir"); fi # a path Windows programs can open
 here=$(dirname "$0")
 "$SHEN" eval -q -l lib/native.shen -l lib/datalog.shen -l lib/ffi.shen -l lib/buffer.shen \
     -l lib/io.shen -l lib/io-file.shen -l "$here/main.shen" \
@@ -49,8 +50,8 @@ unused" "$(sort "$dir/dead.tsv")"
     check "file uses" "a.shen	b.shen
 b.shen	c.kl
 c.kl	b.shen" "$(sort "$dir/file-uses.tsv")"
-    check "out failure" "2 depends: cannot write /nowhere/at/all/defines.tsv" \
-        "$("$dir/depends" --out /nowhere/at/all a.shen > "$dir/err" 2>&1; echo $? $(cut -d: -f1,2 "$dir/err"))"
+    check "out failure" "2 depends: cannot write nowhere/at/all/defines.tsv" \
+        "$("$dir/depends" --out nowhere/at/all a.shen > "$dir/err" 2>&1; echo $? $(cut -d: -f1,2 "$dir/err"))"
 fi
 "$dir/depends" --nope a.shen > "$dir/err" 2>&1
 status=$?

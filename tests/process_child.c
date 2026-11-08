@@ -162,6 +162,9 @@ static int run(int argc, char **argv)
 #ifdef _WIN32
         wchar_t wide[32768];
         GetCurrentDirectoryW(32768, wide);
+        for (wchar_t *w = wide; *w; w++) /* Windows gives \, where the tests write / */
+            if (*w == L'\\')
+                *w = L'/';
         char *text = utf8(wide);
 #else
         char *text = getcwd(NULL, 0);

@@ -203,7 +203,10 @@
 (if (io.file-windows?)
     (process-test.check "exit code 259 is not mistaken for running" [exited 259]
       (freeze (process.status (process-test.ok (process-test.run ["exit" "259"] (buffer.new 0) [])))))
-    (let Stream (open (process-test.path "input.bin") in)
+    \\ The helper's own runtime may hold sockets, as a sanitizer's did on one macOS: what counts is
+    \\ that a listener open here adds none.
+    (let Before (process-test.ok (process-test.run ["sockets"] (buffer.new 0) []))
+         Stream (open (process-test.path "input.bin") in)
          S (socket.listen "127.0.0.1" 0)
          Files (process-test.ok (process-test.run ["has-file" (process-test.path "input.bin")] (buffer.new 0) []))
          Sockets (process-test.ok (process-test.run ["sockets"] (buffer.new 0) []))
@@ -211,7 +214,8 @@
          _ (socket.close S)
       (do (process-test.check "kernel streams do not leak into children" 0
             (freeze (process-test.u32 (process.output-bytes Files) 0)))
-          (process-test.check "listeners do not leak into children" 0
+          (process-test.check "listeners do not leak into children"
+            (process-test.u32 (process.output-bytes Before) 0)
             (freeze (process-test.u32 (process.output-bytes Sockets) 0))))))
 
 (output "~A passed, ~A failed~%" (value process-test.passed) (value process-test.failed))
