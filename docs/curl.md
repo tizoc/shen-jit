@@ -42,7 +42,7 @@ The facade searches `./build/`, `./lib/` and the current directory for `shen-cur
 `shen-curl.dll`. For another location, set `curl.*adapter-files*` to a list of absolute file names
 before loading `lib/curl.shen`. Saved executables retain that declaration and need the adapter and
 libcurl at runtime too. The adapter checks its own ABI and uses only the public `include/shen.h` API.
-Streaming requires adapter ABI 2; rebuild with `make curl` when updating from the initial binding.
+It refuses an adapter built for another ABI: rebuild it with `make curl` after updating Shen/JIT.
 
 ## Requests
 

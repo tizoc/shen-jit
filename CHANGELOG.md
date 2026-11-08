@@ -5,72 +5,77 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.6] - 2026-11-08
+
 ### Added
 
-- `example-apps/source-deps/`: feed Tree-sitter's NDJSON source facts into Datalog, keeping function
-  identity by file/name/definition byte, explicit ambiguous/unresolved calls and syntax-error exclusions.
-  Bounded reports include matched call/file edges and optional reachability or reverse impact queries,
-  written through our I/O and safe filesystem replacement.
-- Version 2 C source facts identify exact enclosing definitions and carry conservative linkage hints,
-  including inherited static prototypes. The Datalog application excludes private cross-file targets,
-  accepts legacy exports with explicit reporting, and allows byte offsets to select duplicate names.
-- Configured C source facts from GCC/Clang compilation databases: bounded preprocessing through our
-  subprocess library, recorded build/coordinate context and file-scope function declarations. Datalog
-  requires a preceding external declaration for cross-unit matches and rejects mixed configurations.
-- Source analysis handles SDK annotations with an explicit parser-only syntax profile that preserves
-  byte positions. Exports/reports carry bounded parse diagnostics, normalization counts and ignored
-  annotation/preprocessor captures; real runtime-source checks compare against compiler symbols.
-- Optional subprocess and pipeline libraries, `lib/process.shen` and `lib/process-io.shen`: explicit argv,
-  environment/cwd, owned children, bounded waits, cancellable pipes, concurrent communication, streaming
-  sinks, output limits and process-group/job cleanup. `make process` builds their adapter. The
-  [reference](docs/processes.md) includes `tools/process-filter.shen`, which publishes output after exit 0.
-- Optional `lib/tree-sitter.shen`: source-language loading, owned syntax snapshots, byte/point ranges,
-  error/missing nodes, traversal and bounded structural query captures. `make tree-sitter` builds its
-  adapter; [the reference](docs/tree-sitter.md) includes a bounded C source-fact extractor using our I/O,
-  filesystem traversal and safe output replacement.
-- Optional `lib/fs.shen`: paths, owned metadata, sorted bounded listings and traversal, exclusive temporary
-  files/directories, rename without overwrite, replacement and bounded copying through our I/O endpoints.
-  Build its platform adapter with `make fs`; [the reference](docs/fs.md) includes the API and `tools/fs-copy.shen`.
-- `shen-jit.write-bytes`: a range of a byte buffer written to a stream at once, where `write-byte` takes a call a byte.
-- `example-apps/depends/`, a dependency analyser over Shen and KL source files, built over `lib/datalog.shen` as one
-  executable: what calls what, cycles between files, dead code from roots, call depths, and why one function reaches another.
-- Datalog lattices: `(relation reached [symbol integer] (lattice F))` keeps for each key the least upper bound, by a Shen
-  function, of the values derived; `(lattice bor)` and `(lattice band)`, unions and intersections of bit sets, are native.
-- Datalog relations that keep one tuple a key: `(relation dist [symbol integer] min)`, `max` and `choice`, by which shortest
-  paths end without a bound.
-- `datalog.explain`: why a Datalog tuple holds, as a proof down to the facts given.
-- `datalog.read-facts` and `datalog.write-facts`: Datalog relations from and to tab-separated or CSV files, each field read as
-  its column's type says; `datalog.bytes->facts` and `datalog.relation->bytes` do the same with the files' bytes, for a
-  program that writes its files itself, as with the I/O library.
-- Datalog equivalences: `(relation same [symbol symbol] equivalence)` keeps the reflexive, symmetric and transitive closure of what
-  it is given, by union-find, stored as classes and not as their pairs, so that a class of k values takes room for k, not k squared.
-- Datalog functions: integer `/` and `%`, `band`, `bor`, `bxor`, `bshl` and `bshr`, `cat`, `strlen`, `substr`, `to-number` and
-  `to-string` on strings, and the `mean` aggregate.
-- `datalog.query`: a Datalog query computed by demand, through magic sets, deriving only what bears on its constants, and
-  `datalog.demand-db`, a database that answers queries so, keeping what earlier ones derived through adds and removals.
-- Datalog records and types of several constructors: `(type shape [circle point integer] [rect point point])`, values such as
-  `[rect [pt 1 2] [pt 4 6]]`, taken apart in a rule's body and made in its head or by `=`, recursive types included.
-- Optional `lib/curl.shen`, with a small C adapter over libcurl: bounded HTTP(S) requests, reusable clients,
-  binary bodies, headers and trailers, timeouts, TLS verification and explicit redirect limits. Responses can
-  stream into independent I/O sinks with backpressure, bounded chunks and exact partial-write progress.
-  `tools/curl-fetch.shen` streams 2xx bodies to files; an error after writing begins can leave a partial file.
-  See [the reference](docs/curl.md). Rebuild the adapter with `make curl` for ABI 2.
 - `lib/grammar.shen`: `defgrammar`, Shen-YACC's notation for parsers over byte views. Each rule compiles to a
   function over a buffer, a position and an end, with parameters, repetition as loops, captures of the bytes matched
   as strings or views, binary fields, and `require`, which stops a parse with a message and a position. See the guide.
-- `io.let-ok` in `lib/io.shen` binds the values of `[ok X]` results in order and returns the first other result, in
-  place of a function per step that passes errors on.
-- `grammar.read` parses a value from an I/O reader as its bytes arrive, in the reader's buffer, without framing
-  it first, and `json.read` reads JSON values that way, leaving what follows unread. `http.read-request` reads a
-  request head that way, and the server uses it when the head limit fits its read buffer, as by default.
 - Typed grammars: a signature after a rule's name, `{==> Value}` or `{T1 --> T2 ==> Value}`, as in `defcc`, and
   under `(tc +)` each alternative is checked: its value, its guards, its messages and the arguments it passes. Typed
   code parses with `grammar.parse`, `grammar.match?` and `grammar.read` of a typed rule, `json.read` and
   `http.read-request` are declared, and grammars can be loaded under `(tc +)`.
+- `grammar.read` parses a value from an I/O reader as its bytes arrive, in the reader's buffer, without framing
+  it first, and `json.read` reads JSON values that way, leaving what follows unread. `http.read-request` reads a
+  request head that way, and the server uses it when the head limit fits its read buffer, as by default.
+- `io.let-ok` in `lib/io.shen` binds the values of `[ok X]` results in order and returns the first other result, in
+  place of a function per step that passes errors on.
+- Optional `lib/fs.shen`: paths, metadata, sorted listings and traversal within bounds, exclusive temporary files and
+  directories, renaming that never overwrites, replacing a file whole, and copying through the I/O library. `make fs`
+  builds its adapter, and [the reference](docs/fs.md) has the API and `tools/fs-copy.shen`.
+- Optional `lib/process.shen` and `lib/process-io.shen`: child processes started with explicit arguments, environment
+  and working directory, which the program owns and cleans up with their process groups or jobs, bounded waits,
+  cancellable pipes, input and output at once, output streamed into sinks or limited. `make process` builds their
+  adapter, and [the reference](docs/processes.md) includes `tools/process-filter.shen`, which writes a command's
+  output to a file only once the command has exited with 0.
+- Optional `lib/tree-sitter.shen`: languages loaded from compiled grammars, syntax trees of whole inputs, byte and
+  point ranges, error and missing nodes, traversal, and structural queries with bounded captures. `make tree-sitter`
+  builds its adapter against Tree-sitter 0.25 or later. See [the reference](docs/tree-sitter.md).
+- Optional `lib/curl.shen`, with a small C adapter over libcurl: bounded HTTP(S) requests, reusable clients,
+  binary bodies, headers and trailers, timeouts, TLS verification and explicit redirect limits. Responses can
+  stream into I/O sinks, with backpressure, bounded chunks and exact progress when a write is partial.
+  `tools/curl-fetch.shen` streams successful bodies to files, and an error once writing has begun can leave a
+  partial file. `make curl` builds the adapter. See [the reference](docs/curl.md).
+- Datalog records and types of several constructors: `(type shape [circle point integer] [rect point point])`, values such as
+  `[rect [pt 1 2] [pt 4 6]]`, taken apart in a rule's body and made in its head or by `=`, recursive types included.
+- Datalog functions: integer `/` and `%`, `band`, `bor`, `bxor`, `bshl` and `bshr`, `cat`, `strlen`, `substr`, `to-number` and
+  `to-string` on strings, and the `mean` aggregate.
+- Datalog equivalences: `(relation same [symbol symbol] equivalence)` keeps the reflexive, symmetric and transitive closure of what
+  it is given, by union-find, stored as classes and not as their pairs, so that a class of k values takes room for k, not k squared.
+- Datalog lattices: `(relation reached [symbol integer] (lattice F))` keeps for each key the least upper bound, by a Shen
+  function, of the values derived; `(lattice bor)` and `(lattice band)`, unions and intersections of bit sets, are native.
+- Datalog relations that keep one tuple a key: `(relation dist [symbol integer] min)`, `max` and `choice`, by which shortest
+  paths end without a bound.
+- `datalog.query`: a Datalog query computed by demand, through magic sets, deriving only what bears on its constants, and
+  `datalog.demand-db`, a database that answers queries so, keeping what earlier ones derived through adds and removals.
+- `datalog.explain`: why a Datalog tuple holds, as a proof down to the facts given.
+- `datalog.read-facts` and `datalog.write-facts`: Datalog relations from and to tab-separated or CSV files, each field read as
+  its column's type says; `datalog.bytes->facts` and `datalog.relation->bytes` do the same with the files' bytes, for a
+  program that writes its files itself, as with the I/O library.
+- `shen-jit.write-bytes`: a range of a byte buffer written to a stream at once, where `write-byte` takes a call a byte.
+- `example-apps/depends/`, a dependency analyser over Shen and KL source files, built over `lib/datalog.shen` as one
+  executable: what calls what, cycles between files, dead code from roots, call depths, and why one function reaches another.
+- `example-apps/source-facts/`, which parses a directory of C with Tree-sitter and writes NDJSON facts: its files,
+  function definitions and direct calls, with the definition each call is in, each definition's linkage as far as
+  `static` declarations show it, and each file's parse errors, with samples. Given a compilation database from GCC or
+  Clang, it preprocesses each file as that build does, through the process library, and records declarations too.
+- `example-apps/source-deps/`, which reads those facts into Datalog and matches calls with definitions, keeping
+  functions of the same name in different files or places apart. It reports which functions one reaches or which
+  depend on it, and the calls it could not match or found ambiguous, and the files it left out for syntax errors.
 
 ### Changed
 
+- `lib/http-request.shen` parses the request line with a grammar, and `lib/json.shen` decodes with one, so
+  `lib/grammar.shen` must be loaded before either. JSON decoding is 1.2 to 4 times as fast, most for strings without
+  escapes. Some invalid inputs are reported with a different message or offset: what was expected where it failed.
+- A read lends the backend a chunk that the endpoint keeps, where it allocated a fresh one as large as the reader's
+  free space each time. Small reads into a large reader are 3 to 8 times as fast, an HTTP head takes 15 to 32% less time,
+  and a JSON value read a byte at a time as it arrives 6.6 times. A custom backend's Read must not keep its chunk.
 - `pr`, through which `output` and `print` write, writes a string at once, not a byte at a time.
+- On arm64, a loop in code written by hand keeps the memory of eight parameters at hand, where it kept four, and gives its
+  last registers to words before the bases and limits of that memory, and first to words it carries from one iteration to
+  the next. Datalog's larger evaluations take 9 to 21% less time.
 - `datalog.ask` and `datalog.match` find the tuples of a pattern with constants by an index on their columns, which the first
   such question makes and the database keeps, where they read the whole relation.
 - Datalog derives each combination of tuples once in a rule with several atoms of its own recursion, such as
@@ -78,21 +83,12 @@ All notable changes to this project are documented in this file. The format is b
 - `make test-core` runs the suites of the runtime, the compiler and the port, and `make test-libs` those of the libraries.
   The libraries' saved images reloaded with a collection at every allocation moved to `make test-lib-stress`, so their
   suites take seconds where `make test-http` took over a minute.
-- On arm64, a loop in code written by hand keeps the memory of eight parameters at hand, where it kept four, and gives its
-  last registers to words before the bases and limits of that memory, and first to words it carries from one iteration to
-  the next. Datalog's larger evaluations take 9 to 21% less time.
-- A read lends the backend a chunk that the endpoint keeps, where it allocated a fresh one as large as the reader's
-  free space each time. Small reads into a large reader are 3 to 8 times as fast, an HTTP head takes 15 to 32% less time,
-  and a JSON value read a byte at a time as it arrives 6.6 times. A custom backend's Read must not keep its chunk.
-- `lib/http-request.shen` parses the request line with a grammar, and `lib/json.shen` decodes with one, so
-  `lib/grammar.shen` must be loaded before either. JSON decoding is 1.2 to 4 times as fast, most for strings without
-  escapes. Some invalid inputs are reported with a different message or offset: what was expected where it failed.
 
 ### Fixed
 
-- Windows command-line arguments preserve Unicode as UTF-8, including saved executables, so
-  programs using the I/O library can open Unicode paths supplied as arguments.
-- Static Linux builds run curl's pure checks and skip its native tests before building an adapter or starting fixtures.
+- On Windows, command-line arguments reach a program as UTF-8, in scripts and saved executables alike. They came in the
+  system's code page, with a question mark for any character outside it, so a program could not open a file whose name
+  it was given with such characters.
 
 ## [0.5] - 2026-11-07
 
@@ -261,7 +257,8 @@ All notable changes to this project are documented in this file. The format is b
 
 - Initial release
 
-[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.5...HEAD
+[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.6...HEAD
+[0.6]: https://github.com/tizoc/shen-jit/compare/v0.5...v0.6
 [0.5]: https://github.com/tizoc/shen-jit/compare/v0.4...v0.5
 [0.4]: https://github.com/tizoc/shen-jit/compare/v0.3...v0.4
 [0.3]: https://github.com/tizoc/shen-jit/compare/v0.2...v0.3
