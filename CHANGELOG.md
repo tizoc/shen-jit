@@ -12,6 +12,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `datalog.explain`: why a Datalog tuple holds, as a proof down to the facts given.
 - `datalog.read-facts` and `datalog.write-facts`: Datalog relations from and to tab-separated or CSV files, each field read as
   its column's type says.
 - Datalog equivalences: `(relation same [symbol symbol] equivalence)` keeps the reflexive, symmetric and transitive closure of what

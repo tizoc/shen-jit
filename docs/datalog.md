@@ -42,6 +42,7 @@ false
 | `(datalog.write-facts Db Relation Path)` | Writes a relation's tuples so, in no particular order, and gives how many |
 | `(datalog.count Db Relation)` | How many tuples it has |
 | `(datalog.holds? Db [Relation Value ...])` | Whether a tuple is there |
+| `(datalog.explain Db [Relation Value ...])` | Why it is: `[Tuple fact]`, `[Tuple Rule Proof ...]` with a proof of each tuple the rule's atoms read, or `[Tuple equivalence]`; `[]` if it is not there |
 | `(datalog.ask Db (Relation Term ...))` | The tuples that match, in no particular order, with variables, constants and `_` |
 | `(datalog.query Name Facts (Relation Term ...))` | The same tuples as asking a run of these facts, computing only what the query needs |
 | `(datalog.define Name Items)`, `(datalog.match Db Pattern)`, `(datalog.solve Name Facts Pattern)` | The same as `defdatalog`, `datalog.ask` and `datalog.query` with the program as data, where a variable is `[var "X"]` and `_` is `[any]` |
@@ -146,6 +147,11 @@ With nodes `a` and `b`, an edge from `a` to `b` and costs 3 and 5 for `a`, `degr
   on. It gains most when the constants select a small part, and little when what they reach is most of a relation, as
   `(path X c)` is when nearly every node reaches `c`. Each query runs on its facts afresh: for many queries over the same
   facts, a run and `datalog.ask` may cost less.
+- **Explanations:** `(datalog.explain Db [depends a c])` gives
+  `[[depends a c] [[depends X Z] <-- [imports X Y] [depends Y Z]] [[imports a b] fact] [[depends b c] ...]]`: a rule as written
+  and a proof of each tuple its atoms read, down to the facts given; negations, comparisons and aggregates hold in it but have no
+  proof of their own. A proof never goes round in a circle, and costs nothing until asked for, as nothing is recorded per tuple;
+  finding one reads the relations it touches, which on a relation of a million tuples takes tens of milliseconds.
 - **Fact files:** each field is read as its column's type says, an integer, a symbol, a string as it is or a record as Shen reads it,
   `[pt 1 2]`, and one that does not fit raises, naming the file and line. A `.csv` file quotes a field as RFC 4180 does, so it can
   hold commas, quotes and line breaks; a tab-separated one cannot hold a tab or a line break, and writing one raises. Blank lines

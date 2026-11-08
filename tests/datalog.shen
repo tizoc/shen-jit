@@ -855,6 +855,90 @@
 (dt.raises "a function as a constructor" "cannot name a constructor"
   (freeze (datalog.define dt.bad [[type t [cat integer]]])))
 
+\* Explanations: each proof is a rule instance whose atoms' tuples are proved in turn, every
+   tuple holding in the reference and every condition true, down to the facts given. *\
+(define dt.valid?
+  Name Facts Ref [T fact] -> (element? T Facts)
+  Name Facts Ref [[Rel | Values] equivalence] -> (and (element? Rel (datalog.nth 8 (datalog.program Name)))
+                                                      (element? Values (datalog.tuples Ref Rel)))
+  Name Facts Ref [[Rel | Values] Form | Subs]
+  -> (let Rules (mapcan (/. R (if (= (datalog.rule->form (hd R) (hd (tl R))) Form) [R] []))
+                        (datalog.nth 4 (datalog.program Name)))
+       (and (cons? Rules)
+            (element? Values (datalog.tuples Ref Rel))
+            (dt.valid-instance? (hd Rules) Values (map (function hd) Subs) Ref)
+            (dt.all-valid? Name Facts Ref Subs))))
+
+(define dt.all-valid?
+  _ _ _ [] -> true
+  Name Facts Ref [P | Ps] -> (and (dt.valid? Name Facts Ref P) (dt.all-valid? Name Facts Ref Ps)))
+
+(define dt.valid-instance?
+  [[Rel | Terms] Body] Values Tuples [naive N Tables]
+  -> (let Env (dt.match-atoms (datalog.atoms Body) Tuples (datalog.naive-match Terms Values []))
+          Conditions (datalog.conditions Body)
+          Bound (if (= Env no) no (datalog.naive-bind Conditions Env Conditions false Tables))
+       (and (not (= Bound no)) (datalog.naive-true? Conditions Bound Tables))))
+
+(define dt.match-atoms
+  _ _ no -> no
+  [] [] Env -> Env
+  [[Rel | Terms] | Atoms] [[Rel | Values] | Tuples] Env -> (dt.match-atoms Atoms Tuples (datalog.naive-match Terms Values Env))
+  _ _ _ -> no)
+
+\* Every tuple of every relation explained and its proof checked, and a tuple that does not hold
+   explained by []. *\
+(define dt.explain-all
+  Label Name Facts
+  -> (let Db (datalog.run Name Facts)
+          Ref (datalog.run-naive Name Facts)
+          Tuples (mapcan (/. R (map (/. V [(hd R) | V]) (datalog.tuples Db (hd R)))) (datalog.nth 3 (datalog.program Name)))
+          Bad (mapcan (/. T (if (dt.valid? Name Facts Ref (datalog.explain Db T)) [] [T])) Tuples)
+       (dt.check Label Bad [])))
+
+(dt.explain-all "explained" dt.dep (value dt.dep-facts))
+(dt.explain-all "explained" dt.nonlinear [[edge a b] [edge b c] [edge c d] [edge d a] [edge x y]])
+(dt.explain-all "explained" dt.mutual [[succ 0 1] [succ 1 2] [succ 2 0]])
+(dt.explain-all "explained" dt.mixed (value dt.mixed-facts))
+(dt.explain-all "explained" dt.shapes (value dt.shapes-facts))
+(dt.explain-all "explained" dt.functions (value dt.functions-facts))
+\* A probe of a relation of the rule's own recursion reads only what earlier rounds merged, as scans
+   do, so that each tuple comes after all it was derived from: here t's rule probes r, which an
+   earlier rule of the same round adds to, in either order of declaration. *\
+(defdatalog dt.round-a
+  (relation start [symbol]) (relation u [symbol]) (relation t [symbol]) (relation r [symbol])
+  (rule (u X) <-- (start X))
+  (rule (u X) <-- (t X))
+  (rule (r X) <-- (u X))
+  (rule (t X) <-- (u X) (r X)))
+(defdatalog dt.round-b
+  (relation start [symbol]) (relation u [symbol]) (relation r [symbol]) (relation t [symbol])
+  (rule (u X) <-- (start X))
+  (rule (u X) <-- (t X))
+  (rule (r X) <-- (u X))
+  (rule (t X) <-- (u X) (r X)))
+(dt.explain-all "explained, probing this round" dt.round-a [[start a] [start b]])
+(dt.explain-all "explained, probing this round" dt.round-b [[start a] [start b]])
+(set datalog.*native* false)
+(datalog.forget-code dt.round-a)
+(datalog.forget-code dt.round-b)
+(dt.explain-all "explained, probing this round, KL" dt.round-a [[start a] [start b]])
+(dt.explain-all "explained, probing this round, KL" dt.round-b [[start a] [start b]])
+(set datalog.*native* true)
+(datalog.forget-code dt.round-a)
+(datalog.forget-code dt.round-b)
+(let Db (datalog.run dt.dep (value dt.dep-facts))
+  (do (dt.check "explained, not holding" (datalog.explain Db [depends d a]) [])
+      (dt.check "explained, a fact" (datalog.explain Db [imports a b]) [[imports a b] fact])
+      (let Forms (map (/. R (datalog.rule->form (hd R) (hd (tl R)))) (datalog.nth 4 (datalog.program dt.dep)))
+        (dt.check "explained, as written" (datalog.explain Db [depends a c])
+                  [[depends a c] (hd (tl Forms))
+                   [[imports a b] fact]
+                   [[depends b c] (hd Forms) [[imports b c] fact]]]))))
+(let Db (datalog.add (datalog.run dt.dep [[imports a b]]) [[imports b c]])
+  (dt.check "explained after an add" (dt.valid? dt.dep [[imports a b] [imports b c]] (datalog.run-naive dt.dep [[imports a b] [imports b c]])
+                                       (datalog.explain Db [depends a c])) true))
+
 \* Fact files: what is written is read back the same, of every type and in both formats, and what
    does not fit its columns is refused, naming the file and line. *\
 (defdatalog dt.files
@@ -943,6 +1027,7 @@
   (dt.check "equivalence, after a removal" (datalog.count (datalog.remove Added [[link b c]]) same) 8))
 (let Db (datalog.run dt.equal (map (/. I [link a (intern (cn "n" (str I)))]) (datalog.upto 1 300)))
   (dt.check "a large class" (datalog.count Db same) 90601))
+(dt.explain-all "explained" dt.equal (value dt.equal-facts))
 (dt.raises "an equivalence of two types" "two of one type"
   (freeze (datalog.define dt.bad [[relation e [symbol integer] equivalence]])))
 (dt.raises "an equivalence of three columns" "two of one type"
@@ -968,15 +1053,15 @@
 (define dt.chain-int
   N N Acc -> Acc
   I N Acc -> (dt.chain-int (+ I 1) N [[edge I (+ I 1)] [node I] | Acc]))
-(set dt.graph-facts (append (dt.chain-int 0 60 []) [[edge 70 71] [edge 71 70] [edge 5 70] [node 60] [node 71] [node 3]]))
-(dt.query "demand" dt.graph (value dt.graph-facts) [reach 55 [var "Y"]])
-(dt.query "demand" dt.graph (value dt.graph-facts) [far 50 [var "Y"]])
-(dt.query "demand" dt.graph (value dt.graph-facts) [far [var "X"] 60])
-(dt.query "demand" dt.graph (value dt.graph-facts) [degree 58 [var "N"]])
+(set dt.graph-facts (append (dt.chain-int 0 25 []) [[edge 70 71] [edge 71 70] [edge 5 70] [node 25] [node 71] [node 3]]))
+(dt.query "demand" dt.graph (value dt.graph-facts) [reach 20 [var "Y"]])
+(dt.query "demand" dt.graph (value dt.graph-facts) [far 15 [var "Y"]])
+(dt.query "demand" dt.graph (value dt.graph-facts) [far [var "X"] 25])
+(dt.query "demand" dt.graph (value dt.graph-facts) [degree 23 [var "N"]])
 (dt.query "demand" dt.graph (value dt.graph-facts) [degree [var "X"] 3])
 (dt.query "demand" dt.graph (value dt.graph-facts) [lone [var "X"]])
 (let D (datalog.demand dt.graph reach [b f])
-     Db (datalog.run D [[magic@reach@bf 55] | (value dt.graph-facts)])
+     Db (datalog.run D [[magic@reach@bf 20] | (value dt.graph-facts)])
   (do (dt.check "demand computes less" (datalog.count Db reach@bf) 5)
       (dt.check "demand leaves the rest" (datalog.count Db reach) 0)))
 (dt.check "a rewritten program is kept" (datalog.demand dt.graph reach [b f]) (datalog.demand dt.graph reach [b f]))
@@ -1070,7 +1155,8 @@
   -> (do (dt.compare-relation Seed Db Reference Relations)
          (dt.compare-all Seed Dbs Reference Relations)))
 
-\* A query's term: a constant, a variable, which may repeat, or _. *\
+\* A query's term: a constant, a variable, which may repeat, or _. A query of each generated program
+   runs with KL joins, which compile faster than kernels: what it tests is the rewriting. *\
 (define dt.query-term
   Type -> (let R (dtg.random 6)
             (cases (< R 3) (dtg.value Type)
@@ -1100,10 +1186,16 @@
             Shuffled (datalog.run Name2 (dtg.shuffle Facts))
             Rel (dtg.choose Relations)
             Pattern [(hd Rel) | (dtg.map (function dt.query-term) (tl Rel))]
+            _ (set datalog.*native* false)
             _ (dt.check (make-string "generated ~A query ~R" N (datalog.atom->form Pattern))
                 (datalog.sort (datalog.solve Name Facts Pattern)) (datalog.sort (datalog.match Reference Pattern)))
+            _ (set datalog.*native* true)
             _ (dt.compare-all N [Fixed Db Kl Added Readded] Reference Relations)
             _ (dt.compare-relation N Shuffled Reference Relations)
+            Unproved (mapcan (/. R (mapcan (/. V (if (dt.valid? Name Facts Reference (datalog.explain Db [(hd R) | V])) [] [[(hd R) | V]]))
+                                           (dt.take 4 (datalog.tuples Db (hd R)))))
+                             Relations)
+            _ (dt.check (make-string "generated ~A explained" N) Unproved [])
          (dt.generated (- N 1))))
 
 (dt.generated 300)

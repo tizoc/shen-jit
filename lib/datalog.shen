@@ -1381,12 +1381,12 @@
 
 \\ A relation's record: 0 where its indexes end, 1 those in use, 2 its tuples, 3 its table, 4 its
 \\ meta, 5 and 6 the tuples that are new, by position, those before 6 being all that a round reads,
-\\ 7 the bytes of a tuple, 8 an equivalence's classes, or 0, and each index from 9, by a number kept
-\\ with the program across runs. A run starts only those it looks up. An index is a vector of its
-\\ table, chain, mask and keys.
+\\ 7 the bytes of a tuple, 8 an equivalence's classes, or 0, 9 the merges its tuples came in, and
+\\ each index from 10, by a number kept with the program across runs. A run starts only those it
+\\ looks up. An index is a vector of its table, chain, mask and keys.
 (define datalog.new-relation
   Arity Equivalence
-  -> (let Room (+ 9 (shen-jit.shift-left 1 (if (> Arity 6) 6 Arity)))
+  -> (let Room (+ 10 (shen-jit.shift-left 1 (if (> Arity 6) 6 Arity)))
           R (absvector Room)
           Stride (datalog.stride Arity)
           Meta (shen-jit.bytes 32)
@@ -1401,6 +1401,7 @@
           _ (address-> R 6 0)
           _ (address-> R 7 Stride)
           _ (address-> R 8 (if Equivalence (datalog.new-classes) 0))
+          _ (address-> R 9 [])
        R))
 
 (define datalog.count-of
@@ -1445,7 +1446,7 @@
   Rel Relations -> (datalog.position Rel (map (function hd) Relations) 1))
 
 (define datalog.index-slot
-  Rel Keys Indexes -> (datalog.position Keys (tl (assoc Rel Indexes)) 9))
+  Rel Keys Indexes -> (datalog.position Keys (tl (assoc Rel Indexes)) 10))
 
 (define datalog.steps-indexes
   [] _ Acc -> Acc
@@ -1666,7 +1667,7 @@
        [let r [<-address s (datalog.relation-slot Rel Relations)]
          (if (datalog.whole-tuple? Rel Keys Relations)
              [let p [Find [<-address r 3] [<-address r 2] [shen-jit.u32 [<-address r 4] 8] | Forms]
-               [if (if (= Source old) [and [> p 0] [<= p [<-address r 5]]] [> p 0])
+               [if [and [> p 0] [<= p [<-address r (if (= Source old) 5 6)]]]
                    (datalog.gen Steps Ctx Prefix N)
                    true]]
              (let Field (datalog.index-slot Rel Keys Indexes)
@@ -2106,8 +2107,10 @@
           Q (datalog.word-name "Q" Level)
           Probe (datalog.word-name "probe" Level)
           Same (datalog.equal-columns Tuples Q Values 1)
-       (datalog.probe-loop Probe Values Table Mask Q Stride
-         (if (= Source old) [[<= [bit-and (protect E) (datalog.mask)] (datalog.old-param Slot)] | Same] Same)
+          Limit (if (= Source old)
+                    (datalog.old-param Slot)
+                    (datalog.param (datalog.word-name "Merged" Slot) [<-address (datalog.record-form Slot) 6]))
+       (datalog.probe-loop Probe Values Table Mask Q Stride [[<= [bit-and (protect E) (datalog.mask)] Limit] | Same]
          [[do | (datalog.native-steps Steps [Relations Constants Indexes N] Env (+ Level 1) Outer)]
           [exit Probe]])))
 
@@ -2421,10 +2424,19 @@
                                     (datalog.index-all Slots Rec From To)))
 
 \\ What was added becomes the new tuples. Gives whether there were any.
+\\ Each merge has a number, larger than any before it in this process, and a relation keeps those
+\\ its tuples came in, as [[Number | First] ...], the newest first: a round derives only from tuples
+\\ merged before it, so these order every derivation, which datalog.explain follows.
+(set datalog.*merges* 0)
+
 (define datalog.merge
   Rec -> (let From (<-address Rec 6)
               _ (if (= (<-address Rec 8) 0) skip (datalog.close-classes Rec From))
               To (datalog.count-of Rec)
+              _ (if (> To From)
+                    (do (set datalog.*merges* (+ 1 (value datalog.*merges*)))
+                        (address-> Rec 9 [[(value datalog.*merges*) | From] | (<-address Rec 9)]))
+                    skip)
               _ (datalog.index-all (<-address Rec 1) Rec From To)
               _ (address-> Rec 5 From)
               _ (address-> Rec 6 To)
@@ -3108,6 +3120,97 @@
         | (map (/. R (let Rec (<-address S (datalog.relation-slot (hd R) Relations))
                        [(hd R) (datalog.count-of Rec) (shen-jit.s64 (<-address Rec 4) 24) (length (<-address Rec 1))]))
                Relations)]))
+
+\\ ---------------------------------------------------------------------------
+\\ Explanations. (datalog.explain Db [Rel V ...]) gives why a tuple holds, as a proof: [Tuple fact]
+\\ for a fact given, [Tuple equivalence] for a pair an equivalence has as such, and otherwise
+\\ [Tuple Rule Proof ...], the rule as written and a proof of each tuple of its positive atoms, in
+\\ order; [] if the tuple does not hold. Nothing is recorded as tuples are derived: a rule instance
+\\ is found whose atoms' tuples were all merged before the tuple was, which the one that derived it
+\\ is, so that a proof never goes round in a circle.
+
+(define datalog.explain
+  [db Name S Interned Rounds Plans Facts] [Rel | Values]
+  -> (let Program (datalog.program Name)
+          _ (if (cons? (assoc Rel (datalog.nth 3 Program))) skip (error "datalog: no relation ~A" Rel))
+          Ctx [[db Name S Interned Rounds Plans Facts] Program (datalog.fact-set Facts (shen.dict 64)) (shen.dict 16) (shen.dict 64)]
+          Merge (datalog.merge-of Ctx [Rel | Values])
+       (if (= Merge none) [] (datalog.prove Ctx [Rel | Values] Merge))))
+
+\\ Ctx is [Db Program Facts Tuples Proofs]: the facts as a set, each relation's tuples read so far,
+\\ as [[Values | Merge] ...] by relation, and the proofs found, by tuple.
+(define datalog.prove
+  Ctx Tuple Merge
+  -> (let Known (datalog.dict-find (datalog.nth 5 Ctx) Tuple)
+       (if (cons? Known)
+           (tl Known)
+           (let Proof (datalog.prove-h Ctx Tuple Merge)
+                _ (shen.dict-> (datalog.nth 5 Ctx) Tuple Proof)
+             Proof))))
+
+(define datalog.prove-h
+  Ctx [Rel | Values] Merge
+  -> (if (cons? (datalog.dict-find (datalog.nth 3 Ctx) [Rel | Values]))
+         [[Rel | Values] fact]
+         (let Found (datalog.instance (datalog.rules-of Rel (datalog.nth 4 (datalog.nth 2 Ctx))) Ctx Values Merge)
+           (cases (not (= Found none))
+                  [[Rel | Values] (datalog.rule->form (hd (hd Found)) (hd (tl (hd Found))))
+                   | (map (/. T (datalog.prove Ctx (hd T) (tl T))) (tl Found))]
+                  (element? Rel (datalog.nth 8 (datalog.nth 2 Ctx))) [[Rel | Values] equivalence]
+                  true (error "datalog: no derivation of ~S found" [Rel | Values])))))
+
+\\ The first rule with an instance for these values: [Rule [Tuple | Merge] ...], or none.
+(define datalog.instance
+  [] _ _ _ -> none
+  [[[Rel | Terms] Body] | Rules] Ctx Values Merge
+  -> (let Env (datalog.naive-match Terms Values [])
+          Found (if (= Env no) none (datalog.body-instance (datalog.atoms Body) (datalog.conditions Body) Env Ctx Merge []))
+       (if (= Found none)
+           (datalog.instance Rules Ctx Values Merge)
+           [[[Rel | Terms] Body] | Found])))
+
+\\ The atoms' tuples, each merged before Merge, in the order written, with the conditions true.
+(define datalog.body-instance
+  [] Conditions Env Ctx _ Acc
+  -> (let Tables (map (/. R [R | (map (function hd) (datalog.read-relation Ctx R))]) (datalog.complete-relations Conditions))
+          Bound (datalog.naive-bind Conditions Env Conditions false Tables)
+       (if (and (not (= Bound no)) (datalog.naive-true? Conditions Bound Tables)) (reverse Acc) none))
+  [[Rel | Terms] | Atoms] Conditions Env Ctx Merge Acc
+  -> (datalog.try-tuples (datalog.read-relation Ctx Rel) Rel Terms Atoms Conditions Env Ctx Merge Acc))
+
+(define datalog.try-tuples
+  [] _ _ _ _ _ _ _ _ -> none
+  [[Values | M] | Tuples] Rel Terms Atoms Conditions Env Ctx Merge Acc
+  -> (let Bound (if (< M Merge) (datalog.naive-match Terms Values Env) no)
+          Found (if (= Bound no) none (datalog.body-instance Atoms Conditions Bound Ctx Merge [[[Rel | Values] | M] | Acc]))
+       (if (= Found none)
+           (datalog.try-tuples Tuples Rel Terms Atoms Conditions Env Ctx Merge Acc)
+           Found)))
+
+\\ A relation's tuples, each with the merge it came in, read once for an explanation.
+(define datalog.read-relation
+  Ctx Rel -> (let Cache (datalog.nth 4 Ctx)
+                  Known (datalog.dict-find Cache Rel)
+               (if (cons? Known)
+                   (tl Known)
+                   (let Db (hd Ctx)
+                        Rec (datalog.relation-of Db Rel)
+                        Tuples (datalog.with-merges (reverse (datalog.tuples Db Rel)) 0 (reverse (<-address Rec 9)))
+                        _ (shen.dict-> Cache Rel Tuples)
+                     Tuples))))
+
+\\ Tuples in the order stored, each paired with the merge of its position.
+(define datalog.with-merges
+  [] _ _ -> []
+  [T | Ts] P Merges -> [[T | (datalog.merge-at P Merges 0)] | (datalog.with-merges Ts (+ P 1) Merges)])
+
+(define datalog.merge-at
+  P [[M | First] | More] Last -> (if (< P First) Last (datalog.merge-at P More M))
+  _ [] Last -> Last)
+
+(define datalog.merge-of
+  Ctx [Rel | Values] -> (let Entry (assoc Values (datalog.read-relation Ctx Rel))
+                          (if (empty? Entry) none (tl Entry))))
 
 \\ ---------------------------------------------------------------------------
 \\ Fact files. (datalog.read-facts Name Rel Path) gives the facts of Rel in a file, a line each, its
