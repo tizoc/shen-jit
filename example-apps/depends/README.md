@@ -9,7 +9,8 @@ is external. Files are read as Shen reads them, so a macro in them is applied fi
 Build it from the repository root:
 
 ```sh
-build/shen-jit eval -q -l lib/native.shen -l lib/datalog.shen -l example-apps/depends/main.shen \
+build/shen-jit eval -q -l lib/native.shen -l lib/datalog.shen -l lib/ffi.shen -l lib/buffer.shen \
+  -l lib/io.shen -l lib/io-file.shen -l example-apps/depends/main.shen \
   -e '(shen-jit.save-executable "depends" depends.main)'
 ```
 
@@ -49,7 +50,8 @@ The rules are in `main.shen`, as one `defdatalog`: a record for where a function
 apart to find its file; recursion for what reaches what and which files depend on which; an equivalence for the files
 that are in one cycle; negation for what is dead and external; a count for the most called; and a relation of one tuple
 a key, `min`, for the depth of each function from the roots, which needs no bound to end, though calls go round in
-cycles. `datalog.solve`, `datalog.explain` and `datalog.write-facts` answer the three questions.
+cycles. `datalog.solve` and `datalog.explain` answer the questions, and `--out` writes each relation's bytes, from
+`datalog.relation->bytes`, with the [I/O library](../../docs/io.md), which a static build cannot use for files.
 
 ## Test
 

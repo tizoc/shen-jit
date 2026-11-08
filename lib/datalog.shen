@@ -3927,22 +3927,37 @@
                           (if (empty? Entry) none (tl Entry))))
 
 \\ ---------------------------------------------------------------------------
-\\ Fact files. (datalog.read-facts Name Rel Path) gives the facts of Rel in a file, a line each, its
-\\ fields apart by tabs, or by commas with RFC 4180's quotes for a path ending in .csv; each field is
-\\ read as its column's type says: an integer, a symbol, a string as it is, or a record as Shen
-\\ reads it, [pt 1 2]. (datalog.write-facts Db Rel Path) writes a relation's tuples the same way.
+\\ Fact files. A relation's file has a line a tuple, its fields apart by tabs, tsv, or by commas with
+\\ RFC 4180's quotes, csv; each field is read as its column's type says: an integer, a symbol, a
+\\ string as it is, or a record as Shen reads it, [pt 1 2]. (datalog.bytes->facts Name Rel Bytes
+\\ Format) gives the facts of Rel in the bytes of such a file, and (datalog.relation->bytes Db Rel
+\\ Format) a relation's tuples as those bytes, so that a program can read and write the file as it
+\\ likes, with the I/O library say. (datalog.read-facts Name Rel Path) and (datalog.write-facts Db Rel
+\\ Path) do so with Shen's own files, csv for a path ending in .csv and tsv otherwise.
+
+(define datalog.bytes->facts
+  Name Rel B Format -> (datalog.parse-facts Name Rel (freeze B) (datalog.separator Format) (make-string "bytes of ~A" Rel)))
 
 (define datalog.read-facts
-  Name Rel Path
+  Name Rel Path -> (datalog.parse-facts Name Rel (freeze (shen-jit.string->bytes (read-file-as-string Path)))
+                     (datalog.separator (datalog.format-of Path)) Path))
+
+\\ The bytes are made once the relation is known to be there.
+(define datalog.parse-facts
+  Name Rel Bytes Separator Source
   -> (let Program (datalog.program Name)
           Types (assoc Rel (datalog.nth 3 Program))
           _ (if (empty? Types) (error "datalog: no relation ~A" Rel) skip)
-          B (shen-jit.string->bytes (read-file-as-string Path))
-       (datalog.read-lines B 0 (shen-jit.bytes-length B) 1
-         [Rel (tl Types) (if (datalog.csv? Path) 44 9) Path (datalog.nth 7 Program)] [])))
+          B (thaw Bytes)
+       (datalog.read-lines B 0 (shen-jit.bytes-length B) 1 [Rel (tl Types) Separator Source (datalog.nth 7 Program)] [])))
 
-(define datalog.csv?
-  Path -> (and (datalog.ends-with? Path ".csv") true))
+(define datalog.separator
+  tsv -> 9
+  csv -> 44
+  Format -> (error "datalog: ~S is neither tsv nor csv" Format))
+
+(define datalog.format-of
+  Path -> (if (datalog.ends-with? Path ".csv") csv tsv))
 
 (define datalog.ends-with?
   S End -> (cases (= S End) true
@@ -4040,14 +4055,27 @@
            V
            (error "datalog: ~A, line ~A: ~S is not of type ~A" Path Line Text Type))))
 
+(define datalog.relation->bytes
+  Db Rel Format
+  -> (let Csv (= (datalog.separator Format) 44)
+          Lines (map (/. T (shen-jit.string->bytes (datalog.line T Csv))) (datalog.tuples Db Rel))
+       (datalog.join-bytes Lines (shen-jit.bytes (datalog.sum (map (function shen-jit.bytes-length) Lines) 0)) 0)))
+
+(define datalog.join-bytes
+  [] Out _ -> Out
+  [B | Bs] Out I -> (let N (shen-jit.bytes-length B)
+                         _ (shen-jit.copy-bytes Out I B 0 N)
+                      (datalog.join-bytes Bs Out (+ I N))))
+
+\\ The file is written by one call, once every line is made, so that a field it cannot hold leaves
+\\ it as it was.
 (define datalog.write-facts
-  [db Name S | Rest] Rel Path
-  -> (let Csv (datalog.csv? Path)
+  Db Rel Path
+  -> (let B (datalog.relation->bytes Db Rel (datalog.format-of Path))
           Out (open Path out)
-          Tuples (datalog.tuples [db Name S | Rest] Rel)
-          _ (map (/. T (let B (shen-jit.string->bytes (datalog.line T Csv)) (shen-jit.write-bytes B 0 (shen-jit.bytes-length B) Out))) Tuples)
+          _ (shen-jit.write-bytes B 0 (shen-jit.bytes-length B) Out)
           _ (close Out)
-       (length Tuples)))
+       (datalog.count Db Rel)))
 
 (define datalog.line
   [V] Csv -> (cn (datalog.field-text V Csv) "c#10;")

@@ -941,8 +941,9 @@
   (dt.check "explained after an add" (dt.valid? dt.dep [[imports a b] [imports b c]] (datalog.run-naive dt.dep [[imports a b] [imports b c]])
                                        (datalog.explain Db [depends a c])) true))
 
-\* Fact files: what is written is read back the same, of every type and in both formats, and what
-   does not fit its columns is refused, naming the file and line. *\
+\* Fact files: what is written is read back the same, of every type and in both formats, as files
+   or as bytes, and what does not fit its columns is refused, naming the file or the bytes and the
+   line. A file that cannot hold a field is left as it was. *\
 (defdatalog dt.files
   (type point [pt integer integer] [no-point])
   (relation row [symbol string integer point])
@@ -954,10 +955,20 @@
   (do (dt.check "a file written" (datalog.write-facts Db copy "build/datalog-facts.csv") 4)
       (dt.check "a file read" (datalog.sort (datalog.read-facts dt.files copy "build/datalog-facts.csv"))
                 (datalog.sort (map (/. F [copy | (tl F)]) (value dt.file-facts))))
-      (dt.raises "a tab in a tab-separated file" "cannot hold" (freeze (datalog.write-facts Db copy "build/datalog-facts.tsv")))
+      (let B (datalog.relation->bytes Db copy csv)
+        (do (dt.check "bytes, as the file" (shen-jit.bytes->string B 0 (shen-jit.bytes-length B))
+                      (read-file-as-string "build/datalog-facts.csv"))
+            (dt.check "bytes read" (datalog.sort (datalog.bytes->facts dt.files copy B csv))
+                      (datalog.sort (map (/. F [copy | (tl F)]) (value dt.file-facts))))))
+      (dt.raises "a format" "neither tsv nor csv" (freeze (datalog.relation->bytes Db copy json)))
       (let Plain [(hd (value dt.file-facts)) (hd (tl (value dt.file-facts))) (hd (reverse (value dt.file-facts)))]
         (do (datalog.write-facts (datalog.run dt.files Plain) copy "build/datalog-facts.tsv")
             (dt.check "a tab-separated file read" (datalog.sort (datalog.read-facts dt.files copy "build/datalog-facts.tsv"))
+                      (datalog.sort (map (/. F [copy | (tl F)]) Plain)))
+            (dt.raises "a tab in a tab-separated file" "cannot hold" (freeze (datalog.write-facts Db copy "build/datalog-facts.tsv")))
+            (dt.check "a file left as it was" (datalog.sort (datalog.read-facts dt.files copy "build/datalog-facts.tsv"))
+                      (datalog.sort (map (/. F [copy | (tl F)]) Plain)))
+            (dt.check "tab-separated bytes read" (datalog.sort (datalog.bytes->facts dt.files copy (datalog.relation->bytes (datalog.run dt.files Plain) copy tsv) tsv))
                       (datalog.sort (map (/. F [copy | (tl F)]) Plain)))))))
 (define dt.write-file
   Path Text -> (let S (open Path out) (do (pr Text S) (close S) Path)))
@@ -970,6 +981,8 @@
 (dt.raises "a file's record" "is not of type point"
   (freeze (datalog.read-facts dt.files row (dt.write-file "build/datalog-facts.tsv" "e	x	5	[pt 1]"))))
 (dt.raises "a file's relation" "no relation nope" (freeze (datalog.read-facts dt.files nope "build/datalog-facts.tsv")))
+(dt.raises "bytes' field count" "bytes of row, line 2, has 3 fields"
+  (freeze (datalog.bytes->facts dt.files row (shen-jit.string->bytes "e	x	5	[pt 1 1]c#10;f	y	6") tsv)))
 
 \* Relations of one tuple a key: the least or greatest last column, or the first tuple derived, on
    graphs with cycles, where a shortest path needs no bound to end. *\

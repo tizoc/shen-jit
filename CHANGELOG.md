@@ -22,7 +22,8 @@ All notable changes to this project are documented in this file. The format is b
   paths end without a bound.
 - `datalog.explain`: why a Datalog tuple holds, as a proof down to the facts given.
 - `datalog.read-facts` and `datalog.write-facts`: Datalog relations from and to tab-separated or CSV files, each field read as
-  its column's type says.
+  its column's type says; `datalog.bytes->facts` and `datalog.relation->bytes` do the same with the files' bytes, for a
+  program that writes its files itself, as with the I/O library.
 - Datalog equivalences: `(relation same [symbol symbol] equivalence)` keeps the reflexive, symmetric and transitive closure of what
   it is given, by union-find, stored as classes and not as their pairs, so that a class of k values takes room for k, not k squared.
 - Datalog functions: integer `/` and `%`, `band`, `bor`, `bxor`, `bshl` and `bshr`, `cat`, `strlen`, `substr`, `to-number` and

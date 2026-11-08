@@ -1,7 +1,8 @@
 \* depends: what calls what among Shen and KL source files, worked out by lib/datalog.shen.
 
    Build the executable from the repository root:
-     build/shen-jit eval -q -l lib/native.shen -l lib/datalog.shen -l example-apps/depends/main.shen \
+     build/shen-jit eval -q -l lib/native.shen -l lib/datalog.shen -l lib/ffi.shen -l lib/buffer.shen \
+       -l lib/io.shen -l lib/io-file.shen -l example-apps/depends/main.shen \
        -e '(shen-jit.save-executable "depends" depends.main)'
    Run it:
      ./depends [--root F]... [--why F G] [--reach F] [--out DIR] FILE...
@@ -138,9 +139,16 @@
   [reaches F G] -> (make-string "~A reaches ~A" F G)
   Tuple -> (make-string "~S" Tuple))
 
+\* Each relation's tab-separated bytes, written by the I/O library, which says what failed. *\
 (define depends.write-all
-  Db Dir -> (map (/. R (output "~A: ~A~%" R (datalog.write-facts Db R (cn Dir (cn "/" (cn (str R) ".tsv"))))))
+  Db Dir -> (map (/. R (depends.write Db R (cn Dir (cn "/" (cn (str R) ".tsv")))))
                  [defines calls in-file file-uses file-depends cyclic reaches recursive live dead external fan-in depth]))
+
+(define depends.write
+  Db R Path -> (let Result (io.write-file Path (buffer.wrap (datalog.relation->bytes Db R tsv)))
+                 (if (= (hd Result) ok)
+                     (output "~A: ~A~%" R (datalog.count Db R))
+                     (error "cannot write ~A: ~A" Path (io.error-message (hd (tl Result)))))))
 
 (define depends.report
   Db Roots

@@ -40,6 +40,7 @@ false
 | `(datalog.tuples Db Relation)`, `(datalog.sorted Db Relation)` | Its tuples as lists, in no particular order or sorted |
 | `(datalog.read-facts Name Relation Path)` | The facts of a relation in a file, a line each, its fields apart by tabs, or by commas if the path ends in `.csv` |
 | `(datalog.write-facts Db Relation Path)` | Writes a relation's tuples so, in no particular order, and gives how many |
+| `(datalog.bytes->facts Name Relation Bytes Format)`, `(datalog.relation->bytes Db Relation Format)` | The same from and to the bytes of such a file, a byte buffer, `Format` being `tsv` or `csv`: for a program that reads and writes its files itself, as with the [I/O library](io.md) |
 | `(datalog.count Db Relation)` | How many tuples it has |
 | `(datalog.holds? Db [Relation Value ...])` | Whether a tuple is there |
 | `(datalog.explain Db [Relation Value ...])` | Why it is: `[Tuple fact]`, `[Tuple Rule Proof ...]` with a proof of each tuple the rule's atoms read, `[Tuple equivalence]`, or `[Tuple lattice]` for a value joined from others; `[]` if it is not there |
@@ -177,8 +178,32 @@ With nodes `a` and `b`, an edge from `a` to `b` and costs 3 and 5 for `a`, `degr
   finding one reads the relations it touches, which on a relation of a million tuples takes tens of milliseconds.
 - **Fact files:** each field is read as its column's type says, an integer, a symbol, a string as it is or a record as Shen reads it,
   `[pt 1 2]`, and one that does not fit raises, naming the file and line. A `.csv` file quotes a field as RFC 4180 does, so it can
-  hold commas, quotes and line breaks; a tab-separated one cannot hold a tab or a line break, and writing one raises. Blank lines
-  are skipped, and a line may end in a carriage return.
+  hold commas, quotes and line breaks; a tab-separated one cannot hold a tab or a line break, and writing one raises before
+  the file is touched. Blank lines are skipped, and a line may end in a carriage return. `datalog.read-facts` and
+  `datalog.write-facts` use Shen's own files; with the I/O library, a program handles each failure as a value:
+
+```shen
+\\ imports.shen, after deps.shen
+(define save-imports
+  Db Path -> (io.write-file Path (buffer.wrap (datalog.relation->bytes Db imports tsv))))
+
+(define load-imports
+  Path -> (let Read (io.read-file Path 100000000)
+            (if (= (hd Read) ok)
+                (datalog.bytes->facts dependencies imports (buffer.bytes (hd (tl Read))) tsv)
+                (error "cannot read ~A: ~A" Path (io.error-message (hd (tl Read)))))))
+
+(let Db (datalog.run dependencies [[imports a b] [imports b c]])
+  (do (output "~R~%" (save-imports Db "imports.tsv"))
+      (output "~R~%" (load-imports "imports.tsv"))))
+```
+
+```bash
+shen-jit eval -l lib/native.shen -l lib/datalog.shen -l lib/ffi.shen -l lib/buffer.shen -l lib/io.shen \
+  -l lib/io-file.shen -l deps.shen -l imports.shen
+```
+
+  After what `deps.shen` prints, this prints `(ok 8)`, the bytes written, and the facts read back, in no particular order.
 - **Saving:** a program saved with `--save` runs in the saved image, and one saved as an executable runs on its own:
   [example-apps/depends](https://github.com/tizoc/shen-jit/blob/main/example-apps/depends/README.md) is a dependency analyser
   over Shen and KL sources, built so, which uses most of the above.

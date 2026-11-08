@@ -2191,6 +2191,13 @@ Best of two runs each, alternating, at a load of about 4 from other work, so tha
 - **Checked:** the fixtures, generated programs against the reference under every evaluator, and SWI-Prolog. Three planted under-reads of old pairs passed every check until a fixture was added whose classes change early, one in the round after the other, in a component that keeps growing and reads their old pairs later, by a scan and by a member check. Now old ranges not reset when nothing changed fail 1 check, the classes changed in the round before not made old 10, a native old member check that never holds 4, KL old pairs read as none 2, and holes not made, or the table not told where moved values went, raise. Over-reads, old pairs read as all and new ones scanned from the first position, and a full layout every time give the same answers more slowly, and pass.
 - **Not done:** negation and aggregates over an equivalence natively, which are rare and KL; and the layout is Shen over dictionaries, which a kernel could place if a workload shows it costs.
 
+### Fact files as bytes (2026-11-08, Apple M3 Max, against the commit before)
+
+`datalog.relation->bytes` makes a relation's whole file as one byte buffer, and `datalog.bytes->facts` parses such bytes, so that a program can write and read its files with the I/O library, which reports a failure as a value and uses no kernel stream. `datalog.read-facts` and `datalog.write-facts` stay, over them, as conveniences with Shen's files. The dependency analyser's `--out` writes through `io.write-file`, and its test skips that on a static build, which cannot load the C library the I/O library's files need. About 20 lines of code.
+
+- **Writing the sparse closure's 1,388,324 lines,** two runs each: 235 ms against 252 to 259, a line at a time. The file is written once every line is made, so a field a tab-separated file cannot hold now raises before the file is opened, and leaves it as it was.
+- **Reading is the same code,** but timing it showed how much the collector's moments weigh: passing the bytes before the program's checks, in place of after them, took a second read in one process from 155 to 187 ms, the first going from 169 to 165, the same in three rounds. Making the bytes after the checks, as before, gave 158 to 172.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.
