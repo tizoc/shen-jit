@@ -12,6 +12,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Datalog relations that keep one tuple a key: `(relation dist [symbol integer] min)`, `max` and `choice`, by which shortest
+  paths end without a bound.
 - `datalog.explain`: why a Datalog tuple holds, as a proof down to the facts given.
 - `datalog.read-facts` and `datalog.write-facts`: Datalog relations from and to tab-separated or CSV files, each field read as
   its column's type says.

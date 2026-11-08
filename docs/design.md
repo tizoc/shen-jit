@@ -300,6 +300,8 @@ value.
 
 An equivalence is an ordinary relation of pairs whose record also holds a union-find: each value's root, and each root's members. When a round's tuples are merged, each joins its two values' classes, the smaller into the larger, and every pair that joining makes is added, so that the next round reads them as new: the relation stays closed, with no rule for it, and kernels read it as any other. The reference adds the three rules of an equivalence instead. Demand computes an equivalence in full, as it does what is negated.
 
+A relation of one tuple a key has a second table, by the columns before its last, whose entry for each key points at the best tuple so far. An insert that is not better is refused there; one that is better is added, and the key's entry moves to it, leaving the other where it is, dead: storage still never deletes, and kernels read such a relation as any other. Within its own recursion a dead tuple can still be read, which derives only what is no better and so is refused in turn. When its component is done, the relation is made again from the tuples its keys point to, so later components read only those; an add evaluates again what reads one that changed, as a better tuple may have replaced one it read.
+
 `datalog.add` notes each relation's size, its mark, adds the facts, and goes through the components in order. One that reads only relations that
 grew, positively, goes on semi-naively: each relation that grew reads what is past its mark as new, every rule runs once with one variant for each
 atom of such a relation, and the component's own rounds follow. One that negates or aggregates a relation that changed, or reads one that was

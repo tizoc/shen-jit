@@ -2085,6 +2085,24 @@ Soufflé chooses a few sorted orders so that one serves several searches: an ord
 - **What there is to gain:** building and keeping up every index, timed around each merge's indexing, took 8.0 to 8.7 ms of points-to's 480 to 790 ms in its three orders, 1.0 to 1.8%, with 10 or 11 indexes over five relations, two of them on `hpt`, by its first column and by its first two; 0.03 ms of the sparse closure's 90 and 0.5 of the nonlinear closure's 152.
 - **Rejected:** sharing could save at most that, and would make every lookup that used a narrower index walk a longer chain, checking the columns it lacks, which is the inner loop. Dropping indexes a re-plan leaves unused saves part of it, at the price of building one again if a later plan wants it. Neither is worth the code while upkeep is under 2%. Memory is where sharing would show: `hpt`'s second index holds 681,172 chain entries and a table of 2 million slots, about 19 MB, which nothing measured has made a problem.
 
+### One tuple a key: min, max and choice (2026-11-08, Apple M3 Max, against Soufflé 2.5's subsumption)
+
+`(relation dist [symbol integer] min)` keeps, for each key, the columns before the last, the tuple whose last column is least; `max` the greatest; `choice` the first derived. About 160 lines of code.
+
+- **Decided: a second table by key, and dead tuples left in place.** Storage only grows, and every kernel reads a relation as a range of tuples. The key table's entry points at the best tuple so far: an insert that is not better is refused, natively, and one that is better is added and the entry moved, leaving the other dead where it was. Nothing that reads a relation changes. Within its own recursion a dead tuple can be read, which only derives what is no better, refused in turn; when the component is done the relation is made again from the live tuples, so later components never see a dead one. The same decision serves lattices, of which min and max are two, and leaves deletion, for deleting and rederiving, to compaction as here.
+- **Rejected before building: deleting or overwriting in place.** A tuple overwritten in place would leave the hash table and every index pointing at a different tuple, and one deleted would need tombstones checked in every scan, probe and chain of every kernel, programs that never delete included. Compacting the whole relation at each round would cost its size every round.
+- **A finding while testing:** an add that improves a key rebuilds the relation, so the positions an add goes on from no longer hold, and a reader may hold what followed from the value replaced. A component that reads such a relation once it has changed is now evaluated again, as one that negates a changed relation is. The fixtures found it: two of six evaluators, the two that add, missed tuples.
+- **Shortest paths from one node,** random graphs, weights 1 to 100, checked against Dijkstra's algorithm, written apart, by count and sum of distances:
+
+  | ms | Ours | Soufflé compiled, subsumption |
+  | --- | --- | --- |
+  | 2,000 nodes, 10,000 edges | 1.9 | 10.3 |
+  | 20,000 nodes, 100,000 edges | 23.5 | 137.9 |
+
+  The large one makes 74,272 derivations for 19,848 distances, in 21 rounds. Soufflé's subsumption deletes in its B-tree; we refuse at the key table and compact once.
+- **Semantics:** a relation in the same recursion as a min or max relation may hold what follows from a value later replaced, as in Soufflé, where a subsumed tuple's consequences also stay; relations after it see only the best. `choice` depends on the order of evaluation, so its tests check what holds of any choice: one tuple a key, each derivable.
+- **Checked:** fixtures, 30 random weighted graphs through native and KL joins, adds and removals, against the reference, which keeps the best of each key round by round, signed values at both ends of 32 bits, demand queries, explanations, and errors. Planted, a min that keeps the larger and a key entry left behind hang, as nothing stops paths around cycles, no compaction fails 101 checks, an unsigned comparison 5, once negative values were added, readers grown and not evaluated again 2, and a key table not grown raises.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.

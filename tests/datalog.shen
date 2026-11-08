@@ -969,6 +969,69 @@
   (freeze (datalog.read-facts dt.files row (dt.write-file "build/datalog-facts.tsv" "e	x	5	[pt 1]"))))
 (dt.raises "a file's relation" "no relation nope" (freeze (datalog.read-facts dt.files nope "build/datalog-facts.tsv")))
 
+\* Relations of one tuple a key: the least or greatest last column, or the first tuple derived, on
+   graphs with cycles, where a shortest path needs no bound to end. *\
+(defdatalog dt.paths
+  (relation edge [integer integer integer])
+  (relation start [integer])
+  (relation dist [integer integer] min)
+  (relation widest [integer integer] max)
+  (relation via [integer integer] choice)
+  (relation step [integer integer])
+  (relation near [integer])
+  (rule (dist X 0) <-- (start X))
+  (rule (dist Y D) <-- (dist X D0) (edge X Y W) (= D (+ D0 W)))
+  (rule (widest X 1000) <-- (start X))
+  (rule (widest Y W) <-- (widest X B0) (edge X Y W) (< W B0))
+  (rule (widest Y B0) <-- (widest X B0) (edge X Y W) (>= W B0))
+  (rule (step X Y) <-- (edge X Y _))
+  (rule (via Y X) <-- (step X Y))
+  (rule (near X) <-- (dist X D) (<= D 3)))
+
+(define dt.weighted
+  0 _ Acc -> Acc
+  M N Acc -> (dt.weighted (- M 1) N [[edge (dtg.random N) (dtg.random N) (dtg.random 10)] | Acc]))
+(dt.same "least" [[start 1] [edge 1 2 5] [edge 1 3 1] [edge 3 2 1] [edge 2 4 1] [edge 4 1 1] [edge 3 4 10]] dt.paths dist
+  [[1 0] [2 2] [3 1] [4 3]])
+(dt.same "greatest" [[start 1] [edge 1 2 5] [edge 1 3 1] [edge 3 2 1] [edge 2 4 1] [edge 4 1 1] [edge 3 4 10]] dt.paths widest
+  [[1 1000] [2 5] [3 1] [4 1]])
+(dt.same "read by a later stratum" [[start 1] [edge 1 2 5] [edge 1 3 1] [edge 3 2 1] [edge 2 4 1] [edge 4 1 1] [edge 3 4 10]] dt.paths near
+  [[1] [2] [3] [4]])
+
+\* On random graphs, against the reference, which keeps the best of each key round by round. *\
+(define dt.random-paths
+  0 -> ok
+  K -> (let Facts [[start (dtg.random 12)] | (dt.weighted 30 12 [])]
+            Ref (datalog.run-naive dt.paths Facts)
+            _ (map (/. Db (do (dt.check (make-string "random paths ~A dist" K) (datalog.sorted Db dist) (datalog.sorted Ref dist))
+                              (dt.check (make-string "random paths ~A widest" K) (datalog.sorted Db widest) (datalog.sorted Ref widest))))
+                   [(datalog.run dt.paths Facts) (dt.run-kl dt.paths Facts) (dt.run-added dt.paths Facts) (dt.run-readded dt.paths Facts)])
+         (dt.random-paths (- K 1))))
+(dt.random-paths 30)
+(defdatalog dt.signs
+  (relation v [symbol integer])
+  (relation low [symbol integer] min)
+  (relation high [symbol integer] max)
+  (rule (low K X) <-- (v K X))
+  (rule (high K X) <-- (v K X)))
+(dt.same "least, signed" [[v a 5] [v a -3] [v a 2] [v b -2147483648] [v b 7] [v c 2147483647]] dt.signs low [[a -3] [b -2147483648] [c 2147483647]])
+(dt.same "greatest, signed" [[v a 5] [v a -3] [v a 2] [v b -2147483648] [v b 7] [v c 2147483647]] dt.signs high [[a 5] [b 7] [c 2147483647]])
+
+\* choice keeps one tuple of each key, which some rule derives. *\
+(let Facts [[start 0] [edge 0 1 1] [edge 2 1 1] [edge 3 1 1] [edge 1 2 1] [edge 0 2 1]]
+     Db (datalog.run dt.paths Facts)
+     Via (datalog.sorted Db via)
+  (do (dt.check "a choice a key" (map (function hd) Via) [1 2])
+      (dt.check "a choice derived" (datalog.subset? (map (/. T [(hd (tl T)) (hd T)]) Via) (datalog.tuples Db step)) true)
+      (dt.check "a choice explained" (dt.valid? dt.paths Facts (datalog.run-naive dt.paths Facts) (datalog.explain Db [via 1 (hd (tl (hd Via)))])) true)))
+(dt.explain-all "explained, least" dt.paths [[start 1] [edge 1 2 5] [edge 1 3 1] [edge 3 2 1] [edge 2 4 1] [edge 4 1 1] [edge 3 4 10]])
+(dt.raises "a least of symbols" "must be an integer"
+  (freeze (datalog.define dt.bad [[relation a [integer symbol] min]])))
+(dt.raises "a key with no value" "two columns or more"
+  (freeze (datalog.define dt.bad [[relation a [integer] choice]])))
+(dt.raises "an unknown way to keep" "neither equivalence, min, max nor choice"
+  (freeze (datalog.define dt.bad [[relation a [integer integer] best]])))
+
 \* Queries by demand give what a whole run would, and compute less. *\
 (define dt.query
   Label Name Facts Pattern
@@ -1018,6 +1081,8 @@
 (dt.same "equivalence" (value dt.equal-facts) dt.equal near-big [[a] [b]])
 (dt.same "equivalence" (value dt.equal-facts) dt.equal classes [[a 3] [b 3] [c 3] [p 3] [q 3] [r 1] [u 3] [x 2] [y 2]])
 (dt.query "demand" dt.equal (value dt.equal-facts) [same a [var "X"]])
+(dt.query "demand" dt.paths [[start 1] [edge 1 2 5] [edge 1 3 1] [edge 3 2 1] [edge 2 4 1]] [dist 4 [var "D"]])
+(dt.query "demand" dt.paths [[start 1] [edge 1 2 5] [edge 1 3 1] [edge 3 2 1] [edge 2 4 1]] [near [var "X"]])
 (dt.query "demand" dt.equal (value dt.equal-facts) [near-big [var "X"]])
 (dt.query "demand" dt.equal (value dt.equal-facts) [classes [var "X"] 2])
 (let Db (datalog.run dt.equal [[same a b] [same c d]])

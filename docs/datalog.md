@@ -33,7 +33,7 @@ false
 
 | Form | Meaning |
 | --- | --- |
-| `(defdatalog Name Item ...)` | Defines a program, checked now. An item is `(relation Name [Types])`, or `(relation Name [T T] equivalence)` for an equivalence, `(type Name [Constructor Types] ...)` or `(rule Head <-- Body ...)`, or `(rule Head)` for one that always holds |
+| `(defdatalog Name Item ...)` | Defines a program, checked now. An item is `(relation Name [Types])`, with `equivalence`, `min`, `max` or `choice` after it for such a relation, `(type Name [Constructor Types] ...)` or `(rule Head <-- Body ...)`, or `(rule Head)` for one that always holds |
 | `(datalog.run Name Facts)` | A database from facts such as `[imports a b]` |
 | `(datalog.add Db Facts)` | The database with these facts added and what follows from them, changed in place and given back |
 | `(datalog.remove Db Facts)` | The same with these facts removed, and what no longer follows; a fact it does not have is no change |
@@ -131,7 +131,23 @@ With nodes `a` and `b`, an edge from `a` to `b` and costs 3 and 5 for `a`, `degr
   of `a`, `b` and `c`. A rule can read and add to it in the same recursion, as congruence closure does with
   `(rule (same A B) <-- (same X Y) (f X A) (f Y B))`. Classes are joined by union-find as tuples arrive, and their pairs are kept as
   tuples, so a class of k values holds k squared of them: for classes of thousands, that is most of the time.
-- **Results** are sets, and the order of rules, atoms and facts does not change them.
+- **One tuple a key:** `(relation dist [symbol integer] min)` keeps, for each value of the columns before the last, the tuple
+  whose last column is least, `max` the greatest, and `choice` the first derived, whichever that is. A tuple that is not better
+  than its key's is not added, so a shortest path needs no bound to end on a graph with cycles:
+
+```shen
+(defdatalog shortest
+  (relation edge [symbol symbol integer])
+  (relation start [symbol])
+  (relation dist [symbol integer] min)
+  (rule (dist X 0) <-- (start X))
+  (rule (dist Y D) <-- (dist X D0) (edge X Y W) (= D (+ D0 W))))
+```
+
+  While its own recursion runs, a rule may still read a tuple that a better one has since replaced, so another relation in the
+  same recursion may hold what follows from it; relations evaluated after it see only the best. `datalog.add` evaluates again
+  what reads such a relation, once it has changed.
+- **Results** are sets, and the order of rules, atoms and facts does not change them, except under `choice`.
 - **Recursion** can be through several atoms of a rule, as in `(rule (path X Z) <-- (path X Y) (path Y Z))`: each combination
   of tuples is derived once, in the round after the last of them was.
 - **The order of a rule's atoms** need not be tuned. A run chooses the order of joins from the sizes of the relations, and again when one has doubled.
