@@ -12,6 +12,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `datalog.read-facts` and `datalog.write-facts`: Datalog relations from and to tab-separated or CSV files, each field read as
+  its column's type says.
 - Datalog equivalences: `(relation same [symbol symbol] equivalence)` keeps the reflexive, symmetric and transitive closure of what
   it is given, by union-find.
 - Datalog functions: integer `/` and `%`, `band`, `bor`, `bxor`, `bshl` and `bshr`, `cat`, `strlen`, `substr`, `to-number` and

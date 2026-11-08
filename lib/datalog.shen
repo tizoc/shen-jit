@@ -3110,6 +3110,159 @@
                Relations)]))
 
 \\ ---------------------------------------------------------------------------
+\\ Fact files. (datalog.read-facts Name Rel Path) gives the facts of Rel in a file, a line each, its
+\\ fields apart by tabs, or by commas with RFC 4180's quotes for a path ending in .csv; each field is
+\\ read as its column's type says: an integer, a symbol, a string as it is, or a record as Shen
+\\ reads it, [pt 1 2]. (datalog.write-facts Db Rel Path) writes a relation's tuples the same way.
+
+(define datalog.read-facts
+  Name Rel Path
+  -> (let Program (datalog.program Name)
+          Types (assoc Rel (datalog.nth 3 Program))
+          _ (if (empty? Types) (error "datalog: no relation ~A" Rel) skip)
+          B (shen-jit.string->bytes (read-file-as-string Path))
+       (datalog.read-lines B 0 (shen-jit.bytes-length B) 1
+         [Rel (tl Types) (if (datalog.csv? Path) 44 9) Path (datalog.nth 7 Program)] [])))
+
+(define datalog.csv?
+  Path -> (and (datalog.ends-with? Path ".csv") true))
+
+(define datalog.ends-with?
+  S End -> (cases (= S End) true
+                  (= S "") false
+                  true (datalog.ends-with? (tlstr S) End)))
+
+\\ Ctx is [Rel Types Separator Path Constructors].
+(define datalog.read-lines
+  B I N Line Ctx Acc
+  -> (if (>= I N)
+         (reverse Acc)
+         (let Read (datalog.read-fields B I N (hd (tl (tl Ctx))) [])
+              Fields (hd Read)
+           (datalog.read-lines B (tl Read) N (+ Line 1) Ctx
+             (if (datalog.blank? Fields) Acc [(datalog.fact-of B Fields Line Ctx) | Acc])))))
+
+(define datalog.blank?
+  [[I | I]] -> true
+  _ -> false)
+
+\\ A line's fields and where the next line starts: [Fields | Next]. A field is its range of bytes,
+\\ [From | To], or a quoted one's text.
+(define datalog.read-fields
+  B I N Sep Acc
+  -> (if (and (< I N) (= (shen-jit.u8 B I) 34) (= Sep 44))
+         (let Quoted (datalog.read-quoted B (+ I 1) N "")
+              J (tl Quoted)
+           (datalog.after-field B J N Sep [(hd Quoted) | Acc]))
+         (let J (datalog.field-end B I N Sep)
+              End (if (and (> J I) (= (shen-jit.u8 B (- J 1)) 13) (or (= J N) (= (shen-jit.u8 B J) 10))) (- J 1) J)
+           (datalog.after-field B J N Sep [[I | End] | Acc]))))
+
+(define datalog.after-field
+  B J N Sep Acc -> (cases (>= J N) [(reverse Acc) | N]
+                          (= (shen-jit.u8 B J) Sep) (datalog.read-fields B (+ J 1) N Sep Acc)
+                          (= (shen-jit.u8 B J) 13) (datalog.after-field B (+ J 1) N Sep Acc)
+                          true [(reverse Acc) | (+ J 1)]))
+
+(define datalog.field-end
+  B I N Sep -> (if (or (>= I N) (= (shen-jit.u8 B I) Sep) (= (shen-jit.u8 B I) 10)) I (datalog.field-end B (+ I 1) N Sep)))
+
+\\ A quoted field from after its quote: [Text | where it ends], "" being a quote within it.
+(define datalog.read-quoted
+  B I N Text
+  -> (let J (datalog.quote-end B I N)
+          More (cn Text (shen-jit.bytes->string B I (- J I)))
+       (cases (>= J N) (error "datalog: a quoted field does not end")
+              (and (< (+ J 1) N) (= (shen-jit.u8 B (+ J 1)) 34)) (datalog.read-quoted B (+ J 2) N (cn More "c#34;"))
+              true [More | (+ J 1)])))
+
+(define datalog.quote-end
+  B I N -> (if (or (>= I N) (= (shen-jit.u8 B I) 34)) I (datalog.quote-end B (+ I 1) N)))
+
+(define datalog.fact-of
+  B Fields Line [Rel Types Sep Path Cs]
+  -> (if (= (length Fields) (length Types))
+         [Rel | (datalog.field-values-of B Fields Types Line Path Cs)]
+         (error "datalog: ~A, line ~A, has ~A fields where ~A takes ~A" Path Line (length Fields) Rel (length Types))))
+
+(define datalog.field-values-of
+  _ [] [] _ _ _ -> []
+  B [[I | J] | Fs] [integer | Ts] Line Path Cs
+  -> (let N (datalog.byte-integer B I J)
+       (if (and (integer? N) (datalog.int32? N))
+           [N | (datalog.field-values-of B Fs Ts Line Path Cs)]
+           (error "datalog: ~A, line ~A: ~S is not an integer of 32 bits" Path Line (shen-jit.bytes->string B I (- J I)))))
+  B [F | Fs] [T | Ts] Line Path Cs
+  -> (let V (datalog.field-value (if (cons? F) (shen-jit.bytes->string B (hd F) (- (tl F) (hd F))) F) T Line Path Cs)
+       [V | (datalog.field-values-of B Fs Ts Line Path Cs)]))
+
+\\ The integer of these bytes, or [] if they are not one.
+(define datalog.byte-integer
+  B I J -> (cases (>= I J) []
+                  (and (= (shen-jit.u8 B I) 45) (< (+ I 1) J)) (datalog.negate (datalog.byte-digits B (+ I 1) J 0))
+                  true (datalog.byte-digits B I J 0)))
+
+(define datalog.byte-digits
+  B I J N -> (if (>= I J)
+                 N
+                 (let D (- (shen-jit.u8 B I) 48)
+                   (if (and (>= D 0) (<= D 9)) (datalog.byte-digits B (+ I 1) J (+ (* 10 N) D)) []))))
+
+(define datalog.field-value
+  Text integer Line Path _
+  -> (let N (datalog.parse-integer Text)
+       (if (and (integer? N) (datalog.int32? N))
+           N
+           (error "datalog: ~A, line ~A: ~S is not an integer of 32 bits" Path Line Text)))
+  Text symbol _ _ _ -> (intern Text)
+  Text string _ _ _ -> Text
+  Text Type Line Path Cs
+  -> (let Read (trap-error (read-from-string Text) (/. E []))
+          V (if (and (cons? Read) (empty? (tl Read))) (datalog.unbracket-term (hd Read)) none)
+       (if (datalog.value-of? V Type Cs)
+           V
+           (error "datalog: ~A, line ~A: ~S is not of type ~A" Path Line Text Type))))
+
+(define datalog.write-facts
+  [db Name S | Rest] Rel Path
+  -> (let Csv (datalog.csv? Path)
+          Out (open Path out)
+          Tuples (datalog.tuples [db Name S | Rest] Rel)
+          _ (map (/. T (pr (datalog.line T Csv) Out)) Tuples)
+          _ (close Out)
+       (length Tuples)))
+
+(define datalog.line
+  [V] Csv -> (cn (datalog.field-text V Csv) "c#10;")
+  [V | Vs] Csv -> (cn (datalog.field-text V Csv) (cn (if Csv "," "c#9;") (datalog.line Vs Csv))))
+
+(define datalog.field-text
+  V _ -> (str V) where (number? V)
+  V Csv -> (datalog.text-field (if (symbol? V) (str V) V) Csv) where (or (symbol? V) (string? V))
+  V Csv -> (datalog.text-field (make-string "~S" V) Csv))
+
+\\ A tab or a line break cannot be in a tab-separated field.
+(define datalog.text-field
+  T true -> (datalog.csv-quote T)
+  T false -> (if (datalog.plain-tsv? T) T (error "datalog: ~S has a tab or a line break, which a tab-separated file cannot hold" T)))
+
+(define datalog.plain-tsv?
+  "" -> true
+  (@s C Rest) -> (and (not (element? C ["c#9;" "c#10;" "c#13;"])) (datalog.plain-tsv? Rest)))
+
+(define datalog.csv-quote
+  S -> (if (datalog.plain? S) S (cn "c#34;" (cn (datalog.double-quotes S) "c#34;"))))
+
+(define datalog.plain?
+  "" -> true
+  (@s C Rest) -> (and (not (element? C ["," "c#34;" "c#10;" "c#13;"])) (datalog.plain? Rest)))
+
+(define datalog.double-quotes
+  "" -> ""
+  (@s "c#34;" Rest) -> (cn "c#34;c#34;" (datalog.double-quotes Rest))
+  (@s C Rest) -> (cn C (datalog.double-quotes Rest)))
+
+\\ ---------------------------------------------------------------------------
 \\ Demand, by magic sets. (datalog.query Name Facts (Rel Term ...)) gives what datalog.ask would of
 \\ a run of these facts, computing only what the query needs. Its constants make an adornment, b
 \\ for a bound column and f for a free one, and the program is rewritten for it once and kept:

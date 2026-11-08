@@ -855,6 +855,36 @@
 (dt.raises "a function as a constructor" "cannot name a constructor"
   (freeze (datalog.define dt.bad [[type t [cat integer]]])))
 
+\* Fact files: what is written is read back the same, of every type and in both formats, and what
+   does not fit its columns is refused, naming the file and line. *\
+(defdatalog dt.files
+  (type point [pt integer integer] [no-point])
+  (relation row [symbol string integer point])
+  (relation copy [symbol string integer point])
+  (rule (copy A B C D) <-- (row A B C D)))
+(set dt.file-facts [[row a "plain" 1 [pt 1 2]] [row b "with, comma" -2147483648 [no-point]]
+                    [row c "with c#34;quotesc#34; and c#9;tab" 2147483647 [pt -3 4]] [row d "" 0 [pt 0 0]]])
+(let Db (datalog.run dt.files (value dt.file-facts))
+  (do (dt.check "a file written" (datalog.write-facts Db copy "build/datalog-facts.csv") 4)
+      (dt.check "a file read" (datalog.sort (datalog.read-facts dt.files copy "build/datalog-facts.csv"))
+                (datalog.sort (map (/. F [copy | (tl F)]) (value dt.file-facts))))
+      (dt.raises "a tab in a tab-separated file" "cannot hold" (freeze (datalog.write-facts Db copy "build/datalog-facts.tsv")))
+      (let Plain [(hd (value dt.file-facts)) (hd (tl (value dt.file-facts))) (hd (reverse (value dt.file-facts)))]
+        (do (datalog.write-facts (datalog.run dt.files Plain) copy "build/datalog-facts.tsv")
+            (dt.check "a tab-separated file read" (datalog.sort (datalog.read-facts dt.files copy "build/datalog-facts.tsv"))
+                      (datalog.sort (map (/. F [copy | (tl F)]) Plain)))))))
+(define dt.write-file
+  Path Text -> (let S (open Path out) (do (pr Text S) (close S) Path)))
+(dt.check "lines with returns and gaps" (datalog.read-facts dt.files row (dt.write-file "build/datalog-facts.tsv" "e	x	5	[pt 1 1]c#13;c#10;c#10;f	y	6	[no-point]"))
+          [[row e "x" 5 [pt 1 1]] [row f "y" 6 [no-point]]])
+(dt.raises "a file's field count" "line 2, has 3 fields"
+  (freeze (datalog.read-facts dt.files row (dt.write-file "build/datalog-facts.tsv" "e	x	5	[pt 1 1]c#10;f	y	6"))))
+(dt.raises "a file's integer" "line 1: c#34;5xc#34; is not an integer"
+  (freeze (datalog.read-facts dt.files row (dt.write-file "build/datalog-facts.tsv" "e	x	5x	[pt 1 1]"))))
+(dt.raises "a file's record" "is not of type point"
+  (freeze (datalog.read-facts dt.files row (dt.write-file "build/datalog-facts.tsv" "e	x	5	[pt 1]"))))
+(dt.raises "a file's relation" "no relation nope" (freeze (datalog.read-facts dt.files nope "build/datalog-facts.tsv")))
+
 \* Queries by demand give what a whole run would, and compute less. *\
 (define dt.query
   Label Name Facts Pattern

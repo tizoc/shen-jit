@@ -38,6 +38,8 @@ false
 | `(datalog.add Db Facts)` | The database with these facts added and what follows from them, changed in place and given back |
 | `(datalog.remove Db Facts)` | The same with these facts removed, and what no longer follows; a fact it does not have is no change |
 | `(datalog.tuples Db Relation)`, `(datalog.sorted Db Relation)` | Its tuples as lists, in no particular order or sorted |
+| `(datalog.read-facts Name Relation Path)` | The facts of a relation in a file, a line each, its fields apart by tabs, or by commas if the path ends in `.csv` |
+| `(datalog.write-facts Db Relation Path)` | Writes a relation's tuples so, in no particular order, and gives how many |
 | `(datalog.count Db Relation)` | How many tuples it has |
 | `(datalog.holds? Db [Relation Value ...])` | Whether a tuple is there |
 | `(datalog.ask Db (Relation Term ...))` | The tuples that match, in no particular order, with variables, constants and `_` |
@@ -144,4 +146,8 @@ With nodes `a` and `b`, an edge from `a` to `b` and costs 3 and 5 for `a`, `degr
   on. It gains most when the constants select a small part, and little when what they reach is most of a relation, as
   `(path X c)` is when nearly every node reaches `c`. Each query runs on its facts afresh: for many queries over the same
   facts, a run and `datalog.ask` may cost less.
+- **Fact files:** each field is read as its column's type says, an integer, a symbol, a string as it is or a record as Shen reads it,
+  `[pt 1 2]`, and one that does not fit raises, naming the file and line. A `.csv` file quotes a field as RFC 4180 does, so it can
+  hold commas, quotes and line breaks; a tab-separated one cannot hold a tab or a line break, and writing one raises. Blank lines
+  are skipped, and a line may end in a carriage return.
 - **Saving:** a program saved with `--save` runs in the saved image.

@@ -2052,6 +2052,23 @@ Integer `/` and `%`, truncating toward zero as C and Soufflé do, `band`, `bor`,
 - **Demand** computes an equivalence whole, as it does what is negated: a copy of it would not be closed.
 - **Checked:** fixtures with facts, rules into an equivalence, congruence closure through one, adds and removals and demand queries, and generated programs that sometimes declare a relation of two columns of one type an equivalence, 31 of 300, against the reference, which adds the three rules, and SWI-Prolog, given the same rules. Planted, pairs added one way fail 283 checks, no reflexive pair 311, only the first new tuple joined 257, demand copying an equivalence 1, and members or roots of the smaller class left behind raise.
 
+### The order of the gaps, and fact files (2026-11-08, Apple M3 Max, against Soufflé 2.5)
+
+- **Reordered:** choice and subsumption, which keep one tuple per key, lattices, which keep the least upper bound per key, and deleting and rederiving all need a tuple to be replaced or deleted, where storage only grows. They come later and together, so that one decision about storage serves all three; fact files, provenance and index sharing do not depend on it and come first.
+
+`(datalog.read-facts Name Rel Path)` and `(datalog.write-facts Db Rel Path)`: a line a tuple, fields apart by tabs, or by commas with RFC 4180's quotes for a `.csv` path, each field read as its column's type says, records as Shen reads them. About 120 lines of code.
+
+| ms | Ours | Soufflé compiled |
+| --- | --- | --- |
+| Reading 1,388,324 lines of two integers, 12 MB | 163, and 171 to load | 309, loading included |
+| Writing them | 455 | |
+| The kernel's 4,730 calls, two symbols, read and written | 1.2, 4.5 | |
+
+- **Fields are byte ranges until their type is known:** integers are parsed from the bytes and only symbols, strings and records make a string. Making a string for each field and parsing integers from it took 457 ms to read the same file.
+- **Writing is bounded by the runtime:** `pr` writes a string a byte at a time, finding its end by an error caught at each character, and `write-byte` costs about 19 ns a byte; joining lines into chunks before writing changed nothing. Building the lines takes about a third of the time. A primitive that writes a buffer at once would remove the rest; the I/O library writes through the FFI, which Datalog does not load.
+- **A tab-separated file refuses what it cannot hold:** a tab or a line break in a field raises when written, as reading it back would split the line.
+- **Checked:** round trips of symbols, strings with commas, quotes and tabs, integers at both ends of 32 bits and records of two constructors, in both formats; carriage returns and blank lines; and errors naming the line for a wrong field count, a bad integer, a record of the wrong shape and an unknown relation.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.
