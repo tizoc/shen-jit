@@ -2665,6 +2665,24 @@ The union-find kept three dictionaries, a value's root, a root's members and a r
 - **Against Soufflé's eqrel,** 1.1, 1.2 and 1.4 ms on the three closures alone, from the same machine's earlier entry: ours now takes less on all three, where pairs took up to 800 times as long.
 - **Checked:** the Datalog tests, with the equivalence fixtures, the generated programs and SWI-Prolog. Planted, the smaller class's values left pointing at their emptied cell and an emptied cell keeping its size raise, the changed flag never cleared fails 87 checks, and a new value joining an old class not counted as a change 27.
 
+### Kernels on x86-64 (2026-11-08, Ryzen 5 5600X in a Hyper-V guest, gcc 9.4, against an Apple M3 Max)
+
+`make bench-datalog`'s rows on both machines, two rounds each, as kernels and with them turned off, so as KL, pinned to one core on the Ryzen. SLJIT gives x86-64 13 integer registers, of which the JIT keeps 5 scratch and 6 saved, which leaves word registers 2 machine registers; the others live in the native frame. On arm64 they have 11.
+
+| KL time over kernel time | M3 | Ryzen |
+| --- | --- | --- |
+| Closure, sparse | 1.4 | 1.3 |
+| Closure, dense | 1.6 | 1.5 |
+| Nonlinear closure | 2.5 | 2.0 |
+| Same generation | 1.8 | 1.7 |
+| Skewed join | 1.4 | 1.3 |
+| The kernel's call graph | 1.4 | 1.3 |
+| Points-to, small and large, both orders | 1.5 to 1.6 | 1.5 to 1.6 |
+
+- **Kernels gain there too,** 10 to 25% less than on the M3, most on the nonlinear closure. Whether the words in the frame are that difference was not measured: the guest has no hardware counters.
+- **The Ryzen takes 1.4 to 2 times the M3's time,** as kernels and as KL alike: sparse closure 153 against 82 ms, points-to large 547 against 394.
+- **Not done:** more machine registers for kernels on x86-64. A kernel calls nothing and catches nothing, so the saved registers the JIT keeps for loop slots and calls might go to words; that is a change to how the JIT assigns places, for at most the 10 to 25% above, and only on x86-64.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.
