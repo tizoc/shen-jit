@@ -29,13 +29,38 @@ def run(args, *, success=True, **kwargs):
     return result
 
 
-def file(path, bad=False):
-    return dict(kind='file', path=path, byte_count=10000, syntax_error=bad)
+def file(path, bad=False, *, version=1):
+    record = dict(kind='file', path=path, byte_count=10000, syntax_error=bad)
+    if version != 1:
+        record['schema_version'] = version
+    return record
 
 
 def site(kind, path, name, owner, at, bad=False):
     return dict(kind=kind, path=path, name=name, container=owner, start_byte=at,
                 end_byte=at + len(name.encode()), row=0, column=at, syntax_error=bad)
+
+
+def definition(path, name, at, linkage='external'):
+    return {**site('definition', path, name, name, at), 'container_byte': at, 'linkage': linkage}
+
+
+def call(path, name, owner, owner_byte, at):
+    return {**site('call', path, name, owner, at), 'container_byte': owner_byte}
+
+
+def linkage_fixture():
+    return [file('a.c', version=2), file('b.c', version=2), file('c.c', version=2), file('legacy.c'),
+            definition('a.c', 'twice', 0), definition('a.c', 'twice', 20),
+            definition('a.c', 'private', 40, 'internal'), definition('a.c', 'shared', 60, 'internal'),
+            definition('a.c', 'nested', 80, 'unknown'), definition('b.c', 'private', 0, 'internal'),
+            definition('b.c', 'shared', 20), definition('c.c', 'entry', 0),
+            site('definition', 'legacy.c', 'old', 'old', 0),
+            call('a.c', 'private', 'twice', 0, 100), call('a.c', 'shared', 'twice', 20, 120),
+            call('a.c', 'nested', 'twice', 0, 140), call('c.c', 'private', 'entry', 0, 100),
+            call('c.c', 'shared', 'entry', 0, 120), call('c.c', 'nested', 'entry', 0, 140),
+            call('c.c', 'twice', 'entry', 0, 160), call('c.c', 'old', 'entry', 0, 180),
+            call('c.c', 'shared', '', None, 200), site('call', 'legacy.c', 'shared', 'old', 100)]
 
 
 def fixture():
@@ -62,28 +87,33 @@ def location(value):
 
 def expected(records):
     excluded = {r['path'] for r in records if r['kind'] == 'file' and r['syntax_error']}
-    by_local, by_name = defaultdict(list), defaultdict(list)
+    versions = {r['path']: r.get('schema_version', 1) for r in records if r['kind'] == 'file'}
+    by_local, visible, linkage = defaultdict(list), defaultdict(list), {}
     for r in records:
         if r['kind'] == 'definition' and r['path'] not in excluded:
             fn = r['path'], r['name'], r['start_byte']
-            if fn not in by_name[r['name']]:
-                by_name[r['name']].append(fn)
+            if fn not in linkage:
+                linkage[fn] = r.get('linkage', 'legacy')
                 by_local[r['path'], r['name']].append(fn)
-    nodes = {fn for group in by_name.values() for fn in group}
+                if linkage[fn] in ['external', 'legacy']:
+                    visible[r['name']].append(fn)
+    nodes = set(linkage)
     resolved, unresolved, ambiguous, unowned = set(), set(), set(), set()
     for r in records:
         if r['kind'] != 'call' or r['path'] in excluded:
             continue
         loc = r['path'], r['start_byte'], r['end_byte'], r['row'], r['column']
         owners = by_local[r['path'], r['container']]
+        if versions[r['path']] == 2:
+            owners = [fn for fn in owners if fn[2] == r['container_byte']]
         if len(owners) != 1:
             unowned.add((loc, r['container'], r['name'], len(owners)))
             continue
         local = by_local[r['path'], r['name']]
-        candidates = local or by_name[r['name']]
-        if len(candidates) == 1:
+        candidates = local or visible[r['name']]
+        if len(candidates) == 1 and linkage[candidates[0]] != 'unknown':
             resolved.add((loc, owners[0], candidates[0]))
-        elif candidates:
+        elif len(candidates) > 1:
             ambiguous.add((loc, owners[0], r['name'], len(candidates), 'local' if local else 'global'))
         else:
             unresolved.add((loc, owners[0], r['name']))
@@ -94,14 +124,18 @@ def expected(records):
 def check_report(rows, records):
     oracle = expected(records)
     summary = rows[0]
-    assert summary['kind'] == 'summary' and summary['matching'] == 'same-file-then-unique-global-name'
+    assert summary['kind'] == 'summary' and summary['matching'] == 'caller-id-local-then-visible-name'
     assert summary['syntax_errors'] == 'exclude-files'
     assert summary['files'] == sum(r['kind'] == 'file' for r in records)
+    assert summary['legacy_files'] == sum(r['kind'] == 'file' and 'schema_version' not in r for r in records)
     assert summary['functions'] == len(oracle['nodes'])
     assert summary['calls'] == sum(r['kind'] == 'call' and not r['syntax_error'] for r in records)
     assert summary['calls'] == sum(summary[k] for k in ['resolved_calls', 'unresolved_calls', 'ambiguous_calls', 'unowned_calls'])
     assert {r['file'] for r in rows if r['kind'] == 'excluded_file'} == oracle['excluded']
     assert {function(r['function']) for r in rows if r['kind'] == 'function'} == oracle['nodes']
+    assert {function(r['function']): r['linkage'] for r in rows if r['kind'] == 'function'} == {
+        (r['path'], r['name'], r['start_byte']): r.get('linkage', 'legacy') for r in records
+        if r['kind'] == 'definition' and r['path'] not in oracle['excluded']}
     assert {(function(r['from']), function(r['to'])) for r in rows if r['kind'] == 'edge'} == oracle['edges']
     assert {(r['from'], r['to']) for r in rows if r['kind'] == 'file_edge'} == {
         (a[0], b[0]) for a, b in oracle['edges'] if a[0] != b[0]}
@@ -135,11 +169,69 @@ def reachable(edges, root):
     return seen
 
 
+def linkage_checks(program, source, output, rng):
+    records = linkage_fixture()
+    write(source, records)
+    run([program, source, output])
+    oracle = check_report(read(output), records)
+    assert (('a.c', 'twice', 0), ('a.c', 'private', 40)) in oracle['edges']
+    assert (('a.c', 'twice', 20), ('a.c', 'shared', 60)) in oracle['edges']
+    assert (('c.c', 'entry', 0), ('b.c', 'shared', 20)) in oracle['edges']
+    assert len(oracle['unresolved']) == 3 and len(oracle['unowned']) == 1
+    checks = 1
+    for at in [0, 20]:
+        for mode in ['reach', 'impact']:
+            run([program, source, output, '--' + mode, 'a.c', 'twice', at])
+            rows = read(output)
+            check_report(rows, records)
+            edges = oracle['edges'] if mode == 'reach' else {(b, a) for a, b in oracle['edges']}
+            assert {function(r['function']) for r in rows if r['kind'] == mode} == reachable(edges, ('a.c', 'twice', at))
+            checks += 1
+    original = output.read_bytes()
+    for options in [['--reach', 'a.c', 'twice'], ['--reach', 'a.c', 'twice', '1'],
+                    ['--reach', 'a.c', 'twice', '-1'], ['--reach', 'a.c', 'twice', 'null']]:
+        run([program, source, output, *options], success=False)
+        assert output.read_bytes() == original
+        checks += 1
+    header, fn, invocation = file('x.c', version=2), definition('x.c', 'f', 0), call('x.c', 'f', 'f', 0, 20)
+    invalid = [[{**header, 'schema_version': version}, fn, invocation] for version in [0, 1, 3, None, True]]
+    invalid += [[header, {**fn, 'container_byte': byte}, invocation] for byte in [None, -1, 1, True]]
+    invalid += [[header, {**fn, 'linkage': linkage}, invocation] for linkage in ['legacy', 'static', None]]
+    invalid += [[header, fn, {**invocation, 'container_byte': byte}] for byte in [None, -1, 1, 10000, True]]
+    invalid += [[header, fn, {**invocation, 'container': owner}] for owner in ['', 'other']]
+    invalid += [[header, fn, {k: v for k, v in invocation.items() if k != 'container_byte'}],
+                [header, {k: v for k, v in fn.items() if k != 'linkage'}, invocation],
+                [header, {**fn, 'syntax_error': True}, invocation],
+                [{**header, 'syntax_error': True}, {**fn, 'syntax_error': True},
+                 {**invocation, 'syntax_error': True, 'container_byte': 1}]]
+    for broken in invalid:
+        write(source, broken)
+        run([program, source, output], success=False)
+        assert output.read_bytes() == original
+        assert not any(p.name.startswith('.shen-') for p in output.parent.iterdir())
+        checks += 1
+    # Vary linkage and duplicate names independently of the Datalog evaluator.
+    for _ in range(6):
+        headers = [file(f'f{k}.c', version=2) for k in range(4)]
+        defs = [definition(f'f{k}.c', f'n{rng.randrange(5)}', 10 * j,
+                           rng.choice(['internal', 'external', 'unknown'])) for k in range(4) for j in range(4)]
+        calls = []
+        for j in range(20):
+            owner = rng.choice(defs)
+            calls.append(call(owner['path'], f'n{rng.randrange(7)}', owner['name'], owner['start_byte'], 100 + j * 20))
+        generated = headers + defs + calls
+        write(source, generated)
+        run([program, source, output])
+        check_report(read(output), generated)
+        checks += 1
+    return checks
+
+
 def memory(executable, adapter, directory):
     source, output = directory / 'chain.ndjson', directory / 'chain-report.ndjson'
-    records = [dict(kind='file', path='chain.c', byte_count=1000000, syntax_error=False)]
-    records += [site('definition', 'chain.c', f'n{i:04}', f'n{i:04}', i * 10) for i in range(1000)]
-    records += [site('call', 'chain.c', f'n{i+1:04}', f'n{i:04}', 100000 + i * 10) for i in range(999)]
+    records = [dict(kind='file', path='chain.c', byte_count=1000000, syntax_error=False, schema_version=2)]
+    records += [definition('chain.c', f'n{i:04}', i * 10) for i in range(1000)]
+    records += [call('chain.c', f'n{i+1:04}', f'n{i:04}', i * 10, 100000 + i * 10) for i in range(999)]
     write(source, records)
     argv = '[' + ' '.join(map(string, ['source-deps', source, output, '--reach', 'chain.c', 'n0000'])) + ']'
     result = run([executable, 'eval', '-s', 'fs.*adapter-files*', '[' + string(adapter) + ']',
@@ -222,6 +314,7 @@ def main():
         run([program, source, output])
         check_report(read(output), generated)
         checks += 1
+    checks += linkage_checks(program, source, output, rng)
     write(source, records)
     run([program, source, output])
     original = output.read_bytes()

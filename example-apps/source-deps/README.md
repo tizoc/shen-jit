@@ -32,32 +32,43 @@ The saved executable still needs the filesystem adapter at its configured paths.
 
 ```text
 source-deps FACTS OUTPUT
-source-deps FACTS OUTPUT --reach FILE NAME
-source-deps FACTS OUTPUT --impact FILE NAME
+source-deps FACTS OUTPUT --reach FILE NAME [BYTE]
+source-deps FACTS OUTPUT --impact FILE NAME [BYTE]
 ```
 
 `FILE` is the exact `path` string in the facts: the analyser does not reopen source files or
 canonicalize those labels. The extractor normally emits absolute paths. `NAME` is the function name.
 A selector must identify exactly one usable definition; otherwise the command fails and preserves
-the old output. Reports keep `(file, name, definition byte)` as function identity, so equal names
+the old output. Supply the optional decimal `BYTE` to select one of several definitions with the same
+file/name. Reports keep `(file, name, definition byte)` as function identity, so equal names
 in different files or at different definition offsets remain separate.
 
 Matching is a **syntactic policy**, recorded in each report:
 
-1. A call's enclosing name must identify exactly one definition in its file. Missing, unscoped or
-   ambiguous owners become `unowned_call` records.
-2. Prefer a unique target definition in the caller's file. Multiple definitions there are ambiguous.
-3. With no same-file target, use a unique definition with that name across the usable input.
-   Multiple candidates are `ambiguous_call`; no candidate is `unresolved_call`.
+1. A version 2 call identifies its enclosing definition by file, name and `container_byte`, even when
+   that name occurs twice. Unscoped calls become `unowned_call` records. A named caller referring to
+   a missing or differently named definition is malformed input and aborts the analysis.
+2. Prefer a unique target definition in the caller's file, with `internal` or `external` linkage.
+   Multiple definitions there are ambiguous; a unique `unknown` target remains unresolved.
+3. With no same-file target, consider only `external` definitions with that name across usable input.
+   Multiple candidates are `ambiguous_call`; no candidate is `unresolved_call`. Private or unknown
+   definitions never become cross-file candidates.
+
+Old, unversioned exports are accepted as version 1. Their callers use a unique same-file enclosing
+name; missing or ambiguous owners become `unowned_call`. Their definitions carry `legacy` linkage
+and remain eligible for local and cross-file matching because visibility was not exported.
+The summary counts `legacy_files` so this weaker policy stays visible. Different files may use
+different schema versions.
 
 Files marked `syntax_error: true` are excluded as a whole and listed as `excluded_file`. Their
 definitions do not become candidates. This avoids treating a partial parse as complete input.
 An unresolved name might be external, excluded, indirect or missing from the export; it is not
 automatically classified as an external C symbol.
 
-The policy does not implement C linkage, preprocessing, local variable shadowing, indirect calls
-or nested-function scope. In particular, "global" in a diagnostic means the whole fact input,
-not C external linkage. Inspect ambiguous/unresolved/excluded records when interpreting a result.
+The exporter supplies conservative linkage hints, including inherited static prototypes. The policy
+does not implement full C linkage, preprocessing, local variable shadowing, indirect calls or
+nested-function scope. In particular, "global" in a diagnostic means eligible names across the fact
+input. Inspect linkage and ambiguous/unresolved/excluded records when interpreting a result.
 
 `--reach` follows outgoing matched calls; `--impact` follows them backwards to callers. Both mean
 one or more edges: the selected function appears in its own answers only if a cycle reaches it.
@@ -70,10 +81,14 @@ Output is NDJSON, with a `summary`, then deterministically sorted `excluded_file
 `edge`, `file_edge`, `resolved_call`, `unresolved_call`, `ambiguous_call` and `unowned_call` records.
 A query adds a `query` record and sorted `reach` or `impact` answers. Edges are sets: repeated calls
 at different sites produce separate call records but one graph edge. Function objects have `file`,
-`name` and `definition_byte`; site objects retain byte ranges and zero-based byte row/column positions.
+`name` and `definition_byte`. Function records also expose `linkage` (`internal`, `external`, `unknown`
+or `legacy`); site objects retain byte ranges and zero-based byte row/column positions. The summary's
+`matching` value is `caller-id-local-then-visible-name`.
 
 The reader validates the extractor's exact record fields, integer ranges, text, source ranges,
-definition/container agreement and per-file syntax flags. Each file record must precede its sites.
+definition/container agreement, versioned linkage/caller fields and per-file syntax flags. Each file
+record must precede its sites. Named version 2 caller references are validated against all raw
+definitions, including syntax-error files, before output begins. Unsupported schema versions fail.
 Duplicate file records and conflicting records at one site are rejected, preventing accidental
 merging of two snapshots of a file. Identical repeated site records deduplicate. Blank lines,
 CRLF and a final record without LF are accepted. A malformed JSON value, invalid UTF-8 or an I/O
@@ -103,6 +118,7 @@ make test-tree-sitter
 ```
 
 The first two check the model against the naive evaluator, independent Python name matching/BFS,
-chunk splits, limits, ambiguous names, cycles, failed replacement, Unicode paths, saved executables
-and images/GC. Static builds run the managed reader/model checks and explicitly skip file operations.
-The Tree-sitter suite also extracts real C files and checks the resulting Datalog graph and queries.
+chunk splits, limits, ambiguous names, private/unknown linkage, exact caller identities, cycles,
+mixed/legacy exports, failed replacement, Unicode paths, saved executables and images/GC. Static builds
+run the managed reader/model checks and explicitly skip file operations. The Tree-sitter suite also
+checks real C linkage hints, inherited static prototypes, declarators and graph queries.

@@ -189,7 +189,8 @@ the query, starting at zero. A language error's code records its rejected ABI wh
 
 [The source-fact extractor](../example-apps/source-facts/README.md) walks C headers/sources through
 the filesystem library, reads one bounded file at a time through our own I/O, and emits NDJSON for
-files, function definitions and direct calls. Output uses bounded buffering and safe filesystem
+files, function definitions and direct calls, with enclosing-definition identity and conservative
+linkage hints. Output uses bounded buffering and safe filesystem
 replacement. This is a starting fact source for Datalog or repository tooling; it does not resolve
 C names, preprocessing, indirect calls or dependencies semantically.
 [Source facts in Datalog](../example-apps/source-deps/README.md) consumes that export and adds

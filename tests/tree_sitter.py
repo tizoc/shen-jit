@@ -198,6 +198,70 @@ def source_analysis(args, grammar, fs_adapter, root):
     print('4 passed, 0 failed (C source → Tree-sitter facts → Datalog reach and impact)', flush=True)
 
 
+def source_linkage(args, grammar, fs_adapter, root):
+    directory = root / 'linkage'
+    directory.mkdir()
+    code = ('static int inherited(void), other(void);\n'
+            'static int *pointer(void);\n'
+            'static int (grouped)(void);\n'
+            'int inherited(void) { return 1; }\n'
+            'extern int other(void) { return 2; }\n'
+            'int *pointer(void) { return 0; }\n'
+            'int (grouped)(void) { return 0; }\n'
+            'static int hidden(void) { return 3; }\n'
+            'int shared(void) { return 4; }\n'
+            '#if FLAG\nint branch(void) { return inherited(); }\n'
+            '#else\nint branch(void) { return other(); }\n#endif\n'
+            'int wrap(void) { int nested(void) { return hidden(); } return nested(); }\n')
+    (directory / 'a.c').write_text(code, encoding='utf-8')
+    (directory / 'b.c').write_text('static int shared(void) { return 0; }\n'
+                                 'int entry(void) { return inherited()+other()+pointer()+grouped()+hidden()+branch(); }\n',
+                                 encoding='utf-8')
+    (directory / 'c.c').write_text('int outside(void) { return shared(); }\n', encoding='utf-8')
+    facts, report = root / 'linkage-facts.ndjson', root / 'linkage-report.ndjson'
+    adapter_files = args[args.index('treesitter.*adapter-files*') + 1]
+    argv = '[' + ' '.join(map(string, ['source-facts', grammar, directory, facts])) + ']'
+    run(args[:2] + ['-s', 'treesitter.*adapter-files*', adapter_files,
+                   '-s', 'fs.*adapter-files*', '[' + string(fs_adapter) + ']',
+                   '-s', '*argv*', argv, '-l', 'example-apps/source-facts/main.shen'])
+    records = [json.loads(line) for line in facts.read_text(encoding='utf-8').splitlines()]
+    assert all(r['schema_version'] == 2 and not r['syntax_error'] for r in records if r['kind'] == 'file')
+    paths = {Path(r['path']).name: r['path'] for r in records if r['kind'] == 'file'}
+    definitions = [r for r in records if r['kind'] == 'definition']
+    for r in definitions:
+        assert r['container_byte'] == r['start_byte'] and r['container'] == r['name']
+        if r['path'] == paths['a.c']:
+            expected = 'internal' if r['name'] in ['inherited', 'other', 'pointer', 'grouped', 'hidden'] else (
+                'unknown' if r['name'] == 'nested' else 'external')
+        else:
+            expected = 'internal' if r['name'] == 'shared' else 'external'
+        assert r['linkage'] == expected, r
+    branches = [r['start_byte'] for r in definitions if r['name'] == 'branch']
+    assert len(branches) == 2
+    branch_calls = [r for r in records if r.get('container') == 'branch' and r['kind'] == 'call']
+    assert {(r['name'], r['container_byte']) for r in branch_calls} == {
+        ('inherited', branches[0]), ('other', branches[1])}
+    for r in records:
+        if r['kind'] == 'call':
+            assert any(d['path'] == r['path'] and d['name'] == r['container'] and
+                       d['start_byte'] == r['container_byte'] for d in definitions), r
+    for byte in [None, *branches]:
+        query = [] if byte is None else ['--reach', paths['a.c'], 'branch', byte]
+        argv = '[' + ' '.join(map(string, ['source-deps', facts, report, *query])) + ']'
+        run(args[:2] + ['-s', 'fs.*adapter-files*', '[' + string(fs_adapter) + ']',
+                       '-s', '*argv*', argv, '-l', 'example-apps/source-deps/main.shen'])
+        rows = [json.loads(line) for line in report.read_text(encoding='utf-8').splitlines()]
+        summary = rows[0]
+        assert summary['functions'] == 13 and summary['legacy_files'] == 0
+        assert summary['resolved_calls'] == 4 and summary['unresolved_calls'] == 6
+        assert summary['ambiguous_calls'] == 1 and summary['unowned_calls'] == 0
+        if byte is not None:
+            target = 'inherited' if byte == branches[0] else 'other'
+            assert [r['function']['name'] for r in rows if r['kind'] == 'reach'] == [target]
+    print('6 passed, 0 failed (private/prototype linkage, parenthesized declarators, exact callers and byte roots)',
+          flush=True)
+
+
 def main():
     executable, adapter, grammar, fixture, native_oracle, fs_adapter = [Path(p).resolve() for p in sys.argv[1:7]]
     args = [executable, 'eval', '-l', 'lib/ffi.shen', '-l', 'lib/buffer.shen',
@@ -220,6 +284,7 @@ def main():
         documentation(args, grammar, root)
         application(args, grammar, fs_adapter, root)
         source_analysis(args, grammar, fs_adapter, root)
+        source_linkage(args, grammar, fs_adapter, root)
 
 
 if __name__ == '__main__':

@@ -46,6 +46,16 @@
   false -> 0
   _ -> (error "syntax_error must be boolean"))
 
+(define source-deps.linkage
+  "internal" -> internal
+  "external" -> external
+  "unknown" -> unknown
+  _ -> (error "unsupported linkage hint"))
+
+(define source-deps.owner-byte
+  null -> -1
+  Value -> (source-deps.uint Value))
+
 \\ State: facts reversed, file metadata, canonical names, seen sites, bytes, records, line, builder, files.
 (define source-deps.read
   Reader Name Limits ->
@@ -132,26 +142,34 @@
 
 (define source-deps.file-record
   State Limits Members ->
-    (let _ (source-deps.keys Members ["kind" "path" "byte_count" "syntax_error"])
+    (let Version (if (element? "schema_version" (map (function hd) Members))
+                    (source-deps.uint (source-deps.member Members "schema_version")) 1)
+         _ (if (or (= Version 1) (= Version 2)) true (error "unsupported source-fact schema version"))
+         Keys ["kind" "path" "byte_count" "syntax_error"]
+         _ (source-deps.keys Members (if (= Version 2) ["schema_version" | Keys] Keys))
          Path (source-deps.text (source-deps.member Members "path") false)
          Bytes (source-deps.uint (source-deps.member Members "byte_count"))
          Error (source-deps.boolean (source-deps.member Members "syntax_error"))
          _ (if (= (source-deps.get (<-address State 1) Path) []) true
                 (error "duplicate file record: ~A" Path))
          _ (if (< (<-address State 8) (<-address Limits 3)) true (error "file count limit exceeded"))
-         _ (shen.dict-> (<-address State 1) Path (io.record [Path Bytes Error]))
+         _ (shen.dict-> (<-address State 1) Path (io.record [Path Bytes Error Version]))
          _ (address-> State 8 (+ (<-address State 8) 1))
-      (source-deps.fact State [source-file Path Bytes Error])))
+      (do (source-deps.fact State [source-file Path Bytes Error])
+          (source-deps.fact State [source-format Path Version]))))
 
 (define source-deps.site-record
   State Kind Members ->
     (let _ (if (element? Kind ["definition" "call"]) true (error "unknown fact kind ~A" Kind))
-         _ (source-deps.keys Members ["kind" "path" "name" "container" "start_byte" "end_byte"
-                                    "row" "column" "syntax_error"])
          Path (source-deps.text (source-deps.member Members "path") false)
          Meta (source-deps.get (<-address State 1) Path)
          _ (if (= Meta []) (error "file record must precede its sites: ~A" Path) true)
          Path (<-address Meta 0)
+         Version (<-address Meta 3)
+         Keys ["kind" "path" "name" "container" "start_byte" "end_byte" "row" "column" "syntax_error"]
+         Keys (if (= Version 1) Keys ["container_byte" | Keys])
+         Keys (if (and (= Version 2) (= Kind "definition")) ["linkage" | Keys] Keys)
+         _ (source-deps.keys Members Keys)
          Name (source-deps.intern-text (<-address State 2)
                 (source-deps.text (source-deps.member Members "name") false))
          Owner (source-deps.intern-text (<-address State 2)
@@ -161,14 +179,26 @@
          Row (source-deps.uint (source-deps.member Members "row"))
          Column (source-deps.uint (source-deps.member Members "column"))
          Error (source-deps.boolean (source-deps.member Members "syntax_error"))
+         OwnerByte (if (= Version 1) -2
+                       (source-deps.owner-byte (source-deps.member Members "container_byte")))
+         Linkage (if (= Version 1) legacy
+                     (if (= Kind "definition")
+                         (source-deps.linkage (source-deps.member Members "linkage")) unknown))
          _ (if (and (<= Start End) (<= End (<-address Meta 1))
                     (= (- End Start) (shen-jit.bytes-length (shen-jit.string->bytes Name)))
                     (<= Row Start) (<= Column (- Start Row)) (or (> Row 0) (= Column Start))
                     (= Error (<-address Meta 2))) true (error "inconsistent site range or syntax_error"))
          _ (if (and (= Kind "definition") (not (= Name Owner)))
                (error "definition container must be its name") true)
+         _ (if (or (= Version 1)
+                   (and (= Kind "definition") (= OwnerByte Start))
+                   (and (= Kind "call")
+                        (or (and (= Owner "") (= OwnerByte -1))
+                            (and (not (= Owner "")) (>= OwnerByte 0) (< OwnerByte (<-address Meta 1))))))
+               true (error "inconsistent caller identity"))
          Site [at Path Start End Row Column]
-         Fact (if (= Kind "definition") [source-definition Site Name] [source-call Site Owner Name])
+         Fact (if (= Kind "definition") [source-definition Site Name Linkage]
+                  [source-call Site Owner OwnerByte Name])
          Key [Kind Path Start]
          Previous (source-deps.get (<-address State 3) Key)
       (cond ((= Previous [])

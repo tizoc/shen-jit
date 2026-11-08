@@ -2,7 +2,11 @@
   [] -> []
   ["--reach" File Name] -> [reach (source-deps.text File false) (source-deps.text Name false)]
   ["--impact" File Name] -> [impact (source-deps.text File false) (source-deps.text Name false)]
-  _ -> (error "expected --reach FILE NAME or --impact FILE NAME"))
+  ["--reach" File Name Byte] ->
+    [reach (source-deps.text File false) (source-deps.text Name false) (source-deps.uint (json.parse Byte []))]
+  ["--impact" File Name Byte] ->
+    [impact (source-deps.text File false) (source-deps.text Name false) (source-deps.uint (json.parse Byte []))]
+  _ -> (error "expected --reach FILE NAME [BYTE] or --impact FILE NAME [BYTE]"))
 
 (define source-deps.run
   Input Output Query Limits ->
@@ -20,7 +24,7 @@
   [_ Input Output | Options] ->
     (source-deps.finish
       (source-deps.run Input Output (source-deps.query-option Options) (source-deps.limits)))
-  _ -> (error "usage: source-deps FACTS OUTPUT [--reach FILE NAME | --impact FILE NAME]"))
+  _ -> (error "usage: source-deps FACTS OUTPUT [--reach FILE NAME [BYTE] | --impact FILE NAME [BYTE]]"))
 
 (define source-deps.entry
   -> (trap-error (source-deps.main (value *argv*))

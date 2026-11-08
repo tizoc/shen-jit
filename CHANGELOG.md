@@ -11,6 +11,9 @@ All notable changes to this project are documented in this file. The format is b
   identity by file/name/definition byte, explicit ambiguous/unresolved calls and syntax-error exclusions.
   Bounded reports include matched call/file edges and optional reachability or reverse impact queries,
   written through our I/O and safe filesystem replacement.
+- Version 2 C source facts identify exact enclosing definitions and carry conservative linkage hints,
+  including inherited static prototypes. The Datalog application excludes private cross-file targets,
+  accepts legacy exports with explicit reporting, and allows byte offsets to select duplicate names.
 - Optional subprocess and pipeline libraries, `lib/process.shen` and `lib/process-io.shen`: explicit argv,
   environment/cwd, owned children, bounded waits, cancellable pipes, concurrent communication, streaming
   sinks, output limits and process-group/job cleanup. `make process` builds their adapter. The

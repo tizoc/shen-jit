@@ -25,8 +25,9 @@ shen-jit eval -l lib/native.shen -l lib/datalog.shen -l deps.shen
 ```
 
 [Source facts in Datalog](../example-apps/source-deps/README.md) is a complete application over
-Tree-sitter's C source export: bounded NDJSON input/output through our I/O, file-scoped call matching,
-explicit ambiguity/exclusion diagnostics, and single-root reachability and reverse impact queries.
+Tree-sitter's C source export: bounded NDJSON input/output through our I/O, exact caller identity,
+linkage-aware name matching, explicit ambiguity/exclusion diagnostics, and single-root reachability
+and reverse impact queries.
 
 ```text
 ((a b) (a c) (b c) (x x) (x y) (y x) (y y))

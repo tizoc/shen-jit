@@ -7,17 +7,53 @@
 (define source-facts.declarator-node
   _ 0 -> 0
   T ID ->
-    (if (= (treesitter.kind T ID) "identifier")
-        ID
-        (source-facts.declarator-node T (treesitter.child-by-field T ID "declarator"))))
+    (let Kind (treesitter.kind T ID)
+      (cond ((= Kind "identifier") ID)
+            ((= Kind "parenthesized_declarator")
+              (source-facts.declarator-node T (source-facts.first-named T (treesitter.children T ID))))
+            (true (source-facts.declarator-node T (treesitter.child-by-field T ID "declarator"))))))
 
-(define source-facts.container
-  _ 0 -> ""
+(define source-facts.first-named
+  _ [] -> 0
+  T [ID | Rest] -> (if (treesitter.named? T ID) ID (source-facts.first-named T Rest)))
+
+(define source-facts.enclosing-function
+  _ 0 -> 0
   T ID ->
-    (if (= (treesitter.kind T ID) "function_definition")
-        (let Name (source-facts.declarator-node T (treesitter.child-by-field T ID "declarator"))
-          (if (= Name 0) "" (treesitter.text T Name)))
-        (source-facts.container T (treesitter.parent T ID))))
+    (if (= (treesitter.kind T ID) "function_definition") ID
+        (source-facts.enclosing-function T (treesitter.parent T ID))))
+
+(define source-facts.static?
+  _ [] -> false
+  T [ID | Rest] ->
+    (or (and (= (treesitter.kind T ID) "storage_class_specifier") (= (treesitter.text T ID) "static"))
+        (source-facts.static? T Rest)))
+
+(define source-facts.static-declarators
+  _ [] Names -> Names
+  T [ID | Rest] Names ->
+    (let Name (if (= (treesitter.field T ID) "declarator") (source-facts.declarator-node T ID) 0)
+         _ (if (= Name 0) true (shen.dict-> Names (treesitter.text T Name) true))
+      (source-facts.static-declarators T Rest Names)))
+
+\\ A prior static prototype can give an otherwise unqualified definition internal linkage.
+\\ Inspect file-scope declarations across all preprocessor branches conservatively.
+(define source-facts.static-names
+  T ->
+    (treesitter.fold
+      (/. Names ID
+        (if (and (= (treesitter.kind T ID) "declaration")
+                 (= (source-facts.enclosing-function T (treesitter.parent T ID)) 0)
+                 (source-facts.static? T (treesitter.children T ID)))
+            (source-facts.static-declarators T (treesitter.children T ID) Names) Names))
+      (shen.dict 32) T))
+
+(define source-facts.linkage
+  T Definition Name StaticNames ->
+    (cond ((not (= (source-facts.enclosing-function T (treesitter.parent T Definition)) 0)) "unknown")
+          ((or (source-facts.static? T (treesitter.children T Definition))
+               (trap-error (shen.<-dict StaticNames (treesitter.text T Name)) (/. E false))) "internal")
+          (true "external")))
 
 (define source-facts.write-result
   [accepted _] -> [ok done]
@@ -37,20 +73,29 @@
                   [ok done]))))))
 
 (define source-facts.captures
-  _ _ _ _ _ At End -> [ok done] where (> At End)
-  Writer State Path T Error At End ->
+  _ _ _ _ _ _ At End -> [ok done] where (> At End)
+  Writer State Path T Error StaticNames At End ->
     (let Captured (treesitter.capture-node T At)
          Kind (treesitter.capture-name T At)
          ID (if (= Kind "definition")
                 (source-facts.declarator-node T (treesitter.child-by-field T Captured "declarator"))
                 Captured)
+         _ (if (= ID 0) (error "unsupported function declarator") true)
+         Definition (source-facts.enclosing-function T Captured)
+         Owner (if (= Definition 0) 0
+                   (source-facts.declarator-node T (treesitter.child-by-field T Definition "declarator")))
+         OwnerByte (if (= Owner 0) null (treesitter.start-byte T Owner))
          Point (treesitter.start-point T ID)
-         Fact [object ["path" Path] ["kind" Kind]
-                      ["name" (treesitter.text T ID)] ["container" (source-facts.container T ID)]
-                      ["start_byte" (treesitter.start-byte T ID)] ["end_byte" (treesitter.end-byte T ID)]
-                      ["row" (hd Point)] ["column" (hd (tl Point))] ["syntax_error" Error]]
+         Fields [["path" Path] ["kind" Kind]
+                 ["name" (treesitter.text T ID)] ["container" (if (= Owner 0) "" (treesitter.text T Owner))]
+                 ["container_byte" OwnerByte]
+                 ["start_byte" (treesitter.start-byte T ID)] ["end_byte" (treesitter.end-byte T ID)]
+                 ["row" (hd Point)] ["column" (hd (tl Point))] ["syntax_error" Error]]
+         Fact [object | (if (= Kind "definition")
+                           (append Fields [["linkage" (source-facts.linkage T Definition ID StaticNames)]])
+                           Fields)]
       (io.let-ok _ (source-facts.emit Writer State Fact)
-        (source-facts.captures Writer State Path T Error (+ At 1) End))))
+        (source-facts.captures Writer State Path T Error StaticNames (+ At 1) End))))
 
 (define source-facts.parsed
   _ _ Path [error E] ->
@@ -58,11 +103,12 @@
                            Path (treesitter.error-message E))]
   Writer State Path [ok T] ->
     (let Error (treesitter.has-error? T 1)
-         Fact [object ["path" Path] ["kind" "file"] ["syntax_error" Error]
+         Fact [object ["path" Path] ["kind" "file"] ["schema_version" 2] ["syntax_error" Error]
                       ["byte_count" (treesitter.end-byte T 1)]]
       (io.let-ok _ (source-facts.emit Writer State Fact)
         (do (address-> State 2 (+ (<-address State 2) 1))
-            (source-facts.captures Writer State Path T Error 1 (treesitter.capture-count T))))))
+            (source-facts.captures Writer State Path T Error (source-facts.static-names T)
+              1 (treesitter.capture-count T))))))
 
 (define source-facts.file
   Language Writer State Path ->

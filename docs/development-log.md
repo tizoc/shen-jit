@@ -1826,6 +1826,33 @@ execution remains CI's responsibility; no new platform ABI or instruction was in
   load. A test with a clock that advances at each reading puts the expiry between each pair in turn;
   without the fix it fails for two of its six budgets.
 
+### Caller identity and linkage hints (2026-11-08, M3 Max, macOS)
+
+- Extended the C source export to schema version 2: exact enclosing-definition name offsets and
+  conservative internal/external/unknown linkage hints. Static prototypes, including multiple and
+  pointer/parenthesized declarators, can mark a later unqualified or extern definition internal.
+  The scan honors static hints across preprocessor branches and declaration order, which can exclude
+  valid cross-file matches in mutually exclusive configurations. Nested definitions remain unknown;
+  this is deliberately smaller than a C preprocessor, scope resolver or compiler frontend.
+- Datalog uses exact caller identity, excludes private/unknown cross-file targets and leaves unknown
+  local targets unresolved. Invalid caller references abort before output replacement, including
+  references in syntax-error files. Legacy exports retain name-based ownership and eligibility,
+  exposed by the summary's legacy-file count and each function's linkage. An optional definition byte
+  selects duplicate file/name roots for reachability or impact.
+- Compared the same 20-file runtime export and 5361 records with the previous name-only policy:
+  749 edges become 455. All 294 removed edges pointed to private definitions in other files.
+  Unowned calls fall from 14 to zero, matched calls from 1379 to 740, and unresolved calls rise
+  from 404 to 1057; the same five syntax-error files remain excluded. This is a correction to the
+  syntactic policy, not evidence of complete semantic coverage. The 1000-function/999-edge version 2
+  chain still fits a 32 MiB heap cap and leaves 5201 KiB live after collection, versus 5070 KiB for
+  the earlier format. The real runtime report also fits that cap. No throughput claim is made.
+- The application passes 169 checks: 103 managed reader/model checks, independent Python graph/BFS
+  oracles, mixed/legacy formats, exact callers, visibility, invalid-reference rollback, byte selectors,
+  executables, the bounded chain and images/GC. The Tree-sitter suite adds six checks with real C
+  prototypes, private duplicate names, nested functions and preprocessor-branch callers. All 121
+  Tree-sitter checks pass. The fast tier, guide, publication scan and release-package checks pass;
+  Windows execution remains for CI.
+
 ### Source facts in Datalog (2026-11-08, M3 Max, macOS and Linux arm64)
 
 - Added `example-apps/source-deps/`, a complete Shen application reading the Tree-sitter export through

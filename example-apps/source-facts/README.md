@@ -18,10 +18,29 @@ On Windows, build/use `.dll` names. In a binary package use `sh lib/build-fs.sh 
 the generated C grammar is a separate dependency. Its entry name is `tree_sitter_c`.
 `sh tools/tree-sitter-deps.sh .deps` fetches the pinned runtime/grammar in a binary installation too.
 
-Each source file produces a `file` record with `byte_count` and `syntax_error`. Captured definitions
-and calls add `name`, enclosing function `container`, half-open `start_byte`/`end_byte`, and zero-based
-byte `row`/`column`. `path` is absolute. Pointer-returning function declarators are followed to their
-identifier. Syntax errors remain visible; a malformed file can still yield useful facts.
+Each source file produces a `file` record with `schema_version: 2`, `byte_count` and `syntax_error`.
+Captured definitions and calls add `name`, enclosing function `container`, half-open
+`start_byte`/`end_byte`, and zero-based byte `row`/`column`. `path` is absolute. Pointer-returning and
+parenthesized function declarators are followed to their identifier. Syntax errors remain visible;
+a malformed file can still yield useful facts.
+
+`container_byte` identifies the enclosing definition by its name's start byte. A definition refers
+to itself; a call outside a function has `container: ""` and `container_byte: null`. Names alone
+cannot distinguish two definitions captured from different preprocessor branches.
+
+Definitions also carry a conservative `linkage` hint:
+
+| Value | Meaning |
+| --- | --- |
+| `internal` | An explicit `static` definition, or a name appearing in a file-scope `static` declaration. |
+| `external` | An ordinary file-scope definition without those static hints. |
+| `unknown` | A nested function, whose scope this application does not resolve. |
+
+A static prototype can give a later unqualified or `extern` definition internal linkage. The
+extractor scans declarations before writing sites, including multiple declarators, and conservatively
+honors static hints across all preprocessor branches and declaration order. This can suppress a valid
+cross-file match in mutually exclusive configurations; it does not implement preprocessing or the
+full C linkage rules.
 
 The extractor processes one file at a time, with an 8 MiB file cap and the binding's node/capture/
 deadline limits. Walking visits at most 10000 entries, depth 64 and 16 MiB of names. It skips links,

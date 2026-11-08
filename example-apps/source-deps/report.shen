@@ -9,8 +9,9 @@
   Analysis ->
     (let Db (<-address Analysis 2)
          Data (<-address Analysis 1)
-      [object ["kind" "summary"] ["matching" "same-file-then-unique-global-name"]
+      [object ["kind" "summary"] ["matching" "caller-id-local-then-visible-name"]
               ["syntax_errors" "exclude-files"]
+              ["legacy_files" (datalog.count Db legacy-file)]
               ["input_records" (<-address Data 2)] ["input_bytes" (<-address Data 3)]
               ["files" (datalog.count Db source-file)] ["excluded_files" (datalog.count Db excluded-file)]
               ["input_definitions" (datalog.count Db source-definition)]
@@ -22,7 +23,9 @@
 
 (define source-deps.row
   excluded-file [File] -> [object ["kind" "excluded_file"] ["file" File] ["reason" "syntax_error"]]
-  function [Function] -> [object ["kind" "function"] ["function" (source-deps.function-value Function)]]
+  definition-linkage [File Name Byte Linkage] ->
+    [object ["kind" "function"] ["function" (source-deps.function-value [fn File Name Byte])]
+            ["linkage" (str Linkage)]]
   edge [From To] ->
     [object ["kind" "edge"] ["from" (source-deps.function-value From)] ["to" (source-deps.function-value To)]]
   file-edge [From To] -> [object ["kind" "file_edge"] ["from" From] ["to" To]]
@@ -91,7 +94,7 @@
          State (io.record [0 0])
       (io.let-ok _ (source-deps.emit Writer Limits State (source-deps.summary Analysis))
         (io.let-ok _ (source-deps.relations Writer Limits State (<-address Analysis 2)
-                      [excluded-file function edge file-edge resolved unresolved ambiguous unowned])
+                      [excluded-file definition-linkage edge file-edge resolved unresolved ambiguous unowned])
           (io.let-ok _ (source-deps.query-report Writer Limits State (<-address Analysis 4)
                         (<-address Analysis 3))
             [ok (<-address State 1)])))))
