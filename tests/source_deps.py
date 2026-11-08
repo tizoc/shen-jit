@@ -267,14 +267,17 @@ def memory(executable, adapter, directory):
 
 def image(executable, base, directory):
     path = directory / 'source-deps.img'
-    run([executable, '--save', path] + base[1:] + ['-l', 'tests/source_deps.shen'])
-    expression = '(let A (sd-test.ok (source-deps.analyze (value sd-test.data) [reach "a.c" "main"])) '
-    expression += 'Db (<-address A 2) Walk (<-address A 4) '
-    expression += '(do (shen-jit.collect) '
-    expression += '(if (and (= (datalog.count Db edge) 3) (= (datalog.count Walk reached) 3)) '
-    expression += '(output "source-deps image gc ok~%") (error "source-deps image changed"))))'
+    records = [file('a.c', version=2), file('b.c', version=2),
+               definition('a.c', 'main', 0), definition('a.c', 'helper', 10), definition('b.c', 'leaf', 0),
+               call('a.c', 'helper', 'main', 0, 100), call('a.c', 'leaf', 'helper', 10, 120),
+               call('b.c', 'main', 'leaf', 0, 100)]
+    text = ''.join(json.dumps(record) + '\n' for record in records)
+    run([executable, '--save', path] + base[1:] +
+        ['-s', 'source-image.text', string(text), '-l', 'tests/source_deps_image.shen'])
+    stress = os.environ.get('TEST_GC_STRESS', '')
+    expression = '(source-image.check ' + ('false' if stress == '1' else 'true') + ')'
     result = run([executable, 'eval', '-e', expression],
-                 env={'SHEN_JIT_IMAGE': str(path), 'SHEN_JIT_GC_STRESS': os.environ.get('TEST_GC_STRESS', ''),
+                 env={'SHEN_JIT_IMAGE': str(path), 'SHEN_JIT_GC_STRESS': stress,
                       'SHEN_JIT_SEMISPACE': '4M'})
     assert 'source-deps image gc ok' in result.stdout
     print('2 passed, 0 failed (saved facts/model and collection)', flush=True)

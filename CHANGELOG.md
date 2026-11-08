@@ -81,7 +81,6 @@ All notable changes to this project are documented in this file. The format is b
 - On arm64, a loop in code written by hand keeps the memory of eight parameters at hand, where it kept four, and gives its
   last registers to words before the bases and limits of that memory, and first to words it carries from one iteration to
   the next. Datalog's larger evaluations take 9 to 21% less time.
-
 - A read lends the backend a chunk that the endpoint keeps, where it allocated a fresh one as large as the reader's
   free space each time. Small reads into a large reader are 3 to 8 times as fast, an HTTP head takes 15 to 32% less time,
   and a JSON value read a byte at a time as it arrives 6.6 times. A custom backend's Read must not keep its chunk.
@@ -93,7 +92,6 @@ All notable changes to this project are documented in this file. The format is b
 
 - Windows command-line arguments preserve Unicode as UTF-8, including saved executables, so
   programs using the I/O library can open Unicode paths supplied as arguments.
-
 - Static Linux builds run curl's pure checks and skip its native tests before building an adapter or starting fixtures.
 
 ## [0.5] - 2026-11-07

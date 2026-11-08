@@ -1877,6 +1877,12 @@ execution remains CI's responsibility; no new platform ABI or instruction was in
 - The first Windows CI attempt reaches the source graph assertions successfully, then Python's
   CP1252 stdout rejects a Unicode arrow in the status label. The label now uses ASCII; facts and
   filesystem paths retain UTF-8 handling. This is a test-console fix rather than a data-format change.
+- Windows passes the functional suites but the saved-model reload reaches its 120-second limit
+  with a collection at every allocation. It saved the entire regression suite and reran the full
+  matching model under stress. A dedicated three-function cycle now saves the parsed facts, matching
+  database and recursive walker, with update plans warmed before saving. Normal reload updates both
+  models; every-allocation reload checks both saved states and updates the small native walker.
+  The focused image check takes about 16 seconds on the M3 Max, with the same 120-second guard.
 
 ### Configured C translation units (2026-11-08, M3 Max, macOS and Linux arm64)
 
