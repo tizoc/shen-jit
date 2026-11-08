@@ -60,6 +60,19 @@ and remain eligible for local and cross-file matching because visibility was not
 The summary counts `legacy_files` so this weaker policy stays visible. Different files may use
 different schema versions.
 
+Configured version 3 exports represent preprocessed translation units and carry file-scope function
+declarations. Their matching policy is `caller-id-local-then-declared-external`: a cross-unit match
+also requires an external declaration of that name preceding the call in the caller's preprocessed
+input. A late, internal or missing declaration blocks the global guess. Same-unit candidates still
+take precedence. These are name/declaration checks, without C type compatibility or block scope.
+See [configured extraction](../../example-apps/source-facts/README.md#configured-translation-units)
+for database requirements and toolchain limits.
+
+The reader rejects mixed raw/configured exports and different configuration labels in one input.
+Version 3 paths identify translation units; coordinates include expanded headers and refer to
+preprocessed text. `context` records expose each unit's configuration and coordinate system.
+Included header definitions remain separate in each unit; raw scans retain physical-file identities.
+
 Files marked `syntax_error: true` are excluded as a whole and listed as `excluded_file`. Their
 definitions do not become candidates. This avoids treating a partial parse as complete input.
 An unresolved name might be external, excluded, indirect or missing from the export; it is not
@@ -83,11 +96,13 @@ A query adds a `query` record and sorted `reach` or `impact` answers. Edges are 
 at different sites produce separate call records but one graph edge. Function objects have `file`,
 `name` and `definition_byte`. Function records also expose `linkage` (`internal`, `external`, `unknown`
 or `legacy`); site objects retain byte ranges and zero-based byte row/column positions. The summary's
-`matching` value is `caller-id-local-then-visible-name`.
+`matching` value is `caller-id-local-then-visible-name` for raw input. `configured_units` and
+`input_declarations` count build context. Unresolved calls include `reason`: `missing-target`,
+`unknown-scope` or `missing-external-declaration`.
 
 The reader validates the extractor's exact record fields, integer ranges, text, source ranges,
 definition/container agreement, versioned linkage/caller fields and per-file syntax flags. Each file
-record must precede its sites. Named version 2 caller references are validated against all raw
+record must precede its sites. Named version 2/3 caller references are validated against all raw
 definitions, including syntax-error files, before output begins. Unsupported schema versions fail.
 Duplicate file records and conflicting records at one site are rejected, preventing accidental
 merging of two snapshots of a file. Identical repeated site records deduplicate. Blank lines,
@@ -121,4 +136,5 @@ The first two check the model against the naive evaluator, independent Python na
 chunk splits, limits, ambiguous names, private/unknown linkage, exact caller identities, cycles,
 mixed/legacy exports, failed replacement, Unicode paths, saved executables and images/GC. Static builds
 run the managed reader/model checks and explicitly skip file operations. The Tree-sitter suite also
-checks real C linkage hints, inherited static prototypes, declarators and graph queries.
+checks real C linkage hints, inherited static prototypes, declarators, compiler configurations,
+preprocessed coordinates, declaration guards and graph queries.

@@ -75,10 +75,10 @@
 (let Db (<-address (value sd-test.analysis) 2)
      Naive (datalog.run-naive source-deps.program (<-address (value sd-test.data) 1))
   (do (map (/. Rel (sd-test.check Rel (= (datalog.sorted Db Rel) (datalog.sorted Naive Rel))))
-        [source-file source-format source-definition source-call usable-file excluded-file legacy-file
+        [source-file source-format source-context source-declaration source-definition source-call usable-file excluded-file legacy-file
          raw-definition invalid-owner defined definition-linkage visible function
          call-file call local-count global-count unique-local unique-owner unique-global owned unowned
-         resolved ambiguous unresolved edge file-edge])
+         global-allowed resolved ambiguous unresolved unresolved-reason edge file-edge])
       (sd-test.check "file/name identity and local preference"
         (datalog.holds? Db [edge [fn "a.c" "main" 0] [fn "a.c" "helper" 10]]))
       (sd-test.check "no edge to same-named function in another file"
@@ -233,5 +233,60 @@
    (sd-test.site "definition" "a.c" "f" "f" 0 false)
    (sd-test.extra (sd-test.site "definition" "a.c" "f" "f" 0 false)
      [["container_byte" 1] ["linkage" "external"]])])
+
+(define sd-test.configured-file
+  File Configuration ->
+    (sd-test.extra (sd-test.file File false)
+      [["schema_version" 3] ["configuration" Configuration] ["coordinates" "preprocessed"]
+       ["directory" "/project"] ["arguments" ["cc" "-E" "-P" File]]]))
+
+(define sd-test.declaration
+  File Name Byte Linkage ->
+    (sd-test.extra (sd-test.site "declaration" File Name "" Byte false)
+      [["container_byte" null] ["linkage" Linkage]]))
+
+(set sd-test.configured-records
+  [(sd-test.configured-file "a.c" "debug") (sd-test.configured-file "b.c" "debug")
+   (sd-test.definition "a.c" "main" 40 "external")
+   (sd-test.definition "b.c" "target" 0 "external")
+   (sd-test.definition "b.c" "hidden" 20 "external")
+   (sd-test.definition "b.c" "late" 40 "external")
+   (sd-test.definition "b.c" "private" 60 "external")
+   (sd-test.declaration "a.c" "target" 0 "external")
+   (sd-test.declaration "a.c" "private" 20 "internal")
+   (sd-test.call "a.c" "target" "main" 40 100)
+   (sd-test.call "a.c" "hidden" "main" 40 120)
+   (sd-test.call "a.c" "late" "main" 40 140)
+   (sd-test.call "a.c" "private" "main" 40 160)
+   (sd-test.declaration "a.c" "late" 180 "external")])
+
+(let Data (sd-test.ok (sd-test.read (sd-test.lines (value sd-test.configured-records)) 1 (source-deps.limits)))
+     A (sd-test.ok (source-deps.analyze Data []))
+     Db (<-address A 2)
+     Naive (datalog.run-naive source-deps.program (<-address Data 1))
+  (do (map (/. Rel (sd-test.check Rel (= (datalog.sorted Db Rel) (datalog.sorted Naive Rel))))
+        [source-context source-declaration global-allowed owned resolved unresolved unresolved-reason edge])
+      (sd-test.check "cross-unit calls require a preceding external declaration"
+        (= (datalog.sorted Db edge) [[[fn "a.c" "main" 40] [fn "b.c" "target" 0]]]))
+      (sd-test.check "missing, late and private declarations block global guesses"
+        (= (datalog.count Db unresolved-reason) 3))))
+
+(map (/. File
+       (sd-test.check "different configurations and raw input cannot mix"
+         (= (sd-test.domain (sd-test.read
+              (sd-test.lines [(sd-test.configured-file "a.c" "debug") File]) 3 (source-deps.limits))) format)))
+  [(sd-test.configured-file "b.c" "release") (sd-test.v2-file "b.c") (sd-test.file "b.c" false)])
+
+(load "example-apps/source-facts/build.shen")
+(sd-test.check "compiler outputs stripped and source spelling preserved"
+  (= (source-build.flags ["-I" "include" "-DNAME=a b" "-c" "a.c" "-MMD" "-MF" "dep.d" "-oout.o"]
+       "/project" "/project/a.c" 0)
+     ["-I" "include" "-DNAME=a b" "a.c"]))
+(map (/. Args
+       (sd-test.check "unsupported compilation commands rejected"
+         (trap-error (do (source-build.flags Args "/project" "/project/a.c" 0) false) (/. E true))))
+  [["@response" "a.c"] ["-x" "c++" "a.c"] ["-Xclang" "plugin" "a.c"]
+   ["-Wp,-MD,dep.d" "a.c"] ["-fplugin=plugin.so" "a.c"] ["-save-temps" "a.c"]
+   ["a.c" "a.c"] ["other.c"] ["-c"] ["-o"] ["-xc++" "a.c"] ["--language=c++" "a.c"]])
 
 (output "~A passed, ~A failed~%" (value sd-test.passed) (value sd-test.failed))

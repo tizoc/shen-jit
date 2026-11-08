@@ -4,6 +4,9 @@
   "(function_definition) @definition
    (call_expression function: (identifier) @call)")
 
+(set source-facts.configured-query
+  (cn (value source-facts.query) "c#10;(declaration) @declaration"))
+
 (define source-facts.declarator-node
   _ 0 -> 0
   T ID ->
@@ -55,6 +58,35 @@
                (trap-error (shen.<-dict StaticNames (treesitter.text T Name)) (/. E false))) "internal")
           (true "external")))
 
+\\ The nearest declarator constructor distinguishes a function from a function-pointer variable.
+(define source-facts.function-name?
+  _ 0 -> false
+  T ID ->
+    (let Kind (treesitter.kind T ID)
+      (cond ((= Kind "function_declarator") true)
+            ((element? Kind ["pointer_declarator" "array_declarator" "declaration"]) false)
+            (true (source-facts.function-name? T (treesitter.parent T ID))))))
+
+(define source-facts.site-fields
+  Path T Kind ID Owner OwnerByte Error ->
+    (let Point (treesitter.start-point T ID)
+      [["path" Path] ["kind" Kind] ["name" (treesitter.text T ID)]
+       ["container" Owner] ["container_byte" OwnerByte]
+       ["start_byte" (treesitter.start-byte T ID)] ["end_byte" (treesitter.end-byte T ID)]
+       ["row" (hd Point)] ["column" (hd (tl Point))] ["syntax_error" Error]]))
+
+(define source-facts.declarations
+  _ _ _ _ _ _ [] -> [ok done]
+  Writer State Path T Error StaticNames [ID | Rest] ->
+    (let Name (if (= (treesitter.field T ID) "declarator") (source-facts.declarator-node T ID) 0)
+         Result (if (and (not (= Name 0)) (source-facts.function-name? T (treesitter.parent T Name)))
+                    (source-facts.emit Writer State
+                      [object | (append (source-facts.site-fields Path T "declaration" Name "" null Error)
+                                  [["linkage" (source-facts.linkage T (treesitter.parent T ID) Name StaticNames)]])])
+                    [ok done])
+      (io.let-ok _ Result
+        (source-facts.declarations Writer State Path T Error StaticNames Rest))))
+
 (define source-facts.write-result
   [accepted _] -> [ok done]
   [error E _] -> [error E])
@@ -75,6 +107,14 @@
 (define source-facts.captures
   _ _ _ _ _ _ At End -> [ok done] where (> At End)
   Writer State Path T Error StaticNames At End ->
+    (let ID (treesitter.capture-node T At)
+         Result (if (= (source-facts.enclosing-function T ID) 0)
+                    (source-facts.declarations Writer State Path T Error StaticNames (treesitter.children T ID))
+                    [ok done])
+      (io.let-ok _ Result
+        (source-facts.captures Writer State Path T Error StaticNames (+ At 1) End)))
+      where (= (treesitter.capture-name T At) "declaration")
+  Writer State Path T Error StaticNames At End ->
     (let Captured (treesitter.capture-node T At)
          Kind (treesitter.capture-name T At)
          ID (if (= Kind "definition")
@@ -85,12 +125,8 @@
          Owner (if (= Definition 0) 0
                    (source-facts.declarator-node T (treesitter.child-by-field T Definition "declarator")))
          OwnerByte (if (= Owner 0) null (treesitter.start-byte T Owner))
-         Point (treesitter.start-point T ID)
-         Fields [["path" Path] ["kind" Kind]
-                 ["name" (treesitter.text T ID)] ["container" (if (= Owner 0) "" (treesitter.text T Owner))]
-                 ["container_byte" OwnerByte]
-                 ["start_byte" (treesitter.start-byte T ID)] ["end_byte" (treesitter.end-byte T ID)]
-                 ["row" (hd Point)] ["column" (hd (tl Point))] ["syntax_error" Error]]
+         Fields (source-facts.site-fields Path T Kind ID
+                  (if (= Owner 0) "" (treesitter.text T Owner)) OwnerByte Error)
          Fact [object | (if (= Kind "definition")
                            (append Fields [["linkage" (source-facts.linkage T Definition ID StaticNames)]])
                            Fields)]
@@ -103,8 +139,12 @@
                            Path (treesitter.error-message E))]
   Writer State Path [ok T] ->
     (let Error (treesitter.has-error? T 1)
-         Fact [object ["path" Path] ["kind" "file"] ["schema_version" 2] ["syntax_error" Error]
-                      ["byte_count" (treesitter.end-byte T 1)]]
+         Fields [["path" Path] ["kind" "file"] ["syntax_error" Error] ["byte_count" (treesitter.end-byte T 1)]]
+         Context (<-address State 3)
+         Extra (if (= Context []) [["schema_version" 2]]
+                   [["schema_version" 3] ["configuration" Context] ["coordinates" "preprocessed"]
+                    ["directory" (<-address State 4)] ["arguments" (<-address State 5)]])
+         Fact [object | (append Fields Extra)]
       (io.let-ok _ (source-facts.emit Writer State Fact)
         (do (address-> State 2 (+ (<-address State 2) 1))
             (source-facts.captures Writer State Path T Error (source-facts.static-names T)
@@ -131,7 +171,7 @@
 
 (define source-facts.extract
   Language Root Out ->
-    (let State (io.record [0 0 0])
+    (let State (io.record [0 0 0 [] "" []])
          Writer (io.writer Out [[chunk-size 4096]])
       (io.let-ok _ (fs.walk Root [[entry-limit 10000] [depth-limit 64] [name-byte-limit 16777216]]
                     (/. Info Depth (source-facts.visit Language Writer State Info Depth)))
@@ -148,6 +188,8 @@
   _ _ [error E] -> (error "source-facts: ~A" (treesitter.error-message E)))
 
 (define source-facts.main
+  [_ Grammar "--compile-commands" Database Configuration Output] ->
+    (source-facts.finish (source-build.start Grammar Database Configuration Output))
   [_ Grammar Root Output] ->
     (source-facts.start Root Output (treesitter.load-language "C" [Grammar] "tree_sitter_c"))
-  _ -> (error "usage: shen-jit script example-apps/source-facts/main.shen GRAMMAR ROOT OUTPUT"))
+  _ -> (error "usage: source-facts GRAMMAR ROOT OUTPUT, or GRAMMAR --compile-commands DATABASE CONFIGURATION OUTPUT"))

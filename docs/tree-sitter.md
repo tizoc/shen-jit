@@ -195,3 +195,5 @@ replacement. This is a starting fact source for Datalog or repository tooling; i
 C names, preprocessing, indirect calls or dependencies semantically.
 [Source facts in Datalog](../example-apps/source-deps/README.md) consumes that export and adds
 explicit call matching, diagnostics, reachability and reverse impact queries.
+An optional compilation-database mode runs bounded compiler preprocessing through our subprocess
+library and records configuration, preprocessed coordinates and file-scope function declarations.

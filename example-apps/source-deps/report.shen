@@ -9,12 +9,16 @@
   Analysis ->
     (let Db (<-address Analysis 2)
          Data (<-address Analysis 1)
-      [object ["kind" "summary"] ["matching" "caller-id-local-then-visible-name"]
+      [object ["kind" "summary"]
+              ["matching" (if (= (datalog.count Db source-context) 0)
+                              "caller-id-local-then-visible-name" "caller-id-local-then-declared-external")]
               ["syntax_errors" "exclude-files"]
               ["legacy_files" (datalog.count Db legacy-file)]
+              ["configured_units" (datalog.count Db source-context)]
               ["input_records" (<-address Data 2)] ["input_bytes" (<-address Data 3)]
               ["files" (datalog.count Db source-file)] ["excluded_files" (datalog.count Db excluded-file)]
               ["input_definitions" (datalog.count Db source-definition)]
+              ["input_declarations" (datalog.count Db source-declaration)]
               ["functions" (datalog.count Db function)] ["input_calls" (datalog.count Db source-call)]
               ["calls" (datalog.count Db call)] ["resolved_calls" (datalog.count Db resolved)]
               ["unresolved_calls" (datalog.count Db unresolved)]
@@ -22,6 +26,8 @@
               ["edges" (datalog.count Db edge)] ["file_edges" (datalog.count Db file-edge)]]))
 
 (define source-deps.row
+  source-context [File Configuration Coordinates] ->
+    [object ["kind" "context"] ["file" File] ["configuration" Configuration] ["coordinates" (str Coordinates)]]
   excluded-file [File] -> [object ["kind" "excluded_file"] ["file" File] ["reason" "syntax_error"]]
   definition-linkage [File Name Byte Linkage] ->
     [object ["kind" "function"] ["function" (source-deps.function-value [fn File Name Byte])]
@@ -32,9 +38,9 @@
   resolved [Site From To] ->
     [object ["kind" "resolved_call"] ["site" (source-deps.site-value Site)]
             ["from" (source-deps.function-value From)] ["to" (source-deps.function-value To)]]
-  unresolved [Site From Name] ->
+  unresolved-reason [Site From Name Reason] ->
     [object ["kind" "unresolved_call"] ["site" (source-deps.site-value Site)]
-            ["from" (source-deps.function-value From)] ["target" Name]]
+            ["from" (source-deps.function-value From)] ["target" Name] ["reason" (str Reason)]]
   ambiguous [Site From Name Count Scope] ->
     [object ["kind" "ambiguous_call"] ["site" (source-deps.site-value Site)]
             ["from" (source-deps.function-value From)] ["target" Name]
@@ -94,7 +100,7 @@
          State (io.record [0 0])
       (io.let-ok _ (source-deps.emit Writer Limits State (source-deps.summary Analysis))
         (io.let-ok _ (source-deps.relations Writer Limits State (<-address Analysis 2)
-                      [excluded-file definition-linkage edge file-edge resolved unresolved ambiguous unowned])
+                      [source-context excluded-file definition-linkage edge file-edge resolved unresolved-reason ambiguous unowned])
           (io.let-ok _ (source-deps.query-report Writer Limits State (<-address Analysis 4)
                         (<-address Analysis 3))
             [ok (<-address State 1)])))))

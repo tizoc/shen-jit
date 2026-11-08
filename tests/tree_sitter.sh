@@ -32,8 +32,10 @@ adapter="$dir/shen-tree-sitter.$extension"
 grammar="$dir/tree-sitter-c.$extension"
 fixture="$dir/fixture.$extension"
 fs_adapter="$dir/shen-fs.$extension"
+process_adapter="$dir/shen-process.$extension"
 sh lib/build-tree-sitter.sh "$adapter"
 sh lib/build-fs.sh "$fs_adapter"
+sh lib/build-process.sh "$process_adapter"
 ${CC:-cc} -std=c11 ${CFLAGS:--O2 -g} -Wall -Wextra -shared -fPIC \
     -I"$TREE_SITTER_C_SOURCE/src" "$TREE_SITTER_C_SOURCE/src/parser.c" -o "$grammar"
 ${CC:-cc} -std=c11 ${CFLAGS:--O2 -g} -Wall -Wextra -shared -fPIC tests/tree_sitter_fixture.c -o "$fixture"
@@ -46,3 +48,4 @@ ${CC:-cc} -std=c11 ${CFLAGS:--O2 -g} -D_POSIX_C_SOURCE=200809L -D_DEFAULT_SOURCE
 python=python3
 if ! command -v "$python" > /dev/null; then python=python; fi
 "$python" tests/tree_sitter.py "$SHEN" "$adapter" "$grammar" "$fixture" "$oracle" "$fs_adapter"
+"$python" tests/source_context.py "$SHEN" "$adapter" "$grammar" "$fs_adapter" "$process_adapter"

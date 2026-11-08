@@ -104,13 +104,17 @@ def expected(records):
             continue
         loc = r['path'], r['start_byte'], r['end_byte'], r['row'], r['column']
         owners = by_local[r['path'], r['container']]
-        if versions[r['path']] == 2:
+        if versions[r['path']] >= 2:
             owners = [fn for fn in owners if fn[2] == r['container_byte']]
         if len(owners) != 1:
             unowned.add((loc, r['container'], r['name'], len(owners)))
             continue
         local = by_local[r['path'], r['name']]
         candidates = local or visible[r['name']]
+        if not local and versions[r['path']] == 3 and not any(
+                d['kind'] == 'declaration' and d['path'] == r['path'] and d['name'] == r['name'] and
+                d['linkage'] == 'external' and d['start_byte'] < r['start_byte'] for d in records):
+            candidates = []
         if len(candidates) == 1 and linkage[candidates[0]] != 'unknown':
             resolved.add((loc, owners[0], candidates[0]))
         elif len(candidates) > 1:
@@ -124,10 +128,14 @@ def expected(records):
 def check_report(rows, records):
     oracle = expected(records)
     summary = rows[0]
-    assert summary['kind'] == 'summary' and summary['matching'] == 'caller-id-local-then-visible-name'
+    configured = any(r['kind'] == 'file' and r.get('schema_version') == 3 for r in records)
+    assert summary['kind'] == 'summary' and summary['matching'] == (
+        'caller-id-local-then-declared-external' if configured else 'caller-id-local-then-visible-name')
     assert summary['syntax_errors'] == 'exclude-files'
     assert summary['files'] == sum(r['kind'] == 'file' for r in records)
     assert summary['legacy_files'] == sum(r['kind'] == 'file' and 'schema_version' not in r for r in records)
+    assert summary['configured_units'] == sum(r['kind'] == 'file' and r.get('schema_version') == 3 for r in records)
+    assert summary['input_declarations'] == sum(r['kind'] == 'declaration' for r in records)
     assert summary['functions'] == len(oracle['nodes'])
     assert summary['calls'] == sum(r['kind'] == 'call' and not r['syntax_error'] for r in records)
     assert summary['calls'] == sum(summary[k] for k in ['resolved_calls', 'unresolved_calls', 'ambiguous_calls', 'unowned_calls'])

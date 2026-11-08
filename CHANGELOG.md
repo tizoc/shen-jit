@@ -14,6 +14,9 @@ All notable changes to this project are documented in this file. The format is b
 - Version 2 C source facts identify exact enclosing definitions and carry conservative linkage hints,
   including inherited static prototypes. The Datalog application excludes private cross-file targets,
   accepts legacy exports with explicit reporting, and allows byte offsets to select duplicate names.
+- Configured C source facts from GCC/Clang compilation databases: bounded preprocessing through our
+  subprocess library, recorded build/coordinate context and file-scope function declarations. Datalog
+  requires a preceding external declaration for cross-unit matches and rejects mixed configurations.
 - Optional subprocess and pipeline libraries, `lib/process.shen` and `lib/process-io.shen`: explicit argv,
   environment/cwd, owned children, bounded waits, cancellable pipes, concurrent communication, streaming
   sinks, output limits and process-group/job cleanup. `make process` builds their adapter. The

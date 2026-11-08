@@ -28,6 +28,8 @@ shen-jit eval -l lib/native.shen -l lib/datalog.shen -l deps.shen
 Tree-sitter's C source export: bounded NDJSON input/output through our I/O, exact caller identity,
 linkage-aware name matching, explicit ambiguity/exclusion diagnostics, and single-root reachability
 and reverse impact queries.
+Configured translation-unit exports also require a preceding external declaration for cross-unit
+matches and keep build configurations separate.
 
 ```text
 ((a b) (a c) (b c) (x x) (x y) (y x) (y y))

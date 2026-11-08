@@ -1826,6 +1826,42 @@ execution remains CI's responsibility; no new platform ABI or instruction was in
   load. A test with a clock that advances at each reading puts the expiry between each pair in turn;
   without the fix it fails for two of its six budgets.
 
+### Configured C translation units (2026-11-08, M3 Max, macOS and Linux arm64)
+
+- Added an optional compilation-database mode to the source-fact application. Shen validates argv
+  arrays, preserves preprocessing flags/order, cwd and source spelling, strips compilation and
+  dependency outputs, and runs GCC/Clang preprocessing through the bounded subprocess library.
+  Shell command strings, response files, wrappers and unsupported driver escapes fail explicitly.
+  The compiler inherits the environment; a caller's configuration label is not a build fingerprint.
+  Raw scans load no subprocess libraries. There are no new C adapters or runtime changes.
+- Schema version 3 records effective commands, a configuration label and preprocessed coordinates.
+  Each translation unit owns included definitions and file-scope function declarations. Datalog
+  requires a preceding external declaration before a cross-unit name match; late, internal or absent
+  declarations cannot authorize a guess. Unresolved records explain missing targets, unknown scope
+  or missing external declarations. Mixed raw/configured inputs and different labels are rejected.
+  These remain syntactic checks: types, variable/block scope, inline/linker rules and source mapping
+  are outside this implementation. Byte offsets never claim to index the original source file.
+- Input has at most 1000 commands in 8 MiB, 256 original arguments, 4096 bytes per argument and
+  32 KiB encoded effective argv per command. Sequential compiler capture has 8 MiB stdout, 64 KiB
+  stderr, 30 seconds per child and a five-minute batch compiler-phase budget. Expanded units needed
+  an explicit 1048576-node/128 MiB serialized-result budget: the original 262144-node raw-file cap
+  rejected the runtime's expanded hash implementation. Fact/output limits remain unchanged.
+- A database from the runtime's 12 object-compilation commands on Debian Bookworm/GCC 12 produces
+  20279 records: 5490 definitions, 4188 declarations and 10589 syntactic calls. Four erroneous units
+  are excluded, leaving 673 functions and 1070 edges. All 51 global function symbols emitted by the
+  compiler in usable units have exported definitions. This is partial coverage, not proof of every
+  edge or declaration: 513 unscoped captures include header syntax that is not an executable call.
+  The macOS database produces 22560 records but SDK extensions, including nullability annotations,
+  make 11 units erroneous and leave no usable functions. Automatic annotation stripping was not
+  added; explicit exclusion exposes this grammar limit instead of silently changing the build.
+- The application passes 199 checks on macOS (133 managed plus 66 native/GC checks); Linux passes
+  the native application checks and all 133 managed checks, also with the static compiler disabled
+  to verify the native skip. Twenty-two configured-project checks pass with Clang and GCC: both
+  configurations agree with independent preprocessed bytes and compiled behavior, prototype/pointer
+  classification, declaration guards, argument fidelity, output preservation, late failure and
+  output quotas. The Tree-sitter suite totals 143 checks. The full fast tier, guide rendering,
+  publication scan and source/binary package checks pass. Windows execution remains for CI.
+
 ### Caller identity and linkage hints (2026-11-08, M3 Max, macOS)
 
 - Extended the C source export to schema version 2: exact enclosing-definition name offsets and

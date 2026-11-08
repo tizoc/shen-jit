@@ -60,7 +60,7 @@
 (define source-deps.read
   Reader Name Limits ->
     (let State (io.record [[] (shen.dict 64) (shen.dict 128) (shen.dict 128) 0 0 1
-                          (buffer.builder (<-address Limits 2)) 0])
+                          (buffer.builder (<-address Limits 2)) 0 []])
       (source-deps.read-more Reader Name Limits State)))
 
 (define source-deps.read-error
@@ -140,19 +140,39 @@
 (define source-deps.fact
   State Fact -> (address-> State 0 [Fact | (<-address State 0)]))
 
+(define source-deps.context
+  State Version Path Members ->
+    (let Context (if (< Version 3) [raw]
+                     (let Configuration (source-deps.text (source-deps.member Members "configuration") false)
+                          _ (if (= (source-deps.member Members "coordinates") "preprocessed") true
+                                (error "configured coordinates must be preprocessed"))
+                          _ (source-deps.text (source-deps.member Members "directory") false)
+                          Args (source-deps.member Members "arguments")
+                          _ (if (and (cons? Args) (<= (length Args) 264)) true (error "invalid compiler arguments"))
+                          _ (map (/. Arg (source-deps.text Arg true)) Args)
+                          _ (source-deps.fact State [source-context Path Configuration preprocessed])
+                       [configured Configuration]))
+         Previous (<-address State 9)
+      (if (or (= Previous []) (= Previous Context))
+          (address-> State 9 Context)
+          (error "cannot mix raw facts or different build configurations"))))
+
 (define source-deps.file-record
   State Limits Members ->
     (let Version (if (element? "schema_version" (map (function hd) Members))
                     (source-deps.uint (source-deps.member Members "schema_version")) 1)
-         _ (if (or (= Version 1) (= Version 2)) true (error "unsupported source-fact schema version"))
+         _ (if (element? Version [1 2 3]) true (error "unsupported source-fact schema version"))
          Keys ["kind" "path" "byte_count" "syntax_error"]
-         _ (source-deps.keys Members (if (= Version 2) ["schema_version" | Keys] Keys))
+         Keys (if (= Version 1) Keys ["schema_version" | Keys])
+         Keys (if (= Version 3) (append Keys ["configuration" "coordinates" "directory" "arguments"]) Keys)
+         _ (source-deps.keys Members Keys)
          Path (source-deps.text (source-deps.member Members "path") false)
          Bytes (source-deps.uint (source-deps.member Members "byte_count"))
          Error (source-deps.boolean (source-deps.member Members "syntax_error"))
          _ (if (= (source-deps.get (<-address State 1) Path) []) true
                 (error "duplicate file record: ~A" Path))
          _ (if (< (<-address State 8) (<-address Limits 3)) true (error "file count limit exceeded"))
+         _ (source-deps.context State Version Path Members)
          _ (shen.dict-> (<-address State 1) Path (io.record [Path Bytes Error Version]))
          _ (address-> State 8 (+ (<-address State 8) 1))
       (do (source-deps.fact State [source-file Path Bytes Error])
@@ -160,15 +180,16 @@
 
 (define source-deps.site-record
   State Kind Members ->
-    (let _ (if (element? Kind ["definition" "call"]) true (error "unknown fact kind ~A" Kind))
+    (let _ (if (element? Kind ["definition" "call" "declaration"]) true (error "unknown fact kind ~A" Kind))
          Path (source-deps.text (source-deps.member Members "path") false)
          Meta (source-deps.get (<-address State 1) Path)
          _ (if (= Meta []) (error "file record must precede its sites: ~A" Path) true)
          Path (<-address Meta 0)
          Version (<-address Meta 3)
+         _ (if (and (= Kind "declaration") (< Version 3)) (error "declarations require schema version 3") true)
          Keys ["kind" "path" "name" "container" "start_byte" "end_byte" "row" "column" "syntax_error"]
          Keys (if (= Version 1) Keys ["container_byte" | Keys])
-         Keys (if (and (= Version 2) (= Kind "definition")) ["linkage" | Keys] Keys)
+         Keys (if (and (>= Version 2) (not (= Kind "call"))) ["linkage" | Keys] Keys)
          _ (source-deps.keys Members Keys)
          Name (source-deps.intern-text (<-address State 2)
                 (source-deps.text (source-deps.member Members "name") false))
@@ -182,7 +203,7 @@
          OwnerByte (if (= Version 1) -2
                        (source-deps.owner-byte (source-deps.member Members "container_byte")))
          Linkage (if (= Version 1) legacy
-                     (if (= Kind "definition")
+                     (if (not (= Kind "call"))
                          (source-deps.linkage (source-deps.member Members "linkage")) unknown))
          _ (if (and (<= Start End) (<= End (<-address Meta 1))
                     (= (- End Start) (shen-jit.bytes-length (shen-jit.string->bytes Name)))
@@ -192,13 +213,15 @@
                (error "definition container must be its name") true)
          _ (if (or (= Version 1)
                    (and (= Kind "definition") (= OwnerByte Start))
+                   (and (= Kind "declaration") (= Owner "") (= OwnerByte -1) (not (= Linkage unknown)))
                    (and (= Kind "call")
                         (or (and (= Owner "") (= OwnerByte -1))
                             (and (not (= Owner "")) (>= OwnerByte 0) (< OwnerByte (<-address Meta 1))))))
                true (error "inconsistent caller identity"))
          Site [at Path Start End Row Column]
-         Fact (if (= Kind "definition") [source-definition Site Name Linkage]
-                  [source-call Site Owner OwnerByte Name])
+         Fact (cond ((= Kind "definition") [source-definition Site Name Linkage])
+                    ((= Kind "declaration") [source-declaration Site Name Linkage])
+                    (true [source-call Site Owner OwnerByte Name]))
          Key [Kind Path Start]
          Previous (source-deps.get (<-address State 3) Key)
       (cond ((= Previous [])
