@@ -289,7 +289,7 @@ The reference evaluator does not use the components: it numbers strata from the 
 `(= V E)` whose `V` nothing has bound yet, once everything in `E` is, becomes a step that binds `V`, which may make other conditions ready and lets the
 atoms after it look `V` up. In a kernel, each operation of an expression goes to a word register and is checked to be 32 bits, the second operand
 of each in the register after the first's, so that a few registers serve any depth; a bound variable keeps its register. A result outside 32 bits
-returns a code above any place to start again from, and the KL around the kernel raises.
+returns a code above any place to start again from, and the KL around the kernel raises. Kernels have no division and cannot intern, so a plan that divides, takes a mean, works on strings or shifts by other than a constant from 0 to 31 is KL from the start. There a function with no value, division by zero or `to-number` of what is not a number, gives `[]`, which no value is, and a binding or comparison that meets it does not hold; the reference does the same.
 
 The checker turns an aggregate into a condition that records its keys: the variables of its atom that appear elsewhere in the body. Its relation
 is a dependency that must be complete, as a negated one is. Once its keys are bound it is a fold step, which binds its variable, or compares when

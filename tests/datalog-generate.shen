@@ -138,11 +138,16 @@
   Bound -> (let Numbers (dtg.of-type Bound integer)
                 R (dtg.random 6)
              (cases (empty? Numbers) []
-                    (< R 2) [[= [var "K"] [(dtg.choose [+ - *]) [var (dtg.choose Numbers)] (dtg.operand Numbers)]]
-                             [<= [var "K"] 4] [>= [var "K"] -4]]
-                    (= R 2) [[(dtg.choose [< >= = !=]) [(dtg.choose [+ - *]) [var (dtg.choose Numbers)] (dtg.operand Numbers)]
-                              (dtg.value integer)]]
+                    (< R 2) [[= [var "K"] (dtg.expression Numbers)] [<= [var "K"] 4] [>= [var "K"] -4]]
+                    (= R 2) [[(dtg.choose [< >= = !=]) (dtg.expression Numbers) (dtg.value integer)]]
                     true [])))
+
+\* An operation on an integer the body binds. A divisor may be 0, where there is no value, and a
+   shift is by a constant. *\
+(define dtg.expression
+  Numbers -> (let Op (dtg.choose [+ - * / % band bor bxor bshl bshr])
+               [Op [var (dtg.choose Numbers)]
+                   (if (element? Op [bshl bshr]) (dtg.choose [0 1 2 3]) (dtg.operand Numbers))]))
 
 (define dtg.operand
   Numbers -> (if (= 0 (dtg.random 2)) [var (dtg.choose Numbers)] (dtg.value integer)))
@@ -160,7 +165,7 @@
   -> (if (= 0 (dtg.random 5))
          (let Rel (dtg.choose Relations)
               Atom [(hd Rel) | (dtg.map (/. T (dtg.aggregate-term T Bound)) (tl Rel))]
-              Op (if (element? [var "W"] Atom) (dtg.choose [count sum min max]) count)
+              Op (if (element? [var "W"] Atom) (dtg.choose [count sum min max mean]) count)
               Agg (if (= Op count) [count Atom] [Op [var "W"] Atom])
               Numbers (dtg.of-type Bound integer)
            (if (and (cons? Numbers) (= 0 (dtg.random 4)))

@@ -765,6 +765,96 @@
 (let Db (dt.run-kl dt.counting [])
   (dt.check "records made while running, KL" (datalog.count Db back) 2999))
 
+\* Division, remainder and bit operations, natively where a kernel can and in KL where not, and
+   string functions and mean, in KL. *\
+(defdatalog dt.functions
+  (relation n [integer])
+  (relation word [string])
+  (relation divided [integer integer integer])
+  (relation bits [integer integer integer integer integer integer])
+  (relation joined [string string string])
+  (relation sizes [string integer])
+  (relation parts [string string])
+  (relation numbers [string integer])
+  (relation texts [integer string])
+  (relation middle [integer])
+  (relation even-big [integer])
+  (rule (divided A B Q) <-- (n A) (n B) (!= B 0) (= Q (/ A B)))
+  (rule (divided A B R) <-- (n A) (n B) (> B 0) (= R (+ 1000 (% A B))))
+  (rule (bits A B C D E F) <-- (n A) (n B) (>= B 0) (<= B 5)
+                               (= C (band A B)) (= D (bor A B)) (= E (bxor A (bshl B 2))) (= F (bshr A B)))
+  (rule (joined X Y Z) <-- (word X) (word Y) (= Z (cat X (cat "-" Y))))
+  (rule (sizes X N) <-- (word X) (= N (strlen X)))
+  (rule (parts X P) <-- (word X) (= P (substr X 1 2)))
+  (rule (numbers X N) <-- (word X) (= X (to-string N0)) (n N0) (= N (to-number X)))
+  (rule (texts N T) <-- (n N) (= T (to-string (* N 2))))
+  (rule (middle M) <-- (= M (mean A (n A))))
+  (rule (even-big A) <-- (n A) (= 0 (% A 2)) (> (bshl A 1) 4)))
+
+(set dt.functions-facts [[n -7] [n -2] [n 0] [n 3] [n 4] [n 9] [word "ab"] [word "c"] [word "hello"] [word "-2"] [word "9"]])
+(dt.same "functions" (value dt.functions-facts) dt.functions divided
+  [[-7 -7 1] [-7 -2 3] [-7 3 -2] [-7 3 999] [-7 4 -1] [-7 4 997] [-7 9 0] [-7 9 993] [-2 -7 0] [-2 -2 1]
+   [-2 3 0] [-2 3 998] [-2 4 0] [-2 4 998] [-2 9 0] [-2 9 998] [0 -7 0] [0 -2 0] [0 3 0] [0 3 1000] [0 4 0]
+   [0 4 1000] [0 9 0] [0 9 1000] [3 -7 0] [3 -2 -1] [3 3 1] [3 3 1000] [3 4 0] [3 4 1003] [3 9 0] [3 9 1003]
+   [4 -7 0] [4 -2 -2] [4 3 1] [4 3 1001] [4 4 1] [4 4 1000] [4 9 0] [4 9 1004] [9 -7 -1] [9 -2 -4] [9 3 3]
+   [9 3 1000] [9 4 2] [9 4 1001] [9 9 1] [9 9 1000]])
+(dt.same "functions" (value dt.functions-facts) dt.functions bits
+  [[-7 0 0 -7 -7 -7] [-7 3 1 -5 -11 -1] [-7 4 0 -3 -23 -1]
+   [-2 0 0 -2 -2 -2] [-2 3 2 -1 -14 -1] [-2 4 4 -2 -18 -1]
+   [0 0 0 0 0 0] [0 3 0 3 12 0] [0 4 0 4 16 0]
+   [3 0 0 3 3 3] [3 3 3 3 15 0] [3 4 0 7 19 0]
+   [4 0 0 4 4 4] [4 3 0 7 8 0] [4 4 4 4 20 0]
+   [9 0 0 9 9 9] [9 3 1 11 5 1] [9 4 0 13 25 0]])
+(dt.same "functions" (value dt.functions-facts) dt.functions sizes [["-2" 2] ["9" 1] ["ab" 2] ["c" 1] ["hello" 5]])
+(dt.same "functions" (value dt.functions-facts) dt.functions parts [["-2" "2"] ["9" ""] ["ab" "b"] ["c" ""] ["hello" "el"]])
+(dt.same "functions" (value dt.functions-facts) dt.functions numbers [["-2" -2] ["9" 9]])
+(dt.same "functions" (value dt.functions-facts) dt.functions texts [[-7 "-14"] [-2 "-4"] [0 "0"] [3 "6"] [4 "8"] [9 "18"]])
+(dt.same "functions" (value dt.functions-facts) dt.functions middle [[1]])
+(dt.same "functions" (value dt.functions-facts) dt.functions even-big [[4]])
+(let Db (datalog.run dt.functions (value dt.functions-facts))
+  (do (dt.check "strings made while running" (datalog.holds? Db [joined "ab" "hello" "ab-hello"]) true)
+      (dt.check "strings made, counted" (datalog.count Db joined) 25)))
+(dt.same "a mean of nothing" [[word "x"]] dt.functions middle [])
+(defdatalog dt.native-bits
+  (relation n [integer])
+  (relation masked [integer integer])
+  (rule (masked A M) <-- (n A) (= M (bxor (band A 6) (bshl (bor A 1) 2))) (> (bshr M 1) -9)))
+(dt.same "native bits" [[n -7] [n -2] [n 0] [n 3] [n 4] [n 9]] dt.native-bits masked [[-2 -6] [0 4] [3 14] [4 16] [9 36]])
+(dt.check "bit operations run natively" (datalog.kl-only? (datalog.plan-rule (hd (datalog.nth 4 (datalog.program dt.native-bits))) [])) false)
+(defdatalog dt.partial
+  (relation n [integer])
+  (relation w [string])
+  (relation q [integer integer integer])
+  (relation num [string integer])
+  (relation shifted [integer integer integer integer])
+  (rule (q A B C) <-- (n A) (n B) (= C (/ A B)) (!= B 0))
+  (rule (q A B C) <-- (n A) (n B) (= C (+ 100 (% A B))) (> (/ 6 B) 0))
+  (rule (num S N) <-- (w S) (= N (+ 1 (to-number S))))
+  (rule (shifted A B C D) <-- (n A) (n B) (= C (bshl A B)) (= D (bshr A B)))
+  (relation unguarded [integer integer integer])
+  (rule (unguarded A B C) <-- (n A) (n B) (= C (% A B)))
+  (relation g [symbol integer])
+  (relation avg [symbol integer])
+  (rule (avg K M) <-- (g K _) (= M (mean V (g K V)))))
+(dt.same "no value" [[n 0] [n 2] [n -3] [w "12"] [w "1x"] [w ""] [w "-"]] dt.partial q
+  [[-3 -3 1] [-3 2 -1] [-3 2 99] [0 -3 0] [0 2 0] [0 2 100] [2 -3 0] [2 2 1] [2 2 100]])
+(dt.same "no value" [[n 0] [n 2] [n -3] [w "12"] [w "1x"] [w ""] [w "-"]] dt.partial num [["12" 13]])
+(dt.same "no value" [[n 0] [n 2] [n -3] [w "12"] [w "1x"] [w ""] [w "-"]] dt.partial shifted
+  [[-3 -3 -1 -24] [-3 0 -3 -3] [-3 2 -12 -1] [0 -3 0 0] [0 0 0 0] [0 2 0 0] [2 -3 0 16] [2 0 2 2] [2 2 8 0]])
+(dt.same "no value" [[n 0] [n 2] [n -3]] dt.partial unguarded
+  [[-3 -3 0] [-3 2 -1] [0 -3 0] [0 2 0] [2 -3 2] [2 2 0]])
+(dt.same "a mean truncates" [[g a 1] [g a 2] [g b -7] [g b -2] [g c 5]] dt.partial avg [[a 1] [b -4] [c 5]])
+(dt.raises "a shift too far" "outside 32 bits"
+  (freeze (datalog.run (datalog.define dt.bad [[relation a [integer]] [rule [a [var "Y"]] [[a [var "X"]] [= [var "Y"] [bshl 1 [var "X"]]] [< [var "Y"] 0]]]]) [[a 40]])))
+(dt.raises "a shift too far, natively" "outside 32 bits"
+  (freeze (datalog.run (datalog.define dt.bad [[relation a [integer]] [relation b [integer]] [rule [b [var "Y"]] [[a [var "X"]] [= [var "Y"] [bshl [var "X"] 31]]]]]) [[a 4]])))
+(dt.raises "a string function's types" "cat takes"
+  (freeze (datalog.define dt.bad [[relation a [string]] [rule [a [var "S"]] [[a [var "T"]] [= [var "S"] [cat [var "T"] 1]]]]])))
+(dt.raises "a string function's arity" "strlen takes 1 values, not 2"
+  (freeze (datalog.define dt.bad [[relation a [integer]] [relation w [string]] [rule [a [var "N"]] [[w [var "T"]] [= [var "N"] [strlen [var "T"] [var "T"]]]]]])))
+(dt.raises "a function as a constructor" "cannot name a constructor"
+  (freeze (datalog.define dt.bad [[type t [cat integer]]])))
+
 \* Queries by demand give what a whole run would, and compute less. *\
 (define dt.query
   Label Name Facts Pattern

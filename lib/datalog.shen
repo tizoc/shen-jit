@@ -163,6 +163,12 @@
                           integer
                           (error "datalog ~A: ~A works on integers" Say Op))
                       where (datalog.arithmetic? Op)
+  Say Env [F | Args] -> (let Sig (datalog.takes F)
+                          (cases (not (= (length Args) (length (hd Sig))))
+                                 (error "datalog ~A: ~A takes ~A values, not ~A" Say F (length (hd Sig)) (length Args))
+                                 (= (map (/. A (datalog.term-type Say Env A)) Args) (hd Sig)) (hd (tl Sig))
+                                 true (error "datalog ~A: ~A takes ~A" Say F (hd Sig))))
+                      where (datalog.string-function? F)
   Say Env [C | Args] -> (let Con (datalog.constructor-of Say [C | Args])
                           (do (datalog.check-field-types Say Env Args (datalog.nth 4 Con))
                               (datalog.nth 2 Con)))
@@ -204,7 +210,7 @@
 \\ Target Atom Keys], Target none for count.
 
 (define datalog.aggregate?
-  X -> (element? X [count sum min max]))
+  X -> (element? X [count sum min max mean]))
 
 (define datalog.aggregate-form?
   [count _] -> true
@@ -332,9 +338,27 @@
           _ (datalog.check-head Say Env Relations Head false)
        [Head Body]))
 
-\\ Arithmetic on integers: (+ A B), (- A B) and (* A B), nested as deep as wanted.
+\\ Functions in rules, nested as deep as wanted: on integers, + - * / % band bor bxor bshl bshr,
+\\ and on strings, (cat S T), (strlen S), (substr S Start Length), (to-number S) and (to-string N).
+\\ / and % truncate toward zero, and (bshl A B) is A times 2 to the B, floored. Division by zero
+\\ and to-number of what is not a number give no value, which [] stands for, as it is never one,
+\\ so that the rule does not hold there; a result outside 32 bits raises.
 (define datalog.arithmetic?
-  X -> (element? X [+ - *]))
+  X -> (element? X [+ - * / % band bor bxor bshl bshr]))
+
+(define datalog.string-function?
+  X -> (element? X [cat strlen substr to-number to-string]))
+
+(define datalog.function?
+  X -> (or (datalog.arithmetic? X) (datalog.string-function? X)))
+
+\\ What a string function takes and gives.
+(define datalog.takes
+  cat -> [[string string] string]
+  strlen -> [[string] integer]
+  substr -> [[string integer integer] string]
+  to-number -> [[string] integer]
+  to-string -> [[integer] string])
 
 (define datalog.expr-vars
   [var V] -> [V]
@@ -524,6 +548,7 @@
 \\ a run's state, after the relations. Checking and generating code read them from here.
 
 (set datalog.*constructors* [])
+(set datalog.*interned-slot* 0)
 
 (define datalog.declared-types
   _ [] Acc -> (reverse Acc)
@@ -553,7 +578,7 @@
 (define datalog.constructors-of
   _ _ [] _ _ _ _ Acc -> Acc
   Name T [[C | Fields] | Cs] Tag Known Slot Width Acc
-  -> (cases (or (not (symbol? C)) (variable? C) (element? C [var any + - * count sum min max]))
+  -> (cases (or (not (symbol? C)) (variable? C) (element? C [var any]) (datalog.function? C) (datalog.aggregate? C))
             (error "datalog ~A: ~S cannot name a constructor" Name C)
             (cons? (assoc C Acc)) (error "datalog ~A: constructor ~A is declared twice" Name C)
             (not (datalog.types? Fields Known))
@@ -677,7 +702,10 @@
   [var X] Env -> (tl (assoc X Env))
   [Op A B] Env -> (datalog.arithmetic Op (datalog.naive-value A Env) (datalog.naive-value B Env))
                   where (datalog.arithmetic? Op)
-  [C | Args] Env -> [C | (map (/. T (datalog.naive-value T Env)) Args)]
+  [F | Args] Env -> (datalog.string-op F (map (/. T (datalog.naive-value T Env)) Args))
+                    where (datalog.string-function? F)
+  [C | Args] Env -> (let Vs (map (/. T (datalog.naive-value T Env)) Args)
+                      (if (element? [] Vs) [] [C | Vs]))
   C _ -> C)
 
 \\ What each binding condition binds, until nothing more is; once bound, it holds as a comparison.
@@ -703,6 +731,7 @@
        (cases (= Op count) (length Matches)
               (= Op sum) (datalog.in-range (datalog.sum Values 0))
               (empty? Values) []
+              (= Op mean) (datalog.quot (datalog.sum Values 0) (length Values))
               (= Op min) (datalog.fold-pick (function <) Values)
               true (datalog.fold-pick (function >) Values))))
 
@@ -724,11 +753,68 @@
   _ [] Best -> Best
   F [X | Xs] Best -> (datalog.fold-pick-h F Xs (if (F X Best) X Best)))
 
-\\ Each operation on 32-bit integers raises if its result is not one.
+\\ Each operation on 32-bit integers raises if its result is not one; [] has no value.
 (define datalog.arithmetic
+  _ [] _ -> []
+  _ _ [] -> []
   + A B -> (datalog.in-range (+ A B))
   - A B -> (datalog.in-range (- A B))
-  * A B -> (datalog.in-range (* A B)))
+  * A B -> (datalog.in-range (* A B))
+  / _ 0 -> []
+  % _ 0 -> []
+  / A B -> (datalog.in-range (datalog.quot A B))
+  % A B -> (- A (* B (datalog.quot A B)))
+  band A B -> (shen-jit.bit-and A B)
+  bor A B -> (shen-jit.bit-or A B)
+  bxor A B -> (shen-jit.bit-xor A B)
+  bshl A B -> (datalog.arithmetic bshr A (- 0 B)) where (< B 0)
+  bshr A B -> (datalog.arithmetic bshl A (- 0 B)) where (< B 0)
+  bshl 0 _ -> 0
+  bshl A B -> (datalog.in-range (shen-jit.shift-left A (if (> B 32) 32 B)))
+  bshr A B -> (shen-jit.shift-right A (if (> B 31) 31 B)))
+
+\\ A / B truncated toward zero, B not 0, by long division.
+(define datalog.quot
+  A B -> (let Q (datalog.floor-quot (if (< A 0) (- 0 A) A) (if (< B 0) (- 0 B) B))
+           (if (= (< A 0) (< B 0)) Q (- 0 Q))))
+
+(define datalog.floor-quot
+  N D -> (if (< N D)
+             0
+             (let Q (datalog.floor-quot N (* 2 D))
+                  R (- N (* Q (* 2 D)))
+               (+ (* 2 Q) (if (< R D) 0 1)))))
+
+\\ The string functions, on Shen's strings, by the characters pos and tlstr count; substr keeps
+\\ what of its range the string has.
+(define datalog.string-op
+  _ Args -> [] where (element? [] Args)
+  cat [A B] -> (cn A B)
+  strlen [S] -> (length (explode S))
+  substr [S I N] -> (datalog.substring S (if (< I 0) 0 I) N)
+  to-number [S] -> (let N (datalog.parse-integer S) (if (= N []) [] (datalog.in-range N)))
+  to-string [N] -> (str N))
+
+(define datalog.substring
+  S I N -> (cases (<= N 0) ""
+                  (= S "") ""
+                  (> I 0) (datalog.substring (tlstr S) (- I 1) N)
+                  true (cn (pos S 0) (datalog.substring (tlstr S) 0 (- N 1)))))
+
+(define datalog.parse-integer
+  S -> (let Cs (explode S)
+         (cases (and (cons? Cs) (= (hd Cs) "-") (cons? (tl Cs))) (datalog.negate (datalog.digits (tl Cs) 0))
+                (cons? Cs) (datalog.digits Cs 0)
+                true [])))
+
+(define datalog.negate
+  [] -> []
+  N -> (- 0 N))
+
+(define datalog.digits
+  [] N -> N
+  [C | Cs] N -> (let D (- (string->n C) 48)
+                  (if (and (>= D 0) (<= D 9)) (datalog.digits Cs (+ (* 10 N) D)) [])))
 
 (define datalog.in-range
   X -> (if (datalog.int32? X) X (error "datalog: arithmetic gave ~A, outside 32 bits" X)))
@@ -742,13 +828,19 @@
   -> (and (= (datalog.naive-aggregate Op Target Atom Env Tables) (tl (assoc V Env)))
           (datalog.naive-true? Rest Env Tables))
   [[Op A B] | Rest] Env Tables
-  -> (and (datalog.compare Op (datalog.naive-value A Env) (datalog.naive-value B Env))
+  -> (and (datalog.defined-compare Op (datalog.naive-value A Env) (datalog.naive-value B Env))
           (datalog.naive-true? Rest Env Tables)))
 
 (define datalog.naive-any?
   [] _ _ -> false
   [Tuple | Tuples] Terms Env -> (or (not (= (datalog.naive-match Terms Tuple Env) no))
                                     (datalog.naive-any? Tuples Terms Env)))
+
+\\ A comparison, false where either side has no value.
+(define datalog.defined-compare
+  _ [] _ -> false
+  _ _ [] -> false
+  Op A B -> (datalog.compare Op A B))
 
 (define datalog.compare
   < A B -> (< A B)
@@ -1367,6 +1459,9 @@
 (define datalog.value-form
   [var V] _ -> (datalog.var-symbol V)
   C _ -> (datalog.int-word C) where (integer? C)
+  E Constants -> [datalog.intern-string s (value datalog.*interned-slot*) (datalog.string-form E Constants)]
+                 where (datalog.string-expression? E)
+  E Constants -> [datalog.word-of (datalog.number-form E Constants)] where (datalog.kl-only-term? E)
   E Constants -> [datalog.int-word (datalog.number-form E Constants)] where (datalog.expression? E)
   [F | Args] Constants
   -> (let Con (datalog.constructor F)
@@ -1374,13 +1469,17 @@
        [datalog.record-id s (datalog.nth 5 Con) (datalog.list-form Words)])
   C Constants -> (datalog.position C Constants 0))
 
+(define datalog.word-of
+  [] -> []
+  N -> (datalog.int-word N))
+
 (define datalog.list-form
   [] -> []
   [X | Xs] -> [cons X (datalog.list-form Xs)])
 
 \\ A record term, as data: not a variable, _ or arithmetic.
 (define datalog.record-term?
-  [F | _] -> (not (element? F [var any + - *]))
+  [F | _] -> (not (or (element? F [var any]) (datalog.function? F)))
   _ -> false)
 
 \\ Whether a type has more than one constructor, so that its records' tags need checking.
@@ -1394,24 +1493,59 @@
 (define datalog.number-form
   [var V] _ -> (let W (datalog.var-symbol V) [if [> W 2147483647] [- W 4294967296] W])
   [Op A B] Constants -> [datalog.in-range [Op (datalog.number-form A Constants) (datalog.number-form B Constants)]]
+                        where (and (element? Op [+ - *]) (not (datalog.kl-only-term? [Op A B])))
+  [Op A B] Constants -> [datalog.arithmetic Op (datalog.number-form A Constants) (datalog.number-form B Constants)]
                         where (datalog.arithmetic? Op)
+  [F | Args] Constants -> (datalog.string-call F Args Constants)
   C _ -> C)
 
+\\ A string term's value, the string itself.
+(define datalog.string-form
+  [var V] _ -> [<-vector [<-address s 0] [+ (datalog.var-symbol V) 1]]
+  [F | Args] Constants -> (datalog.string-call F Args Constants)
+  C _ -> C)
+
+(define datalog.string-call
+  F Args Constants
+  -> [datalog.string-op F (datalog.list-form (map (/. P (if (= (hd P) string)
+                                                          (datalog.string-form (tl P) Constants)
+                                                          (datalog.number-form (tl P) Constants)))
+                                                 (datalog.pairs (hd (datalog.takes F)) Args)))])
+
+(define datalog.pairs
+  [] [] -> []
+  [X | Xs] [Y | Ys] -> [[X | Y] | (datalog.pairs Xs Ys)])
+
 (define datalog.expression?
-  [Op _ _] -> (datalog.arithmetic? Op)
+  [Op | _] -> (datalog.function? Op)
+  _ -> false)
+
+\\ Whether an expression gives a string.
+(define datalog.string-expression?
+  [Op | _] -> (element? Op [cat substr to-string])
   _ -> false)
 
 \\ Values of one type are equal when their words are; an expression is compared as a number.
 (define datalog.filter-form
+  Op A B Constants -> [datalog.defined-compare Op (datalog.side-form A B Constants) (datalog.side-form B A Constants)]
+                      where (or (datalog.kl-only-term? A) (datalog.kl-only-term? B))
+  = A B Constants -> [= (datalog.value-form A Constants) (datalog.value-form B Constants)]
+                     where (or (datalog.string-expression? A) (datalog.string-expression? B))
   = A B Constants -> [= (datalog.number-form A Constants) (datalog.number-form B Constants)]
                      where (or (datalog.expression? A) (datalog.expression? B))
   != A B Constants -> [not (datalog.filter-form = A B Constants)]
   = A B Constants -> [= (datalog.value-form A Constants) (datalog.value-form B Constants)]
   Op A B Constants -> [Op (datalog.number-form A Constants) (datalog.number-form B Constants)])
 
+\\ One side of a comparison: a number if either side is arithmetic, and otherwise a word.
+(define datalog.side-form
+  A B Constants -> (datalog.number-form A Constants)
+                   where (and (or (datalog.expression? A) (datalog.expression? B))
+                              (not (datalog.string-expression? A)) (not (datalog.string-expression? B)))
+  A _ Constants -> (datalog.value-form A Constants))
+
 \\ What [assign V E] binds V to: a word, as a column would hold.
 (define datalog.assign-form
-  E Constants -> [datalog.int-word (datalog.number-form E Constants)] where (datalog.expression? E)
   E Constants -> (datalog.value-form E Constants))
 
 (define datalog.step-uses
@@ -1475,6 +1609,10 @@
   [[filter Op A B] | Steps] Ctx Prefix N
   -> [if (datalog.filter-form Op A B (datalog.nth 2 Ctx)) (datalog.gen Steps Ctx Prefix N) true]
   [[assign V E] | Steps] Ctx Prefix N
+  -> [let x (datalog.assign-form E (datalog.nth 2 Ctx))
+       [if [= x []] true [let (datalog.var-symbol V) x (datalog.gen Steps Ctx Prefix N)]]]
+     where (datalog.kl-only-term? E)
+  [[assign V E] | Steps] Ctx Prefix N
   -> [let (datalog.var-symbol V) (datalog.assign-form E (datalog.nth 2 Ctx)) (datalog.gen Steps Ctx Prefix N)]
   [[fold Mode V Op Target Rel Keys Terms Columns] | Steps] [Relations Constants Indexes] Prefix N
   -> (let Ctx [Relations Constants Indexes]
@@ -1482,7 +1620,7 @@
        [let r [<-address s (datalog.relation-slot Rel Relations)]
          [let a (datalog.fold-form Op Target Rel Keys Terms Columns Ctx Prefix N)
            (cases (= Mode compare) [if [= (if (= Op sum) [datalog.in-range a] a) (datalog.number-form [var V] Constants)] Rest true]
-                  (element? Op [min max]) [if [= a none] true [let (datalog.var-symbol V) [datalog.int-word a] Rest]]
+                  (element? Op [min max mean]) [if [= a none] true [let (datalog.var-symbol V) [datalog.int-word a] Rest]]
                   true [let (datalog.var-symbol V) [datalog.int-word [datalog.in-range a]] Rest])]])
   [[absent Rel Keys Terms] | Steps] [Relations Constants Indexes] Prefix N
   -> [let r [<-address s (datalog.relation-slot Rel Relations)]
@@ -1605,6 +1743,10 @@
   -> [if [= W (datalog.value-form T Constants)] (datalog.gen-unpack Ts Ws Binds Constants Inner Otherwise) Otherwise])
 
 \\ An aggregate's accumulator a, given the next value t: none until min or max has seen one.
+(define datalog.mean
+  _ 0 -> none
+  Sum Count -> (datalog.quot Sum Count))
+
 (define datalog.fold-init
   count -> 0
   sum -> 0
@@ -1619,6 +1761,9 @@
 \\ What a fold gives: a loop over the relation in r, or for a whole tuple's keys whether it is
 \\ there.
 (define datalog.fold-form
+  mean Target Rel Keys Terms Columns Ctx Prefix N
+  -> [datalog.mean (datalog.fold-form sum Target Rel Keys Terms Columns Ctx Prefix N)
+                   (datalog.fold-form count none Rel Keys Terms Columns Ctx (cn Prefix "m") N)]
   Op Target Rel Keys Terms Columns [Relations Constants Indexes] Prefix N
   -> (let Stride (datalog.stride (datalog.arity-in Rel Relations))
           Update (datalog.fold-update Op (if (= Target none) 0 (datalog.number-form [var Target] Constants)))
@@ -1675,6 +1820,7 @@
            (tl Entry)
            (let Ctx [Relations Constants (get Name datalog.indexes)]
                 _ (set datalog.*constructors* (datalog.nth 7 (datalog.program Name)))
+                _ (set datalog.*interned-slot* (datalog.interned-slot Relations (value datalog.*constructors*)))
                 Prefix (datalog.next-name Name)
                 Fn (datalog.gen-either Steps Ctx Prefix)
                 Forms (reverse (value datalog.*forms*))
@@ -1697,12 +1843,33 @@
 
 (define datalog.gen-either
   Steps Ctx Prefix
-  -> (if (value datalog.*native*)
+  -> (if (and (value datalog.*native*) (not (datalog.kl-only? Steps)))
          (trap-error (do (set datalog.*forms* []) (datalog.native-plan Steps Ctx Prefix))
                      (/. E (do (set datalog.*fallbacks* (+ 1 (value datalog.*fallbacks*)))
                                (set datalog.*forms* [])
                                (datalog.gen-plan Steps Ctx Prefix))))
          (do (set datalog.*forms* []) (datalog.gen-plan Steps Ctx Prefix))))
+
+\\ Plans that divide, shift by other than a constant from 0 to 31, take a mean or work on strings
+\\ are KL: a kernel has no division, cannot intern, and has no way to say that a value is missing.
+(define datalog.kl-only?
+  [] -> false
+  [[filter _ A B] | Steps] -> (or (datalog.kl-only-term? A) (datalog.kl-only-term? B) (datalog.kl-only? Steps))
+  [[assign _ E] | Steps] -> (or (datalog.kl-only-term? E) (datalog.kl-only? Steps))
+  [[fold _ _ mean | _] | _] -> true
+  [_ | Steps] -> (datalog.kl-only? Steps))
+
+(define datalog.kl-only-term?
+  [Op A B] -> (or (not (integer? B)) (< B 0) (> B 31) (datalog.kl-only-term? A)) where (element? Op [bshl bshr])
+  [Op | Args] -> (or (element? Op [/ % cat strlen substr to-number to-string])
+                     (datalog.some? (function datalog.kl-only-term?) Args))
+                 where (datalog.function? Op)
+  [F | Args] -> (datalog.some? (function datalog.kl-only-term?) Args) where (datalog.record-term? [F | Args])
+  _ -> false)
+
+(define datalog.some?
+  _ [] -> false
+  F [X | Xs] -> (or (F X) (datalog.some? F Xs)))
 
 (define datalog.word-name
   Prefix N -> (intern (cn Prefix (str N))))
@@ -1762,8 +1929,16 @@
   -> (let L (datalog.native-operand A Env Ctx D)
           R (datalog.native-operand B Env Ctx (+ D 1))
        (append (hd L) (hd R)
-               [[word Target [Op (hd (tl L)) (hd (tl R))]]
+               [[word Target [(datalog.native-op Op) (hd (tl L)) (hd (tl R))]]
                 [unless [u< [+ Target 2147483648] 4294967296] [return-word (datalog.overflow-code)]]])))
+
+(define datalog.native-op
+  band -> bit-and
+  bor -> bit-or
+  bxor -> bit-xor
+  bshl -> shift-left
+  bshr -> shift-right-signed
+  Op -> Op)
 
 \\ What a kernel returns when arithmetic leaves 32 bits: more than any place to start again from.
 (define datalog.overflow-code
@@ -2459,13 +2634,29 @@
   [] -> 0
   [[_ _ _ _ Slot _] | Cs] -> (datalog.max Slot (datalog.record-slots Cs)))
 
+\\ A run's state: the values by number, the relations, the tables of records, and the dictionary
+\\ that interns values, in which KL makes strings.
 (define datalog.new-state
-  Relations Constructors
+  Relations Constructors Interned
   -> (let N (datalog.max (length Relations) (datalog.record-slots Constructors))
-          S (absvector (+ 1 N))
+          S (absvector (+ 2 N))
           _ (datalog.zero-state S 1 N)
+          _ (address-> S (+ N 1) Interned)
           _ (datalog.fill-state Relations S 1)
        (datalog.fill-records Constructors S)))
+
+(define datalog.interned-slot
+  Relations Constructors -> (+ 1 (datalog.max (length Relations) (datalog.record-slots Constructors))))
+
+\\ A string's number, interned now if it is new, as a string function can make one.
+(define datalog.intern-string
+  _ _ [] -> []
+  S Slot String -> (let Interned (<-address S Slot)
+                        Id (datalog.intern String Interned)
+                        _ (if (> (+ Id 1) (limit (<-address S 0)))
+                              (address-> S 0 (datalog.more-values (<-address S 0) [[Id | String]] (+ Id 1)))
+                              (vector-> (<-address S 0) (+ Id 1) String))
+                     Id))
 
 (define datalog.zero-state
   S I N -> (if (> I N) S (do (address-> S I 0) (datalog.zero-state S (+ I 1) N))))
@@ -2473,6 +2664,7 @@
 \\ A record's position in the table at Slot, made if it is not there: Words are its constructor's
 \\ number and its fields, as wide as the table.
 (define datalog.record-id
+  _ _ Words -> [] where (element? [] Words)
   S Slot Words -> (let Rec (<-address S Slot)
                        P ((datalog.interner (length Words)) Rec Words)
                     (if (= P 0)
@@ -2605,7 +2797,7 @@
           Interned (shen.dict 8)
           _ (datalog.intern-all Constants Interned)
           N (length Relations)
-          S (datalog.new-state Relations (datalog.nth 7 Program))
+          S (datalog.new-state Relations (datalog.nth 7 Program) Interned)
           _ (datalog.load-facts Facts Relations S Interned (datalog.nth 7 Program))
           _ (set datalog.*fresh* [])
           _ (address-> S 0 (datalog.values-vector Interned))

@@ -71,10 +71,15 @@ false
 
   With `a` a start and edges from `a` to `b` and `b` to `c`, `route` holds `[c [cons c [cons b [cons a [nil]]]] 3]`, among
   others. `datalog.sorted` orders records after other values, by constructor name and then by fields.
-- **Arithmetic:** `(+ A B)`, `(- A B)` and `(* A B)` on integers, nested as deep as wanted, can stand on either side of a comparison.
+- **Functions:** on integers, `(+ A B)`, `(- A B)`, `(* A B)`, `(/ A B)` and `(% A B)`, which truncate toward zero as C does,
+  `(band A B)`, `(bor A B)` and `(bxor A B)`, and `(bshl A B)` and `(bshr A B)`, A times or divided by 2 to the B, rounded down;
+  on strings, `(cat S T)`, `(strlen S)`, `(substr S Start Length)`, which keeps what of that range `S` has, `(to-number S)` and
+  `(to-string N)`, counting characters as `pos` does. They nest as deep as wanted and stand on either side of a comparison.
   `(= D (+ D0 W))` binds `D` when nothing else has, and compares otherwise; a binding can use what another binds, in any order.
-  An operation whose result is not 32 bits raises. Arithmetic makes new values, so a recursive rule that uses it should bound them,
-  as `(<= D 10)` does here, or it does not end:
+  An integer operation whose result is not 32 bits raises. Division by zero, and `to-number` of text that is not an integer, give
+  no value, so the rule does not hold there, whatever the order of its conditions. Rules that divide, take a `mean`, work on strings
+  or shift by other than a constant from 0 to 31 run as KL rather than native kernels, which is slower. Functions make new values, so
+  a recursive rule that uses them should bound them, as `(<= D 10)` does here, or it does not end:
 
 ```shen
 (defdatalog distances
@@ -85,9 +90,9 @@ false
   (rule (dist Y D) <-- (dist X D0) (edge X Y W) (= D (+ D0 W)) (<= D 10)))
 ```
 
-- **Aggregates:** `(= N (count (edge X _)))` counts the tuples an atom matches, and `(sum W Atom)`, `(min W Atom)` and `(max W Atom)`
-  read an integer variable of the atom. A variable of the atom that appears elsewhere in the body is a key, which the rest of the body
-  binds, as `X` here; the others belong to the aggregate. Over no tuples, `count` and `sum` give 0, and `min` and `max` give nothing, so the
+- **Aggregates:** `(= N (count (edge X _)))` counts the tuples an atom matches, and `(sum W Atom)`, `(min W Atom)`, `(max W Atom)`
+  and `(mean W Atom)`, which truncates toward zero, read an integer variable of the atom. A variable of the atom that appears elsewhere in the body is a key, which the rest of the body
+  binds, as `X` here; the others belong to the aggregate. Over no tuples, `count` and `sum` give 0, and `min`, `max` and `mean` give nothing, so the
   rule does not hold. If `N` is bound already, the aggregate compares instead. As with negation, a relation cannot depend on an aggregate of one
   that depends on it.
 
