@@ -145,6 +145,7 @@
           _ (swi.write-all S (map (function swi.no-clause) Relations))
           _ (swi.write-all S (map (/. F (cn (swi.atom-form F) ".c#10;")) Facts))
           _ (swi.write-all S (map (function swi.rule) Rules))
+          _ (swi.write-all S (map (function swi.rule) (mapcan (function datalog.equivalence-rules) (value dtg.*equivalences*))))
           _ (pr "text(T, S) :- compound(T), !, T =.. Parts, maplist(text, Parts, Texts), atomic_list_concat(Texts, ' ', In), atomic_list_concat(['[', In, ']'], S).c#10;" S)
           _ (pr "text(X, X).c#10;" S)
           _ (pr "output(Rel, Values) :- maplist(text, Values, Texts), atomic_list_concat([Rel | Texts], ' ', Line), writeln(Line).c#10;" S)

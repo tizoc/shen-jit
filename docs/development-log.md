@@ -2034,6 +2034,24 @@ Integer `/` and `%`, truncating toward zero as C and Soufflé do, `band`, `bor`,
 - **Not done:** real numbers, as columns are 32 bits.
 - **Checked:** fixtures against tables computed in Python, every evaluator agreeing, and generated programs whose arithmetic now draws from all ten integer operations, a divisor sometimes 0, and whose aggregates include `mean`: of 300, 17 to 25 use each operation and 1 a mean. They agree with the reference, KL joins, adds and removals, and with SWI-Prolog, which reads `/` as `//` behind a guard that the divisor is not 0, `%` as `rem` and mean as a sum over a count. Planted, a quotient rounded down fails 12 checks, `band` as `bor` 16, an unsigned `bshr` raises, an undefined assignment bound to 0 26, `substr` from 0 6, and strings left out of the values vector raise. Division by zero as 0 and a mean rounded down passed until two fixtures were added: a remainder with no guard and a mean of negative numbers; they fail 6 and 5 now. The workloads, which use none of this, are within noise.
 
+### Equivalences by union-find (2026-11-08, Apple M3 Max, against the same closure as rules and Soufflé 2.5's eqrel)
+
+`(relation same [symbol symbol] equivalence)` holds the reflexive, symmetric and transitive closure of what it is given. Its record holds a union-find, each value's root and each root's members; merging a round's tuples joins their classes, the smaller into the larger, and adds the pairs that makes, which the next round reads as new. About 55 lines of code.
+
+| ms, random graphs of 3,000 nodes | 1,500 links | 2,500 links | 3,000 links |
+| --- | --- | --- | --- |
+| Pairs in `same` | 45,401 | 3,922,045 | 5,727,183 |
+| The closure alone, union-find | 8.7 | 728 | 1,134 |
+| The same as three rules | 73.7, 3,560,604 derivations | not run | not run |
+| Soufflé's eqrel, alone | 1.1 | 1.2 | 1.4 |
+| With a join reading it twice, union-find | 10.7 | 1,244 | 2,016 |
+| The same, Soufflé | 8.2 | 787 | 1,335 |
+
+- **Kept: the pairs are stored.** Kernels, indexes and deltas need nothing new, and deltas are exact, the pairs a join made. Against the closure written as rules it is 8.5 times as fast on small classes, which derive each triple, and classes of thousands, at billions of derivations, finish at all.
+- **Not done: storing classes and not pairs,** as Soufflé does. Its closure costs nothing to speak of at any size, where ours spends about 190 ns a pair adding both directions from Shen: 1.1 s for a class of 2,400. Joins that read the pairs pay for them either way, 1.6 times Soufflé's time here. Storing classes would need new code for every kind of step a kernel takes, scans, lookups, probes, negation and folds, natively and in KL, and deltas of their own. A cheaper step, if large classes come up in real use: a kernel that adds a class's pairs from its members in bytes, which might take a third of the time.
+- **Demand** computes an equivalence whole, as it does what is negated: a copy of it would not be closed.
+- **Checked:** fixtures with facts, rules into an equivalence, congruence closure through one, adds and removals and demand queries, and generated programs that sometimes declare a relation of two columns of one type an equivalence, 31 of 300, against the reference, which adds the three rules, and SWI-Prolog, given the same rules. Planted, pairs added one way fail 283 checks, no reflexive pair 311, only the first new tuple joined 257, demand copying an equivalence 1, and members or roots of the smaller class left behind raise.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.

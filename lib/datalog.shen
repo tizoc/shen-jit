@@ -117,6 +117,12 @@
             (not (datalog.types? Types Known))
             (error "datalog ~A: relation ~A has columns ~S, which are not a list of symbol, string, integer or declared types" Name Rel Types)
             true (datalog.relations Name Known Items [[Rel | Types] | Acc]))
+  Name Known [[relation Rel [A B] equivalence] | Items] Acc
+  -> (if (= A B)
+         (datalog.relations Name Known [[relation Rel [A B]] | Items] Acc)
+         (error "datalog ~A: equivalence ~A has columns ~S, where two of one type are wanted" Name Rel [A B]))
+  Name _ [[relation Rel Types equivalence] | _] _
+  -> (error "datalog ~A: equivalence ~A has columns ~S, where two of one type are wanted" Name Rel Types)
   Name Known [[rule | _] | Items] Acc -> (datalog.relations Name Known Items Acc)
   Name Known [[type | _] | Items] Acc -> (datalog.relations Name Known Items Acc)
   Name _ [Item | _] _ -> (error "datalog ~A: ~S is neither a relation, a type nor a rule" Name Item))
@@ -483,7 +489,13 @@
   [[aggregate _ _ _ [_ | Terms] _] | Ls] Acc -> (datalog.body-constants Ls (datalog.term-constants Terms Acc))
   [[_ | Terms] | Ls] Acc -> (datalog.body-constants Ls (datalog.term-constants Terms Acc)))
 
-\\ [program Name Relations Rules Constants Strata Constructors].
+\\ The relations declared as equivalences.
+(define datalog.equivalences
+  [] -> []
+  [[relation Rel _ equivalence] | Items] -> [Rel | (datalog.equivalences Items)]
+  [_ | Items] -> (datalog.equivalences Items))
+
+\\ [program Name Relations Rules Constants Strata Constructors Equivalences].
 (define datalog.check
   Name Items -> (let Types (datalog.declared-types Name Items [])
                      Relations (datalog.relations Name (map (function hd) Types) Items [])
@@ -491,7 +503,8 @@
                      _ (set datalog.*constructors* Constructors)
                      Rules (datalog.rules Name Relations Items)
                      _ (datalog.check-strata Name Relations Rules)
-                  [program Name Relations Rules (datalog.constants Rules []) (datalog.strata Relations Rules) Constructors]))
+                  [program Name Relations Rules (datalog.constants Rules []) (datalog.strata Relations Rules) Constructors
+                   (datalog.equivalences Items)]))
 
 (define datalog.define
   Name Items -> (let Program (datalog.check Name Items)
@@ -621,8 +634,15 @@
           Strata (datalog.nth 6 Program)
           Check (map (/. F (datalog.check-fact Relations (datalog.nth 7 Program) F)) Facts)
           Tables (map (/. R [(hd R)]) Relations)
-       [naive Name (datalog.naive-strata 0 (datalog.highest Strata 0) Rules Strata
+          Closure (mapcan (function datalog.equivalence-rules) (datalog.nth 8 Program))
+       [naive Name (datalog.naive-strata 0 (datalog.highest Strata 0) (append Rules Closure) Strata
                                         (datalog.naive-add-all Facts Tables))]))
+
+\\ What an equivalence is, as rules: reflexive, symmetric and transitive.
+(define datalog.equivalence-rules
+  R -> [[[R [var "X"] [var "X"]] [[R [var "X"] [any]]]]
+        [[R [var "Y"] [var "X"]] [[R [var "X"] [var "Y"]]]]
+        [[R [var "X"] [var "Z"]] [[R [var "X"] [var "Y"]] [R [var "Y"] [var "Z"]]]]])
 
 \\ Each stratum's rules to a fixed point, lowest first, so that what one negates is complete.
 (define datalog.naive-strata
@@ -1361,11 +1381,12 @@
 
 \\ A relation's record: 0 where its indexes end, 1 those in use, 2 its tuples, 3 its table, 4 its
 \\ meta, 5 and 6 the tuples that are new, by position, those before 6 being all that a round reads,
-\\ 7 the bytes of a tuple, and each index from 8, by a number kept with the program across runs. A
-\\ run starts only those it looks up. An index is a vector of its table, chain, mask and keys.
+\\ 7 the bytes of a tuple, 8 an equivalence's classes, or 0, and each index from 9, by a number kept
+\\ with the program across runs. A run starts only those it looks up. An index is a vector of its
+\\ table, chain, mask and keys.
 (define datalog.new-relation
-  Arity
-  -> (let Room (+ 8 (shen-jit.shift-left 1 (if (> Arity 6) 6 Arity)))
+  Arity Equivalence
+  -> (let Room (+ 9 (shen-jit.shift-left 1 (if (> Arity 6) 6 Arity)))
           R (absvector Room)
           Stride (datalog.stride Arity)
           Meta (shen-jit.bytes 32)
@@ -1379,6 +1400,7 @@
           _ (address-> R 5 0)
           _ (address-> R 6 0)
           _ (address-> R 7 Stride)
+          _ (address-> R 8 (if Equivalence (datalog.new-classes) 0))
        R))
 
 (define datalog.count-of
@@ -1423,7 +1445,7 @@
   Rel Relations -> (datalog.position Rel (map (function hd) Relations) 1))
 
 (define datalog.index-slot
-  Rel Keys Indexes -> (datalog.position Keys (tl (assoc Rel Indexes)) 8))
+  Rel Keys Indexes -> (datalog.position Keys (tl (assoc Rel Indexes)) 9))
 
 (define datalog.steps-indexes
   [] _ Acc -> Acc
@@ -2401,11 +2423,56 @@
 \\ What was added becomes the new tuples. Gives whether there were any.
 (define datalog.merge
   Rec -> (let From (<-address Rec 6)
+              _ (if (= (<-address Rec 8) 0) skip (datalog.close-classes Rec From))
               To (datalog.count-of Rec)
               _ (datalog.index-all (<-address Rec 1) Rec From To)
               _ (address-> Rec 5 From)
               _ (address-> Rec 6 To)
            (> To From)))
+
+\\ An equivalence is kept closed: each tuple added since From joins its two classes, and the pairs
+\\ that joining makes are added too, so that they are new in the next round, as any tuple derived
+\\ would be. Classes are a union-find: a root for each value, the root's members, and each class
+\\ joins the larger.
+(define datalog.new-classes
+  -> (@p (shen.dict 64) (shen.dict 64)))
+
+(define datalog.close-classes
+  Rec P -> (if (< P (datalog.count-of Rec))
+               (let Tuples (<-address Rec 2)
+                    _ (datalog.join-classes Rec (shen-jit.u32 Tuples (* 8 P)) (shen-jit.u32 Tuples (+ 4 (* 8 P))))
+                 (datalog.close-classes Rec (+ P 1)))
+               true))
+
+(define datalog.join-classes
+  Rec A B -> (let RA (datalog.class-root Rec A)
+                  RB (datalog.class-root Rec B)
+                  Members (snd (<-address Rec 8))
+                  MA (tl (datalog.dict-find Members RA))
+                  MB (tl (datalog.dict-find Members RB))
+               (cases (= RA RB) true
+                      (< (length MA) (length MB)) (datalog.join-into Rec RB MB RA MA)
+                      true (datalog.join-into Rec RA MA RB MB))))
+
+\\ The root of a value's class, which is made, holding the value alone, if it has none.
+(define datalog.class-root
+  Rec X -> (let Roots (fst (<-address Rec 8))
+                Entry (datalog.dict-find Roots X)
+             (if (cons? Entry)
+                 (tl Entry)
+                 (do (shen.dict-> Roots X X)
+                     (shen.dict-> (snd (<-address Rec 8)) X [X])
+                     ((datalog.adder 2) Rec [X X])
+                     X))))
+
+(define datalog.join-into
+  Rec Root Big Old Small
+  -> (let Add (datalog.adder 2)
+          _ (map (/. Y (shen.dict-> (fst (<-address Rec 8)) Y Root)) Small)
+          _ (map (/. X (map (/. Y (do (Add Rec [X Y]) (Add Rec [Y X]))) Small)) Big)
+          _ (shen.dict-> (snd (<-address Rec 8)) Root (append Small Big))
+          _ (shen.dict-rm (snd (<-address Rec 8)) Old)
+       true))
 
 (define datalog.merge-all
   [] Any -> Any
@@ -2618,16 +2685,16 @@
   [Fact | _] _ Relations _ Records -> (datalog.check-fact Relations (tl Records) Fact))
 
 (define datalog.fill-state
-  [] S _ -> S
-  [[_ | Types] | Rs] S I
-  -> (do (address-> S I (datalog.new-relation (length Types)))
-         (datalog.fill-state Rs S (+ I 1))))
+  [] S _ _ -> S
+  [[Rel | Types] | Rs] S I Equivalences
+  -> (do (address-> S I (datalog.new-relation (length Types) (element? Rel Equivalences)))
+         (datalog.fill-state Rs S (+ I 1) Equivalences)))
 
 \\ A table for each type's records, after the relations.
 (define datalog.fill-records
   [] S -> S
   [[_ _ _ _ Slot Width] | Cs] S
-  -> (do (if (= (<-address S Slot) 0) (address-> S Slot (datalog.new-relation Width)) skip)
+  -> (do (if (= (<-address S Slot) 0) (address-> S Slot (datalog.new-relation Width false)) skip)
          (datalog.fill-records Cs S)))
 
 (define datalog.record-slots
@@ -2637,12 +2704,12 @@
 \\ A run's state: the values by number, the relations, the tables of records, and the dictionary
 \\ that interns values, in which KL makes strings.
 (define datalog.new-state
-  Relations Constructors Interned
+  Relations Constructors Interned Equivalences
   -> (let N (datalog.max (length Relations) (datalog.record-slots Constructors))
           S (absvector (+ 2 N))
           _ (datalog.zero-state S 1 N)
           _ (address-> S (+ N 1) Interned)
-          _ (datalog.fill-state Relations S 1)
+          _ (datalog.fill-state Relations S 1 Equivalences)
        (datalog.fill-records Constructors S)))
 
 (define datalog.interned-slot
@@ -2797,7 +2864,7 @@
           Interned (shen.dict 8)
           _ (datalog.intern-all Constants Interned)
           N (length Relations)
-          S (datalog.new-state Relations (datalog.nth 7 Program) Interned)
+          S (datalog.new-state Relations (datalog.nth 7 Program) Interned (datalog.nth 8 Program))
           _ (datalog.load-facts Facts Relations S Interned (datalog.nth 7 Program))
           _ (set datalog.*fresh* [])
           _ (address-> S 0 (datalog.values-vector Interned))
@@ -2895,8 +2962,9 @@
 (define datalog.again
   [C First Variants] [Name Relations Constants S] [Facts Interned Constructors] Rounds
   -> (let Run [Name Relations Constants S]
+          Equivalences (datalog.nth 8 (datalog.program Name))
           _ (map (/. Rel (address-> S (datalog.relation-slot Rel Relations)
-                           (datalog.new-relation (datalog.arity-in Rel Relations))))
+                           (datalog.new-relation (datalog.arity-in Rel Relations) (element? Rel Equivalences))))
                  C)
           _ (datalog.load-facts (datalog.facts-of C Facts) Relations S Interned Constructors)
           _ (map (/. Rel (datalog.merge (datalog.run-relation Rel Run))) C)
@@ -3050,8 +3118,8 @@
 \\ for in its bound columns. A magic relation's rules pass those on, from a head, through the
 \\ atoms that bind more, as the planner would order them with no sizes, to the next atom of a
 \\ copy. A copy also takes the facts of its relation. What is negated or aggregated must be
-\\ complete, so it is computed in full, by its own rules, with all it depends on. The query's
-\\ constants are the one fact of its magic relation.
+\\ complete, and an equivalence is closed only as a whole, so these are computed in full, by their
+\\ own rules, with all they depend on. The query's constants are the one fact of its magic relation.
 
 (define datalog.solve
   Name Facts [Rel | Terms]
@@ -3093,13 +3161,16 @@
   [_ | Xs] [_ | As] -> (datalog.at-bound Xs As))
 
 (define datalog.demand-items
-  [program _ Relations Rules _ _ Constructors] Rel Adorn
-  -> (let Derived (datalog.unique (map (/. R (hd (hd R))) Rules) [])
-          Done (datalog.adorn [[Rel Adorn]] [] [] Rules Derived [])
+  [program _ Relations Rules _ _ Constructors Equivalences] Rel Adorn
+  -> (let Derived (difference (datalog.unique (map (/. R (hd (hd R))) Rules) []) Equivalences)
+          Done (datalog.adorn [[Rel Adorn]] [] (datalog.keep-in [Rel] Equivalences) Rules Derived [])
           Full (datalog.full-closure (hd (tl (tl Done))) Rules)
           Copies (hd (tl Done))
        (append (datalog.type-items Constructors [])
-       (append (map (/. R [relation (hd R) (tl R)]) Relations)
+       (append (map (/. R (if (element? (hd R) Equivalences)
+                              [relation (hd R) (tl R) equivalence]
+                              [relation (hd R) (tl R)]))
+                    Relations)
        (append (mapcan (/. C (datalog.copy-items C Relations)) Copies)
        (append (map (/. R [rule (hd R) (map (function datalog.literal->data) (hd (tl R)))])
                     (datalog.rules-in Rules Full))
@@ -3158,7 +3229,7 @@
        [[[[(datalog.adorned-name Rel Adorn) | Terms] [Magic | (append (map (function hd) Atoms) Data)]]
          | (datalog.magic-rules Atoms Magic Conditions [])]
         (mapcan (/. A (tl (tl A))) Atoms)
-        (datalog.complete-relations Body)]))
+        (union (datalog.complete-relations Body) (difference (map (function hd) (datalog.atoms Body)) Derived))]))
 
 \\ [Atom' Bound | Copy]: the atom, a copy's if its relation is derived and not complete, with
 \\ what is bound before it.
@@ -3267,10 +3338,11 @@
 
 (define datalog.item
   [relation Name Types] -> [relation Name (datalog.unbracket Types)]
+  [relation Name Types equivalence] -> [relation Name (datalog.unbracket Types) equivalence]
   [type Name | Constructors] -> [type Name | (map (function datalog.unbracket) Constructors)]
   [rule Head <-- | Body] -> [rule (datalog.unbracket-atom Head) (map (function datalog.unbracket-literal) Body)]
   [rule Head] -> [rule (datalog.unbracket-atom Head) []]
-  Form -> (error "defdatalog: ~R is neither (relation Name [Types]), (type Name [Constructor Types] ...) nor (rule Head <-- Body)" Form))
+  Form -> (error "defdatalog: ~R is neither (relation Name [Types]), with equivalence after for one, (type Name [Constructor Types] ...) nor (rule Head <-- Body)" Form))
 
 \\ In a rule, brackets are records: [cons X P] is the term of constructor cons.
 (define datalog.unbracket-literal

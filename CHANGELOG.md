@@ -12,6 +12,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Datalog equivalences: `(relation same [symbol symbol] equivalence)` keeps the reflexive, symmetric and transitive closure of what
+  it is given, by union-find.
 - Datalog functions: integer `/` and `%`, `band`, `bor`, `bxor`, `bshl` and `bshr`, `cat`, `strlen`, `substr`, `to-number` and
   `to-string` on strings, and the `mean` aggregate.
 - `datalog.query`: a Datalog query computed by demand, through magic sets, deriving only what bears on its constants.

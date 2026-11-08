@@ -298,6 +298,8 @@ probe of an index and a walk along its chain for some columns. `min` and `max` s
 a sum is checked once at the end, so that the order of the tuples cannot change whether it raises. KL folds in a loop function that returns the
 value.
 
+An equivalence is an ordinary relation of pairs whose record also holds a union-find: each value's root, and each root's members. When a round's tuples are merged, each joins its two values' classes, the smaller into the larger, and every pair that joining makes is added, so that the next round reads them as new: the relation stays closed, with no rule for it, and kernels read it as any other. The reference adds the three rules of an equivalence instead. Demand computes an equivalence in full, as it does what is negated.
+
 `datalog.add` notes each relation's size, its mark, adds the facts, and goes through the components in order. One that reads only relations that
 grew, positively, goes on semi-naively: each relation that grew reads what is past its mark as new, every rule runs once with one variant for each
 atom of such a relation, and the component's own rounds follow. One that negates or aggregates a relation that changed, or reads one that was

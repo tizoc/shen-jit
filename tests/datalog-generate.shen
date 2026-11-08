@@ -246,11 +246,23 @@
   Rules -> (map (/. R [rule (hd R) (hd (tl R))]) Rules))
 
 (define dtg.items
-  Relations Rules -> (append [[type pair [pr symbol integer] [one symbol]] | (map (/. R [relation (hd R) (tl R)]) Relations)]
+  Relations Rules -> (append [[type pair [pr symbol integer] [one symbol]] | (map (function dtg.declare) Relations)]
                              (dtg.rule-items Rules)))
+
+\* A relation of two columns of one type is sometimes an equivalence: the last program's are here. *\
+(set dtg.*equivalences* [])
+
+(define dtg.declare
+  R -> (if (element? (hd R) (value dtg.*equivalences*)) [relation (hd R) (tl R) equivalence] [relation (hd R) (tl R)]))
+
+(define dtg.equivalences
+  [] -> []
+  [[Rel A A] | Rs] -> [Rel | (dtg.equivalences Rs)] where (= 0 (dtg.random 3))
+  [_ | Rs] -> (dtg.equivalences Rs))
 
 (define dtg.program
   -> (let Relations (dtg.map (function dtg.relation) (dtg.upto (+ 2 (dtg.random 3))))
+          _ (set dtg.*equivalences* (dtg.equivalences Relations))
           Rules (dtg.stratified Relations (dtg.times (+ 1 (dtg.random 5)) (freeze (dtg.rule Relations))))
           Facts (dtg.times (dtg.random 25) (freeze (dtg.fact (dtg.choose Relations))))
        [Relations Rules Facts]))

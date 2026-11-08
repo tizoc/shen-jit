@@ -404,7 +404,7 @@
                  (dt.chains Index (<-address R 2) Find Counts (shen.dict-keys Counts) (* 4 (- Column 1)) 0) 0)))
 
 (define dt.kernel-test
-  -> (let R (datalog.new-relation 2)
+  -> (let R (datalog.new-relation 2 false)
           Add (datalog.adder 2)
           Seen (dt.fill-relation R 300000 Add (shen.dict 8))
           Tuples (shen.dict-keys Seen)
@@ -883,6 +883,40 @@
 (let Db (datalog.run dt.dep (value dt.dep-facts))
   (dt.check "a query as written" (datalog.sort (datalog.query dt.dep (value dt.dep-facts) (depends a X)))
             (datalog.sort (datalog.ask Db (depends a X)))))
+
+\* Equivalences: closed as they grow, from facts, from rules, and through a rule that reads one, as
+   congruence closure does: if X and Y are the same, so are what f gives for each. *\
+(defdatalog dt.equal
+  (relation same [symbol symbol] equivalence)
+  (relation link [symbol symbol])
+  (relation f [symbol symbol])
+  (relation big [symbol])
+  (relation near-big [symbol])
+  (relation classes [symbol integer])
+  (rule (same X Y) <-- (link X Y))
+  (rule (same A B) <-- (same X Y) (f X A) (f Y B))
+  (rule (near-big X) <-- (same X Y) (big Y) (!= X Y))
+  (rule (classes X N) <-- (same X _) (= N (count (same X _)))))
+(set dt.equal-facts [[same a b] [link b c] [link x y] [f a p] [f c q] [f x r] [f s t] [same q u] [big c] [big r]])
+(dt.same "equivalence" (value dt.equal-facts) dt.equal same
+  [[a a] [a b] [a c] [b a] [b b] [b c] [c a] [c b] [c c]
+   [p p] [p q] [p u] [q p] [q q] [q u] [r r] [u p] [u q] [u u] [x x] [x y] [y x] [y y]])
+(dt.same "equivalence" (value dt.equal-facts) dt.equal near-big [[a] [b]])
+(dt.same "equivalence" (value dt.equal-facts) dt.equal classes [[a 3] [b 3] [c 3] [p 3] [q 3] [r 1] [u 3] [x 2] [y 2]])
+(dt.query "demand" dt.equal (value dt.equal-facts) [same a [var "X"]])
+(dt.query "demand" dt.equal (value dt.equal-facts) [near-big [var "X"]])
+(dt.query "demand" dt.equal (value dt.equal-facts) [classes [var "X"] 2])
+(let Db (datalog.run dt.equal [[same a b] [same c d]])
+     _ (dt.check "equivalence, classes apart" (datalog.count Db same) 8)
+     Added (datalog.add Db [[link b c]])
+     _ (dt.check "equivalence, joined by an add" (datalog.count Added same) 16)
+  (dt.check "equivalence, after a removal" (datalog.count (datalog.remove Added [[link b c]]) same) 8))
+(let Db (datalog.run dt.equal (map (/. I [link a (intern (cn "n" (str I)))]) (datalog.upto 1 300)))
+  (dt.check "a large class" (datalog.count Db same) 90601))
+(dt.raises "an equivalence of two types" "two of one type"
+  (freeze (datalog.define dt.bad [[relation e [symbol integer] equivalence]])))
+(dt.raises "an equivalence of three columns" "two of one type"
+  (freeze (datalog.define dt.bad [[relation e [symbol symbol symbol] equivalence]])))
 
 \* Negation and an aggregate read complete relations, beside the copies a query makes. *\
 (defdatalog dt.graph
