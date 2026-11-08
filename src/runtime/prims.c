@@ -123,6 +123,7 @@ const Primitive primitive_table[] = {
     {"shen-jit.pointers-dead", 0, NULL},
     {"shen-jit.pointer-read-only", 1, NULL},
     {"shen-jit.collect", 0, NULL},
+    {"shen-jit.write-bytes", 4, NULL},
 };
 
 const size_t primitive_count = sizeof primitive_table / sizeof primitive_table[0];
@@ -1484,6 +1485,25 @@ static V bytes_primitive(VM *vm, unsigned prim)
     }
 }
 
+/* shen-jit.write-bytes: N bytes of a buffer from I, to an output stream, by one write,
+   where write-byte takes a call each. */
+static V write_bytes(VM *vm)
+{
+    V b = vm->args[0], i = vm->args[1], n = vm->args[2];
+    char *base;
+    size_t length;
+    if (!memory_of(b, &base, &length))
+        return sj_raise_value(vm, "bytes: ~S is not a byte buffer", b);
+    if (!bytes_range(length, i, n))
+        return sj_raise_value(vm, "shen-jit.write-bytes: ~S is not a valid range", i);
+    FILE *f = stream_file(vm->args[3], true);
+    if (!f)
+        return sj_raise_value(vm, "shen-jit.write-bytes: ~S is not an open output stream", vm->args[3]);
+    if (fixval(n) > 0 && fwrite(base + fixval(i), 1, (size_t)fixval(n), f) != (size_t)fixval(n))
+        return raise_io_failed(vm, "shen-jit.write-bytes", errno);
+    return n;
+}
+
 /* Bit operations (docs/bytecode.md), on the 62 bits of a fixnum. A fixnum's tag bits
    are zero, so its value shifted left by two is its own word. */
 static V bit_operation(VM *vm, unsigned prim)
@@ -1771,6 +1791,7 @@ V sj_primitive(VM *vm, size_t index)
     case P_COLLECT:
         vm_collect(vm, 0);
         return V_TRUE;
+    case P_WRITE_BYTES: return write_bytes(vm);
     case P_DEREF: {
         /* What X is bound to in the vector b, along a chain of variables; the
            third argument marks a variable with no binding. */

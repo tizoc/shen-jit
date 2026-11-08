@@ -396,7 +396,8 @@ may use as values, as (fn shen-jit.u8)."
     (do (shen-jit.primitive shen-jit.pointer-owner 1)
     (do (shen-jit.primitive shen-jit.pointers-dead 0)
     (do (shen-jit.primitive shen-jit.pointer-read-only 1)
-    (do (shen-jit.primitive shen-jit.collect 0) shen.skip)))))))))))))))))))))))))))))))))))))))))))))))))))))))
+    (do (shen-jit.primitive shen-jit.collect 0)
+    (do (shen-jit.primitive shen-jit.write-bytes 4) shen.skip))))))))))))))))))))))))))))))))))))))))))))))))))))))))
 
 "Stage 1 calls this after the kernel and extensions are initialised: it
 registers the port functions meant for Shen code. (shen-jit.exit N) ends

@@ -12,6 +12,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `shen-jit.write-bytes`: a range of a byte buffer written to a stream at once, where `write-byte` takes a call a byte.
 - `example-apps/depends/`, a dependency analyser over Shen and KL source files, built over `lib/datalog.shen` as one
   executable: what calls what, cycles between files, dead code from roots, call depths, and why one function reaches another.
 - Datalog lattices: `(relation reached [symbol integer] (lattice F))` keeps for each key the least upper bound, by a Shen

@@ -343,6 +343,7 @@ them.
 | `(shen-jit.string->bytes S)` | A new buffer with S's bytes |
 | `(shen-jit.bytes->string B I N)` | A new string of the N bytes from I |
 | `(shen-jit.copy-bytes To I From J N)` | Copies N bytes from J in From to I in To, which may overlap, and returns To |
+| `(shen-jit.write-bytes B I N S)` | Writes the N bytes from I to the output stream S at once, and returns N |
 
 On a fixnum's 62 bits: `shen-jit.bit-and`, `bit-or`, `bit-xor`, `bit-not`, `shift-left`, `shift-right`, `rotate32`,
 `bswap32`, `popcount`, `clz` and `ctz`.

@@ -2147,6 +2147,13 @@ Soufflé chooses a few sorted orders so that one serves several searches: an ord
 
 On one thread, ahead everywhere but the skewed join, which is even, and the shortest runs, under Soufflé's startup. With the entries above: records, 536,345 routes in 54 to 64 ms against 290 to 320; shortest paths 23.5 against 137.9; one node's paths by demand 0.3 against 1.3 with its magic sets; reading 1.39 million facts 334 against 309.
 
+### Writing a buffer at once (2026-11-08, Apple M3 Max, against the commit before and Soufflé 2.5)
+
+`shen-jit.write-bytes B I N Stream`, a primitive, writes a range of a byte buffer by one `fwrite`. The kernel's `pr` writes a string a byte at a time and finds its end by an error caught at each character, about 27 ns a byte, and `write-byte` takes a call a byte, about 19 ns; joining lines into chunks for `pr` changed nothing. It is the last primitive, so no other's number moves; Shen/Scheme as the host makes the same generated files.
+
+- **Fact files:** `datalog.write-facts` writes each line through it, 275 ms for the sparse closure's 1,388,324 lines against 455. Soufflé 2.5's compiled program writes the same relation in about 276 ms, its run with the output less its read, as without an output it skips the read too. Building the lines, decoding each tuple and its numbers into text, is most of what is left.
+- **Not done:** `pr` itself through it. Every program's output would gain, but `pr` is the kernel's, and an override must agree with it under `make test-overrides`; worth its own change.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.

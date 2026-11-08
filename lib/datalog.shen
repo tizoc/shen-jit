@@ -3580,7 +3580,7 @@
   -> (let Csv (datalog.csv? Path)
           Out (open Path out)
           Tuples (datalog.tuples [db Name S | Rest] Rel)
-          _ (map (/. T (pr (datalog.line T Csv) Out)) Tuples)
+          _ (map (/. T (let B (shen-jit.string->bytes (datalog.line T Csv)) (shen-jit.write-bytes B 0 (shen-jit.bytes-length B) Out))) Tuples)
           _ (close Out)
        (length Tuples)))
 
