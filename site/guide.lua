@@ -13,6 +13,7 @@ local PAGES = {
   io = 'Chunk I/O',
   fs = 'Filesystem operations',
   processes = 'Subprocesses and pipelines',
+  ['tree-sitter'] = 'Tree-sitter bindings',
   framing = 'Binary framing',
   ['io-sockets'] = 'Socket I/O endpoints',
   deadlines = 'Operation deadlines',

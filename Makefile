@@ -34,6 +34,7 @@ FFI_TEST_LIB := $(BUILD)/ffi_test$(if $(EXE),.dll,.so)
 CURL_ADAPTER := $(BUILD)/shen-curl$(if $(EXE),.dll,.so)
 FS_ADAPTER := $(BUILD)/shen-fs$(if $(EXE),.dll,.so)
 PROCESS_ADAPTER := $(BUILD)/shen-process$(if $(EXE),.dll,.so)
+TREE_SITTER_ADAPTER := $(BUILD)/shen-tree-sitter$(if $(EXE),.dll,.so)
 # Your own paths and targets, which git ignores: see the variables below.
 -include local.mk
 .DEFAULT_GOAL := all
@@ -90,6 +91,18 @@ $(PROCESS_ADAPTER): lib/process.c lib/process-posix.h lib/process-win.h lib/buil
 
 test-process: $(BUILD)/shen-jit
 	CC="$(CC)" sh tests/process.sh $(SHEN_JIT)
+
+.PHONY: tree-sitter test-tree-sitter deps-tree-sitter
+tree-sitter: $(TREE_SITTER_ADAPTER)
+
+$(TREE_SITTER_ADAPTER): lib/tree-sitter.c lib/build-tree-sitter.sh include/shen.h | $(BUILD)
+	CC="$(CC)" CFLAGS="$(CFLAGS)" sh lib/build-tree-sitter.sh $@
+
+deps-tree-sitter:
+	sh tools/tree-sitter-deps.sh .deps
+
+test-tree-sitter: $(BUILD)/shen-jit
+	CC="$(CC)" sh tests/tree_sitter.sh $(SHEN_JIT)
 
 # The runtime alone, and the image stage 1 writes with it from the stage 0
 # output.
@@ -223,7 +236,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi buffers grammar io fs processes framing io-sockets deadlines http-head http http-streaming http-listener json datalog curl
+GUIDE_PAGES := design semantics bytecode ffi buffers grammar io fs processes tree-sitter framing io-sockets deadlines http-head http http-streaming http-listener json datalog curl
 GUIDE_PANDOC := pandoc -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
 guide:
@@ -543,6 +556,8 @@ test-san: $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stage0/.done 
 	  CC="$(CC)" CFLAGS="$(SAN_FLAGS)" sh tests/fs.sh $(BUILD)/shen-jit-san$(EXE)
 	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=$(abspath $(BUILD)/shen-jit-san.img) \
 	  CC="$(CC)" CFLAGS="$(SAN_FLAGS)" sh tests/process.sh $(BUILD)/shen-jit-san$(EXE)
+	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=$(abspath $(BUILD)/shen-jit-san.img) \
+	  CC="$(CC)" CFLAGS="$(SAN_FLAGS)" sh tests/tree_sitter.sh $(BUILD)/shen-jit-san$(EXE)
 
 test-x86: $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stage0/.done | $(BUILD)
 	for t in $(TESTS); do \

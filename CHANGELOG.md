@@ -11,6 +11,10 @@ All notable changes to this project are documented in this file. The format is b
   environment/cwd, owned children, bounded waits, cancellable pipes, concurrent communication, streaming
   sinks, output limits and process-group/job cleanup. `make process` builds their adapter. The
   [reference](docs/processes.md) includes `tools/process-filter.shen`, which publishes output after exit 0.
+- Optional `lib/tree-sitter.shen`: source-language loading, owned syntax snapshots, byte/point ranges,
+  error/missing nodes, traversal and bounded structural query captures. `make tree-sitter` builds its
+  adapter; [the reference](docs/tree-sitter.md) includes a bounded C source-fact extractor using our I/O,
+  filesystem traversal and safe output replacement.
 - Optional `lib/fs.shen`: paths, owned metadata, sorted bounded listings and traversal, exclusive temporary
   files/directories, rename without overwrite, replacement and bounded copying through our I/O endpoints.
   Build its platform adapter with `make fs`; [the reference](docs/fs.md) includes the API and `tools/fs-copy.shen`.

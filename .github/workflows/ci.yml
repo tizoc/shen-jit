@@ -94,9 +94,12 @@ jobs:
           echo "KERNEL_DIR=$(sh tools/ci-deps.sh kernel "$PWD/.kernel")" >> "$GITHUB_ENV"
       - name: Release build
         run: make ${{ matrix.static && 'STATIC=1' || '' }} release stlib
+      - name: Optional Tree-sitter test dependencies
+        if: '!matrix.static || matrix.heavy'
+        run: make deps-tree-sitter
       - name: Tests
         run: |
-          for suite in check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-fs test-process test-http test-datalog test-ffi test-curl test-overrides; do
+          for suite in check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-fs test-process test-tree-sitter test-http test-datalog test-ffi test-curl test-overrides; do
             echo "::group::$suite"
             make "KERNEL_DIR=$KERNEL_DIR" "$suite"
             echo "::endgroup::"

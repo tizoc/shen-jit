@@ -1819,6 +1819,48 @@ execution remains CI's responsibility; no new platform ABI or instruction was in
   with MinGW gcc 10.2; Windows execution awaits CI. The reference has its own guide page, executable
   examples and release-package coverage.
 
+### Tree-sitter batch snapshots (2026-11-08, M3 Max, macOS and Linux arm64)
+
+- Added optional `lib/tree-sitter.shen` and a public-C-API adapter over Tree-sitter 0.25 or later.
+  Complete byte views produce managed source/tree snapshots; structural queries add captures referring
+  to those nodes. Parsers, trees, queries and cursors are destroyed before returning. This takes the
+  batch route without introducing live node aliases, close dependencies or edit versions. Incremental
+  parsing, predicate evaluation and a comparison with live wrappers remain separate work.
+- Each preorder node has 48 record bytes: parent, first child, next sibling, kind/field IDs, flags,
+  byte range and byte row/column coordinates. Captures have 16 bytes plus shared names. Query mapping
+  uses an operation-local native hash table of node identities; Shen traversal reads records directly,
+  without a foreign call per node. Source and name tables count toward the result payload budget.
+  This does not count managed overhead or impose a hard limit on Tree-sitter's parser allocations.
+- Managed input ranges are copied before releasing the VM; foreign views first become checked managed
+  ranges. Native result conversion roots vectors across allocation and frees buffers on every return,
+  including managed allocation failure. Language handles retain reloadable FFI entries, rather than
+  pointers in images. Syntax errors/missing nodes stay in the tree, and an explicit ERROR kind handles
+  Tree-sitter's out-of-table error symbol. Every query predicate/directive is rejected explicitly,
+  since the C matcher does not evaluate them.
+- The adapter checks input/query/result/node/capture/match budgets and native monotonic deadlines,
+  including upstream progress callbacks. It detects the query engine's active-state overflow rather
+  than publishing incomplete matches. Query compilation/destruction are not preemptible; upstream
+  allocation failure retains Tree-sitter's abort policy. Pinned optional sources are runtime 0.26.13
+  and C grammar 0.24.2, fetched explicitly with archive hashes and their licenses. Ordinary builds
+  need neither. The source and installed-runtime build routes use the same adapter.
+- The suite passes 111 checks on macOS and Linux arm64 with gcc 10. An independent C client walks
+  with child accessors and checks all node fields/captures; Python independently checks coordinates
+  and reconstructed links for Unicode/CRLF, malformed and NUL input. Other checks cover exact limits,
+  duplicate captures, rejected grammars/predicates, types, foreign storage, timeout during a large
+  parse, images and concurrent collection while parsing a 256 KiB comment.
+- `example-apps/source-facts/` walks C headers/sources through our filesystem/I/O libraries and writes
+  bounded NDJSON with file/error records, definitions, direct calls, containers and ranges. It keeps
+  one file snapshot at a time and replaces output only after success. Processing 103 fixture files
+  under a 16 MiB heap cap leaves 3032 KiB live on macOS and about 3035 KiB on Linux. A real run over
+  19 runtime files produces 5355 records: 504 definitions and 4832 direct calls, with every name range
+  independently checked. Five files retain syntax-error flags, so these are syntactic facts rather
+  than a complete semantic C dependency graph. No throughput improvement is claimed.
+- The fast tier, ASan/UBSan, executable reference examples, guide rendering and release-package checks
+  pass on macOS. Static Linux runs 26 pure checks and skips before compilers/dependencies/Python.
+  Windows x86-64 cross-compiles with warnings treated as errors; explicitly selecting the Windows API
+  version before headers fixes an undeclared `GetTickCount64` return type in old MinGW headers.
+  Windows execution awaits CI. The API reference is its own page linked from the guide.
+
 ### Filesystem operations (2026-11-08, M3 Max, macOS and Linux arm64)
 
 - Added optional `lib/fs.shen` over our I/O endpoints, with paths, owned metadata, sorted bounded
