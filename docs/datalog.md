@@ -146,9 +146,10 @@ With nodes `a` and `b`, an edge from `a` to `b` and costs 3 and 5 for `a`, `degr
 
   `(lattice F)` keeps, for each key, the least upper bound of all the values derived for it, by `F`, a Shen function of two
   integers that is commutative, associative and idempotent, and whose values reach a top in finitely many steps, or evaluation
-  does not end; `min` and `max` are two such. The union of bit sets, `(define union A B -> (shen-jit.bit-or A B))`, gives for
-  each node which of up to 32 starts reach it, and a flat lattice, a constant or a value for many, constant propagation. Rules
-  that add to a lattice run as KL, as they call `F`.
+  does not end; `min` and `max` are two such. `(lattice bor)` and `(lattice band)` are the union and the intersection of bit
+  sets, joined natively: `bor` gives for each node which of up to 32 starts reach it, and `band` what every way into it carries.
+  With a function of your own, such as a flat lattice, a constant or a value for many, for constant propagation, rules that
+  add to it run as KL, which calls `F`.
 
   While its own recursion runs, a rule may still read a tuple that a better one has since replaced, so another relation in the
   same recursion may hold what follows from it; relations evaluated after it see only the best. `datalog.add` evaluates again

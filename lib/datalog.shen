@@ -518,7 +518,8 @@
   [_ | Items] -> (datalog.keyed Items))
 
 \\ (lattice F) keeps for each key the least upper bound of its values, by F, a function of two
-\\ integers that gives one; min and max are such, natively.
+\\ integers that gives one: bor or band, the bit operations, which kernels compute, or the name of
+\\ a Shen function, which KL calls. min and max are such too, natively.
 (define datalog.keep-mode?
   [lattice F] -> (symbol? F)
   Mode -> (element? Mode [min max choice]))
@@ -718,14 +719,14 @@
 
 \\ What a key keeps of a better value: a lattice the bound of both.
 (define datalog.kept
-  [lattice F] Values T -> (append (datalog.key-of T) [(datalog.in-range ((fn F) (hd (reverse T)) (hd (reverse Values))))])
+  [lattice F] Values T -> (append (datalog.key-of T) [(datalog.lub F (hd (reverse T)) (hd (reverse Values)))])
   _ Values _ -> Values)
 
 (define datalog.key-of
   Values -> (reverse (tl (reverse Values))))
 
 (define datalog.better?
-  [lattice F] A B -> (not (= ((fn F) B A) B))
+  [lattice F] A B -> (not (= (datalog.lub F B A) B))
   min A B -> (< A B)
   max A B -> (> A B)
   choice _ _ -> false)
@@ -1742,7 +1743,9 @@
          [if [= k 0]
              (Replace (hd (reverse Forms)))
              [let old [shen-jit.u32 [<-address r 2] [+ [* [- k 1] [<-address r 7]] (* 4 (- N 1))]]
-               [let j [datalog.int-word [datalog.in-range [F [datalog.word-int old] [datalog.word-int (hd (reverse Forms))]]]]
+               [let j [datalog.int-word (if (element? F [bor band])
+                                            [datalog.arithmetic F [datalog.word-int old] [datalog.word-int (hd (reverse Forms))]]
+                                            [datalog.in-range [F [datalog.word-int old] [datalog.word-int (hd (reverse Forms))]]])]
                  [if [= j old] 0 (Replace j)]]]]])
   N Forms Mode
   -> (let Call (if (= Mode none)
@@ -1757,6 +1760,16 @@
 (define datalog.keyed-mode
   Rel -> (let Entry (assoc Rel (value datalog.*keyed*)) (if (empty? Entry) none (tl Entry))))
 
+\\ A lattice's least upper bound of two integers, checked to be 32 bits.
+(define datalog.lub
+  F A B -> (datalog.arithmetic F A B) where (element? F [bor band])
+  F A B -> (datalog.in-range ((fn F) A B)))
+
+\\ Lattices that kernels join: those of the bit operations.
+(define datalog.native-lattice?
+  [lattice F] -> (element? F [bor band])
+  _ -> false)
+
 \\ Adds a value to a lattice's key, as the KL of datalog.insert-form does inline: the key's tuple is
 \\ replaced by one of the least upper bound of the two values, unless that is what it has. 1 if the
 \\ relation changed, and 0 if not.
@@ -1769,7 +1782,7 @@
        (if (= P 0)
            (Replace Rec Words)
            (let Old (shen-jit.u32 (<-address Rec 2) (+ (* (- P 1) (<-address Rec 7)) (* 4 (- N 1))))
-                Join (datalog.int-word (datalog.in-range ((fn F) (datalog.word-int Old) (datalog.word-int (hd (reverse Words))))))
+                Join (datalog.int-word (datalog.lub F (datalog.word-int Old) (datalog.word-int (hd (reverse Words)))))
              (if (= Join Old) 0 (Replace Rec (append Keys [Join])))))))
 
 \\ The expression for these steps. Each atom's loop is a function of its own, so that it is a
@@ -2028,7 +2041,7 @@
 \\ and has no way to say that a value is missing.
 (define datalog.kl-only?
   [] -> false
-  [[emit Rel | _] | _] -> (cons? (datalog.keyed-mode Rel))
+  [[emit Rel | _] | _] -> (and (cons? (datalog.keyed-mode Rel)) (not (datalog.native-lattice? (datalog.keyed-mode Rel))))
   [[filter _ A B] | Steps] -> (or (datalog.kl-only-term? A) (datalog.kl-only-term? B) (datalog.kl-only? Steps))
   [[assign _ E] | Steps] -> (or (datalog.kl-only-term? E) (datalog.kl-only? Steps))
   [[fold _ _ mean | _] | _] -> true
@@ -2441,7 +2454,23 @@
 
 \\ As datalog.keyed-insert-kernel, inline.
 (define datalog.native-keyed-store
+  Slot Stride Values Again [lattice Op]
+  -> (let Keys (reverse (tl (reverse Values)))
+       [[word (protect Kv) (hd (reverse Values))]
+        | (datalog.native-keyed-probe Slot Stride (append Keys [(protect Kv)]) Again
+            (/. Old Keep Add [[word (protect Kj) [(datalog.native-op Op) Old (protect Kv)]]
+                              [when [= (protect Kj) Old] Keep]
+                              [word (protect Kv) (protect Kj)]
+                              Add]))])
   Slot Stride Values Again Mode
+  -> (datalog.native-keyed-probe Slot Stride Values Again
+       (/. Old Keep Add (datalog.keyed-check Mode (hd (reverse Values)) [shift-right-signed [shift-left Old 32] 32] Keep Add))))
+
+\\ The probe of the table by key, then the insert. Check gives the statements for a key that has a
+\\ tuple, given the word of its value and two exits: Keep leaves the tuple as it is, and Add goes on
+\\ to add the new one.
+(define datalog.native-keyed-probe
+  Slot Stride Values Again Check
   -> (let Tuples (datalog.tuples-param Slot)
           KTab (datalog.param (datalog.word-name "Ktab" Slot) [<-address (datalog.record-form Slot) 8])
           Meta (datalog.param (datalog.word-name "Meta" Slot) [<-address (datalog.record-form Slot) 4])
@@ -2457,7 +2486,7 @@
             [when [= [shift-right (protect E) 32] (protect Kfp)]
               [word (protect Pe) [* [- [bit-and (protect E) (datalog.mask)] 1] Stride]]
               [when [and | (datalog.equal-columns Tuples (protect Pe) Keys 1)]
-                | (datalog.keyed-check Mode (hd (reverse Values)) [s32 Tuples [+ (protect Pe) (* 4 (length Keys))]] [exit Block] [exit Probe])]]
+                | (Check [u32 Tuples [+ (protect Pe) (* 4 (length Keys))]] [exit Block] [exit Probe])]]
             [word (protect Ki) [bit-and [+ (protect Ki) 1] [u64 Meta 8]]]]
           | (datalog.native-store Slot Stride Values Again (datalog.native-label "insert")
               [[u64! KTab [shift-left (protect Ki) 3] [bit-or [shift-left (protect Kfp) 32] [+ (protect Count) 1]]]]

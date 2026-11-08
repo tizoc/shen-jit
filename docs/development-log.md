@@ -2154,6 +2154,13 @@ On one thread, ahead everywhere but the skewed join, which is even, and the shor
 - **Fact files:** `datalog.write-facts` writes each line through it, 275 ms for the sparse closure's 1,388,324 lines against 455. Soufflé 2.5's compiled program writes the same relation in about 276 ms, its run with the output less its read, as without an output it skips the read too. Building the lines, decoding each tuple and its numbers into text, is most of what is left.
 - **Not done:** `pr` itself through it. Every program's output would gain, but `pr` is the kernel's, and an override must agree with it under `make test-overrides`; worth its own change.
 
+### Native bit-set lattices (2026-11-08, Apple M3 Max, against the commit before)
+
+`(lattice bor)` and `(lattice band)` name the bit operations, not a Shen function, and kernels join them: the new value goes in a register, is joined with the key's old one, and the tuple is added only if that changed it. The probe by key is now one function that `min`, `max`, `choice` and these share, given what to do with the old value. About 25 lines of code.
+
+- **Bit sets for which of 30 starts reach each node,** the workload of the lattices' entry: 97.9 ms natively against 148 through a Shen function, for the same 527,935 derivations into 18,858 tuples; the same as pairs, one per start and node, takes 55 ms but keeps 28 times as many tuples. A derivation probes the key table and, when the bound grows, the relation's own table too, and leaves a dead tuple behind, which is what is left of the difference.
+- **Checked:** both lattices by hand, against a Python fixpoint, and on 20 random graphs through every evaluator against the reference, and that each of their plans is a kernel. Planted, `band` computed as `bor` raises in the generated programs and the joined value not kept fails 144 checks. Adding a tuple whose bound did not change is harmless, as the relation's own table already holds it, so leaving out that test changes nothing but a probe.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.

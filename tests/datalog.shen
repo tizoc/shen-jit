@@ -1056,6 +1056,35 @@
          (do (dt.same (make-string "random lattice ~A" K) Facts dt.lattices reached-by (datalog.sorted (datalog.run-naive dt.lattices Facts) reached-by))
              (dt.random-lattice (- K 1)))))
 (dt.random-lattice 20)
+
+\* The bit operations as lattices, which kernels join: bor for which starts reach a node, and band
+   for the tags every way into a node carries. Each plan is a kernel. *\
+(defdatalog dt.bits
+  (relation edge [integer integer])
+  (relation start [integer integer])
+  (relation tag [integer integer])
+  (relation reached [integer integer] (lattice bor))
+  (relation common [integer integer] (lattice band))
+  (rule (reached X M) <-- (start X M))
+  (rule (reached Y M) <-- (reached X M) (edge X Y))
+  (rule (common X M) <-- (tag X M))
+  (rule (common Y M) <-- (common X M) (edge X Y)))
+(dt.same "bit lattices" [[start 1 1] [start 4 2] [edge 1 2] [edge 2 3] [edge 4 3] [edge 3 5] [edge 5 3]] dt.bits reached
+  [[1 1] [2 1] [3 3] [4 2] [5 3]])
+(dt.same "bit lattices" [[tag 1 7] [tag 4 5] [tag 3 12] [edge 1 2] [edge 2 3] [edge 4 3] [edge 3 5] [edge 5 3]] dt.bits common
+  [[1 7] [2 7] [3 4] [4 5] [5 4]])
+(define dt.random-bits
+  0 -> ok
+  K -> (let Edges (map (/. E [edge (hd (tl E)) (hd (tl (tl E)))]) (dt.weighted 18 10 []))
+            Facts (append [[start (dtg.random 10) 1] [start (dtg.random 10) 4] [tag (dtg.random 10) 13] [tag (dtg.random 10) 7] [tag (dtg.random 10) 2147483647]] Edges)
+            Ref (datalog.run-naive dt.bits Facts)
+         (do (dt.same (make-string "random bits ~A" K) Facts dt.bits reached (datalog.sorted Ref reached))
+             (dt.same (make-string "random bits ~A" K) Facts dt.bits common (datalog.sorted Ref common))
+             (dt.random-bits (- K 1)))))
+(dt.random-bits 20)
+(dt.check "bit lattices are kernels"
+  (length (mapcan (/. F (if (= (hd F) define-native) [F] [])) (datalog.code dt.bits)))
+  (length (datalog.all-steps (datalog.plans dt.bits))))
 (dt.explain-all "explained, lattice" dt.lattices (value dt.lattice-facts))
 (dt.raises "a lattice of symbols" "must be an integer"
   (freeze (datalog.define dt.bad [[relation a [integer symbol] [lattice dt.union]]])))
