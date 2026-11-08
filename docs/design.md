@@ -276,7 +276,9 @@ same bounds check and access. A pointer that is dead or has no length has length
 `lib/datalog.shen` is Shen, loaded on request, and the JIT knows nothing of it. A program is checked into relations and rules, and planned: relations
 by strongly connected components in dependency order, and each rule as an order of joins, the atom with the most columns known going next. In a
 recursive component a rule has one variant for each of its atoms in that component, which reads that relation's new tuples and goes first, as a new
-derivation must use a new tuple somewhere. Join order is chosen as a run goes, from the sizes of the relations, and again when one has doubled: the next atom is the one expected to give the fewest tuples for what is known, from
+derivation must use a new tuple somewhere. So that a derivation from several new tuples is made once, by the variant of the first atom to read one,
+the component's atoms before that one read only the old tuples, from before the round's new ones, and those after it read all: a scan stops where
+the new tuples begin, a walk along an index's chain, which runs from the newest, skips those, and a probe of the table ignores them. Join order is chosen as a run goes, from the sizes of the relations, and again when one has doubled: the next atom is the one expected to give the fewest tuples for what is known, from
 an index's tuples per key if it has one, and otherwise as if the columns were alike and independent. Each order becomes code, described below, kept with the program, as a rule has only so many orders.
 
 A negated atom counts as a dependency too, so its relation's component comes first, and the checker refuses a program where a relation depends

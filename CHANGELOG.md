@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- Datalog derives each combination of tuples once in a rule with several atoms of its own recursion, such as
+  `(path X Z) <-- (path X Y) (path Y Z)`, where it derived those that were new together once for each.
+
 ### Added
 
 - Optional `lib/curl.shen`, with a small C adapter over libcurl: bounded HTTP(S) requests, reusable clients,

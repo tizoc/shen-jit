@@ -99,6 +99,8 @@ With nodes `a` and `b`, an edge from `a` to `b` and costs 3 and 5 for `a`, `degr
   (rule (unreached X) <-- (node X) (not (reached X))))
 ```
 - **Results** are sets, and the order of rules, atoms and facts does not change them.
+- **Recursion** can be through several atoms of a rule, as in `(rule (path X Z) <-- (path X Y) (path Y Z))`: each combination
+  of tuples is derived once, in the round after the last of them was.
 - **The order of a rule's atoms** need not be tuned. A run chooses the order of joins from the sizes of the relations, and again when one has doubled.
 - **Adding facts** with `datalog.add` gives what a run of all of them would. It goes on from what grew where it can, and
   evaluates again only what negates or aggregates something that changed, or reads what was evaluated again. The database

@@ -124,6 +124,65 @@
 (dt.same "nonlinear chain" [[edge a b] [edge b c] [edge c d] [edge d e]] dt.nonlinear path
   [[a b] [a c] [a d] [a e] [b c] [b d] [b e] [c d] [c e] [d e]])
 
+\* Each combination of tuples is derived once, by the variant of the first atom that reads a new
+   one, as the atoms before it read only the old tuples: by a lookup and its chain, a scan, and a
+   probe of the table. With joins as KL nothing is derived twice, though an insert that finds no
+   room counts again once it has grown it, at most 16 times here; a native kernel that has to grow
+   its head starts again where it stood, which repeats at most Slack. *\
+(define dt.derived
+  Db Rel -> (hd (tl (tl (assoc Rel (datalog.stats Db))))))
+
+(define dt.derived-once
+  Label Name Facts Rel Want Slack
+  -> (let Kl (dt.derived (dt.run-kl Name Facts) Rel)
+          Native (dt.derived (datalog.run Name Facts) Rel)
+          Exact (Want (datalog.run Name Facts))
+       (do (dt.check (cn Label ", KL") (dt.within? Kl Exact 16) true)
+           (dt.check (cn Label ", native") (dt.within? Native Kl Slack) true))))
+
+(define dt.within?
+  X Low Slack -> (and (>= X Low) (<= X (+ Low Slack))))
+
+(define dt.joined
+  [] _ -> 0
+  [[_ Y] | Ts] Paths -> (+ (length (dt.from Y Paths)) (dt.joined Ts Paths)))
+
+(define dt.from
+  _ [] -> []
+  Y [[Y Z] | Ts] -> [[Y Z] | (dt.from Y Ts)]
+  Y [_ | Ts] -> (dt.from Y Ts))
+
+(define dt.formula-edges
+  N N Acc -> Acc
+  I N Acc -> (dt.formula-edges (+ I 1) N [[e I (shen.mod (+ (* I 7) 3) N)] [e I (shen.mod (+ (* I 5) 1) N)] | Acc]))
+
+(defdatalog dt.closure2
+  (relation e [integer integer])
+  (relation p [integer integer])
+  (rule (p X Y) <-- (e X Y))
+  (rule (p X Z) <-- (p X Y) (p Y Z)))
+
+(defdatalog dt.cross
+  (relation e [integer integer])
+  (relation p [integer integer])
+  (rule (p X Y) <-- (e X Y))
+  (rule (p X Z) <-- (p X _) (p _ Z)))
+
+(defdatalog dt.sym
+  (relation e [integer integer])
+  (relation p [integer integer])
+  (relation q [integer integer])
+  (rule (p X Y) <-- (e X Y))
+  (rule (p Y X) <-- (q X Y))
+  (rule (q X Y) <-- (p X Y) (p Y X)))
+
+(dt.derived-once "nonlinear derives once" dt.closure2 (dt.formula-edges 0 16 []) p
+  (/. Db (+ (datalog.count Db e) (dt.joined (datalog.tuples Db p) (datalog.tuples Db p)))) 100)
+(dt.derived-once "a cross product derives once" dt.cross (dt.formula-edges 0 10 []) p
+  (/. Db (+ (datalog.count Db e) (* (datalog.count Db p) (datalog.count Db p)))) 100)
+(dt.derived-once "a member derives once" dt.sym (dt.formula-edges 0 24 [[e 1 2] [e 2 1] [e 5 5]]) q
+  (/. Db (datalog.count Db q)) 4)
+
 \* Mutual recursion, with a head outside the cycle reading it. *\
 (defdatalog dt.mutual
   (relation succ [integer integer])

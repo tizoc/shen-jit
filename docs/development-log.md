@@ -1976,6 +1976,23 @@ In parallel, the OpenMP build with 32-bit values:
 - **On 12 threads** Soufflé is now 1.3 times our time on same generation, 3.3 on points-to as written, 3.8 on nonlinear closure and 6.6 on the skewed join, against 2.3 to 8.3 before. We are ahead on both closures now, the dense one included, on the call graph and on the badly ordered rule. Our points-to large, order c, read 536 ms here and 449 on the one-thread run, as the load rose during this one.
 - **What is left is threads:** at one thread each, only the skewed join is behind, and the gap on 12 is what Soufflé's parallel joins give it.
 
+### Old tuples in the other atoms of a rule (2026-11-08, Apple M3 Max, against the commit before)
+
+A rule with several atoms of its own component had a variant for each, reading that atom's new tuples and all tuples of the others, so a combination of tuples that were new together was derived once for each of them. Nonlinear closure, `(path X Z) <-- (path X Y) (path Y Z)`, made 41,142,495 derivations for 88,803 tuples and was the slowest row. Now the variant of the first atom to read a new tuple derives such a combination, and the component's atoms before it read only the old tuples, from before the round's new ones: a scan stops where the new tuples begin, a walk along an index's chain skips them, which is cheap as a chain runs from the newest, and a probe of the table ignores them. About 30 lines of code more.
+
+| ms | Before | After | Derivations before, after |
+| --- | --- | --- | --- |
+| Nonlinear closure (88,803 tuples) | 221 to 228 | 154 to 157 | 41,142,495, 26,376,080 |
+| Points-to small, order a / b | 129 to 131 / 152 to 155 | 107 to 111 / 139 to 145 | `vpt` 5,427,412 / 5,381,929, 3,731,744 / 4,499,143 |
+| Points-to large, order a / b / c | 519 to 533 / 634 to 636 / 499 to 521 | 468 to 478 / 600 to 613 / 471 to 475 | `vpt` 15,152,158 / 15,073,805, 11,433,013 / 13,072,769 |
+
+Nonlinear closure is `make bench-datalog`'s later runs; points-to is three runs of each, alternating, at a load of 2.8.
+
+- **Kept.** Nonlinear closure now makes exactly its edges plus, for each node, the paths into it times the paths out of it: each combination once. Against Soufflé's compiled program on one thread, the same build as before: 142 ms against 671, where it was 239 against 673, and points-to large in order c 415 against 916. Points-to gains 5 to 17%, least in order b, which keeps more derivations. Workloads with one recursive atom per rule are as before, as nothing changes for them.
+- **The first round halves too:** it reads every tuple as new, so every variant but the first used to make the whole join again; the atoms before now read nothing there.
+- **Rejected: estimating an old atom by its old tuples alone,** in the planner. The same derivations on every row and times within the noise, alternating three times, and points-to started one more index.
+- **Tests had to count derivations.** Reading too much changes no result, only repeats work: of 7 bugs planted that way, none failed a check, and of 3 that read too little, all did (39 and 11 checks, and a crash). Three programs now check derivation counts, a lookup's chain, a scan and a probe each, with KL joins within one per growth of the exact count and native kernels within what starting again after growing repeats; each of the 7 fails one. Checked against the reference, KL joins, adds and removals on 300 generated programs, and SWI-Prolog's tabling on 300.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.

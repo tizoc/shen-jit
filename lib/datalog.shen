@@ -656,8 +656,10 @@
 \\ ---------------------------------------------------------------------------
 \\ Plans. Relations are evaluated by strongly connected components, in dependency order. In a
 \\ recursive component a rule has one variant per atom of that component, reading the new tuples
-\\ of that atom's relation and all tuples of the others: a new derivation must use a new tuple
-\\ somewhere, and which atom it is cannot be told in advance.
+\\ of that atom's relation: a new derivation must use a new tuple somewhere. So that a derivation
+\\ from several new tuples is made once, by the variant of the first atom to read one, the atoms
+\\ of the component before it read only the old tuples, from before this round's new ones, and
+\\ those after it read all.
 
 (define datalog.depends
   Rel Rules -> (datalog.depends-h Rel Rules []))
@@ -841,51 +843,56 @@
   -> [fold Mode V Op Target Rel (datalog.key-columns Terms 1 Bound) (datalog.key-terms Terms Bound)
       (datalog.columns (datalog.unkey Terms 1 Bound) 1 Bound)])
 
-\\ Steps for the atoms left, each a scan of all tuples or a lookup by its known columns.
+\\ Steps for the atoms left, each a scan of its tuples or a lookup by its known columns. Those in
+\\ Old read the old tuples only, and the rest all.
 (define datalog.plan-steps
-  [] Comparisons Head Bound _
+  [] _ Comparisons Head Bound _
   -> [[emit | Head]]
-  Atoms Comparisons Head Bound Est
+  Atoms Old Comparisons Head Bound Est
   -> (let Atom (datalog.best Atoms Bound Est)
-       (datalog.plan-atom Atom (datalog.remove-one Atom Atoms) Comparisons Head Bound Est)))
+          Source (if (element? Atom Old) old all)
+       (datalog.plan-atom Atom Source (datalog.remove-one Atom Atoms)
+         (if (= Source old) (datalog.remove-one Atom Old) Old) Comparisons Head Bound Est)))
 
 (define datalog.remove-one
   X [X | Xs] -> Xs
   X [Y | Xs] -> [Y | (datalog.remove-one X Xs)])
 
 (define datalog.plan-atom
-  [Rel | Terms] Atoms Comparisons Head Bound Est
+  [Rel | Terms] Source Atoms Old Comparisons Head Bound Est
   -> (let Keys (datalog.key-columns Terms 1 Bound)
        (if (empty? Keys)
-           (datalog.plan-scan Rel all Terms Atoms Comparisons Head Bound Est)
+           (datalog.plan-scan Rel Source Terms Atoms Old Comparisons Head Bound Est)
            (let KeyTerms (datalog.key-terms Terms Bound)
                 Rest (datalog.columns (datalog.unkey Terms 1 Bound) 1 Bound)
-             (datalog.plan-next [lookup Rel Keys KeyTerms Rest] Rest Atoms Comparisons Head Bound Est)))))
+             (datalog.plan-next [lookup Rel Source Keys KeyTerms Rest] Rest Atoms Old Comparisons Head Bound Est)))))
 
 (define datalog.plan-scan
-  Rel Source Terms Atoms Comparisons Head Bound Est
+  Rel Source Terms Atoms Old Comparisons Head Bound Est
   -> (let Columns (datalog.columns Terms 1 Bound)
-       (datalog.plan-next [scan Rel Source Columns] Columns Atoms Comparisons Head Bound Est)))
+       (datalog.plan-next [scan Rel Source Columns] Columns Atoms Old Comparisons Head Bound Est)))
 
 (define datalog.plan-next
-  Step Columns Atoms Comparisons Head Bound Est
+  Step Columns Atoms Old Comparisons Head Bound Est
   -> (let Split (datalog.ready Comparisons (datalog.bound-after Columns Bound))
-       [Step | (append (hd Split) (datalog.plan-steps Atoms (hd (tl Split)) Head (hd (tl (tl Split))) Est))]))
+       [Step | (append (hd Split) (datalog.plan-steps Atoms Old (hd (tl Split)) Head (hd (tl (tl Split))) Est))]))
 
 (define datalog.plan-rule
   [Head Body] Est
   -> (let Split (datalog.ready (datalog.conditions Body) [])
-       (append (hd Split) (datalog.plan-steps (datalog.atoms Body) (hd (tl Split)) Head (hd (tl (tl Split))) Est))))
+       (append (hd Split) (datalog.plan-steps (datalog.atoms Body) [] (hd (tl Split)) Head (hd (tl (tl Split))) Est))))
 
-\\ A variant: the atom at Position reads the new tuples, and goes first.
+\\ A variant: the atom at Position reads the new tuples, and goes first, and those at the positions
+\\ in Old read the old ones.
 (define datalog.plan-variant
-  [Head Body] Position Est
+  [Head Body] Position Old Est
   -> (let Atoms (datalog.atoms Body)
           Atom (datalog.nth Position Atoms)
           Others (datalog.without Position Atoms)
           Split (datalog.ready (datalog.conditions Body) [])
        (append (hd Split)
-               (datalog.plan-scan (hd Atom) new (tl Atom) Others (hd (tl Split)) Head (hd (tl (tl Split))) Est))))
+               (datalog.plan-scan (hd Atom) new (tl Atom) Others (map (/. P (datalog.nth P Atoms)) Old)
+                 (hd (tl Split)) Head (hd (tl (tl Split))) Est))))
 
 (define datalog.without
   1 [_ | Xs] -> Xs
@@ -918,12 +925,17 @@
 
 (define datalog.variants
   [] _ -> []
-  [R | Rs] C -> (append (map (/. P [R P]) (datalog.rule-positions R C))
+  [R | Rs] C -> (append (datalog.rule-variants R (datalog.rule-positions R C) [])
                         (datalog.variants Rs C)))
 
+\\ [Rule Position Old] for each of these positions, Old those before it.
+(define datalog.rule-variants
+  _ [] _ -> []
+  R [P | Ps] Before -> [[R P Before] | (datalog.rule-variants R Ps [P | Before])])
+
 \\ For each component [Relations First Variants]: First the rules that read nothing of the
-\\ component, run once, and Variants the rest as [Rule Position], run until nothing is new. What
-\\ order each joins in is chosen when it runs.
+\\ component, run once, and Variants the rest as [Rule Position Old], run until nothing is new.
+\\ What order each joins in is chosen when it runs.
 (define datalog.make-schedule
   [program _ Relations Rules | _]
   -> (map (/. C (let In (datalog.rules-in Rules C)
@@ -934,7 +946,7 @@
 (define datalog.plans
   Name -> (map (/. C [(hd C)
                       (map (/. R (datalog.plan-rule R [])) (hd (tl C)))
-                      (map (/. V (datalog.plan-variant (hd V) (hd (tl V)) [])) (hd (tl (tl C))))])
+                      (map (/. V (datalog.plan-variant (hd V) (hd (tl V)) (hd (tl (tl V))) [])) (hd (tl (tl C))))])
                (get Name datalog.schedule)))
 
 \\ ---------------------------------------------------------------------------
@@ -1210,7 +1222,7 @@
 
 \\ The index a step looks up, as [Rel Keys], or none.
 (define datalog.step-index
-  [lookup Rel Keys | _] Relations -> (datalog.index-of Rel Keys Relations)
+  [lookup Rel _ Keys | _] Relations -> (datalog.index-of Rel Keys Relations)
   [absent Rel Keys | _] Relations -> (datalog.index-of Rel Keys Relations)
   [fold _ _ _ _ Rel Keys | _] Relations -> (datalog.index-of Rel Keys Relations)
   _ _ -> none)
@@ -1267,7 +1279,7 @@
   [absent _ _ Terms] -> (datalog.term-vars Terms [])
   [emit _ | Terms] -> (datalog.term-vars Terms [])
   [scan _ _ Columns] -> (datalog.columns-use Columns)
-  [lookup _ _ Terms Columns] -> (datalog.term-vars Terms (datalog.columns-use Columns)))
+  [lookup _ _ _ Terms Columns] -> (datalog.term-vars Terms (datalog.columns-use Columns)))
 
 (define datalog.columns-use
   [] -> []
@@ -1276,7 +1288,7 @@
 
 (define datalog.step-binds
   [scan _ _ Columns] -> (datalog.columns-bind Columns)
-  [lookup _ _ _ Columns] -> (datalog.columns-bind Columns)
+  [lookup _ _ _ _ Columns] -> (datalog.columns-bind Columns)
   [assign V _] -> [V]
   [fold bind V | _] -> [V]
   _ -> [])
@@ -1339,22 +1351,24 @@
   [[scan Rel Source Columns] | Steps] [Relations Constants Indexes] Prefix N
   -> (let Stride (datalog.stride (datalog.arity-in Rel Relations))
           Start (if (= Source new) [* [<-address r 5] Stride] 0)
+          End (if (= Source old) [* [<-address r 5] Stride] [* [<-address r 6] Stride])
        [let r [<-address s (datalog.relation-slot Rel Relations)]
-         (datalog.gen-scan Start [* [<-address r 6] Stride] Stride Columns Steps
-                           [Relations Constants Indexes] Prefix N)])
-  [[lookup Rel Keys Terms Columns] | Steps] [Relations Constants Indexes] Prefix N
+         (datalog.gen-scan Start End Stride Columns Steps [Relations Constants Indexes] Prefix N)])
+  [[lookup Rel Source Keys Terms Columns] | Steps] [Relations Constants Indexes] Prefix N
   -> (let Forms (map (/. T (datalog.value-form T Constants)) Terms)
           Find (datalog.find-kernel (datalog.arity-in Rel Relations) Keys)
           Ctx [Relations Constants Indexes]
        [let r [<-address s (datalog.relation-slot Rel Relations)]
          (if (datalog.whole-tuple? Rel Keys Relations)
-             [if [> [Find [<-address r 3] [<-address r 2] [shen-jit.u32 [<-address r 4] 8] | Forms] 0]
-                 (datalog.gen Steps Ctx Prefix N)
-                 true]
+             [let p [Find [<-address r 3] [<-address r 2] [shen-jit.u32 [<-address r 4] 8] | Forms]
+               [if (if (= Source old) [and [> p 0] [<= p [<-address r 5]]] [> p 0])
+                   (datalog.gen Steps Ctx Prefix N)
+                   true]]
              (let Field (datalog.index-slot Rel Keys Indexes)
                   Stride (datalog.stride (datalog.arity-in Rel Relations))
+                  First [Find [<-address i 0] [<-address r 2] [<-address i 2] | Forms]
                [let i [<-address r Field]
-                 [let p [Find [<-address i 0] [<-address r 2] [<-address i 2] | Forms]
+                 [let p (if (= Source old) [datalog.skip-chain First [<-address i 1] [<-address r 5]] First)
                    [if [> p 0]
                        (datalog.gen-chain Stride Columns Steps Ctx Prefix N)
                        true]]]))]))
@@ -1382,6 +1396,11 @@
                      true]]
           _ (set datalog.*forms* [Form | (value datalog.*forms*)])
        [Name Start End [<-address r 2] s | Live]))
+
+\\ The first of a chain's tuples, given as position plus one, from before position Limit: a chain
+\\ runs from the newest.
+(define datalog.skip-chain
+  P Next Limit -> (if (> P Limit) (datalog.skip-chain (shen-jit.u32 Next (* 4 (- P 1))) Next Limit) P))
 
 \\ A loop along a chain, from p and the index in i of the relation in r.
 (define datalog.gen-chain
@@ -1635,7 +1654,9 @@
           From (if (and (= Outer none) (= Level 1))
                    (datalog.param (intern "Start") start)
                    (datalog.param (datalog.word-name "From" Level) (if (= Source new) [<-address (datalog.record-form Slot) 5] 0)))
-          To (datalog.param (datalog.word-name "To" Level) [<-address (datalog.record-form Slot) 6])
+          To (if (= Source old)
+                 (datalog.old-param Slot)
+                 (datalog.param (datalog.word-name "To" Level) [<-address (datalog.record-form Slot) 6]))
           P (datalog.word-name "P" Level)
           B (datalog.word-name "B" Level)
           Inner (datalog.native-binds Columns Tuples B Env)
@@ -1643,13 +1664,17 @@
           [word B [* P Stride]]
           | (datalog.guarded (datalog.native-checks Columns Tuples B Inner Constants)
               (datalog.native-steps Steps Ctx Inner (+ Level 1) (if (and (= Outer none) (= Level 1)) P (datalog.outer Outer))))]])
-  [[lookup Rel Keys Terms Columns] | Steps] [Relations Constants Indexes N] Env Level Outer
+  [[lookup Rel Source Keys Terms Columns] | Steps] [Relations Constants Indexes N] Env Level Outer
   -> (let Ctx [Relations Constants Indexes N]
           Slot (datalog.relation-slot Rel Relations)
           Values (map (/. T (datalog.native-value T Env Constants)) Terms)
        (if (datalog.whole-tuple? Rel Keys Relations)
-           (datalog.native-member Rel Slot Values Steps Ctx Env Level (datalog.outer Outer))
-           (datalog.native-chain Rel Slot Keys Values Columns Steps Ctx Env Level (datalog.outer Outer)))))
+           (datalog.native-member Rel Source Slot Values Steps Ctx Env Level (datalog.outer Outer))
+           (datalog.native-chain Rel Source Slot Keys Values Columns Steps Ctx Env Level (datalog.outer Outer)))))
+
+\\ Where the old tuples of the relation in Slot end, by position.
+(define datalog.old-param
+  Slot -> (datalog.param (datalog.word-name "Old" Slot) [<-address (datalog.record-form Slot) 5]))
 
 \\ Only a scan at the outermost level can start again partway: below any other step, a kernel with
 \\ no room starts again from the beginning.
@@ -1659,14 +1684,16 @@
 
 \\ The tuple these values make, if the relation has it, by its own table.
 (define datalog.native-member
-  Rel Slot Values Steps [Relations Constants Indexes N] Env Level Outer
+  Rel Source Slot Values Steps [Relations Constants Indexes N] Env Level Outer
   -> (let Stride (datalog.stride (datalog.arity-in Rel Relations))
           Tuples (datalog.tuples-param Slot)
           Table (datalog.param (datalog.word-name "Tab" Slot) [<-address (datalog.record-form Slot) 3])
           Mask (datalog.param (datalog.word-name "Mask" Slot) [shen-jit.u32 [<-address (datalog.record-form Slot) 4] 8])
           Q (datalog.word-name "Q" Level)
           Probe (datalog.word-name "probe" Level)
-       (datalog.probe-loop Probe Values Table Mask Q Stride (datalog.equal-columns Tuples Q Values 1)
+          Same (datalog.equal-columns Tuples Q Values 1)
+       (datalog.probe-loop Probe Values Table Mask Q Stride
+         (if (= Source old) [[<= [bit-and (protect E) (datalog.mask)] (datalog.old-param Slot)] | Same] Same)
          [[do | (datalog.native-steps Steps [Relations Constants Indexes N] Env (+ Level 1) Outer)]
           [exit Probe]])))
 
@@ -1796,7 +1823,7 @@
 \\ The tuples with these values for Keys, through an index: its table finds the first, and its chain
 \\ the rest.
 (define datalog.native-chain
-  Rel Slot Keys Values Columns Steps [Relations Constants Indexes N] Env Level Outer
+  Rel Source Slot Keys Values Columns Steps [Relations Constants Indexes N] Env Level Outer
   -> (let Ctx [Relations Constants Indexes N]
           Stride (datalog.stride (datalog.arity-in Rel Relations))
           Field (datalog.index-slot Rel Keys Indexes)
@@ -1814,11 +1841,16 @@
         | (append
             (datalog.probe-loop Probe Values Table Mask Q Stride (datalog.equal-keys Tuples Q Keys Values)
               [[word P [bit-and (protect E) (datalog.mask)]] [exit Probe]])
-        [[while Chain [> P 0]
-          [word Q [* [- P 1] Stride]]
-          [do | (datalog.guarded (datalog.native-checks Columns Tuples Q Inner Constants)
-                  (datalog.native-steps Steps Ctx Inner (+ Level 1) Outer))]
-          [word P [u32 Next [shift-left [- P 1] 2]]]]])]))
+            (append
+              (if (= Source old)
+                  [[while (datalog.native-label "skip") [> P (datalog.old-param Slot)]
+                     [word P [u32 Next [shift-left [- P 1] 2]]]]]
+                  [])
+              [[while Chain [> P 0]
+                [word Q [* [- P 1] Stride]]
+                [do | (datalog.guarded (datalog.native-checks Columns Tuples Q Inner Constants)
+                        (datalog.native-steps Steps Ctx Inner (+ Level 1) Outer))]
+                [word P [u32 Next [shift-left [- P 1] 2]]]]]))]))
 
 \\ Statements that run only when these checks hold.
 (define datalog.guarded
@@ -2068,7 +2100,7 @@
 
 (define datalog.variant-functions
   [] _ _ -> []
-  [[R P] | Vs] Est Run -> (let F (datalog.steps-function (datalog.plan-variant R P Est) Run)
+  [[R P Old] | Vs] Est Run -> (let F (datalog.steps-function (datalog.plan-variant R P Old Est) Run)
                             [F | (datalog.variant-functions Vs Est Run)]))
 
 \\ Sizes to within a power of two: a new plan when one has moved that far.
@@ -2353,10 +2385,10 @@
   -> (do (if (element? Rel Grown) (address-> (<-address S I) 5 Mark) skip)
          (datalog.since-marks Rs S Marks Grown (+ I 1))))
 
-\\ [Rule Position] for each atom whose relation grew.
+\\ [Rule Position Old] for each atom whose relation grew, Old those before it.
 (define datalog.grown-variants
   [] _ -> []
-  [R | Rs] Grown -> (append (map (/. P [R P]) (datalog.positions-in (datalog.atoms (hd (tl R))) 1 Grown))
+  [R | Rs] Grown -> (append (datalog.rule-variants R (datalog.positions-in (datalog.atoms (hd (tl R))) 1 Grown) [])
                             (datalog.grown-variants Rs Grown)))
 
 \\ ---------------------------------------------------------------------------
