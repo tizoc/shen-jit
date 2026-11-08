@@ -41,7 +41,8 @@ false
 | `(datalog.count Db Relation)` | How many tuples it has |
 | `(datalog.holds? Db [Relation Value ...])` | Whether a tuple is there |
 | `(datalog.ask Db (Relation Term ...))` | The tuples that match, in no particular order, with variables, constants and `_` |
-| `(datalog.define Name Items)`, `(datalog.match Db Pattern)` | The same as `defdatalog` and `datalog.ask` with the program as data, where a variable is `[var "X"]` and `_` is `[any]` |
+| `(datalog.query Name Facts (Relation Term ...))` | The same tuples as asking a run of these facts, computing only what the query needs |
+| `(datalog.define Name Items)`, `(datalog.match Db Pattern)`, `(datalog.solve Name Facts Pattern)` | The same as `defdatalog`, `datalog.ask` and `datalog.query` with the program as data, where a variable is `[var "X"]` and `_` is `[any]` |
 | `(datalog.plans Name)`, `(datalog.code Name)` | Each rule's order of joins with no sizes to go by, and the code that gives: each kernel as written for `lib/native.shen`, and the KL that calls it |
 | `(datalog.stats Db)` | The rounds, how many plans were made, and each relation's tuples, the derivations that made them and its indexes |
 | `(datalog.run-naive Name Facts)` | The same result by the plain definition, slowly: what the rest is tested against |
@@ -127,4 +128,10 @@ With nodes `a` and `b`, an edge from `a` to `b` and costs 3 and 5 for `a`, `degr
 - **Removing facts** with `datalog.remove` evaluates again whatever holds a relation that lost a fact, or reads something evaluated
   again, and keeps the rest. That costs about a full run of what it reaches, and nothing for the parts of a program a removal
   does not reach. It removes facts given, not tuples derived: a tuple that still follows from what is left stays.
+- **Queries by demand:** `(datalog.query dependencies Facts (depends a X))` gives what asking a run would, but derives only
+  what bears on `a`: the program is rewritten for the query's pattern of constants, by magic sets, once for each pattern,
+  and kept with the program. A relation read under a negation or an aggregate is still computed whole, with all it depends
+  on. It gains most when the constants select a small part, and little when what they reach is most of a relation, as
+  `(path X c)` is when nearly every node reaches `c`. Each query runs on its facts afresh: for many queries over the same
+  facts, a run and `datalog.ask` may cost less.
 - **Saving:** a program saved with `--save` runs in the saved image.

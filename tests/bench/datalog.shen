@@ -162,6 +162,17 @@
                Label (db.ms (fst First)) (db.ms (fst Second)) (db.ms (fst Third))
                (datalog.count Db Rel) (datalog.stats Db))))
 
+\* A query by demand: the first, which rewrites the program for its pattern and compiles, and two
+   more. *\
+(define db.query-row
+  Label Name Facts Pattern
+  -> (let _ (put Name datalog.demands [])
+          First (db.seconds (freeze (datalog.solve Name Facts Pattern)))
+          Second (db.seconds (freeze (datalog.solve Name Facts Pattern)))
+          Third (db.seconds (freeze (datalog.solve Name Facts Pattern)))
+       (output "~A | first ~A | then ~A ~A | ~A answers~%"
+               Label (db.ms (fst First)) (db.ms (fst Second)) (db.ms (fst Third)) (length (snd First)))))
+
 (define db.ms
   S -> (/ (db.floor (* S 10000) 0) 10))
 
@@ -190,5 +201,8 @@
            (db.row "skewed join" db.skew Skew two)
            (db.row "kernel call graph" db.calls Calls reaches)
            (db.row "kernel analysis" db.analysis Calls depth)
+           (db.query-row "closure, demand (path 1774 X)" db.closure Sparse [path 1774 [var "X"]])
+           (db.query-row "closure, demand (path X 7)" db.closure Sparse [path [var "X"] 7])
+           (db.query-row "call graph, demand (reaches X =)" db.calls Calls [reaches [var "X"] =])
            (db.naive "closure, 300 edges" db.closure (db.random-edges 300 200 []) path)
            ok)))

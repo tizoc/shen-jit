@@ -473,6 +473,7 @@
   Name Items -> (let Program (datalog.check Name Items)
                   (do (put Name datalog.program Program)
                       (put Name datalog.schedule (datalog.make-schedule Program))
+                      (put Name datalog.demands [])
                       (datalog.forget-code Name)
                       Name)))
 
@@ -2849,6 +2850,172 @@
                Relations)]))
 
 \\ ---------------------------------------------------------------------------
+\\ Demand, by magic sets. (datalog.query Name Facts (Rel Term ...)) gives what datalog.ask would of
+\\ a run of these facts, computing only what the query needs. Its constants make an adornment, b
+\\ for a bound column and f for a free one, and the program is rewritten for it once and kept:
+\\ each relation the query reaches through positive atoms has a copy for each adornment it is
+\\ reached with, Rel@bf, whose rules begin with a magic relation, magic@Rel@bf, of the values asked
+\\ for in its bound columns. A magic relation's rules pass those on, from a head, through the
+\\ atoms that bind more, as the planner would order them with no sizes, to the next atom of a
+\\ copy. A copy also takes the facts of its relation. What is negated or aggregated must be
+\\ complete, so it is computed in full, by its own rules, with all it depends on. The query's
+\\ constants are the one fact of its magic relation.
+
+(define datalog.solve
+  Name Facts [Rel | Terms]
+  -> (let Program (datalog.program Name)
+          Types (assoc Rel (datalog.nth 3 Program))
+          _ (cases (empty? Types) (error "datalog: no relation ~A" Rel)
+                   (not (= (length Terms) (length (tl Types))))
+                   (error "datalog: ~A takes ~A values, not ~A" Rel (length (tl Types)) (length Terms))
+                   true skip)
+          Adorn (map (/. T (if (datalog.known? T []) b f)) Terms)
+          Demand (datalog.demand Name Rel Adorn)
+          Seed [(datalog.magic-name Rel Adorn) | (datalog.at-bound Terms Adorn)]
+          Db (datalog.run Demand [Seed | Facts])
+       (datalog.match-tuples (datalog.tuples Db (datalog.adorned-name Rel Adorn)) Terms [])))
+
+(define datalog.demand
+  Name Rel Adorn
+  -> (let D (intern (cn (str Name) (cn "@" (str (datalog.adorned-name Rel Adorn)))))
+          Known (get Name datalog.demands)
+       (if (element? D Known)
+           D
+           (do (datalog.define D (datalog.demand-items (datalog.program Name) Rel Adorn))
+               (put Name datalog.demands [D | Known])
+               D))))
+
+(define datalog.adorned-name
+  Rel Adorn -> (intern (cn (str Rel) (cn "@" (datalog.adorn-string Adorn)))))
+
+(define datalog.magic-name
+  Rel Adorn -> (intern (cn "magic@" (str (datalog.adorned-name Rel Adorn)))))
+
+(define datalog.adorn-string
+  [] -> ""
+  [A | As] -> (cn (str A) (datalog.adorn-string As)))
+
+(define datalog.at-bound
+  [] [] -> []
+  [X | Xs] [b | As] -> [X | (datalog.at-bound Xs As)]
+  [_ | Xs] [_ | As] -> (datalog.at-bound Xs As))
+
+(define datalog.demand-items
+  [program _ Relations Rules _ _ Constructors] Rel Adorn
+  -> (let Derived (datalog.unique (map (/. R (hd (hd R))) Rules) [])
+          Done (datalog.adorn [[Rel Adorn]] [] [] Rules Derived [])
+          Full (datalog.full-closure (hd (tl (tl Done))) Rules)
+          Copies (hd (tl Done))
+       (append (datalog.type-items Constructors [])
+       (append (map (/. R [relation (hd R) (tl R)]) Relations)
+       (append (mapcan (/. C (datalog.copy-items C Relations)) Copies)
+       (append (map (/. R [rule (hd R) (map (function datalog.literal->data) (hd (tl R)))])
+                    (datalog.rules-in Rules Full))
+               (map (/. R [rule (hd R) (hd (tl R))]) (hd Done))))))))
+
+\\ Each copy and its magic relation, and the rule that gives the copy its relation's facts.
+(define datalog.copy-items
+  [Rel Adorn] Relations
+  -> (let Types (tl (assoc Rel Relations))
+          Vars (map (/. I [var (cn "D" (str I))]) (datalog.upto 1 (length Types)))
+       [[relation (datalog.adorned-name Rel Adorn) Types]
+        [relation (datalog.magic-name Rel Adorn) (datalog.at-bound Types Adorn)]
+        [rule [(datalog.adorned-name Rel Adorn) | Vars]
+              [[(datalog.magic-name Rel Adorn) | (datalog.at-bound Vars Adorn)] [Rel | Vars]]]]))
+
+(define datalog.type-items
+  [] Acc -> (reverse Acc)
+  [[C T _ Fields | _] | Cs] Acc
+  -> (datalog.type-items Cs (if (element? T (map (/. I (hd (tl I))) Acc))
+                                (map (/. I (if (= (hd (tl I)) T) (append I [[C | Fields]]) I)) Acc)
+                                [[type T [C | Fields]] | Acc])))
+
+(define datalog.literal->data
+  [aggregate V count _ Atom _] -> [= [var V] [count Atom]]
+  [aggregate V Op T Atom _] -> [= [var V] [Op [var T] Atom]]
+  L -> L)
+
+\\ Copies to make, as [[Rel Adorn] ...]: gives [Rules Copies Full], Full what must be complete.
+(define datalog.adorn
+  [] Done Full _ _ Acc -> [Acc (reverse Done) Full]
+  [Copy | Queue] Done Full Rules Derived Acc
+  -> (if (element? Copy Done)
+         (datalog.adorn Queue Done Full Rules Derived Acc)
+         (datalog.adorn-each (datalog.rules-of (hd Copy) Rules) Copy Queue [Copy | Done] Full Rules Derived Acc)))
+
+(define datalog.rules-of
+  _ [] -> []
+  Rel [[[Rel | Terms] Body] | Rules] -> [[[Rel | Terms] Body] | (datalog.rules-of Rel Rules)]
+  Rel [_ | Rules] -> (datalog.rules-of Rel Rules))
+
+(define datalog.adorn-each
+  [] _ Queue Done Full Rules Derived Acc -> (datalog.adorn Queue Done Full Rules Derived Acc)
+  [Rule | More] [Rel Adorn] Queue Done Full Rules Derived Acc
+  -> (let R (datalog.adorn-rule Rule Adorn Derived Full)
+       (datalog.adorn-each More [Rel Adorn] (append Queue (hd (tl R))) Done
+         (union (hd (tl (tl R))) Full) Rules Derived (append Acc (hd R)))))
+
+\\ A rule's copy for Adorn, and a magic rule for each copy it reads: [Rules Copies Complete].
+(define datalog.adorn-rule
+  [[Rel | Terms] Body] Adorn Derived Full
+  -> (let Magic [(datalog.magic-name Rel Adorn) | (datalog.at-bound Terms Adorn)]
+          Conditions (datalog.conditions Body)
+          Order (datalog.sips (datalog.atoms Body) Conditions (datalog.term-vars (datalog.at-bound Terms Adorn) []))
+          Atoms (map (/. A (datalog.adorn-atom A Derived Full)) Order)
+          Data (map (function datalog.literal->data) Conditions)
+       [[[[(datalog.adorned-name Rel Adorn) | Terms] [Magic | (append (map (function hd) Atoms) Data)]]
+         | (datalog.magic-rules Atoms Magic Conditions [])]
+        (mapcan (/. A (tl (tl A))) Atoms)
+        (datalog.complete-relations Body)]))
+
+\\ [Atom' Bound | Copy]: the atom, a copy's if its relation is derived and not complete, with
+\\ what is bound before it.
+(define datalog.adorn-atom
+  [[Rel | Terms] Bound] Derived Full
+  -> (if (and (element? Rel Derived) (not (element? Rel Full)))
+         (let Adorn (map (/. T (if (datalog.known? T Bound) b f)) Terms)
+           [[(datalog.adorned-name Rel Adorn) | Terms] Bound [Rel Adorn]])
+         [[Rel | Terms] Bound]))
+
+(define datalog.magic-rules
+  [] _ _ _ -> []
+  [[Atom Bound | Copy] | Atoms] Magic Conditions Before
+  -> (let More (datalog.magic-rules Atoms Magic Conditions (append Before [Atom]))
+       (if (empty? Copy)
+           More
+           (let Vars (datalog.term-vars (tl Magic) (datalog.term-vars (mapcan (function tl) Before) []))
+                Ready (hd (datalog.close-conditions Conditions Vars))
+                Head [(datalog.magic-name (hd (hd Copy)) (hd (tl (hd Copy)))) | (datalog.at-bound (tl Atom) (hd (tl (hd Copy))))]
+             [[Head [Magic | (append Before (map (function datalog.literal->data) Ready))]] | More]))))
+
+\\ The order in which bindings pass, [[Atom Bound] ...]: the planner's with no sizes, and the
+\\ conditions that bind more as soon as they can.
+(define datalog.sips
+  [] _ _ -> []
+  Atoms Conditions Bound
+  -> (let B (hd (tl (datalog.close-conditions Conditions Bound)))
+          Atom (datalog.best Atoms B [])
+       [[Atom B] | (datalog.sips (datalog.remove-one Atom Atoms) Conditions (datalog.term-vars (tl Atom) B))]))
+
+\\ The conditions that can run given what is bound, and what is bound after: [Ready Bound].
+(define datalog.close-conditions
+  Conditions Bound -> (datalog.close-h Conditions Bound [] [] false))
+
+(define datalog.close-h
+  [] Bound Ready _ false -> [(reverse Ready) Bound]
+  [] Bound Ready Left true -> (datalog.close-h (reverse Left) Bound Ready [] false)
+  [C | Cs] Bound Ready Left Progress
+  -> (let B (datalog.binder C Bound)
+       (cases (datalog.subset? (datalog.condition-vars C) Bound) (datalog.close-h Cs Bound [C | Ready] Left Progress)
+              (= B none) (datalog.close-h Cs Bound Ready [C | Left] Progress)
+              true (datalog.close-h Cs [(hd B) | Bound] [C | Ready] Left true))))
+
+\\ These relations and all they depend on.
+(define datalog.full-closure
+  Full Rules -> (let More (union Full (mapcan (/. R (datalog.depends R Rules)) Full))
+                  (if (datalog.same-set? More Full) Full (datalog.full-closure More Rules))))
+
+\\ ---------------------------------------------------------------------------
 \\ Sorting, for a result that does not depend on the order of evaluation.
 
 (define datalog.value<
@@ -2944,4 +3111,5 @@
 
 (defmacro datalog.macro
   [defdatalog Name | Items] -> [datalog.define Name (datalog.quote (map (function datalog.item) Items))]
-  [datalog.ask Db Atom] -> [datalog.match Db (datalog.quote (datalog.unbracket-atom Atom))])
+  [datalog.ask Db Atom] -> [datalog.match Db (datalog.quote (datalog.unbracket-atom Atom))]
+  [datalog.query Name Facts Atom] -> [datalog.solve Name Facts (datalog.quote (datalog.unbracket-atom Atom))])

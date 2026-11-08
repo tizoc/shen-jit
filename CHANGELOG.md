@@ -12,6 +12,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `datalog.query`: a Datalog query computed by demand, through magic sets, deriving only what bears on its constants.
 - Datalog records and types of several constructors: `(type shape [circle point integer] [rect point point])`, values such as
   `[rect [pt 1 2] [pt 4 6]]`, taken apart in a rule's body and made in its head or by `=`, recursive types included.
 - Optional `lib/curl.shen`, with a small C adapter over libcurl: bounded HTTP(S) requests, reusable clients,

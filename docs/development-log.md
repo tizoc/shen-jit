@@ -2004,6 +2004,26 @@ Soufflé has records and algebraic data types. Here a type is `(type shape [circ
 - **Nothing lost:** the workloads, which have no records, are within noise, three alternating runs. Loading facts, which now dispatches records too, took 4 to 9% longer at first, from passing a failure value back through each column and then from a sixth argument; written as before, with the record clause guarded by `cons?`, it is within about 2%, at 4.11 against 4.04 ms for 60,000 integer facts and 7.44 against 7.31 for symbols, best of four at a load near 3.
 - **Tests:** fixtures by hand, and generated programs: every one now has a type of two constructors whose fields are not records, so that its values are finitely many, and of 300, 185 have a column of it, 150 records in rules and 123 records made in heads. They agree with the reference, KL joins, adds and removals, and with SWI-Prolog's tabling, which reads records as compound terms, on all 300. Planted, a missing tag check fails 31 checks natively and 8 in KL, a field read one off 30, a found record's position plus one 16, a wrong tag when loading 36, records read from the tag's column 16, a KL position plus one raises, and tables of made records left ungrown hang. Counting an unpack's bindings as what it uses changes nothing, as KL binds them again.
 
+### Queries by demand (2026-11-08, Apple M3 Max, against whole runs and Soufflé 2.5's magic sets)
+
+`(datalog.query Name Facts (depends a X))` gives what `datalog.ask` would of a run, deriving only what bears on its constants, by magic sets. The program is rewritten for the query's adornment, which columns a constant binds, once, and kept with it; a relation reached positively gets a copy per adornment, guarded by a magic relation of the values asked for, and the magic relations pass bindings along each rule in the order the planner would choose with no sizes. About 130 lines of code.
+
+| ms | Query, first | Query, later | Run and ask |
+| --- | --- | --- | --- |
+| Closure, sparse: `(path 1774 X)`, 1,174 answers | 1.5 to 3.5 | 0.3 | 115 to 117 |
+| Closure, sparse: `(path X 7)`, 1,207 answers | 75 to 82 | 74 to 75 | 116 |
+| Call graph: `(reaches X =)`, 626 answers | 1.8 to 2.0 | 0.9 | 11.1 |
+| Call graph: `(errors shen.yacc-syntax)` | 3.2 | 1.1 | 8.1 |
+| Call graph: `(reaches shen.repl X)`, 511 answers | 8.0 | 6.9 | 10.5 |
+| Kernel analysis: `(dead X)`, `(depth F D)` | 1.8 to 2.2 | 0.9 to 1.0 | 1.2 to 1.3 |
+
+- **Kept.** A selective query costs a fraction of a run: 400 times less for one node's paths, 12 times for what reaches `=`. The first query of a pattern rewrites and compiles, 1 to 3 ms. A query loads its facts afresh each time, which bounds the gain on the small analysis, whose run is mostly loading.
+- **Where it gains little:** `(path X 7)` demands the paths into every node that reaches 7, which in a graph this connected is most of `path`. That is magic sets, not this code: Soufflé's take 431 ms there, against its 664 without them, and ours 75.
+- **Against Soufflé,** the same facts, its compiled programs, startup taken away, best of seven: `(path 1774 X)` 1.3 ms with `--magic-transform=*` against 0.3 here, warm, and 422 ms without the transformation. Its transformation did not apply while the answer fed a count, as the query was first written, so that form showed no gain at all; `--show=transformed-datalog` explained it.
+- **Complete relations are whole:** a relation read under a negation or an aggregate keeps its own rules, with all it depends on, and no copy reads it. Copies of it would need demand through the negation, which also risks a cycle through negation in the rewritten program; computing it whole is always stratified and correct, and the analysis rows show it costs little where those relations are small.
+- **Not done:** demand for a database that `datalog.add` keeps current. A query is a run of its own.
+- **Checked:** fixtures with recursion, mutual recursion, negation, aggregates, records and constants in heads, and on each of the 300 generated programs a query of a random relation, with constants, repeated variables and `_`, against the reference. Planted, copies never read fail 20 checks, copies without their relation's facts 133, negated relations not made complete 2, a magic rule passing its head's values in place of its atom's raises, and an adornment reversed is refused by the checker. Leaving out what a complete relation depends on passed until a fixture negated a relation whose own dependency is derived; it fails that one now.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.

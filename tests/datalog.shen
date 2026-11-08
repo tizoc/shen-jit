@@ -765,6 +765,70 @@
 (let Db (dt.run-kl dt.counting [])
   (dt.check "records made while running, KL" (datalog.count Db back) 2999))
 
+\* Queries by demand give what a whole run would, and compute less. *\
+(define dt.query
+  Label Name Facts Pattern
+  -> (dt.check (make-string "~A ~R" Label (datalog.atom->form Pattern))
+       (datalog.sort (datalog.solve Name Facts Pattern))
+       (datalog.sort (datalog.match (datalog.run-naive Name Facts) Pattern))))
+
+(dt.query "demand" dt.dep (value dt.dep-facts) [depends a [var "X"]])
+(dt.query "demand" dt.dep (value dt.dep-facts) [depends [var "X"] d])
+(dt.query "demand" dt.dep (value dt.dep-facts) [depends x x])
+(dt.query "demand" dt.dep (value dt.dep-facts) [depends [var "X"] [var "X"]])
+(dt.query "demand" dt.dep (value dt.dep-facts) [cyclic [var "X"]])
+(dt.query "demand" dt.dep (value dt.dep-facts) [imports b [any]])
+(dt.query "demand" dt.dep (value dt.dep-facts) [depends nowhere [var "X"]])
+(dt.query "demand" dt.nonlinear [[edge a b] [edge b c] [edge c d] [edge d a] [edge x y]] [path b [var "X"]])
+(dt.query "demand" dt.mutual [[succ 0 1] [succ 1 2] [succ 2 3] [succ 3 4]] [odd [var "X"]])
+(dt.query "demand" dt.mutual [[succ 0 1] [succ 1 2] [succ 2 0]] [both 1])
+(map (/. R (dt.query "demand" dt.mixed (value dt.mixed-facts) [R | (map (/. T [any]) (tl (assoc R (datalog.nth 3 (datalog.program dt.mixed)))))]))
+     [big self linked pair named fixed seeded])
+(dt.query "demand" dt.mixed (value dt.mixed-facts) [fixed b [var "N"]])
+(dt.query "demand" dt.mixed (value dt.mixed-facts) [pair c [var "Y"]])
+(dt.query "demand" dt.shapes (value dt.shapes-facts) [unit [var "S"] [rect [pt 1 2] [pt 2 3]]])
+(dt.query "demand" dt.shapes (value dt.shapes-facts) [near b [var "T"]])
+(dt.query "demand" dt.shapes (value dt.shapes-facts) [lonely [var "S"]])
+(dt.query "demand" dt.lists [[start a] [edge a b] [edge b c] [edge b a] [edge c a]] [route c [var "P"] [var "N"]])
+(let Db (datalog.run dt.dep (value dt.dep-facts))
+  (dt.check "a query as written" (datalog.sort (datalog.query dt.dep (value dt.dep-facts) (depends a X)))
+            (datalog.sort (datalog.ask Db (depends a X)))))
+
+\* Negation and an aggregate read complete relations, beside the copies a query makes. *\
+(defdatalog dt.graph
+  (relation edge [integer integer])
+  (relation node [integer])
+  (relation reach [integer integer])
+  (relation sink [integer])
+  (relation far [integer integer])
+  (relation degree [integer integer])
+  (rule (reach X Y) <-- (edge X Y))
+  (rule (reach X Z) <-- (reach X Y) (edge Y Z))
+  (rule (sink X) <-- (node X) (not (edge X _)))
+  (rule (far X Y) <-- (reach X Y) (sink Y) (not (reach Y X)))
+  (rule (degree X N) <-- (reach X _) (= N (count (reach X _))))
+  (relation out [integer])
+  (relation lone [integer])
+  (rule (out X) <-- (reach X _))
+  (rule (lone X) <-- (node X) (not (out X))))
+(define dt.chain-int
+  N N Acc -> Acc
+  I N Acc -> (dt.chain-int (+ I 1) N [[edge I (+ I 1)] [node I] | Acc]))
+(set dt.graph-facts (append (dt.chain-int 0 60 []) [[edge 70 71] [edge 71 70] [edge 5 70] [node 60] [node 71] [node 3]]))
+(dt.query "demand" dt.graph (value dt.graph-facts) [reach 55 [var "Y"]])
+(dt.query "demand" dt.graph (value dt.graph-facts) [far 50 [var "Y"]])
+(dt.query "demand" dt.graph (value dt.graph-facts) [far [var "X"] 60])
+(dt.query "demand" dt.graph (value dt.graph-facts) [degree 58 [var "N"]])
+(dt.query "demand" dt.graph (value dt.graph-facts) [degree [var "X"] 3])
+(dt.query "demand" dt.graph (value dt.graph-facts) [lone [var "X"]])
+(let D (datalog.demand dt.graph reach [b f])
+     Db (datalog.run D [[magic@reach@bf 55] | (value dt.graph-facts)])
+  (do (dt.check "demand computes less" (datalog.count Db reach@bf) 5)
+      (dt.check "demand leaves the rest" (datalog.count Db reach) 0)))
+(dt.check "a rewritten program is kept" (datalog.demand dt.graph reach [b f]) (datalog.demand dt.graph reach [b f]))
+(dt.raises "a query of no relation" "no relation nope" (freeze (datalog.solve dt.dep [] [nope a])))
+(dt.raises "a query's arity" "takes 2 values, not 1" (freeze (datalog.solve dt.dep [] [depends a])))
+
 \* Errors, each when the program is defined. *\
 (dt.raises "undeclared" "no relation nope"
   (freeze (datalog.define dt.bad [[rule [nope a] []]])))
@@ -852,6 +916,13 @@
   -> (do (dt.compare-relation Seed Db Reference Relations)
          (dt.compare-all Seed Dbs Reference Relations)))
 
+\* A query's term: a constant, a variable, which may repeat, or _. *\
+(define dt.query-term
+  Type -> (let R (dtg.random 6)
+            (cases (< R 3) (dtg.value Type)
+                   (< R 5) [var (dtg.choose ["X" "Y"])]
+                   true [any])))
+
 (define dt.generated
   0 -> ok
   N -> (let Program (dtg.program)
@@ -873,6 +944,10 @@
             _ (datalog.define Name2 (append (dtg.items (dtg.shuffle Relations) [])
                                             (dtg.rule-items (dtg.shuffle (dtg.shuffle-bodies Rules)))))
             Shuffled (datalog.run Name2 (dtg.shuffle Facts))
+            Rel (dtg.choose Relations)
+            Pattern [(hd Rel) | (dtg.map (function dt.query-term) (tl Rel))]
+            _ (dt.check (make-string "generated ~A query ~R" N (datalog.atom->form Pattern))
+                (datalog.sort (datalog.solve Name Facts Pattern)) (datalog.sort (datalog.match Reference Pattern)))
             _ (dt.compare-all N [Fixed Db Kl Added Readded] Reference Relations)
             _ (dt.compare-relation N Shuffled Reference Relations)
          (dt.generated (- N 1))))
