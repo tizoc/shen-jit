@@ -1369,6 +1369,34 @@ parsing again from the start, and `json.read` reads JSON values that way.
   status and request and leave the same bytes unread; with eof, a cut head, the head limit, a 414 and a 431, 137 checks
   in `tests/http_read.shen`. Messages for malformed line endings may differ, all 400. The macro is 509 lines.
 
+### Typed grammars (2026-11-08, M3 Max, macOS arm64, against the same grammar untyped)
+
+A rule takes a signature after its name, as a `defcc` rule does: `{==> Value}`, or `{T1 --> T2 ==> Value}` with
+parameters. Under `(tc +)` each alternative is checked: its value has the value's type, guards are booleans, messages
+strings, and arguments to a typed rule's parameters have their types; bytes, `(at P)` and binary fields are numbers,
+`(text <r>)` a string, `(span <r>)` a `buffer.view`, and a typed rule's value has its type.
+
+- **Checked as the clauses of a function, not as the rule.** `defcc` types its generated function, whose input and
+  value are a pair. A grammar rule's value goes through one state record for every rule, so its function cannot be
+  typed. Each typed rule instead gives the loader `<rule>.types`, a function of everything its alternatives name,
+  with one clause per alternative, whose body checks the guards, messages and arguments and gives the value. A
+  first version annotated a lambda per alternative with `(type ...)`, and its errors said only `type error`; as
+  clauses they say `type error in rule 2 of <rule>.types`, as `defcc`'s do.
+- **Every rule is a stub under `(tc +)`.** The loader refuses a `define` without a signature, so under `(tc +)` a
+  rule is defined as a stub when it is read and compiled at its first call, as loops already were. This also lets
+  untyped grammars load under `(tc +)` at all. Under `(tc -)` a signature changes nothing in how a rule runs.
+- **Typed clients.** The signature declares `<rule>.parse` and `<rule>.match?`, defined from the same code that
+  `grammar.parse` and `grammar.match?` expand to, and under `(tc +)` those two expand to them for a typed rule.
+  `grammar.read` stays untyped: its results mix values with `[eof]` and errors.
+- **Speed unchanged:** 3,000 parses of a list of 1,000 numbers took 114 to 118 ms, three runs of three under a load of
+  2.3, untyped, typed under `(tc -)` through `grammar.parse` and through `<rule>.parse`, and typed under `(tc +)`,
+  where each rule was compiled at its first call.
+- **Size:** 98 lines, bringing the macro to 607, with untyped grammars under `(tc +)`. A first version, with messages
+  that repeated the signature and split it by groups of tokens, took 124.
+- **Checked:** `tests/grammar_typed.shen`, 13 checks of typed rules from typed code, and `tests/grammar_typed.sh`,
+  14 grammars and clients refused with the message expected, and a typed file's rules read from a reader under
+  `(tc -)`.
+
 ### Shen features in the SQLite example (2026-11-08, M3 Max, macOS arm64)
 
 A read of the libraries and the example found code that reads like Scheme or ML: index loops, records reached by slot

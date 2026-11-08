@@ -4,7 +4,7 @@
 [byte views](buffers.md) instead of lists. Each definition compiles to an ordinary function over a buffer, a
 position and an end, which reads bytes with the same inline primitives a scanner written by hand would use, and
 allocates nothing but the values its rules build. Load it after `buffer.shen`, under `(tc -)`, and before the
-grammars, which must be in a file read after it:
+grammars, which must be in a file read after it, and can be [typed](#types):
 
 ```shen
 (defgrammar <letter> B where (and (>= B 97) (<= B 122));)
@@ -163,10 +163,49 @@ checks wait for input; parsing a complete view is unchanged by it. `(grammar.pre
 ahead, outside any deadline, as a server does when it starts listening. A task blocks while its parse
 waits, as it does for any read, so each connection reads in a task of its own.
 
+## Types
+
+A rule can have a signature after its name, as a `defcc` rule can: `{==> Value}` gives the type of its
+value, and `{T1 --> T2 ==> Value}` the types of its parameters too, with spaces around the arrows, as in
+any signature. Each alternative of a typed rule has `:=`, and names only typed rules' values. Loaded under
+`(tc +)`, each alternative is checked: its value has the rule's type, its guards are booleans, its messages
+are strings, and the arguments it gives a typed rule have the types of its parameters. In an alternative,
+a byte variable, `(at P)` and a binary field are numbers, `(text <rule>)` is a string, `(span <rule>)` a
+`buffer.view`, and a typed rule named in a value has its value's type:
+
+```shen
+(defgrammar <digit> {==> number} B := (- B 48) where (and (>= B 48) (<= B 57));)
+(defgrammar (<number> Acc) {number ==> number}
+  <digit> (<number> (+ (* 10 Acc) <digit>)) := <number>;
+  <digit> := (+ (* 10 Acc) <digit>);)
+(defgrammar <numbers> {==> (list number)}
+  (<number> 0) "," <numbers> := [<number> | <numbers>];
+  (<number> 0) := [<number>];)
+
+(define numbers
+  {string --> (list number)}
+  Text -> (grammar.parse <numbers> (buffer.from-string Text) (/. At Message (error "~A at ~A" Message At))))
+```
+
+```sh
+shen-jit eval -l lib/buffer.shen -l lib/grammar.shen -e '(tc +)' -l numbers.shen -e '(numbers "1,22,333")'
+```
+
+This gives `[1 22 333]`. Rules without a value need no signature, and typed rules can
+match them. The alternatives are checked as the clauses of a function, `<rule>.types`, so an error names
+the alternative, as in `type error in rule 2 of <numbers>.types`.
+
+In typed code, `grammar.parse` and `grammar.match?` of a typed rule call two functions that the
+signature declares: `<rule>.parse`, of type `T1 --> ... --> buffer.view --> (number --> string --> Value)
+--> Value`, and `<rule>.match?`, of type `T1 --> ... --> buffer.view --> boolean`. `grammar.read` and
+`grammar.parse-range` are not typed. The loader would not accept a rule's own function, which has no
+type, so under `(tc +)` each rule is compiled at its first call, as a repetition is. Under `(tc -)` a
+signature changes nothing in how a rule runs.
+
 ## Compared with defcc
 
 `defgrammar` keeps `defcc`'s notation where the meaning is the same: alternatives ended by `;`, `:=`,
 `where`, `<e>`, variables, `_`, and a rule named in a value standing for its value. It reads bytes, not
-lists, so a number or a string is a terminal, and patterns in brackets are not. It has no `<!>` and no type
-signatures, and adds parameters, repetition, captures, requires, binary fields and reading from a reader as
-input arrives.
+lists, so a number or a string is a terminal, and patterns in brackets are not. Its signatures type values
+and parameters, where `defcc`'s type the input too, as it is always bytes here. It has no `<!>`, and adds
+parameters, repetition, captures, requires, binary fields and reading from a reader as input arrives.

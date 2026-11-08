@@ -110,8 +110,11 @@
 
 (define grammar.define
   Name Params Body ->
-    (let Rules (map (/. R (grammar.split-rule R [])) (grammar.split Body [] []))
+    (let Signed (grammar.signed Name Params Body)
+         Sig (fst Signed)
+         Rules (map (/. R (grammar.split-rule R [])) (grammar.split (snd Signed) [] []))
          _ (if (empty? Rules) (error "defgrammar ~A: no rules" Name) skip)
+         _ (put Name grammar.type Sig)
          _ (put Name grammar.value (grammar.every? (/. R (not (= (hd (tl R)) grammar.none))) Rules))
          _ (put Name grammar.class (if (empty? Params) (grammar.class Rules) []))
          _ (put Name grammar.params Params)
@@ -126,7 +129,128 @@
                                                     R [At 0]))
                                 Rules))])
          _ (put Name grammar.code Def)
-      Def))
+         Checked (if (empty? Sig) [] (grammar.typed Name Params Sig Rules))
+      (if (tc?) (do (grammar.stub Name Def) (if (empty? Sig) Name Checked)) Def)))
+
+\\ Typed grammars. A signature, {T1 --> T2 ==> B}, gives the parameters' types and the value's,
+\\ and is read as its symbols. What an alternative names, it gives to a function annotated with
+\\ (type ...), whose body has the value's type and checks the guards, the messages and the
+\\ arguments; the loader checks it under (tc +). A rule cannot be checked itself, as values pass
+\\ through the state, so under (tc +) every rule is defined as a stub, which the loader does not
+\\ see, and compiled at its first call, as a loop is. Typed code parses with <rule>.parse and
+\\ <rule>.match?.
+
+(define grammar.signed
+  Name Params [X | Body] -> (grammar.signature Name Params Body []) where (= X (intern "{"))
+  _ _ Body -> (@p [] Body))
+
+(define grammar.signature
+  Name Params [X | Body] Acc ->
+    (let Sig (grammar.sig-types (reverse Acc) [])
+      (if (and (cons? Sig) (= (length (hd Sig)) (length Params)))
+          (@p Sig Body)
+          (error "defgrammar ~A: a signature gives a type for each parameter, then ==> and the value's type" Name)))
+    where (= X (intern "}"))
+  Name Params [X | Body] Acc -> (grammar.signature Name Params Body [X | Acc])
+  Name _ _ _ -> (error "defgrammar ~A: a signature without }" Name))
+
+\\ {T1 --> T2 ==> Value} gives [[T1 T2] Value], and a value of a function type is curried.
+(define grammar.sig-types
+  [X | Value] Types -> [(reverse Types) (grammar.curry Value)] where (and (= X (intern "==>")) (cons? Value))
+  [T X | Tokens] Types -> (grammar.sig-types Tokens [T | Types]) where (= X (grammar.arrow))
+  [T X | Tokens] Types -> (grammar.sig-types [X | Tokens] [T | Types]) where (= X (intern "==>"))
+  _ _ -> [])
+
+(define grammar.curry
+  [T] -> T
+  [T X | Ts] -> [T X (grammar.curry Ts)] where (cons? Ts)
+  Ts -> Ts)
+
+(define grammar.arrow
+  -> (intern "-->"))
+
+(define grammar.arrows
+  [] B -> B
+  [T | Ts] B -> [T (grammar.arrow) (grammar.arrows Ts B)])
+
+(define grammar.sig-of
+  R -> (trap-error (get R grammar.type) (/. E [])))
+
+(define grammar.typed
+  Name Params [Types Value] Rules ->
+    (let Checked (grammar.types Name Params Types Value Rules)
+         View (gensym (protect V)) Fail (gensym (protect F))
+         Parse (grammar.client-name Name ".parse")
+         Match (grammar.client-name Name ".match?")
+         _ (declare Parse (grammar.arrows (append Types [buffer.view (grammar.arrows [number string] Value)]) Value))
+         _ (declare Match (grammar.arrows (append Types [buffer.view]) boolean))
+         _ (eval (append [define Parse | Params] [View Fail -> (grammar.parse-form [Name | Params] View Fail)]))
+         _ (eval (append [define Match | Params] [View -> (grammar.match-form [Name | Params] View)]))
+      Checked))
+
+(define grammar.client-name
+  Name Suffix -> (intern (cn (str Name) Suffix)))
+
+\\ The alternatives as the clauses of Name.types, a function of everything any of them names, so
+\\ that a type error says which alternative it is in: the parameters, the numbers the items bind,
+\\ and a variable for each rule named, with the type of its value or its capture.
+(define grammar.types
+  Name Params Types Value Rules ->
+    (let Kinds (map (/. R (grammar.named Name R)) Rules)
+         Vars (grammar.unique (mapcan (/. R (difference (grammar.scope (hd R)) Params)) Rules) [])
+         Named (map (/. K [K | (gensym (protect V))]) (grammar.unique (mapcan (/. K K) Kinds) []))
+         Sig (append Types (map (/. V number) Vars) (map (/. N (grammar.value-type Name (hd N))) Named))
+      (append [define (grammar.client-name Name ".types") (intern "{")
+               | (if (empty? Sig) [(grammar.arrow) Value] (append (mapcan (/. T [T (grammar.arrow)]) Sig) [Value]))]
+              [(intern "}") | (mapcan (/. RK (grammar.clause Named (append Params Vars (map (function tl) Named))
+                                                            (hd RK) (tl RK)))
+                                      (grammar.zip Rules Kinds))])))
+
+\\ The rules an alternative names, each as [Rule How], matched plain, as text, or as a span.
+(define grammar.named
+  Name [_ grammar.none _] -> (error "defgrammar ~A: a typed rule gives a value with := in every alternative" Name)
+  Name [Items Sem Guard] -> (let Top (grammar.top Items)
+                              (map (/. V [(hd V) (tl (assoc (hd V) Top))]) (grammar.values Name [Items Sem Guard]))))
+
+(define grammar.clause
+  Named Patterns [Items Sem Guard] Kinds ->
+    (let Values (map (/. K [(hd K) | (tl (assoc K Named))]) Kinds)
+         Checks (grammar.replace Values (append (if (= Guard grammar.none) [] [Guard]) (grammar.checks Items)))
+         Result (grammar.replace Values Sem)
+      (append Patterns [(intern "->") (if (empty? Checks) Result [if (grammar.conj Checks) Result Result])])))
+
+(define grammar.value-type
+  _ [_ text] -> string
+  _ [_ span] -> buffer.view
+  Name [R _] -> (let Sig (grammar.sig-of R)
+                  (if (empty? Sig)
+                      (error "defgrammar ~A: ~A's value has no type: give ~A a signature" Name R R)
+                      (hd (tl Sig)))))
+
+\\ The numbers an alternative's items bind: bytes, positions and fields.
+(define grammar.scope
+  [] -> []
+  [X | Items] -> [X | (grammar.scope Items)] where (variable? X)
+  [[F V] | Items] -> [V | (grammar.scope Items)] where (and (element? F [at u16-be u32-be]) (variable? V))
+  [[require | Rest] | Items] -> (append (grammar.scope (grammar.butlast Rest)) (grammar.scope Items))
+  [_ | Items] -> (grammar.scope Items))
+
+\\ Guards are booleans, messages strings, and arguments have the types of a typed rule's parameters.
+(define grammar.checks
+  [] -> []
+  [[where G] | Items] -> [G | (grammar.checks Items)]
+  [[require | Rest] | Items] ->
+    (append (grammar.checks (grammar.butlast Rest)) [[= (grammar.last Rest) ""] | (grammar.checks Items)])
+  [[F X] | Items] -> (append (grammar.checks [X]) (grammar.checks Items)) where (element? F [* + ? text span])
+  [[R | Args] | Items] -> [(append [(grammar.client-name R ".match?") | Args] [[buffer.new 0]]) | (grammar.checks Items)]
+    where (and (grammar.nonterminal? R) (cons? Args) (cons? (grammar.sig-of R)))
+  [_ | Items] -> (grammar.checks Items))
+
+\\ A function compiled at its first call: Def, saved, and a stub that compiles it.
+(define grammar.stub
+  H Def -> (let Params (grammar.parameters Def)
+                _ (put H grammar.loop Def)
+             (eval (append [define H | Params] [-> [grammar.compile H (grammar.list Params)]]))))
 
 \\ A byte class, B where Guard and nothing else, is tested in place by the rules read after it.
 (define grammar.class
@@ -486,9 +610,8 @@
          Free (grammar.unique (intersection (grammar.symbols Body) Scope) [])
          Params [Buf At End S | Free]
          _ (grammar.arity [H | (length Params)])
-         _ (put H grammar.loop (append [define H | Params]
-                                 [-> [let P Body [if [> P At] (append [H Buf P End S] Free) [if [= P -2] P At]]]]))
-         _ (eval (append [define H | Params] [-> [grammar.compile H (grammar.list Params)]]))
+         _ (grammar.stub H (append [define H | Params]
+                             [-> [let P Body [if [> P At] (append [H Buf P End S] Free) [if [= P -2] P At]]]]))
       [H | Free]))
 
 (define grammar.list
@@ -521,8 +644,10 @@
     where (and (grammar.nonterminal? Name) (grammar.every? (function variable?) Params))
   [defgrammar | Form] -> (error "defgrammar: expected <name> or (<name> Parameters...), and rules, in ~R" Form)
   [grammar.in-class _ _ Guard] -> Guard
-  [grammar.parse Rule View Fail] -> (grammar.parse-form Rule View Fail) where (grammar.rule-form? Rule)
-  [grammar.match? Rule View] -> (grammar.match-form Rule View) where (grammar.rule-form? Rule)
+  [grammar.parse Rule View Fail] -> (grammar.client Rule ".parse" [View Fail] (grammar.parse-form Rule View Fail))
+    where (grammar.rule-form? Rule)
+  [grammar.match? Rule View] -> (grammar.client Rule ".match?" [View] (grammar.match-form Rule View))
+    where (grammar.rule-form? Rule)
   [grammar.parse-range Rule Buffer At End Fail] -> (grammar.range-form Rule Buffer At End Fail)
     where (grammar.rule-form? Rule)
   [grammar.read Rule Reader Fail] ->
@@ -531,6 +656,13 @@
   [grammar.read-within Rule Reader Limit Fail] ->
     [grammar.read-from (grammar.rule-name Rule) (grammar.list (grammar.rule-args Rule)) Reader Limit Fail]
     where (grammar.rule-form? Rule))
+
+\\ Typed code calls a typed rule's own functions, which have types.
+(define grammar.client
+  Rule Suffix Rest Code ->
+    (if (and (tc?) (cons? (grammar.sig-of (grammar.rule-name Rule))))
+        (append [(grammar.client-name (grammar.rule-name Rule) Suffix) | (grammar.rule-args Rule)] Rest)
+        Code))
 
 \\ A call of a rule from outside a grammar: Rule is <rule>, or (<rule> Arguments...).
 (define grammar.call-rule
