@@ -2129,6 +2129,24 @@ Soufflé chooses a few sorted orders so that one serves several searches: an ord
 - **What it found:** nothing in the library needed a change. One thing in its use: `datalog.ask` and `datalog.query` read their pattern as written, so `(datalog.query P Facts (reaches F X))` inside a function treats `F` as a Datalog variable and answers for every function; the analyser builds the pattern for `datalog.solve` instead, and the reference now says so. Read through Shen's reader, a file's macros are applied before the analysis sees it: `(input+ number)` is two calls.
 - **Tested** by `example-apps/depends/test.sh`, which `make test-datalog` runs: it builds the executable, checks the report, a demand query, two explanations, the files written and a bad option over a fixture whose answers are written by hand, and that it finds every function, by name, the kernel's KL defines. It adds about 0.9 s.
 
+### Against Soufflé after the gaps (2026-11-08, Apple M3 Max, Homebrew's Soufflé 2.5 on one thread)
+
+`make bench-datalog-souffle` on the branch's last commit, its interpreter left out, at a load of 3 to 5 from other work, so that each time is a little high. Every result Soufflé finished matches ours.
+
+| ms | Ours | Soufflé compiled |
+| --- | --- | --- |
+| Closure, sparse | 103.5 | 448.4 |
+| Closure, dense | 6.5 | 39.4 |
+| Nonlinear closure | 164.1 | 690.3 |
+| Same generation | 11.6 | 56.1 |
+| Mutual recursion | 0.2 | 0.9 |
+| Skewed join | 109.5 | 107.5 |
+| The kernel's call graph | 7.8 | 46.4 |
+| Points-to small, order a / b / c | 109.5 / 141.1 / 111.2 | 1,436.6 / over 40 s / 234.6 |
+| Points-to large, order a / b / c | 486.9 / 643.9 / 485.3 | 16,820.3 / over 40 s / 974.2 |
+
+On one thread, ahead everywhere but the skewed join, which is even, and the shortest runs, under Soufflé's startup. With the entries above: records, 536,345 routes in 54 to 64 ms against 290 to 320; shortest paths 23.5 against 137.9; one node's paths by demand 0.3 against 1.3 with its magic sets; reading 1.39 million facts 334 against 309.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.
