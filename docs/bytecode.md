@@ -211,7 +211,8 @@ is in memory, so it takes no floating point. `f64!` takes a real inline, and lea
 pointer differs in its header, which a store tests whole, so no other access pays for it.
 
 Code that loops, calls nothing and has no handlers, and reads or stores through a parameter it never changes, works out that memory's base and lengths once, on the way in, for any code,
-written by hand or not, however many loops it has, for four parameters at most. They hold until C runs, as only C can collect or kill a pointer, and they are worked out again each time it has. What is not memory gets length 0, so that its first access raises as it would have, and a read-only pointer gets 0 for stores. Memory reached at one width, and only at word indices, keeps limits in place of lengths, the first index without room for that width, so that an access is one comparison, and what is in registers is used where it is.
+written by hand or not, however many loops it has, for eight parameters at most where integer registers are many, as on arm64, and four
+where they are few, as on x86-64. They hold until C runs, as only C can collect or kill a pointer, and they are worked out again each time it has. What is not memory gets length 0, so that its first access raises as it would have, and a read-only pointer gets 0 for stores. Memory reached at one width, and only at word indices, keeps limits in place of lengths, the first index without room for that width, so that an access is one comparison, and what is in registers is used where it is.
 
 | Form | Result |
 | --- | --- |
@@ -542,7 +543,9 @@ What is in a slot stays tagged, also with byte buffers and bit operations.
 Doubles can live unboxed in 48 real registers, and 64-bit integers, which wrap, in 16 word registers, each a namespace of
 its own. The JIT gives machine registers to what is used most, each loop counting 8 times what is around it, so the numbers and
 the order of the names make no difference: 27 float registers on arm64 and 12 on x86-64, and the integer registers a target has to spare,
-11 on arm64, 2 on x86-64 and none on Windows, which the base and limits of kept memory compete for too. Code with loops that has more than
+11 on arm64, 2 on x86-64 and none on Windows, which the base and limits of kept memory compete for too, where registers are many at half
+a word's weight: they never change in a loop, so a load of one from the native frame waits on nothing, while a word the loop writes puts
+a store and a load in the way of the next iteration. Code with loops that has more than
 fits also takes the saved registers its slots would have had, 6, 2 and 4, and its slots stay in the frame. The rest are places in the
 native frame. The collector does not look at any of them, and the JIT saves what C does not keep to the native frame around any call to
 C that returns: a collection, a primitive, an interrupt check. Nothing saves them across a call of a function, so **code using them calls nothing and

@@ -32,7 +32,11 @@
    scratch register waits in the native frame around a call to C that returns. */
 #define REAL_FLOATS (SLJIT_NUMBER_OF_FLOAT_REGISTERS - 3)
 #define WORD_GPRS (SLJIT_NUMBER_OF_REGISTERS - SAVEDS - 5)
-#define CACHED_MEMORY 4
+/* Where integer registers are many, as on arm64, memory is kept for eight parameters, and a word
+   counts twice what its base and limits do. Where they are few, as on x86-64, the hottest of all
+   keep them, and four are kept: there, each change cost some loop more than it gave. */
+#define MANY_GPRS (WORD_GPRS >= 8)
+#define CACHED_MEMORY (MANY_GPRS ? 8 : 4)
 #define RAW_INTEGERS (WORD_REGISTERS + 3 * CACHED_MEMORY)
 #define SCRATCHES ((5 + WORD_GPRS) | SLJIT_ENTER_FLOAT(3 + REAL_FLOATS))
 #define LOCALS ((REAL_REGISTERS + RAW_INTEGERS) * (sljit_s32)sizeof(sljit_sw))
@@ -1186,9 +1190,12 @@ static void places_by_use(const uint64_t *use, uint8_t *place, uint32_t n)
 }
 
 /* Machine registers go to what is used most, each loop counting 8 times what is around it, base
-   and limits of kept memory competing with word registers. A loop runs from its head to its last
-   jump back. Code that loops and has more than fits takes the saved registers too, which slots
-   would otherwise have: its work is in these, and they need no saving around C. */
+   and limits of kept memory competing with word registers. Where registers are many, the last ones
+   decide between those and a word: the base and limits never change in a loop, so a load of one
+   from the native frame waits on nothing, while a word the loop writes puts a store and a load in
+   the way of the next iteration. A loop runs from its head to its last jump back. Code that loops
+   and has more than fits takes the saved registers too, which slots would otherwise have: its work
+   is in these, and they need no saving around C. */
 static void assign_places(Emit *e, const uint32_t *words, size_t nwords)
 {
     if (!e->reals && !e->word_regs && !e->nmemory)
@@ -1214,7 +1221,7 @@ static void assign_places(Emit *e, const uint32_t *words, size_t nwords)
             if (kinds[k] == 'r')
                 real_use[x] += use;
             else if ((kinds[k] == 'w' || kinds[k] == 'W') && !(x & OPERAND_CONST))
-                raw_use[x] += use;
+                raw_use[x] += MANY_GPRS ? 2 * use : use;
         }
         uint32_t memory = memory_operand(p);
         for (uint32_t k = 0; k < e->nmemory; k++)
