@@ -1860,6 +1860,9 @@ execution remains CI's responsibility; no new platform ABI or instruction was in
   cap, leaving 5290 KiB live. Saved-model collection at every allocation also passes; it now follows
   the test split's `TEST_GC_STRESS=1` contract and is included in `test-lib-stress`. Core/library tiers,
   source/binary package checks, guide and the publication scan pass. The CI matrix includes Windows.
+- The first Windows CI attempt reaches the source graph assertions successfully, then Python's
+  CP1252 stdout rejects a Unicode arrow in the status label. The label now uses ASCII; facts and
+  filesystem paths retain UTF-8 handling. This is a test-console fix rather than a data-format change.
 
 ### Configured C translation units (2026-11-08, M3 Max, macOS and Linux arm64)
 

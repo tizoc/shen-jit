@@ -195,7 +195,7 @@ def source_analysis(args, grammar, fs_adapter, root):
             expected = {(paths['a.c'], 'helper'), (paths['b.c'], 'target')} if mode == 'reach' else {
                 (paths['a.c'], 'main'), (paths['a.c'], 'helper')}
             assert answers == expected
-    print('4 passed, 0 failed (C source → Tree-sitter facts → Datalog reach and impact)', flush=True)
+    print('4 passed, 0 failed (C source -> Tree-sitter facts -> Datalog reach and impact)', flush=True)
 
 
 def source_linkage(args, grammar, fs_adapter, root):
