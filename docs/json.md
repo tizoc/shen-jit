@@ -30,7 +30,9 @@ values need no framing.
 This returns `[ok [object ["n" [number "1"]]]]`, `[ok [[number "2"]]]`, `[ok [number "3"]]` and `[eof]`.
 It gives `[error Error]` when the reader fails, and raises for a syntax error as `json.decode` does, with an
 offset counted in the stream, or `"input ended"` when the input stops inside a value. The value must fit
-the reader's capacity, which takes the place of `byte-limit`; `depth-limit` applies.
+the reader's capacity, which takes the place of `byte-limit`; `depth-limit` applies. In typed code its
+type is `io.reader --> (list json.option) --> (grammar.read-result json.value)`, as [grammar](grammar.md#types)
+gives it.
 
 ## Values and numbers
 

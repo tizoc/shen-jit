@@ -195,10 +195,13 @@ This gives `[1 22 333]`. Rules without a value need no signature, and typed rule
 match them. The alternatives are checked as the clauses of a function, `<rule>.types`, so an error names
 the alternative, as in `type error in rule 2 of <numbers>.types`.
 
-In typed code, `grammar.parse` and `grammar.match?` of a typed rule call two functions that the
-signature declares: `<rule>.parse`, of type `T1 --> ... --> buffer.view --> (number --> string --> Value)
---> Value`, and `<rule>.match?`, of type `T1 --> ... --> buffer.view --> boolean`. `grammar.read` and
-`grammar.parse-range` are not typed. The loader would not accept a rule's own function, which has no
+In typed code, `grammar.parse`, `grammar.match?`, `grammar.read` and `grammar.read-within` of a typed
+rule call functions that the signature declares: `<rule>.parse`, of type `T1 --> ... --> buffer.view -->
+(number --> string --> Value) --> Value`, `<rule>.match?`, of type `T1 --> ... --> buffer.view -->
+boolean`, and `<rule>.read`, of type `T1 --> ... --> io.reader --> number --> (number --> string -->
+(grammar.read-result Value)) --> (grammar.read-result Value)`, whose number is the limit. A
+`(grammar.read-result A)` is `[ok A]`, `[eof]` or `[error Error]`, with an `io.error`, so a read's Fail
+gives one of those, or raises. `grammar.parse-range` is not typed. The loader would not accept a rule's own function, which has no
 type, so under `(tc +)` each rule is compiled at its first call, as a repetition is. Under `(tc -)` a
 signature changes nothing in how a rule runs.
 

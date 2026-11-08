@@ -25,7 +25,8 @@ All notable changes to this project are documented in this file. The format is b
   request head that way, and the server uses it when the head limit fits its read buffer, as by default.
 - Typed grammars: a signature after a rule's name, `{==> Value}` or `{T1 --> T2 ==> Value}`, as in `defcc`, and
   under `(tc +)` each alternative is checked: its value, its guards, its messages and the arguments it passes. Typed
-  code parses with `grammar.parse` and `grammar.match?` of a typed rule, and grammars can be loaded under `(tc +)`.
+  code parses with `grammar.parse`, `grammar.match?` and `grammar.read` of a typed rule, `json.read` is declared, and
+  grammars can be loaded under `(tc +)`.
 
 ### Changed
 

@@ -1,5 +1,5 @@
-\\ Typed grammars and typed code that parses with them. Load buffer.shen and grammar.shen, then
-\\ (tc +), then this.
+\\ Typed grammars and typed code that parses with them. Load buffer.shen, io.shen and grammar.shen,
+\\ then (tc +), then this.
 (defgrammar <gt.digit> {==> number} B := (- B 48) where (and (>= B 48) (<= B 57));)
 
 (defgrammar (<gt.number> Acc) {number ==> number}
@@ -52,6 +52,19 @@
   {string --> (list number)}
   Text -> (grammar.parse <gt.numbers> (gt.view Text) (function gt.raise)))
 
+(define gt.reader
+  {string --> io.reader}
+  Text -> (io.reader (io.input-buffer (gt.view Text)) []))
+
+(define gt.reject
+  {number --> string --> (grammar.read-result A)}
+  At Message -> [error (io.error read "grammar" (make-string "~A at ~A" Message At))])
+
+(define gt.message
+  {(grammar.read-result A) --> string}
+  [error Error] -> (io.error-message Error)
+  _ -> "no error")
+
 (define gt.checks
   {--> (list (string * boolean))}
   -> [(@p "a list of numbers" (= (gt.numbers "12 345 6") [12 345 6]))
@@ -68,6 +81,14 @@
       (@p "an argument" (grammar.match? (<gt.keyword> "let") (gt.view "let")))
       (@p "an argument that does not match" (not (grammar.match? (<gt.keyword> "let") (gt.view "lot"))))
       (@p "rules within rules" (= (grammar.parse <gt.let> (gt.view "let x=5") (function gt.raise)) (@p "x" 5)))
+      (@p "a read" (= (grammar.read <gt.numbers> (gt.reader "1 22 333") (function gt.reject)) [ok [1 22 333]]))
+      (@p "a read within a limit" (= (grammar.read-within <gt.numbers> (gt.reader "1 22 333") 4 (function gt.reject))
+                                     [ok [1 22]]))
+      (@p "a read that fails" (= (gt.message (grammar.read <gt.field> (gt.reader "ab=x") (function gt.reject)))
+                                 "expected a number at 3"))
+      (@p "a read at the end" (= (grammar.read <gt.field> (gt.reader "") (function gt.reject)) [eof]))
+      (@p "a read with an argument" (= (grammar.read (<gt.keyword> "let") (gt.reader "let") (function gt.reject))
+                                       [ok "let"]))
       (@p "a value and a capture" (= (map (/. T (grammar.parse <gt.either> (gt.view T) (function gt.raise))) ["#ab" "cd"])
                                      ["#ab" "cd"]))])
 

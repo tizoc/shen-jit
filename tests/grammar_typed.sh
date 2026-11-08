@@ -19,7 +19,7 @@ EOF
 passed=0
 refused() {
   printf '%s\n' "$2" | cat "$dir/base.shen" - > "$dir/case.shen"
-  if "$SHEN" eval -l lib/buffer.shen -l lib/grammar.shen -e '(tc +)' -l "$dir/case.shen" > "$dir/case.out" 2>&1; then
+  if "$SHEN" eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -e '(tc +)' -l "$dir/case.shen" > "$dir/case.out" 2>&1; then
     echo "FAIL accepted: $2"
     exit 1
   fi
@@ -43,6 +43,8 @@ refused 'type error in rule 1 of bad.go' \
   '(define bad.go {string --> string} S -> (grammar.parse <bad.digit> (buffer.from-string S) (function bad.fail)))'
 refused 'type error in rule 1 of bad.go' \
   '(define bad.go {string --> boolean} S -> (grammar.match? (<bad.times> 1) (buffer.from-string S)))'
+refused 'type error in rule 1 of bad.go' \
+  '(define bad.go {io.reader --> number} R -> (grammar.read <bad.digit> R (function bad.fail)))'
 refused "<bad.any>'s value has no type" '(defgrammar <bad.x> {==> number} <bad.any> := <bad.any>;)'
 refused 'gives a value with := in every alternative' '(defgrammar <bad.x> {==> number} B := 1; B;)'
 refused 'a signature gives a type for each parameter' '(defgrammar (<bad.x> A) {==> number} B := A;)'

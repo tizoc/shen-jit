@@ -179,13 +179,17 @@
 (define grammar.typed
   Name Params [Types Value] Rules ->
     (let Checked (grammar.types Name Params Types Value Rules)
-         View (gensym (protect V)) Fail (gensym (protect F))
+         View (gensym (protect V)) Fail (gensym (protect F)) R (gensym (protect R)) Limit (gensym (protect L))
          Parse (grammar.client-name Name ".parse")
          Match (grammar.client-name Name ".match?")
+         Read (grammar.client-name Name ".read")
+         Result [grammar.read-result Value]
          _ (declare Parse (grammar.arrows (append Types [buffer.view (grammar.arrows [number string] Value)]) Value))
          _ (declare Match (grammar.arrows (append Types [buffer.view]) boolean))
+         _ (declare Read (grammar.arrows (append Types [io.reader number (grammar.arrows [number string] Result)]) Result))
          _ (eval (append [define Parse | Params] [View Fail -> (grammar.parse-form [Name | Params] View Fail)]))
          _ (eval (append [define Match | Params] [View -> (grammar.match-form [Name | Params] View)]))
+         _ (eval (append [define Read | Params] [R Limit Fail -> (grammar.read-form [Name | Params] R Limit Fail)]))
       Checked))
 
 (define grammar.client-name
@@ -651,11 +655,16 @@
   [grammar.parse-range Rule Buffer At End Fail] -> (grammar.range-form Rule Buffer At End Fail)
     where (grammar.rule-form? Rule)
   [grammar.read Rule Reader Fail] ->
-    [grammar.read-from (grammar.rule-name Rule) (grammar.list (grammar.rule-args Rule)) Reader [io.window-size Reader] Fail]
+    (let R (gensym (protect R))
+      [let R Reader (grammar.client Rule ".read" [R [io.window-size R] Fail] (grammar.read-form Rule R [io.window-size R] Fail))])
     where (grammar.rule-form? Rule)
   [grammar.read-within Rule Reader Limit Fail] ->
-    [grammar.read-from (grammar.rule-name Rule) (grammar.list (grammar.rule-args Rule)) Reader Limit Fail]
+    (grammar.client Rule ".read" [Reader Limit Fail] (grammar.read-form Rule Reader Limit Fail))
     where (grammar.rule-form? Rule))
+
+(define grammar.read-form
+  Rule Reader Limit Fail ->
+    [grammar.read-from (grammar.rule-name Rule) (grammar.list (grammar.rule-args Rule)) Reader Limit Fail])
 
 \\ Typed code calls a typed rule's own functions, which have types.
 (define grammar.client
@@ -704,6 +713,19 @@
 
 (define grammar.read-within
   Rule Reader Limit Fail -> (grammar.read-from Rule [] Reader Limit Fail))
+
+\\ What a read of a typed rule gives typed code, Fail's result included.
+(datatype grammar-read-results
+  V : A;
+  ========================================
+  [ok V] : (grammar.read-result A);
+
+  ________________________________________
+  [eof] : (grammar.read-result A);
+
+  Error : io.error;
+  ========================================
+  [error Error] : (grammar.read-result A);)
 
 \\ The stream record: what has arrived, the reader, why there is no more, and the limit.
 (define grammar.read-from

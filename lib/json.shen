@@ -391,6 +391,7 @@
 
 (declare json.decode [buffer.view --> [[list json.option] --> json.value]])
 (declare json.parse [string --> [[list json.option] --> json.value]])
+(declare json.read [io.reader --> [[list json.option] --> [grammar.read-result json.value]]])
 (declare json.number [string --> json.value])
 (declare json.integer [json.value --> number])
 (declare json.encode [json.value --> [[list json.option] --> buffer.view]])

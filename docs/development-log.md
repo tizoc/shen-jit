@@ -1438,6 +1438,11 @@ strings, and arguments to a typed rule's parameters have their types; bytes, `(a
 - **Checked:** `tests/grammar_typed.shen`, 13 checks of typed rules from typed code, and `tests/grammar_typed.sh`,
   14 grammars and clients refused with the message expected, and a typed file's rules read from a reader under
   `(tc -)`.
+- **Reads typed too,** the same day: `(grammar.read-result A)`, `[ok A]`, `[eof]` or `[error io.error]`, as `io.shen`
+  types its results, and a third client, `<rule>.read`, which `grammar.read` and `grammar.read-within` of a typed rule
+  expand to under `(tc +)`. `json.read` is declared with it. On the way, `grammar.read`'s expansion evaluated its
+  reader twice, once for the window's size; it binds it first now. 17 lines, 18 typed checks, and a read used at the
+  wrong type refused.
 
 ### Shen features in the SQLite example (2026-11-08, M3 Max, macOS arm64)
 
