@@ -1585,7 +1585,16 @@
   _ _ -> none)
 
 (define datalog.index-of
-  Rel Keys Relations -> (if (or (empty? Keys) (datalog.whole-tuple? Rel Keys Relations)) none [Rel Keys]))
+  Rel Keys Relations -> (if (or (empty? Keys) (datalog.whole-tuple? Rel Keys Relations) (datalog.equivalence? Rel))
+                            none
+                            [Rel Keys]))
+
+\\ The equivalences of the program whose code is being made or prepared: they are read from their
+\\ classes, by the steps below, and have no index.
+(set datalog.*equivalences* [])
+
+(define datalog.equivalence?
+  Rel -> (element? Rel (value datalog.*equivalences*)))
 
 (define datalog.arity-in
   Rel Relations -> (- (length (assoc Rel Relations)) 1))
@@ -1791,6 +1800,23 @@
 \\ relation it reads, what it reads is already in that buffer, and growing leaves it as it is.
 (define datalog.gen
   [] _ _ _ -> true
+  [[scan Rel Source Columns] | Steps] [Relations Constants Indexes] Prefix N
+  -> [let r [<-address s (datalog.relation-slot Rel Relations)]
+       (datalog.gen-pairs [datalog.eq-pairs r Source [] []] Columns Steps [Relations Constants Indexes] Prefix N)]
+     where (datalog.equivalence? Rel)
+  [[lookup Rel Source Keys Terms Columns] | Steps] [Relations Constants Indexes] Prefix N
+  -> [let r [<-address s (datalog.relation-slot Rel Relations)]
+       (datalog.gen-pairs [datalog.eq-pairs r Source (datalog.list-form Keys) (datalog.list-form (map (/. T (datalog.value-form T Constants)) Terms))]
+         Columns Steps [Relations Constants Indexes] Prefix N)]
+     where (datalog.equivalence? Rel)
+  [[absent Rel Keys Terms] | Steps] [Relations Constants Indexes] Prefix N
+  -> [let r [<-address s (datalog.relation-slot Rel Relations)]
+       [if (if (empty? Keys)
+               [> [<-address [<-address r 8] 8] 0]
+               [cons? [datalog.eq-pairs r all (datalog.list-form Keys) (datalog.list-form (map (/. T (datalog.value-form T Constants)) Terms))]])
+           true
+           (datalog.gen Steps [Relations Constants Indexes] Prefix N)]]
+     where (datalog.equivalence? Rel)
   [[filter Op A B] | Steps] Ctx Prefix N
   -> [if (datalog.filter-form Op A B (datalog.nth 2 Ctx)) (datalog.gen Steps Ctx Prefix N) true]
   [[assign V E] | Steps] Ctx Prefix N
@@ -1852,6 +1878,19 @@
            (let I [<-address r (datalog.index-slot Rel Keys Indexes)]
              [> [Find [<-address I 0] [<-address r 2] [<-address I 2] | Forms] 0]))))
 
+\\ A loop over the pairs of an equivalence that List gives, as [X Y] words.
+(define datalog.gen-pairs
+  List Columns Steps Ctx Prefix N
+  -> (let Name (datalog.loop-name Prefix N)
+          Live (datalog.loop-live Columns Steps)
+          Body (datalog.gen-columns Columns [eq [hd [hd l]] [hd [tl [hd l]]]] (datalog.nth 2 Ctx) (datalog.gen Steps Ctx Prefix (+ N 1)))
+          Form [defun Name [l s | Live]
+                 [if [cons? l]
+                     [do Body [Name [tl l] s | Live]]
+                     true]]
+          _ (set datalog.*forms* [Form | (value datalog.*forms*)])
+       [Name List s | Live]))
+
 \\ A loop over the tuples from byte Start to byte End of the relation in r.
 (define datalog.gen-scan
   Start End Stride Columns Steps Ctx Prefix N
@@ -1886,6 +1925,8 @@
        [Name p [<-address i 1] [<-address r 2] s | Live]))
 
 (define datalog.column-form
+  [eq X _] 1 -> X
+  [eq _ Y] 2 -> Y
   Base I -> [shen-jit.u32 b (if (= I 1) Base [+ Base (* 4 (- I 1))])])
 
 \\ In order, as a check reads only what a column before it bound.
@@ -1946,6 +1987,15 @@
 \\ What a fold gives: a loop over the relation in r, or for a whole tuple's keys whether it is
 \\ there.
 (define datalog.fold-form
+  Op Target Rel Keys Terms Columns [Relations Constants Indexes] Prefix N
+  -> (let Name (datalog.loop-name Prefix N)
+          Update (datalog.fold-update Op (if (= Target none) 0 (datalog.number-form [var Target] Constants)))
+          Body (datalog.gen-columns-or Columns [eq [hd [hd l]] [hd [tl [hd l]]]] Constants Update a)
+          _ (set datalog.*forms* [[defun Name [l s a] [if [cons? l] [Name [tl l] s Body] a]] | (value datalog.*forms*)])
+          Call [Name [datalog.eq-pairs r all (datalog.list-form Keys) (datalog.list-form (map (/. T (datalog.value-form T Constants)) Terms))]
+                     s (datalog.fold-init Op)]
+       Call)
+     where (and (datalog.equivalence? Rel) (not (= Op mean)))
   mean Target Rel Keys Terms Columns Ctx Prefix N
   -> [datalog.mean (datalog.fold-form sum Target Rel Keys Terms Columns Ctx Prefix N)
                    (datalog.fold-form count none Rel Keys Terms Columns Ctx (cn Prefix "m") N)]
@@ -2006,6 +2056,7 @@
            (let Ctx [Relations Constants (get Name datalog.indexes)]
                 _ (set datalog.*constructors* (datalog.nth 7 (datalog.program Name)))
                 _ (set datalog.*keyed* (datalog.nth 9 (datalog.program Name)))
+                _ (set datalog.*equivalences* (datalog.nth 8 (datalog.program Name)))
                 _ (set datalog.*interned-slot* (datalog.interned-slot Relations (value datalog.*constructors*)))
                 Prefix (datalog.next-name Name)
                 Fn (datalog.gen-either Steps Ctx Prefix)
@@ -2041,11 +2092,17 @@
 \\ and has no way to say that a value is missing.
 (define datalog.kl-only?
   [] -> false
+  [Step | _] -> true where (datalog.reads-classes? Step)
   [[emit Rel | _] | _] -> (and (cons? (datalog.keyed-mode Rel)) (not (datalog.native-lattice? (datalog.keyed-mode Rel))))
   [[filter _ A B] | Steps] -> (or (datalog.kl-only-term? A) (datalog.kl-only-term? B) (datalog.kl-only? Steps))
   [[assign _ E] | Steps] -> (or (datalog.kl-only-term? E) (datalog.kl-only? Steps))
   [[fold _ _ mean | _] | _] -> true
   [_ | Steps] -> (datalog.kl-only? Steps))
+
+(define datalog.reads-classes?
+  [absent Rel | _] -> (datalog.equivalence? Rel)
+  [fold _ _ _ _ Rel | _] -> (datalog.equivalence? Rel)
+  _ -> false)
 
 (define datalog.kl-only-term?
   [Op A B] -> (or (not (integer? B)) (< B 0) (> B 31) (datalog.kl-only-term? A)) where (element? Op [bshl bshr])
@@ -2137,6 +2194,8 @@
 
 \\ Columns of the tuple whose first byte is Base in Tuples.
 (define datalog.column-word
+  _ [eq X _] 1 -> X
+  _ [eq _ Y] 2 -> Y
   Tuples Base I -> [u32 Tuples (datalog.offset-form Base (* 4 (- I 1)))])
 
 \\ The variables an atom's columns bind, as the words that read them where used, and the checks
@@ -2203,6 +2262,14 @@
 \\ room starts again; none before the first step, and restart when that step is not a scan.
 (define datalog.native-steps
   [] _ _ _ _ -> []
+  [[scan Rel Source Columns] | Steps] Ctx Env Level Outer
+  -> (datalog.native-class-scan Rel Source Columns Steps Ctx Env Level Outer) where (datalog.equivalence? Rel)
+  [[lookup Rel Source Keys Terms Columns] | Steps] [Relations Constants Indexes N] Env Level Outer
+  -> (let Parts (datalog.native-terms Terms Env [Relations Constants Indexes N] Outer)
+       (append (hd Parts)
+               (datalog.native-class-lookup Rel Source Keys (hd (tl Parts)) Columns Steps [Relations Constants Indexes N] Env Level
+                 (datalog.outer Outer))))
+     where (datalog.equivalence? Rel)
   [[filter Op A B] | Steps] Ctx Env Level Outer
   -> (let Test (datalog.native-test Op A B Env Ctx Outer)
        (append (hd Test) [[when (hd (tl Test)) | (datalog.native-steps Steps Ctx Env Level Outer)]]))
@@ -2255,6 +2322,74 @@
 \\ Where the old tuples of the relation in Slot end, by position.
 (define datalog.old-param
   Slot -> (datalog.param (datalog.word-name "Old" Slot) [<-address (datalog.record-form Slot) 5]))
+
+\\ The classes of an equivalence, as kernels read them: X's words, a value at a position's byte B and
+\\ its ranges after it, and H's table and mask.
+(define datalog.class-params
+  Slot -> (let C [<-address (datalog.record-form Slot) 8]
+            [(datalog.param (datalog.word-name "Cx" Slot) [<-address C 3])
+             (datalog.param (datalog.word-name "Ch" Slot) [<-address C 4])
+             (datalog.param (datalog.word-name "Cm" Slot) [<-address C 5])
+             (datalog.param (datalog.word-name "Cn" Slot) [<-address C 6])
+             (datalog.param (datalog.word-name "Cc" Slot) [<-address C 7])]))
+
+\\ Statements that run Inner for each position Q the value at byte B pairs with, from all, old or
+\\ new pairs: its class's range, its old part's, or the class's less the part's. The ranges are read
+\\ where used, which costs loads and saves registers, of which a kernel has 16.
+(define datalog.class-range
+  X B all Q Inner -> [[for Q [u32 X [+ B 4]] [u32 X [+ B 8]] | Inner]]
+  X B old Q Inner -> [[for Q [u32 X [+ B 12]] [u32 X [+ B 16]] | Inner]]
+  X B new Q Inner -> [[for Q [u32 X [+ B 4]] [u32 X [+ B 8]]
+                        [unless [and [>= Q [u32 X [+ B 12]]] [< Q [u32 X [+ B 16]]]] | Inner]]])
+
+\\ Every pair, old pair or new one: each value, of those that changed for new ones, and each it
+\\ pairs with.
+(define datalog.native-class-scan
+  Rel Source Columns Steps [Relations Constants Indexes N] Env Level Outer
+  -> (let Ctx [Relations Constants Indexes N]
+          Slot (datalog.relation-slot Rel Relations)
+          Params (datalog.class-params Slot)
+          X (hd Params)
+          P (datalog.word-name "P" Level)
+          Q (datalog.word-name "Eq" Level)
+          From (cases (and (= Outer none) (= Level 1)) (datalog.param (intern "Start") start)
+                      (= Source new) (datalog.nth 5 Params)
+                      true 0)
+          To (datalog.nth 4 Params)
+          Cols (datalog.native-columns Columns X [eq [u32 X [* P 20]] [u32 X [* Q 20]]] Env Constants [])
+       [[for P From To
+          | (datalog.class-range X [* P 20] Source Q
+              (datalog.guarded (hd (tl Cols))
+                (datalog.native-steps Steps Ctx (hd Cols) (+ Level 1) (if (and (= Outer none) (= Level 1)) P (datalog.outer Outer)))))]]))
+
+\\ The pairs with a known column: the value's position by H, and those it pairs with; or for both,
+\\ whether they are in one class, or one old part, which needs the positions only for the test, so
+\\ that they share registers with other steps'.
+(define datalog.native-class-lookup
+  Rel Source Keys Values Columns Steps [Relations Constants Indexes N] Env Level Outer
+  -> (let Ctx [Relations Constants Indexes N]
+          Slot (datalog.relation-slot Rel Relations)
+          Params (datalog.class-params Slot)
+          X (hd Params)
+          B (datalog.word-name "B" Level)
+          Q (datalog.word-name "Eq" Level)
+          V (hd Values)
+       (if (= Keys [1 2])
+           (let Same (if (= Source old)
+                         [and [>= (protect Cb) [* [u32 X [+ (protect Ca) 12]] 20]] [< (protect Cb) [* [u32 X [+ (protect Ca) 16]] 20]]]
+                         [= [u32 X [+ (protect Cb) 4]] [u32 X [+ (protect Ca) 4]]])
+             (datalog.class-probe (datalog.native-label "probe") V Params (protect Ca)
+               (datalog.class-probe (datalog.native-label "probe") (hd (tl Values)) Params (protect Cb)
+                 [[when Same | (datalog.native-steps Steps Ctx Env (+ Level 1) Outer)]])))
+           (let Cols (datalog.native-columns Columns X (if (= Keys [1]) [eq V [u32 X [* Q 20]]] [eq [u32 X [* Q 20]] V]) Env Constants [])
+             (datalog.class-probe (datalog.word-name "probe" Level) V Params B
+               (datalog.class-range X B Source Q
+                 (datalog.guarded (hd (tl Cols)) (datalog.native-steps Steps Ctx (hd Cols) (+ Level 1) Outer))))))))
+
+\\ Found, with B the byte of V's position, if the classes have V.
+(define datalog.class-probe
+  Probe V [X H Mask | _] B Found
+  -> (datalog.probe-loop Probe [V] H Mask B 20 [[= [u32 X B] V]] (append Found [[exit Probe]])))
 
 \\ Only a scan at the outermost level can start again partway: below any other step, a kernel with
 \\ no room starts again from the beginning.
@@ -2569,6 +2704,8 @@
 
 \\ Where the first loop starts: the new tuples or all of them; 0 if the plan begins with no loop.
 (define datalog.first-start
+  [[scan Rel new _] | _] Relations -> [<-address [<-address [<-address s (datalog.relation-slot Rel Relations)] 8] 7]
+                                       where (datalog.equivalence? Rel)
   [[scan Rel new _] | _] Relations -> [<-address [<-address s (datalog.relation-slot Rel Relations)] 5]
   [[scan _ _ _] | _] _ -> 0
   [[filter | _] | Steps] Relations -> (datalog.first-start Steps Relations)
@@ -2584,6 +2721,7 @@
           Relations (datalog.nth 3 Program)
           Constants (datalog.nth 5 Program)
           Steps (datalog.all-steps (datalog.plans Name))
+          _ (set datalog.*equivalences* (datalog.nth 8 Program))
        (datalog.code-h Steps Name Relations Constants)))
 
 (define datalog.all-steps
@@ -2639,8 +2777,8 @@
 (set datalog.*merges* 0)
 
 (define datalog.merge
+  Rec -> (datalog.merge-classes Rec) where (datalog.classes? Rec)
   Rec -> (let From (<-address Rec 6)
-              _ (if (tuple? (<-address Rec 8)) (datalog.close-classes Rec From) skip)
               To (datalog.count-of Rec)
               _ (if (> To From)
                     (do (set datalog.*merges* (+ 1 (value datalog.*merges*)))
@@ -2651,49 +2789,331 @@
               _ (address-> Rec 6 To)
            (> To From)))
 
-\\ An equivalence is kept closed: each tuple added since From joins its two classes, and the pairs
-\\ that joining makes are added too, so that they are new in the next round, as any tuple derived
-\\ would be. Classes are a union-find: a root for each value, the root's members, and each class
-\\ joins the larger.
+\\ An equivalence keeps classes, not pairs. Rules add pairs to its own storage as to any relation's,
+\\ an inbox, which each merge empties into a union-find: a root for each value and each root's
+\\ members, a class joining the larger. The classes that changed are then laid out again at the end
+\\ of a buffer X of five u32 a position: a value, its class's range of positions, and the range of
+\\ the part it was in when last laid out, values new since being a part of their own, whose range is
+\\ empty. So the pairs of a class are its range, the old ones a value's part, and the new ones the
+\\ rest, all from the positions where the changed classes start. Their earlier positions become
+\\ holes, whose ranges are empty, and a table by value, H, an index of X's first column, finds a
+\\ value's latest position. When X is full, H half full or holes outnumber values, every class is
+\\ laid out again, into new ones. The record: 0 roots, 1 members, 2 the root each value had when last
+\\ laid out, 3 X, 4 H, 5 H's mask, 6 how many positions, holes included, 7 where the classes that
+\\ changed start, 8 how many pairs, 9 whether the last merge laid any out, 10 the size of a pair's
+\\ class on average, or -1 until asked for, 11 the roots of classes changed since, 12 how many
+\\ holes, 13 H's chains.
 (define datalog.new-classes
-  -> (@p (shen.dict 64) (shen.dict 64)))
+  -> (let C (absvector 14)
+          _ (address-> C 0 (shen.dict 64))
+          _ (address-> C 1 (shen.dict 64))
+          _ (address-> C 2 (shen.dict 64))
+          _ (address-> C 3 (shen-jit.bytes 0))
+          _ (address-> C 4 (shen-jit.bytes (* 16 8)))
+          _ (address-> C 5 15)
+          _ (address-> C 6 0)
+          _ (address-> C 7 0)
+          _ (address-> C 8 0)
+          _ (address-> C 9 false)
+          _ (address-> C 10 -1)
+          _ (address-> C 11 [])
+          _ (address-> C 12 0)
+          _ (address-> C 13 (shen-jit.bytes 0))
+       C))
 
-(define datalog.close-classes
-  Rec P -> (if (< P (datalog.count-of Rec))
-               (let Tuples (<-address Rec 2)
-                    _ (datalog.join-classes Rec (shen-jit.u32 Tuples (* 8 P)) (shen-jit.u32 Tuples (+ 4 (* 8 P))))
-                 (datalog.close-classes Rec (+ P 1)))
-               true))
+(define datalog.classes?
+  Rec -> (absvector? (<-address Rec 8)))
 
-(define datalog.join-classes
-  Rec A B -> (let RA (datalog.class-root Rec A)
-                  RB (datalog.class-root Rec B)
-                  Members (snd (<-address Rec 8))
-                  MA (tl (datalog.dict-find Members RA))
-                  MB (tl (datalog.dict-find Members RB))
-               (cases (= RA RB) true
-                      (< (length MA) (length MB)) (datalog.join-into Rec RB MB RA MA)
-                      true (datalog.join-into Rec RA MA RB MB))))
+(define datalog.size-of
+  Rec -> (if (datalog.classes? Rec) (<-address (<-address Rec 8) 8) (datalog.count-of Rec)))
 
-\\ The root of a value's class, which is made, holding the value alone, if it has none.
-(define datalog.class-root
-  Rec X -> (let Roots (fst (<-address Rec 8))
-                Entry (datalog.dict-find Roots X)
-             (if (cons? Entry)
-                 (tl Entry)
-                 (do (shen.dict-> Roots X X)
-                     (shen.dict-> (snd (<-address Rec 8)) X [X])
-                     ((datalog.adder 2) Rec [X X])
-                     X))))
+\\ The inbox into the classes: whether any pair was new, and if so the next round's new pairs are
+\\ those, and the relation's size is its pairs, which an add's marks compare.
+(define datalog.merge-classes
+  Rec -> (let C (<-address Rec 8)
+              Before (<-address C 8)
+              Changed (datalog.join-pairs Rec C 0 (datalog.count-of Rec) false)
+              _ (datalog.empty-inbox Rec)
+           (if Changed
+               (do (address-> Rec 5 Before)
+                   (datalog.lay-out C)
+                   (address-> Rec 6 (<-address C 8))
+                   true)
+               (do (datalog.settle-classes C) false))))
+
+\\ Back to the size a relation starts with, as a round's pairs may be far fewer than the facts'.
+(define datalog.empty-inbox
+  Rec -> (let Meta (<-address Rec 4)
+              _ (shen-jit.s64! Meta 0 0)
+              _ (shen-jit.s64! Meta 8 15)
+              _ (shen-jit.s64! Meta 16 8)
+              _ (address-> Rec 2 (shen-jit.bytes (* 8 (<-address Rec 7))))
+           (address-> Rec 3 (shen-jit.bytes (* 16 8)))))
+
+(define datalog.join-pairs
+  Rec C P N Changed
+  -> (if (= P N)
+         Changed
+         (let Tuples (<-address Rec 2)
+              New (datalog.join C (shen-jit.u32 Tuples (* 8 P)) (shen-jit.u32 Tuples (+ 4 (* 8 P))))
+           (datalog.join-pairs Rec C (+ P 1) N (or New Changed)))))
+
+\\ Joins two values' classes: whether that changed a class or made one. The pairs grow by twice the
+\\ product of the classes' sizes, or by one for a new value.
+(define datalog.join
+  C A B -> (let NewA (datalog.ensure-class C A)
+                NewB (datalog.ensure-class C B)
+                RA (tl (datalog.dict-find (<-address C 0) A))
+                RB (tl (datalog.dict-find (<-address C 0) B))
+                MA (tl (datalog.dict-find (<-address C 1) RA))
+                MB (tl (datalog.dict-find (<-address C 1) RB))
+             (cases (= RA RB) (and (or NewA NewB) (datalog.changed C RA))
+                    (< (length MA) (length MB)) (datalog.join-into C RB MB RA MA)
+                    true (datalog.join-into C RA MA RB MB))))
+
+(define datalog.changed
+  C Root -> (do (address-> C 11 [Root | (<-address C 11)]) true))
+
+(define datalog.ensure-class
+  C X -> (if (cons? (datalog.dict-find (<-address C 0) X))
+             false
+             (do (shen.dict-> (<-address C 0) X X)
+                 (shen.dict-> (<-address C 1) X [X])
+                 (address-> C 8 (+ (<-address C 8) 1))
+                 true)))
 
 (define datalog.join-into
-  Rec Root Big Old Small
-  -> (let Add (datalog.adder 2)
-          _ (map (/. Y (shen.dict-> (fst (<-address Rec 8)) Y Root)) Small)
-          _ (map (/. X (map (/. Y (do (Add Rec [X Y]) (Add Rec [Y X]))) Small)) Big)
-          _ (shen.dict-> (snd (<-address Rec 8)) Root (append Small Big))
-          _ (shen.dict-rm (snd (<-address Rec 8)) Old)
+  C Root Big Old Small
+  -> (do (map (/. Y (shen.dict-> (<-address C 0) Y Root)) Small)
+         (shen.dict-> (<-address C 1) Root (append Small Big))
+         (shen.dict-rm (<-address C 1) Old)
+         (address-> C 8 (+ (<-address C 8) (* 2 (* (length Small) (length Big)))))
+         (datalog.changed C Root)))
+
+\\ The classes that changed, each once, at the end of X; or every class again, into a new X and H,
+\\ if there is no room or the holes would outnumber the values.
+(define datalog.lay-out
+  C -> (let Seen (shen.dict 64)
+            _ (map (/. R (shen.dict-> Seen (tl (datalog.dict-find (<-address C 0) R)) true)) (<-address C 11))
+            Classes (shen.dict-fold (/. Root _ Acc [(tl (datalog.dict-find (<-address C 1) Root)) | Acc]) Seen [])
+            Moved (datalog.sum (map (function length) Classes) 0)
+            Live (shen.dict-count (<-address C 0))
+            _ (address-> C 9 true)
+            _ (address-> C 10 -1)
+            _ (address-> C 11 [])
+         (if (or (> (* 20 (+ (<-address C 6) Moved)) (shen-jit.bytes-length (<-address C 3)))
+                 (> (* 2 Live) (<-address C 5))
+                 (> (+ (<-address C 12) Moved) Live))
+             (datalog.lay-out-all C Live)
+             (datalog.lay-out-some C Classes))))
+
+\\ The classes that changed after the rest, from the positions where the last ones started, which
+\\ are old now; their earlier positions holes, and H told where they are.
+(define datalog.lay-out-some
+  C Classes
+  -> (let X (<-address C 3)
+          From (<-address C 6)
+          _ (datalog.reset-old X (<-address C 7) From false)
+          Changed (datalog.filter-parts true (map (/. Ms (datalog.parts C Ms)) Classes))
+          _ (map (/. Ps (map (/. Part (map (/. V (datalog.hole C X V)) (tl Part))) (tl Ps))) Changed)
+          End (datalog.place-classes X Changed From)
+          _ (datalog.remember-roots C Changed)
+          _ ((datalog.index-function 5 [1]) (<-address C 4) (<-address C 13) X (<-address C 5) From End)
+          _ (address-> C 6 End)
+          _ (address-> C 7 From)
        true))
+
+\\ Every class, those that changed last, into a new X with room for twice the values and an H for
+\\ twice that.
+(define datalog.lay-out-all
+  C Live
+  -> (let Parts (shen.dict-fold (/. _ Ms Acc [(datalog.parts C Ms) | Acc]) (<-address C 1) [])
+          Changed (datalog.filter-parts true Parts)
+          Room (datalog.max 16 (* 2 Live))
+          X (shen-jit.bytes (* 20 Room))
+          From (datalog.place-classes X (datalog.filter-parts false Parts) 0)
+          End (datalog.place-classes X Changed From)
+          _ (datalog.remember-roots C Changed)
+          Size (datalog.power-at-least 16 (* 2 Room))
+          H (shen-jit.bytes (* 8 Size))
+          Next (shen-jit.bytes (* 4 Room))
+          _ ((datalog.index-function 5 [1]) H Next X (- Size 1) 0 End)
+          _ (address-> C 3 X)
+          _ (address-> C 4 H)
+          _ (address-> C 5 (- Size 1))
+          _ (address-> C 6 End)
+          _ (address-> C 7 From)
+          _ (address-> C 12 0)
+          _ (address-> C 13 Next)
+       true))
+
+\\ A value's position, if it has one, made a hole: an empty class that no pair reads.
+(define datalog.hole
+  C X V -> (let P (datalog.class-position C V)
+             (if (= P 0)
+                 skip
+                 (let B (* 20 (- P 1))
+                      _ (shen-jit.u32! X (+ B 4) 0)
+                      _ (shen-jit.u32! X (+ B 8) 0)
+                      _ (shen-jit.u32! X (+ B 12) 0)
+                      _ (shen-jit.u32! X (+ B 16) 0)
+                   (address-> C 12 (+ (<-address C 12) 1))))))
+
+(define datalog.remember-roots
+  C Changed -> (map (/. Ps (map (/. Part (map (/. V (shen.dict-> (<-address C 2) V (tl (datalog.dict-find (<-address C 0) V))))
+                                              (tl Part)))
+                                (tl Ps)))
+                    Changed))
+
+\\ A class's parts: [Changed [Old Values] ... [new Values]], Old a root when last laid out.
+(define datalog.parts
+  C Ms -> (let Prev (<-address C 2)
+               Roots (map (/. V (let E (datalog.dict-find Prev V) (if (cons? E) (tl E) new))) Ms)
+            (if (and (not (element? new Roots)) (datalog.all-same? (tl Roots) (hd Roots)))
+                [false [(hd Roots) | Ms]]
+                [true | (datalog.group-parts Roots Ms (shen.dict 8))])))
+
+(define datalog.all-same?
+  [] _ -> true
+  [X | Xs] Y -> (and (= X Y) (datalog.all-same? Xs Y)))
+
+(define datalog.group-parts
+  [] [] Groups -> (let All (shen.dict-fold (/. K Vs Acc [[K | Vs] | Acc]) Groups [])
+                    (append (datalog.filter (/. G (not (= (hd G) new))) All) (datalog.filter (/. G (= (hd G) new)) All)))
+  [R | Rs] [V | Vs] Groups -> (let E (datalog.dict-find Groups R)
+                                (do (shen.dict-> Groups R (if (cons? E) [V | (tl E)] [V]))
+                                    (datalog.group-parts Rs Vs Groups))))
+
+(define datalog.filter
+  _ [] -> []
+  F [X | Xs] -> (if (F X) [X | (datalog.filter F Xs)] (datalog.filter F Xs)))
+
+(define datalog.filter-parts
+  _ [] -> []
+  Flag [[Flag | Parts] | Ps] -> [[Flag | Parts] | (datalog.filter-parts Flag Ps)]
+  Flag [_ | Ps] -> (datalog.filter-parts Flag Ps))
+
+(define datalog.place-classes
+  _ [] P -> P
+  X [[_ | Parts] | Classes] P
+  -> (let End (+ P (datalog.sum (map (/. Part (length (tl Part))) Parts) 0))
+       (datalog.place-classes X Classes (datalog.place-parts X Parts P P End))))
+
+(define datalog.place-parts
+  _ [] _ At _ -> At
+  X [[Old | Vs] | Parts] Start At End
+  -> (let To (+ At (length Vs))
+          Os (if (= Old new) Start At)
+          Oe (if (= Old new) Start To)
+       (datalog.place-parts X Parts Start (datalog.place-values X Vs At Start End Os Oe) End)))
+
+(define datalog.place-values
+  _ [] At _ _ _ _ -> At
+  X [V | Vs] At Start End Os Oe
+  -> (let B (* 20 At)
+          _ (shen-jit.u32! X B V)
+          _ (shen-jit.u32! X (+ B 4) Start)
+          _ (shen-jit.u32! X (+ B 8) End)
+          _ (shen-jit.u32! X (+ B 12) Os)
+          _ (shen-jit.u32! X (+ B 16) Oe)
+       (datalog.place-values X Vs (+ At 1) Start End Os Oe)))
+
+\\ The size of a pair's class, on average over the pairs: the sum of the cubes over that of the
+\\ squares, as a real, since the cubes may not fit an integer. Made when a plan asks, and kept until
+\\ a class changes.
+(define datalog.pair-class-size
+  C -> (if (< (<-address C 10) 0)
+           (let S (<-address C 8)
+                W (shen.dict-fold (/. _ Ms W (let K (length Ms) (+ W (* K (/ (* K K) S))))) (<-address C 1) 0)
+                _ (address-> C 10 W)
+             W)
+           (<-address C 10)))
+
+\\ Nothing new: the old pairs are all, until a class changes again.
+(define datalog.settle-classes
+  C -> (if (<-address C 9)
+           (do (datalog.reset-old (<-address C 3) (<-address C 7) (<-address C 6) false)
+               (address-> C 7 (<-address C 6))
+               (address-> C 9 false))
+           skip))
+
+\\ Every pair new, for a component's first round.
+(define datalog.start-classes
+  C -> (do (datalog.reset-old (<-address C 3) 0 (<-address C 6) true)
+           (address-> C 7 0)
+           (address-> C 9 true)))
+
+(define datalog.reset-old
+  X P N Empty -> (if (>= P N)
+                     true
+                     (let B (* 20 P)
+                          S (shen-jit.u32 X (+ B 4))
+                          _ (shen-jit.u32! X (+ B 12) S)
+                          _ (shen-jit.u32! X (+ B 16) (if Empty S (shen-jit.u32 X (+ B 8))))
+                       (datalog.reset-old X (+ P 1) N Empty))))
+
+\\ A value's position plus one, or 0.
+(define datalog.class-position
+  C V -> ((datalog.key-finder-5) C V))
+
+(define datalog.key-finder-5
+  -> (let Name datalog.class-finder
+          Known (datalog.dict-find (value datalog.*kernels*) Name)
+       (if (cons? Known)
+           (tl Known)
+           (let Find (datalog.find-kernel 5 [1])
+                F (eval-kl [lambda c [lambda v [Find [<-address c 4] [<-address c 3] [<-address c 5] v]]])
+                _ (shen.dict-> (value datalog.*kernels*) Name F)
+             F))))
+
+\\ The pairs an atom reads, as [X Y] words, from all, old or new pairs, with these columns known.
+(define datalog.eq-pairs
+  Rec Source Keys Values
+  -> (let C (<-address Rec 8)
+          X (<-address C 3)
+       (cases (empty? Keys) (datalog.eq-all X Source (if (= Source new) (<-address C 7) 0) (<-address C 6) [])
+              (= Keys [1 2])
+              (let P (datalog.class-position C (hd Values))
+                   Q (datalog.class-position C (hd (tl Values)))
+                (if (and (> P 0) (> Q 0) (datalog.in-ranges? (- Q 1) (datalog.ranges X (- P 1) Source)))
+                    [Values]
+                    []))
+              true
+              (let P (datalog.class-position C (hd Values))
+                   Others (if (= P 0) [] (datalog.range-values X (datalog.ranges X (- P 1) Source) []))
+                (if (= Keys [1])
+                    (map (/. Y [(hd Values) Y]) Others)
+                    (map (/. Y [Y (hd Values)]) Others))))))
+
+(define datalog.eq-all
+  X Source P N Acc
+  -> (if (= P N)
+         Acc
+         (let V (shen-jit.u32 X (* 20 P))
+           (datalog.eq-all X Source (+ P 1) N
+             (append (map (/. Y [V Y]) (datalog.range-values X (datalog.ranges X P Source) [])) Acc)))))
+
+\\ The ranges of positions a value at P pairs with: its class, its old part, or the rest.
+(define datalog.ranges
+  X P Source -> (let B (* 20 P)
+                     Cs (shen-jit.u32 X (+ B 4))
+                     Ce (shen-jit.u32 X (+ B 8))
+                     Os (shen-jit.u32 X (+ B 12))
+                     Oe (shen-jit.u32 X (+ B 16))
+                  (cases (= Source all) [[Cs | Ce]]
+                         (= Source old) [[Os | Oe]]
+                         true [[Cs | Os] [Oe | Ce]])))
+
+(define datalog.in-ranges?
+  _ [] -> false
+  Q [[From | To] | Rs] -> (or (and (>= Q From) (< Q To)) (datalog.in-ranges? Q Rs)))
+
+(define datalog.range-values
+  _ [] Acc -> Acc
+  X [[From | To] | Rs] Acc -> (datalog.range-values X Rs (datalog.values-from X From To Acc)))
+
+(define datalog.values-from
+  X From To Acc -> (if (>= From To) Acc (datalog.values-from X (+ From 1) To [(shen-jit.u32 X (* 20 From)) | Acc])))
 
 (define datalog.merge-all
   [] Any -> Any
@@ -2706,7 +3126,9 @@
 \\ Everything so far counts as new, for the first round of a component.
 (define datalog.start-round
   [] -> true
-  [Rel | Rels] -> (do (address-> Rel 5 0) (datalog.start-round Rels)))
+  [Rel | Rels] -> (do (address-> Rel 5 0)
+                      (if (datalog.classes? Rel) (datalog.start-classes (<-address Rel 8)) skip)
+                      (datalog.start-round Rels)))
 
 \\ What a run needs: [Name Relations Constants S].
 (define datalog.run-relation
@@ -2719,17 +3141,20 @@
   A B Q -> (if (< A B) Q (datalog.quotient (- A B) B (+ Q 1))))
 
 \\ How many tuples an atom is expected to give for one set of known columns: the average per key if
-\\ there is an index to say, and otherwise as if the columns were alike and independent.
+\\ there is an index to say, and otherwise as if the columns were alike and independent. For an
+\\ equivalence, the class of a pair's value, which a join's keys meet more often in a large class
+\\ than one value in each class would.
 (define datalog.estimate
   [Rel | Terms] Bound Run
   -> (let Rec (datalog.run-relation Rel Run)
-          Size (datalog.count-of Rec)
+          Size (datalog.size-of Rec)
           Keys (datalog.key-columns Terms 1 Bound)
           Known (length Keys)
           Arity (length Terms)
        (cases (= Known 0) Size
               (= Size 0) 0
               (= Known Arity) 1
+              (datalog.classes? Rec) (datalog.pair-class-size (<-address Rec 8))
               true (datalog.per-key Rec Size Rel Keys Known Arity Run))))
 
 (define datalog.per-key
@@ -2787,6 +3212,7 @@
 (define datalog.steps-function
   Steps [Name Relations Constants S]
   -> (let Run [Name Relations Constants S]
+          _ (set datalog.*equivalences* (datalog.nth 8 (datalog.program Name)))
           _ (datalog.prepare Steps Run)
           _ (set datalog.*plans* (+ 1 (value datalog.*plans*)))
        (hd (datalog.compiled Name Steps Relations Constants))))
@@ -2805,7 +3231,7 @@
 (define datalog.signature
   [] _ -> []
   [[Rel | _] | Rs] Run
-  -> [(datalog.log2 (datalog.count-of (datalog.run-relation Rel Run)) 0) | (datalog.signature Rs Run)])
+  -> [(datalog.log2 (datalog.size-of (datalog.run-relation Rel Run)) 0) | (datalog.signature Rs Run)])
 
 (define datalog.fixpoint
   Variants Rels Run Functions Signature Rounds
@@ -3161,8 +3587,9 @@
 \\ them, semi-naively, with a variant of each rule for each atom of a relation that grew, reading
 \\ what is past its mark; one that negates or aggregates a relation that changed, or reads one
 \\ that was evaluated again or that keeps one tuple a key and grew, as a better tuple replaces one,
-\\ could lose tuples, so it is emptied to its facts and evaluated again; one that reads nothing
-\\ that changed stays as it is. The database changes in place.
+\\ could lose tuples, so it is emptied to its facts and evaluated again, as is one that reads an
+\\ equivalence that grew, whose new pairs since the mark its classes no longer tell; one that reads
+\\ nothing that changed stays as it is. The database changes in place.
 
 (define datalog.add
   [db Name S Interned Rounds Plans Facts] New
@@ -3227,7 +3654,8 @@
           S (datalog.nth 4 Run)
           Relations (hd (tl Run))
           Grew (datalog.keep-in C (datalog.grown Relations S Marks 1))
-          Keyed (datalog.keep-in C (map (function hd) (datalog.nth 9 (datalog.program (hd Run)))))
+          Program (datalog.program (hd Run))
+          Keyed (datalog.keep-in C (append (datalog.nth 8 Program) (map (function hd) (datalog.nth 9 Program))))
        (datalog.add-components Cs Rules Run Marks Facts
          (if (= Kind grow) (union Grew Grown) Grown)
          (cases (= Kind again) (union C Again)
@@ -3365,12 +3793,16 @@
        (if (empty? Table) (error "datalog: no relation ~A" Rel) (tl Table)))
   [db Name S | Rest] Rel
   -> (let Rec (datalog.relation-of [db Name S | Rest] Rel)
-       (datalog.read-tuples 0 (<-address Rec 6) (<-address Rec 2) (<-address Rec 7)
-                            (datalog.types-of Name Rel) [S | (datalog.nth 7 (datalog.program Name))] [])))
+          Types (datalog.types-of Name Rel)
+          Records [S | (datalog.nth 7 (datalog.program Name))]
+       (if (datalog.classes? Rec)
+           (map (/. P [(datalog.word-value (hd P) (hd Types) Records) (datalog.word-value (hd (tl P)) (hd Types) Records)])
+                (datalog.eq-pairs Rec all [] []))
+           (datalog.read-tuples 0 (<-address Rec 6) (<-address Rec 2) (<-address Rec 7) Types Records []))))
 
 (define datalog.count
   [naive | Rest] Rel -> (length (datalog.tuples [naive | Rest] Rel))
-  Db Rel -> (datalog.count-of (datalog.relation-of Db Rel)))
+  Db Rel -> (datalog.size-of (datalog.relation-of Db Rel)))
 
 (define datalog.holds?
   [naive | Rest] [Rel | Values] -> (element? Values (datalog.tuples [naive | Rest] Rel))
@@ -3378,7 +3810,9 @@
   -> (let Rec (datalog.relation-of [db Name S Interned | Rest] Rel)
           Ids (datalog.find-values Values (datalog.types-of Name Rel) Interned [S | (datalog.nth 7 (datalog.program Name))])
           Find (datalog.finder (length Values))
-       (and (not (= Ids no)) (> (Find Rec Ids) 0))))
+       (cases (= Ids no) false
+              (datalog.classes? Rec) (cons? (datalog.eq-pairs Rec all [1 2] Ids))
+              true (> (Find Rec Ids) 0))))
 
 (define datalog.match
   Db [Rel | Terms] -> (datalog.match-tuples (datalog.tuples Db Rel) Terms []))
@@ -3394,7 +3828,7 @@
   -> (let Relations (datalog.nth 3 (datalog.program Name))
        [[rounds Rounds] [plans Plans]
         | (map (/. R (let Rec (<-address S (datalog.relation-slot (hd R) Relations))
-                       [(hd R) (datalog.count-of Rec) (shen-jit.s64 (<-address Rec 4) 24) (length (<-address Rec 1))]))
+                       [(hd R) (datalog.size-of Rec) (shen-jit.s64 (<-address Rec 4) 24) (length (<-address Rec 1))]))
                Relations)]))
 
 \\ ---------------------------------------------------------------------------
@@ -3473,7 +3907,9 @@
                    (tl Known)
                    (let Db (hd Ctx)
                         Rec (datalog.relation-of Db Rel)
-                        Tuples (datalog.with-merges (reverse (datalog.tuples Db Rel)) 0 (reverse (<-address Rec 9)))
+                        Tuples (if (datalog.classes? Rec)
+                                   (map (/. T [T | 0]) (datalog.tuples Db Rel))
+                                   (datalog.with-merges (reverse (datalog.tuples Db Rel)) 0 (reverse (<-address Rec 9))))
                         _ (shen.dict-> Cache Rel Tuples)
                      Tuples))))
 

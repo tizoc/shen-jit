@@ -1157,6 +1157,37 @@
 (let Db (datalog.run dt.equal (map (/. I [link a (intern (cn "n" (str I)))]) (datalog.upto 1 300)))
   (dt.check "a large class" (datalog.count Db same) 90601))
 (dt.explain-all "explained" dt.equal (value dt.equal-facts))
+
+\* An equivalence whose classes change early, one in the round after the other, in a component that
+   goes on growing: h and k read its old pairs, by a scan and by a member check, beside l, which
+   reaches 10 several rounds later. never has no tuples, and only keeps h and k in the component. *\
+(defdatalog dt.late-eq
+  (relation step [integer integer])
+  (relation start [integer])
+  (relation link [integer integer])
+  (relation pairup [integer integer])
+  (relation cand [integer integer])
+  (relation never [integer])
+  (relation same [integer integer] equivalence)
+  (relation l [integer])
+  (relation h [integer integer])
+  (relation lp [integer integer])
+  (relation k [integer integer])
+  (rule (l X) <-- (start X))
+  (rule (l Y) <-- (l X) (step X Y))
+  (rule (same X Y) <-- (link X Y))
+  (rule (same X Y) <-- (l X) (pairup X Y))
+  (rule (h X Y) <-- (same X Y) (l X))
+  (rule (lp X Y) <-- (l X) (l Y) (cand X Y))
+  (rule (k X Y) <-- (same X Y) (lp X Y))
+  (rule (l Y) <-- (h X Y) (never Y))
+  (rule (l Y) <-- (k X Y) (never Y)))
+(set dt.late-eq-facts (append (map (/. I [step I (+ I 1)]) (datalog.upto 0 11))
+                              [[start 0] [link 10 20] [pairup 2 10] [link 30 40] [pairup 3 30]
+                               [cand 10 2] [cand 2 10]]))
+(dt.same "an equivalence read late" (value dt.late-eq-facts) dt.late-eq h
+  [[2 2] [2 10] [2 20] [3 3] [3 30] [3 40] [10 2] [10 10] [10 20]])
+(dt.same "an equivalence read late" (value dt.late-eq-facts) dt.late-eq k [[2 10] [10 2]])
 (dt.raises "an equivalence of two types" "two of one type"
   (freeze (datalog.define dt.bad [[relation e [symbol integer] equivalence]])))
 (dt.raises "an equivalence of three columns" "two of one type"

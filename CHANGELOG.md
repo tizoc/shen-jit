@@ -23,7 +23,7 @@ All notable changes to this project are documented in this file. The format is b
 - `datalog.read-facts` and `datalog.write-facts`: Datalog relations from and to tab-separated or CSV files, each field read as
   its column's type says.
 - Datalog equivalences: `(relation same [symbol symbol] equivalence)` keeps the reflexive, symmetric and transitive closure of what
-  it is given, by union-find.
+  it is given, by union-find, stored as classes and not as their pairs, so that a class of k values takes room for k, not k squared.
 - Datalog functions: integer `/` and `%`, `band`, `bor`, `bxor`, `bshl` and `bshr`, `cat`, `strlen`, `substr`, `to-number` and
   `to-string` on strings, and the `mean` aggregate.
 - `datalog.query`: a Datalog query computed by demand, through magic sets, deriving only what bears on its constants.
