@@ -237,17 +237,20 @@
     (process.signal-children Rest Force
       (process.finish-unit Result (if (<-address Child 4) [ok] (process.signal Child Force)))))
 
+\\ Read the budget once per round: a second reading could find it expired just after the first
+\\ did not, and give up without forcing.
 (define process.cleanup-wait
   State Budget Grace Forced Result ->
     (let Children (<-address State 4)
          Polled (process.poll-children Children)
          Result (process.finish-unit Result Polled)
+         Late (deadline.expired? Budget)
       (cond ((and (process.children-done? Children)
                   (or Forced (not (process.groups? Children)))) Result)
-            ((and (not Forced) (or (deadline.expired? Grace) (deadline.expired? Budget)))
+            ((and (not Forced) (or Late (deadline.expired? Grace)))
               (process.cleanup-wait State Budget Grace true
                 (process.signal-children Children true Result)))
-            ((deadline.expired? Budget)
+            (Late
               (process.finish-unit Result
                 [error (process.error-at timeout "process cleanup"
                          "cleanup deadline expired; retain the report's child handle")]))

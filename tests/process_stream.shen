@@ -93,6 +93,21 @@
                    (freeze Wait))))))
   [1000 1])
 
+\\ A clock that advances one millisecond at each reading puts the budget's expiry between any two
+\\ readings in turn, as preemption can.
+(map (/. Budget
+       (let Reads (io.record [0])
+            Clock (freeze (let N (<-address Reads 0) (do (address-> Reads 0 (+ N 1)) N)))
+            Child (process-test.ok (process.spawn (value process-test.helper) ["hold" "10000"] []))
+            _ (process.cleanup-wait (io.record [false [] [] [] [Child]])
+                (deadline.after Clock Budget) (deadline.after (freeze 0) 1) false [ok])
+            Wait (process.wait Child 1000)
+            _ (if (= Wait [pending]) (do (process.kill Child) (process.wait Child 1000)) true)
+            _ (process.close Child)
+         (process-test.check "cleanup forces before its budget expires between readings" false
+           (freeze (= Wait [pending])))))
+  [1 2 3 4 5 6])
+
 (let Cancel (io.record [false])
      _ (thread (freeze (do (process.c-pause [] 40) (address-> Cancel 0 true))))
      Result (process-test.run ["hold" "10000"] (buffer.new 0)

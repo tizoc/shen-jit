@@ -1818,6 +1818,13 @@ execution remains CI's responsibility; no new platform ABI or instruction was in
   skip native work before compiling fixtures. The Windows adapter and Unicode child cross-compile
   with MinGW gcc 10.2; Windows execution awaits CI. The reference has its own guide page, executable
   examples and release-package coverage.
+- Cleanup read its budget twice a round: once to decide whether to force, and again to give up. A
+  budget that expired between the two readings gave up after SIGTERM alone, and a child ignoring it
+  kept running; `make test-process` failed so once in seven runs. With 40 to 64 busy processes
+  beside it, 2 of 1500 cancellations with a 1 ms budget left the child running a second later. Now
+  one reading decides both, so it forces before it gives up: none of 900 failed, under the same
+  load. A test with a clock that advances at each reading puts the expiry between each pair in turn;
+  without the fix it fails for two of its six budgets.
 
 ### Tree-sitter batch snapshots (2026-11-08, M3 Max, macOS and Linux arm64)
 
