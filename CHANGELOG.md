@@ -7,6 +7,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- All optional Shen libraries use namespaces, with explicit dependency prefixes and exported operations, types and
+  shared support functions. Their qualified API names and data formats stay the same. The kernel pin moves to
+  43.5 for namespace interfaces and syntax annotation hooks, using the release's precompiled KLambda.
 - The guide has a part for the libraries, grouped by what they do, which says once how to load them and build their
   adapters, and lists the example applications. "Close to the machine" keeps the runtime's own: bytes and bits,
   calling C, memory outside the heap, C written for Shen and native code by hand.

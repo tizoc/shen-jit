@@ -9,7 +9,7 @@ Shen, and its stage 0 driver.
 | `stage0.shen` | 224 | Driver: lowers the kernel KLambda files and the port to `build/stage0/<file>.sbc`. |
 | `tokl.shen` | 39 | Compiles `lower.shen` to KLambda for stage 0. |
 | `host.shen` | 43 | What the lowerer takes from Shen/JIT, defined for running under a host. |
-| `check.shen` | 453 | Test code: reads the output back and checks it against the rules in `lib/native.shen`, checks normalization's output, unit cases. |
+| `check.shen` | 455 | Test code: reads the output back and checks it against the rules in `lib/native.shen`, checks normalization's output, unit cases. |
 
 Entry points, with `Sealed` the list of names defined in the stage 0 input:
 
@@ -50,6 +50,9 @@ the one being built under other names. The Makefile writes `build/tools/lower.sh
 and `build/tools/native.shen`, with `shen-jit.lower.` changed to `stage0.lower.`, and
 calls to the primitives `shen-jit.sealed?` and `shen-jit.inline-body` changed to
 `stage0.sealed?` and `stage0.inline-body`, which `host.shen` defines.
+
+The checker also loads the pinned kernel's namespace extension under `stage0.namespaces`, so its host
+can read the migrated `native.shen` even when its own namespace extension predates exports and shadowing.
 
 With FILE arguments, stage 0 lowers only those files from KLAMBDA-DIR (the
 test programs use this), without the port.

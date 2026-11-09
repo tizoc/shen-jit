@@ -31,9 +31,15 @@ itself and saving the result.
 files of definitions as text, in `build/stage0`, so no state of the host reaches the target. Release tarballs carry this
 output, so they build with a C compiler alone, and `generated.sha256` holds its hashes.
 
+`tools/ci-deps.sh` pins a kernel release and checks its archive's hash. Stage 0 uses the release's
+precompiled KLambda directly. The same archive supplies sources and tests for every CI platform.
+
 The host is the earlier release of Shen/JIT that `tools/ci-deps.sh` names, or Shen/Scheme, which makes the same files byte for byte. A host that is
 Shen/JIT has its own lowerer sealed in its image, so the tools load the one being built under other names: `build/tools/lower.shen`, which the Makefile makes
 with `shen-jit.lower.` changed to `stage0.lower.`. `tokl.shen` starts the compiler's variable numbering from zero in each definition, so that it does not depend on the host.
+
+The lowerer checker reads `lib/native.shen` through a copy of the pinned namespace extension under
+`stage0.namespaces`, so an older host's namespace implementation does not constrain that library's source.
 
 **Stage 1,** under the runtime alone:
 

@@ -29,6 +29,8 @@
 (set *hush* true)
 (load "src/lowerer/host.shen")
 (load "build/tools/lower.shen")
+(load "build/tools/namespaces.shen")
+(stage0.namespaces.initialise)
 (load "build/tools/native.shen")
 (set *hush* false)
 (set *maximum-print-sequence-size* 100000)

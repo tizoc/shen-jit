@@ -14,18 +14,25 @@
 \\ For memory from C, see shen-jit.pointer-sized in docs/ffi.md. For memory released once nothing
 \\ reaches it, see lib/handle.shen.
 
-(shen-jit.library memory.lib ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])
+(shen.x.namespace memory
+  (use shen-jit)
+  (externals [define-foreign int64 pointer void])
+  (export alloc free)
 
-(define-foreign memory.c-calloc memory.lib "calloc" (int64 int64) --> pointer)
-(define-foreign memory.c-free memory.lib "free" (pointer) --> void)
+(shen-jit.library lib ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])
 
-(define memory.alloc
-  N -> (let P (memory.c-calloc 1 N)
+(define-foreign c-calloc lib "calloc" (int64 int64) --> pointer)
+(define-foreign c-free lib "free" (pointer) --> void)
+
+(define alloc
+  N -> (let P (c-calloc 1 N)
          (if (empty? P)
              (error "memory.alloc: cannot allocate ~A bytes" N)
              (shen-jit.pointer-sized P N))))
 
-(define memory.free
-  M -> (do (memory.c-free M)
+(define free
+  M -> (do (c-free M)
            (shen-jit.pointer-kill M)
            true))
+
+)

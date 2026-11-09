@@ -58,7 +58,8 @@ A commit message says what changed and what it measured.
 
 ## Building
 
-- `make deps` fetches the kernel and the earlier release of Shen/JIT that builds this one into `.deps/`. A file `local.mk`, which git ignores, can
+- `make deps` fetches the kernel release and the earlier release of Shen/JIT that builds this one into `.deps/`,
+  checked by hash. The kernel archive includes precompiled KLambda. A file `local.mk`, which git ignores, can
   set other paths: the guide lists the variables.
 - Shen/Scheme can be the host too, with `BOOTSTRAP`, and must keep making the same generated files, which CI's `shen-scheme-host` job checks. The host need not move with each release: move it in `tools/ci-deps.sh` only when the lowerer needs what a newer one has.
 - `make guide` needs pandoc, and so do `make dist` and `make test-linux`, as a source tarball carries the guide rendered.
@@ -84,7 +85,7 @@ Run what the change can break, and nothing more: CI runs everything on every pus
 
 `make test-core` is `test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn
 test-native test-ffi test-overrides`, and `make test-libs` is `test-buffer test-json test-io test-fs test-process
-test-tree-sitter test-http test-datalog test-curl`.
+test-tree-sitter test-http test-datalog test-curl test-namespaces`.
 
 Keep each suite fast. A check that needs a collection at every allocation, a long wait or a large input goes in a
 stress target that CI runs, as `test-lib-stress` holds the libraries' saved images reloaded under GC stress: a test

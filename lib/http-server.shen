@@ -1,72 +1,86 @@
 \\ Sequential HTTP/1.1 requests per owned socket. Load clock/deadline/socket I/O and HTTP modules first.
 \\ The application receives a complete request and returns a response value, without writing bytes.
 
-(shen-jit.library http.time-lib ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])
-(define-foreign http.c-time http.time-lib
+(shen.x.namespace http
+  (use buffer)
+  (use clock)
+  (use deadline)
+  (use grammar)
+  (use io)
+  (use shen-jit)
+  (externals [application body-limit body-timeout chunk-count-limit chunk-line-limit
+    chunk-metadata-limit chunk-size connection-timeout define-foreign eof head-limit head-timeout
+    http http-head http-server-options idle-timeout int64 library ok pointer read-buffer-size
+    request-limit response-body-limit response-chunk-count-limit response-chunk-size
+    response-head-limit timeout trailer-fields-limit trailer-limit write-timeout])
+  (export chunk-option option request response response-option serve-connection serve-one)
+
+(shen-jit.library time-lib ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])
+(define-foreign c-time time-lib
   (if (= (value *os*) "Windows") "_time64" "time") (pointer) --> int64)
 
-(define http.quotient
+(define quotient
   N Divisor -> (/ (- N (shen.mod N Divisor)) Divisor))
 
-(define http.leap?
+(define leap?
   Year -> (and (= (shen.mod Year 4) 0)
                (or (not (= (shen.mod Year 100) 0)) (= (shen.mod Year 400) 0))))
 
-(define http.calendar-year
+(define calendar-year
   Days Year ->
-    (let Count (if (http.leap? Year) 366 365)
-      (if (< Days Count) (@p Year Days) (http.calendar-year (- Days Count) (+ Year 1)))))
+    (let Count (if (leap? Year) 366 365)
+      (if (< Days Count) (@p Year Days) (calendar-year (- Days Count) (+ Year 1)))))
 
-(define http.calendar-month
+(define calendar-month
   Days Year Month ->
-    (let Count (cond ((= Month 2) (if (http.leap? Year) 29 28))
+    (let Count (cond ((= Month 2) (if (leap? Year) 29 28))
                       ((element? Month [4 6 9 11]) 30)
                       (true 31))
-      (if (< Days Count) (@p Month (+ Days 1)) (http.calendar-month (- Days Count) Year (+ Month 1)))))
+      (if (< Days Count) (@p Month (+ Days 1)) (calendar-month (- Days Count) Year (+ Month 1)))))
 
-(define http.list-at
+(define list-at
   [X | _] 0 -> X
-  [_ | Rest] N -> (http.list-at Rest (- N 1)))
+  [_ | Rest] N -> (list-at Rest (- N 1)))
 
-(define http.two-digits
+(define two-digits
   N -> (if (< N 10) (cn "0" (str N)) (str N)))
 
-(define http.date-value
+(define date-value
   Seconds ->
     (let N (buffer.index Seconds)
          _ (if (< N 253402300800) true (error "http: date is outside years 1970..9999"))
-         Days (http.quotient N 86400)
+         Days (quotient N 86400)
          Time (shen.mod N 86400)
-         Calendar (http.calendar-year Days 1970)
+         Calendar (calendar-year Days 1970)
          Year (fst Calendar)
-         MonthDay (http.calendar-month (snd Calendar) Year 1)
-         Month (http.list-at ["Jan" "Feb" "Mar" "Apr" "May" "Jun" "Jul" "Aug" "Sep" "Oct" "Nov" "Dec"]
+         MonthDay (calendar-month (snd Calendar) Year 1)
+         Month (list-at ["Jan" "Feb" "Mar" "Apr" "May" "Jun" "Jul" "Aug" "Sep" "Oct" "Nov" "Dec"]
                              (- (fst MonthDay) 1))
-         Weekday (http.list-at ["Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat"] (shen.mod (+ Days 4) 7))
+         Weekday (list-at ["Sun" "Mon" "Tue" "Wed" "Thu" "Fri" "Sat"] (shen.mod (+ Days 4) 7))
       (make-string "~A, ~A ~A ~A ~A:~A:~A GMT"
-        Weekday (http.two-digits (snd MonthDay)) Month Year
-        (http.two-digits (http.quotient Time 3600))
-        (http.two-digits (http.quotient (shen.mod Time 3600) 60))
-        (http.two-digits (shen.mod Time 60)))))
+        Weekday (two-digits (snd MonthDay)) Month Year
+        (two-digits (quotient Time 3600))
+        (two-digits (quotient (shen.mod Time 3600) 60))
+        (two-digits (shen.mod Time 60)))))
 
-(define http.has-date?
+(define has-date?
   [] -> false
-  [[Name _] | Rest] -> (or (= (http.lower Name) "date") (http.has-date? Rest))
+  [[Name _] | Rest] -> (or (= (lower Name) "date") (has-date? Rest))
   _ -> (error "http: response fields must be pairs"))
 
-(define http.server-response
+(define server-response
   Response ->
-    (let _ (http.response-check Response)
+    (let _ (response-check Response)
          Fields (<-address Response 2)
-      (if (http.has-date? Fields)
+      (if (has-date? Fields)
           Response
-          (let Date (trap-error (http.date-value (http.c-time [])) (/. X []))
+          (let Date (trap-error (date-value (c-time [])) (/. X []))
             (if (empty? Date)
                 Response
-                (http.response-copy-fields Response [["Date" Date] | Fields]
-                                           (http.response-closes? Response)))))))
+                (response-copy-fields Response [["Date" Date] | Fields]
+                                           (response-closes? Response)))))))
 
-(define http.option-index
+(define option-index
   head-limit -> 0
   body-limit -> 1
   response-head-limit -> 2
@@ -87,22 +101,22 @@
   read-buffer-size -> 17
   _ -> (error "http: unknown server option"))
 
-(define http.server-options
+(define server-options
   Options ->
-    (http.configure (io.record [16384 1048576 16384 1048576 5000 5000 5000
+    (configure (io.record [16384 1048576 16384 1048576 5000 5000 5000
                                8192 65536 16384 100 4096 16384 4096 100 5000 60000 16384]) Options []))
 
-(define http.configure
+(define configure
   Config [] _ -> Config
   Config [[Name Value] | Rest] Seen ->
-    (let I (http.option-index Name)
+    (let I (option-index Name)
          _ (if (element? Name Seen) (error "http: duplicate server option") true)
          N (buffer.index Value)
          _ (if (element? I [0 2])
                (if (and (>= N (if (= I 2) 128 4)) (<= N 1048576))
                    true (error "http: invalid server head limit"))
                true)
-         _ (if (and (>= I 7) (<= I 11)) (http.chunk-options [[Name N]]) true)
+         _ (if (and (>= I 7) (<= I 11)) (chunk-options [[Name N]]) true)
          _ (if (and (>= I 12) (<= I 14))
                (if (and (> N 0) (<= N 1048576)) true
                    (error "http: chunk size, chunk count and request limit must be 1..1048576")) true)
@@ -110,36 +124,36 @@
                (if (and (> N 0) (<= N 65536)) true
                    (error "http: read buffer size must be 1..65536")) true)
          _ (address-> Config I N)
-      (http.configure Config Rest [Name | Seen]))
+      (configure Config Rest [Name | Seen]))
   _ _ _ -> (error "http: server options must be [Name Number] pairs"))
 
-(define http.serve-one
+(define serve-one
   E Handler Options ->
-    (let Config (http.server-options Options)
+    (let Config (server-options Options)
          _ (address-> Config 14 1)
-      (http.connection E Handler Config (freeze false))))
+      (connection E Handler Config (freeze false))))
 
-(define http.serve-connection
-  E Handler Options -> (http.serve-controlled E Handler Options (freeze false)))
+(define serve-connection
+  E Handler Options -> (serve-controlled E Handler Options (freeze false)))
 
-(define http.serve-controlled
-  E Handler Options Stop -> (http.connection E Handler (http.server-options Options) Stop))
+(define serve-controlled
+  E Handler Options Stop -> (connection E Handler (server-options Options) Stop))
 
 \\ One task owns the socket, its single reader and every source returned by its handler.
 \\ Connection slots: endpoint, reader, handler, config, stop thunk, total deadline,
 \\ completed request count and acknowledged wire bytes.
-(define http.connection
+(define connection
   E Handler Config Stop ->
     (do (io.socket-check E)
-        (grammar.prepare http.<head>)
+        (grammar.prepare <head>)
         (io.with-endpoint E
           (/. Peer (let R (io.reader Peer [[chunk-size (<-address Config 17)]])
                        C (io.record [Peer R Handler Config Stop
                                      (clock.deadline (<-address Config 16)) 0 0])
-                    (http.connection-read C))))))
+                    (connection-read C))))))
 
 \\ A head that fits the reader is read in place as it arrives; a larger limit frames it first.
-(define http.connection-read
+(define connection-read
   C ->
     (if (thaw (<-address C 4))
         [ok (<-address C 7)]
@@ -148,95 +162,95 @@
              D (deadline.within (<-address C 5) (<-address Config 4))
              _ (io.socket-deadline (<-address C 0) D)
           (if (<= (<-address Config 0) (io.window-size R))
-              (http.connection-parsed C (http.read-request R (<-address Config 0) (<-address Config 1)))
-              (http.connection-head C (http.read-head-until (http.head-reader R (<-address Config 0)) D))))))
+              (connection-parsed C (read-request R (<-address Config 0) (<-address Config 1)))
+              (connection-head C (read-head-until (head-reader R (<-address Config 0)) D))))))
 
-(define http.connection-head
+(define connection-head
   C [eof] -> [ok (<-address C 7)]
-  C [error Error] -> (http.connection-fail C Error)
+  C [error Error] -> (connection-fail C Error)
   C [head V] ->
-    (http.connection-parsed C (http.parse-request V (<-address (<-address C 3) 1))))
+    (connection-parsed C (parse-request V (<-address (<-address C 3) 1))))
 
-(define http.connection-parsed
+(define connection-parsed
   C [eof] -> [ok (<-address C 7)]
-  C [error Error] -> (http.connection-fail C Error)
+  C [error Error] -> (connection-fail C Error)
   C [ok Q] ->
     (let Config (<-address C 3)
          D (deadline.within (<-address C 5) (<-address Config 5))
          _ (io.socket-deadline (<-address C 0) D)
-         B (http.body-reader-with (<-address C 1) Q (http.server-body-options Config))
-      (http.connection-body C (http.read-body-until B D))))
+         B (body-reader-with (<-address C 1) Q (server-body-options Config))
+      (connection-body C (read-body-until B D))))
 
-(define http.server-body-options
+(define server-body-options
   Config -> [[chunk-line-limit (<-address Config 7)] [chunk-metadata-limit (<-address Config 8)]
              [trailer-limit (<-address Config 9)] [trailer-fields-limit (<-address Config 10)]
              [chunk-count-limit (<-address Config 11)]])
 
-(define http.server-output-limits
+(define server-output-limits
   Config -> (io.record [(<-address Config 2) (<-address Config 3)
                        (<-address Config 12) (<-address Config 13)]))
 
-(define http.connection-body
-  C [error Error] -> (http.connection-fail C Error)
+(define connection-body
+  C [error Error] -> (connection-fail C Error)
   C [ok Q] ->
     (let Handler (<-address C 2)
          Result (trap-error [ok (Handler Q)]
-                  (/. X [error (http.output-error (error-to-string X))]))
-      (http.connection-handled C Q Result)))
+                  (/. X [error (output-error (error-to-string X))]))
+      (connection-handled C Q Result)))
 
-(define http.connection-handled
-  C _ [error Error] -> (http.connection-fail C Error)
+(define connection-handled
+  C _ [error Error] -> (connection-fail C Error)
   C Q [ok Response] ->
     (let Config (<-address C 3)
          D (deadline.within (<-address C 5) (<-address Config 6))
          _ (io.socket-deadline (<-address C 0) D)
          Prepared (trap-error
-                    (let R (http.server-response Response)
-                         Close (or (http.response-closes? R)
-                                   (element? "close" (http.token-list (http.header-values Q "connection")))
+                    (let R (server-response Response)
+                         Close (or (response-closes? R)
+                                   (element? "close" (token-list (header-values Q "connection")))
                                    (>= (+ (<-address C 6) 1) (<-address Config 14))
                                    (thaw (<-address C 4)))
-                         Plan (http.prepare-response (http.method Q) R
-                                (http.server-output-limits Config) Close D)
+                         Plan (prepare-response (method Q) R
+                                (server-output-limits Config) Close D)
                       (@p Close Plan))
-                    (/. X (@p true (http.finish-source
-                                     [error (http.output-error (error-to-string X))]
-                                     (http.response-source Response)))))
-      (http.connection-prepared C D (fst Prepared) (snd Prepared))))
+                    (/. X (@p true (finish-source
+                                     [error (output-error (error-to-string X))]
+                                     (response-source Response)))))
+      (connection-prepared C D (fst Prepared) (snd Prepared))))
 
-(define http.connection-prepared
-  C _ _ [error Error] -> (http.connection-fail C Error)
+(define connection-prepared
+  C _ _ [error Error] -> (connection-fail C Error)
   C D Close [ok Plan] ->
-    (io.let-ok N (http.send-plan (<-address C 0) D Plan)
+    (io.let-ok N (send-plan (<-address C 0) D Plan)
       (let _ (address-> C 6 (+ (<-address C 6) 1))
            _ (address-> C 7 (+ (<-address C 7) N))
         (if (or Close (thaw (<-address C 4)) (deadline.expired? (<-address C 5)))
             [ok (<-address C 7)]
-            (http.connection-idle C (deadline.within (<-address C 5) (<-address (<-address C 3) 15)))))))
+            (connection-idle C (deadline.within (<-address C 5) (<-address (<-address C 3) 15)))))))
 
 \\ Idle time starts after the response. Short bounded waits observe shutdown without
 \\ cancelling an active request or renewing the idle/connection deadline.
-(define http.connection-idle
+(define connection-idle
   C D ->
     (if (or (thaw (<-address C 4)) (deadline.expired? D))
         [ok (<-address C 7)]
         (let _ (io.socket-deadline (<-address C 0) (deadline.within D 50))
-          (http.connection-available C D (io.peek-up-to (<-address C 1) 1)))))
+          (connection-available C D (io.peek-up-to (<-address C 1) 1)))))
 
-(define http.connection-available
+(define connection-available
   C _ [eof] -> [ok (<-address C 7)]
-  C _ [ok _] -> (http.connection-read C)
+  C _ [ok _] -> (connection-read C)
   C D [error Error] ->
     (if (= (io.error-domain Error) timeout)
-        (http.connection-idle C D)
+        (connection-idle C D)
         [error Error]))
 
-(define http.connection-fail
+(define connection-fail
   C Error ->
-    (http.server-fail-until (<-address C 0) (<-address C 3) Error
+    (server-fail-until (<-address C 0) (<-address C 3) Error
       (deadline.within (<-address C 5) (<-address (<-address C 3) 6))))
 
-(define http.server-status
+(define server-status
   Error ->
     (let Domain (io.error-domain Error)
       (cond ((= Domain http) (io.error-code Error))
@@ -246,67 +260,69 @@
               (if (= (io.error-message Error) "head exceeds byte limit") 431 400))
             (true 0))))
 
-(define http.server-fail-until
+(define server-fail-until
   E Config Error D ->
-    (let Status (http.server-status Error)
+    (let Status (server-status Error)
       (if (= Status 0)
           [error Error]
-          (let Response (http.server-response (http.response Status [] (buffer.new 0)))
-               Wire (http.encode-for "GET" Response (<-address Config 2) (<-address Config 3))
+          (let Response (server-response (response Status [] (buffer.new 0)))
+               Wire (encode-for "GET" Response (<-address Config 2) (<-address Config 3))
                _ (io.socket-deadline E D)
-            (http.server-rejected Error (io.write-all E Wire []))))))
+            (server-rejected Error (io.write-all E Wire []))))))
 
-(define http.server-rejected
+(define server-rejected
   Error [ok _] -> [error Error]
   Error [error Other N] -> [error (io.secondary Error (io.progress Other N))])
 
 (datatype http-server-options
   N : number;
   ===========================
-  [read-buffer-size N] : http.option;
+  [read-buffer-size N] : option;
 
-  Option : http.response-option;
+  Option : response-option;
   ===========================
-  Option : http.option;
+  Option : option;
 
   N : number;
   ===========================
-  [request-limit N] : http.option;
+  [request-limit N] : option;
 
   N : number;
   ===========================
-  [idle-timeout N] : http.option;
+  [idle-timeout N] : option;
 
   N : number;
   ===========================
-  [connection-timeout N] : http.option;
+  [connection-timeout N] : option;
 
-  Option : http.chunk-option;
+  Option : chunk-option;
   ===========================
-  Option : http.option;
+  Option : option;
 
   N : number;
   ===========================
-  [head-limit N] : http.option;
+  [head-limit N] : option;
 
   N : number;
   ===========================
-  [body-limit N] : http.option;
-
-  N : number;
-  =============================
-  [head-timeout N] : http.option;
+  [body-limit N] : option;
 
   N : number;
   =============================
-  [body-timeout N] : http.option;
+  [head-timeout N] : option;
+
+  N : number;
+  =============================
+  [body-timeout N] : option;
 
   N : number;
   ==============================
-  [write-timeout N] : http.option;)
+  [write-timeout N] : option;)
 
-(declare http.serve-one
-  [io.endpoint --> [[http.request --> http.response] --> [[list http.option] --> [io.result number]]]])
+(declare serve-one
+  [io.endpoint --> [[request --> response] --> [[list option] --> [io.result number]]]])
 
-(declare http.serve-connection
-  [io.endpoint --> [[http.request --> http.response] --> [[list http.option] --> [io.result number]]]])
+(declare serve-connection
+  [io.endpoint --> [[request --> response] --> [[list option] --> [io.result number]]]])
+
+)

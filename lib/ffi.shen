@@ -40,50 +40,56 @@
 \\
 \\ (define-foreign-procedure sum-list mine "sum_list" 1)
 
-(define shen-jit.library
-  Name Files -> (do (put Name shen-jit.ffi.files Files) Name))
+(shen.x.namespace shen-jit
+  \\ This extends the runtime namespace, which stays open for its primitives and other libraries.
+  (externals [blocking bool bytes define-foreign define-foreign-procedure double int32 int64
+    pointer skip uint32 unknown varargs void])
+  (shadow foreign)
 
-(define shen-jit.ffi.files
-  Library -> (trap-error (get Library shen-jit.ffi.files)
+(define library
+  Name Files -> (do (put Name ffi.files Files) Name))
+
+(define ffi.files
+  Library -> (trap-error (get Library ffi.files)
                          (/. E (error "foreign: ~A is not a library: see shen-jit.library" Library))))
 
 \\ A later call in the same file compiles directly if the name's arity is known when it is
 \\ read, as for define.
-(defmacro shen-jit.ffi-macro
+(defmacro ffi-macro
   [define-foreign Name Library CName Types --> Result | Flags]
   -> (do (if (and (symbol? Name) (not (variable? Name)) (= (arity Name) -1))
              (shen.store-arity Name (length Types))
              skip)
-         (shen-jit.ffi.check-flags Flags)
-         [shen-jit.ffi.define Name Library CName (shen-jit.ffi.list Types) Result
-                              (element? blocking Flags) (shen-jit.ffi.varargs Flags)])
+         (ffi.check-flags Flags)
+         [ffi.define Name Library CName (ffi.list Types) Result
+                              (element? blocking Flags) (ffi.varargs Flags)])
   [define-foreign | Form]
   -> (error "define-foreign: expected Name Library CName (Types) --> Result Flags, in ~R" Form)
   [define-foreign-procedure Name Library CName Arity]
   -> (do (if (and (symbol? Name) (not (variable? Name)) (= (arity Name) -1))
              (shen.store-arity Name Arity)
              skip)
-         [shen-jit.ffi.define-procedure Name Library CName Arity])
+         [ffi.define-procedure Name Library CName Arity])
   [define-foreign-procedure | Form]
   -> (error "define-foreign-procedure: expected Name Library CName Arity, in ~R" Form))
 
-(define shen-jit.ffi.list
+(define ffi.list
   [] -> []
-  [X | Xs] -> [cons X (shen-jit.ffi.list Xs)])
+  [X | Xs] -> [cons X (ffi.list Xs)])
 
-(define shen-jit.ffi.check-flags
+(define ffi.check-flags
   [] -> true
-  [blocking | Flags] -> (shen-jit.ffi.check-flags Flags)
-  [[varargs N] | Flags] -> (shen-jit.ffi.check-flags Flags) where (integer? N)
+  [blocking | Flags] -> (ffi.check-flags Flags)
+  [[varargs N] | Flags] -> (ffi.check-flags Flags) where (integer? N)
   [Flag | _] -> (error "define-foreign: ~R is not a flag" Flag))
 
-(define shen-jit.ffi.varargs
+(define ffi.varargs
   [] -> 0
   [[varargs N] | _] -> N
-  [_ | Flags] -> (shen-jit.ffi.varargs Flags))
+  [_ | Flags] -> (ffi.varargs Flags))
 
 \\ As ffi.c numbers them.
-(define shen-jit.ffi.code
+(define ffi.code
   void -> 0
   int64 -> 1
   int32 -> 2
@@ -95,57 +101,57 @@
   bool -> 8
   Type -> (error "foreign: ~R is not a type" Type))
 
-(define shen-jit.ffi.argument
+(define ffi.argument
   void -> (error "foreign: void is not an argument type")
-  Type -> (shen-jit.ffi.code Type))
+  Type -> (ffi.code Type))
 
-(define shen-jit.ffi.result
+(define ffi.result
   bytes -> (error "foreign: bytes is not a result type")
-  Type -> (shen-jit.ffi.code Type))
+  Type -> (ffi.code Type))
 
-(define shen-jit.ffi.fill
+(define ffi.fill
   V _ [] -> V
-  V I [X | Xs] -> (shen-jit.ffi.fill (address-> V I X) (+ I 1) Xs))
+  V I [X | Xs] -> (ffi.fill (address-> V I X) (+ I 1) Xs))
 
 \\ The description that ffi.c reads, in its order: the name, the library's name and files, the
 \\ name in C, the result, the flags, the kind of a pointer returned, and the arguments.
-(define shen-jit.ffi.define
+(define ffi.define
   Name _ _ _ _ _ _ -> (error "foreign: ~A is a system function" Name) where (shen.sysfunc? Name)
   Name Library CName Types Result Blocking Varargs
   -> (let N (length Types)
           Flags (+ (if Blocking 1 0) (* 2 Varargs))
-          Fields [Name Library (shen-jit.ffi.files Library) CName (shen-jit.ffi.result Result) Flags pointer
-                  | (map (/. T (shen-jit.ffi.argument T)) Types)]
-          Desc (shen-jit.ffi.fill (absvector (length Fields)) 0 Fields)
-       (do (shen-jit.foreign Name Desc)
+          Fields [Name Library (ffi.files Library) CName (ffi.result Result) Flags pointer
+                  | (map (/. T (ffi.argument T)) Types)]
+          Desc (ffi.fill (absvector (length Fields)) 0 Fields)
+       (do (foreign Name Desc)
            (shen.store-arity Name N)
-           (shen-jit.ffi.declare Name Types Result)
+           (ffi.declare Name Types Result)
            Name)))
 
 \\ A procedure has one type of its own, in place of every other.
-(define shen-jit.ffi.define-procedure
+(define ffi.define-procedure
   Name _ _ _ -> (error "foreign: ~A is a system function" Name) where (shen.sysfunc? Name)
   Name Library CName Arity
-  -> (let Fields [Name Library (shen-jit.ffi.files Library) CName 9 0 pointer | (shen-jit.ffi.repeat Arity 9)]
-          Desc (shen-jit.ffi.fill (absvector (length Fields)) 0 Fields)
-       (do (shen-jit.foreign Name Desc)
+  -> (let Fields [Name Library (ffi.files Library) CName 9 0 pointer | (ffi.repeat Arity 9)]
+          Desc (ffi.fill (absvector (length Fields)) 0 Fields)
+       (do (foreign Name Desc)
            (shen.store-arity Name Arity)
            Name)))
 
-(define shen-jit.ffi.repeat
+(define ffi.repeat
   0 _ -> []
-  N X -> [X | (shen-jit.ffi.repeat (- N 1) X)])
+  N X -> [X | (ffi.repeat (- N 1) X)])
 
 \\ Typed code can use a function at once if each of its types is a plain Shen type. A result
 \\ that may be [] is not, nor is a pointer: those are for the program to declare.
-(define shen-jit.ffi.declare
-  Name Types Result -> (let Plain (map (/. T (shen-jit.ffi.plain T)) [string | Types])
-                            Out (shen-jit.ffi.plain Result)
+(define ffi.declare
+  Name Types Result -> (let Plain (map (/. T (ffi.plain T)) [string | Types])
+                            Out (ffi.plain Result)
                          (if (and (not (element? unknown [Out | Plain])) (not (= Out string)))
-                             (declare Name (shen-jit.ffi.type (tl Plain) Out))
+                             (declare Name (ffi.type (tl Plain) Out))
                              skip)))
 
-(define shen-jit.ffi.plain
+(define ffi.plain
   int64 -> number
   int32 -> number
   uint32 -> number
@@ -154,14 +160,16 @@
   string -> string
   _ -> unknown)
 
-(define shen-jit.ffi.type
+(define ffi.type
   [] Out -> [--> Out]
   [T] Out -> [T --> Out]
-  [T | Ts] Out -> [T --> (shen-jit.ffi.type Ts Out)])
+  [T | Ts] Out -> [T --> (ffi.type Ts Out)])
 
-(declare shen-jit.library [symbol --> [[list string] --> symbol]])
-(declare shen-jit.ffi.define
+(declare library [symbol --> [[list string] --> symbol]])
+(declare ffi.define
          [symbol --> [symbol --> [string --> [[list symbol] --> [symbol --> [boolean --> [number --> symbol]]]]]]])
-(declare shen-jit.ffi.define-procedure [symbol --> [symbol --> [string --> [number --> symbol]]]])
-(declare shen-jit.errno [--> number])
-(declare shen-jit.c-errno [--> number])
+(declare ffi.define-procedure [symbol --> [symbol --> [string --> [number --> symbol]]]])
+(declare errno [--> number])
+(declare c-errno [--> number])
+
+)

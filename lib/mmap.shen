@@ -27,114 +27,122 @@
 \\ mapping. Functions are found at their first call, so a system declares what it never calls
 \\ without harm.
 
-(shen-jit.library mmap.lib ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])
-(shen-jit.library mmap.kernel32 ["kernel32.dll"])
+(shen.x.namespace mmap
+  (use shen-jit)
+  (externals [define-foreign int32 int64 pointer])
+  (shadow close fail map open read)
+  (export close create read read-write)
 
-(define mmap.windows?
+(shen-jit.library lib ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])
+(shen-jit.library kernel32 ["kernel32.dll"])
+
+(define windows?
   -> (= (value *os*) "Windows"))
 
-(define-foreign mmap.c-open mmap.lib (if (mmap.windows?) "_open" "open") (string int32) --> int32)
-(define-foreign mmap.c-creat mmap.lib (if (mmap.windows?) "_creat" "creat") (string int32) --> int32)
-(define-foreign mmap.c-close mmap.lib (if (mmap.windows?) "_close" "close") (int32) --> int32)
-(define-foreign mmap.c-lseek mmap.lib (if (mmap.windows?) "_lseeki64" "lseek") (int32 int64 int32) --> int64)
-(define-foreign mmap.c-truncate mmap.lib (if (mmap.windows?) "_chsize_s" "ftruncate") (int32 int64) --> int32)
-(define-foreign mmap.c-strerror mmap.lib "strerror" (int32) --> string)
+(define-foreign c-open lib (if (windows?) "_open" "open") (string int32) --> int32)
+(define-foreign c-creat lib (if (windows?) "_creat" "creat") (string int32) --> int32)
+(define-foreign c-close lib (if (windows?) "_close" "close") (int32) --> int32)
+(define-foreign c-lseek lib (if (windows?) "_lseeki64" "lseek") (int32 int64 int32) --> int64)
+(define-foreign c-truncate lib (if (windows?) "_chsize_s" "ftruncate") (int32 int64) --> int32)
+(define-foreign c-strerror lib "strerror" (int32) --> string)
 
-(define-foreign mmap.c-mmap mmap.lib "mmap" (pointer int64 int32 int32 int32 int64) --> pointer)
-(define-foreign mmap.c-munmap mmap.lib "munmap" (pointer int64) --> int32)
+(define-foreign c-mmap lib "mmap" (pointer int64 int32 int32 int32 int64) --> pointer)
+(define-foreign c-munmap lib "munmap" (pointer int64) --> int32)
 
-(define-foreign mmap.c-osfhandle mmap.lib "_get_osfhandle" (int32) --> int64)
-(define-foreign mmap.c-create-mapping mmap.kernel32 "CreateFileMappingA" (int64 pointer int32 int32 int32 pointer) --> int64)
-(define-foreign mmap.c-map-view mmap.kernel32 "MapViewOfFile" (int64 int32 int32 int32 int64) --> pointer)
-(define-foreign mmap.c-unmap-view mmap.kernel32 "UnmapViewOfFile" (pointer) --> int32)
-(define-foreign mmap.c-close-handle mmap.kernel32 "CloseHandle" (int64) --> int32)
+(define-foreign c-osfhandle lib "_get_osfhandle" (int32) --> int64)
+(define-foreign c-create-mapping kernel32 "CreateFileMappingA" (int64 pointer int32 int32 int32 pointer) --> int64)
+(define-foreign c-map-view kernel32 "MapViewOfFile" (int64 int32 int32 int32 int64) --> pointer)
+(define-foreign c-unmap-view kernel32 "UnmapViewOfFile" (pointer) --> int32)
+(define-foreign c-close-handle kernel32 "CloseHandle" (int64) --> int32)
 
-(define mmap.fail
-  Path -> (mmap.raise Path (shen-jit.c-errno)))
+(define fail
+  Path -> (raise Path (shen-jit.c-errno)))
 
-(define mmap.raise
-  Path Code -> (error "mmap: ~A: ~A" Path (mmap.c-strerror Code)))
+(define raise
+  Path Code -> (error "mmap: ~A: ~A" Path (c-strerror Code)))
 
 \\ ---------------------------------------------------------------------------
 \\ The mapping. O_RDONLY is 0 and O_RDWR is 2 on every system. Windows also needs _O_BINARY, as it
 \\ would otherwise take a Ctrl-Z off the end of a file opened to write.
 
-(define mmap.open
-  Path Flags -> (mmap.c-open Path (if (mmap.windows?) (+ Flags 32768) Flags)))
+(define open
+  Path Flags -> (c-open Path (if (windows?) (+ Flags 32768) Flags)))
 
-(define mmap.read
-  Path -> (mmap.map Path (mmap.open Path 0) false))
+(define read
+  Path -> (map Path (open Path 0) false))
 
-(define mmap.read-write
-  Path -> (mmap.map Path (mmap.open Path 2) true))
+(define read-write
+  Path -> (map Path (open Path 2) true))
 
 \\ creat gives a descriptor that cannot read, which a mapping needs, so it is opened again.
-(define mmap.create
+(define create
   Path N -> (error "mmap: ~A: cannot make a file of ~A bytes" Path N) where (not (and (integer? N) (> N 0)))
-  Path N -> (let Fd (mmap.c-creat Path (if (mmap.windows?) 384 420))
+  Path N -> (let Fd (c-creat Path (if (windows?) 384 420))
               (if (< Fd 0)
-                  (mmap.fail Path)
-                  (do (mmap.c-close Fd)
-                      (mmap.map-sized Path (mmap.open Path 2) N)))))
+                  (fail Path)
+                  (do (c-close Fd)
+                      (map-sized Path (open Path 2) N)))))
 
-(define mmap.map-sized
-  Path Fd _ -> (mmap.fail Path) where (< Fd 0)
-  Path Fd N -> (if (= 0 (mmap.c-truncate Fd N))
-                   (mmap.map Path Fd true)
+(define map-sized
+  Path Fd _ -> (fail Path) where (< Fd 0)
+  Path Fd N -> (if (= 0 (c-truncate Fd N))
+                   (map Path Fd true)
                    (let Code (shen-jit.c-errno)
-                     (do (mmap.c-close Fd) (mmap.raise Path Code)))))
+                     (do (c-close Fd) (raise Path Code)))))
 
 \\ The descriptor is closed either way: a mapping does not need it.
-(define mmap.map
-  Path Fd _ -> (mmap.fail Path) where (< Fd 0)
-  Path Fd Write -> (let M (trap-error (mmap.map-open Path Fd Write)
-                                      (/. E (do (mmap.c-close Fd) (simple-error (error-to-string E)))))
-                     (do (mmap.c-close Fd) M)))
+(define map
+  Path Fd _ -> (fail Path) where (< Fd 0)
+  Path Fd Write -> (let M (trap-error (map-open Path Fd Write)
+                                      (/. E (do (c-close Fd) (simple-error (error-to-string E)))))
+                     (do (c-close Fd) M)))
 
-(define mmap.map-open
-  Path Fd Write -> (let Length (mmap.c-lseek Fd 0 2)
-                     (cases (< Length 0) (mmap.fail Path)
+(define map-open
+  Path Fd Write -> (let Length (c-lseek Fd 0 2)
+                     (cases (< Length 0) (fail Path)
                             (= Length 0) (error "mmap: ~A is empty, and cannot be mapped" Path)
-                            true (mmap.access (shen-jit.pointer-sized (mmap.view Path Fd Length Write) Length) Write))))
+                            true (access (shen-jit.pointer-sized (view Path Fd Length Write) Length) Write))))
 
-(define mmap.access
+(define access
   M true -> M
   M false -> (shen-jit.pointer-read-only M))
 
-(define mmap.view
-  Path Fd Length Write -> (if (mmap.windows?)
-                              (mmap.windows-view Path Fd Write)
-                              (mmap.posix-view Path Fd Length Write)))
+(define view
+  Path Fd Length Write -> (if (windows?)
+                              (windows-view Path Fd Write)
+                              (posix-view Path Fd Length Write)))
 
 \\ PROT_READ is 1, PROT_WRITE is 2, and MAP_SHARED is 1. MAP_FAILED is all ones.
-(define mmap.posix-view
-  Path Fd Length Write -> (let P (mmap.c-mmap [] Length (if Write 3 1) 1 Fd 0)
+(define posix-view
+  Path Fd Length Write -> (let P (c-mmap [] Length (if Write 3 1) 1 Fd 0)
                             (if (= (shen-jit.pointer-address P) -1)
-                                (mmap.fail Path)
+                                (fail Path)
                                 P)))
 
 \\ PAGE_READWRITE is 4 and PAGE_READONLY is 2; FILE_MAP_WRITE is 2 and FILE_MAP_READ is 4. A view
 \\ keeps its mapping, and sizes of 0 mean all of the file.
-(define mmap.windows-view
-  Path Fd Write -> (let Mapping (mmap.c-create-mapping (mmap.c-osfhandle Fd) [] (if Write 4 2) 0 0 [])
+(define windows-view
+  Path Fd Write -> (let Mapping (c-create-mapping (c-osfhandle Fd) [] (if Write 4 2) 0 0 [])
                      (if (= Mapping 0)
-                         (mmap.windows-fail Path (shen-jit.errno))
-                         (let View (mmap.c-map-view Mapping (if Write 2 4) 0 0 0)
+                         (windows-fail Path (shen-jit.errno))
+                         (let View (c-map-view Mapping (if Write 2 4) 0 0 0)
                               Code (shen-jit.errno)
-                              _ (mmap.c-close-handle Mapping)
+                              _ (c-close-handle Mapping)
                            (if (empty? View)
-                               (mmap.windows-fail Path Code)
+                               (windows-fail Path Code)
                                View)))))
 
-(define mmap.windows-fail
+(define windows-fail
   Path Code -> (error "mmap: ~A: error ~A" Path Code))
 
 \\ ---------------------------------------------------------------------------
 \\ Closing.
 
-(define mmap.close
-  M -> (do (if (mmap.windows?)
-               (mmap.c-unmap-view M)
-               (mmap.c-munmap M (shen-jit.bytes-length M)))
+(define close
+  M -> (do (if (windows?)
+               (c-unmap-view M)
+               (c-munmap M (shen-jit.bytes-length M)))
            (shen-jit.pointer-kill M)
            true))
+
+)

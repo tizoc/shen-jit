@@ -2,147 +2,162 @@
 \\ One supervisor owns admission and the registry; each worker publishes one final result.
 \\ Stop and socket cancellation are monotonic flags. No shared read/modify/write queue is used.
 
-(shen-jit.library http.wait-lib ["libc.so.6" "libSystem.dylib"])
-(shen-jit.library http.wait-win ["kernel32.dll"])
-(define-foreign http.c-pause http.wait-lib "poll" (pointer int64 int32) --> int32 blocking)
-(define-foreign http.c-sleep http.wait-win "Sleep" (int32) --> void blocking)
+(shen.x.namespace http
+  (use buffer)
+  (use clock)
+  (use deadline)
+  (use grammar)
+  (use io)
+  (use shen-jit)
+  (use socket)
+  (externals [accept blocking cancelling define-foreign draining http-listener-options
+    http-listener-results int32 int64 listening max-connections ok pending pointer serve
+    shutdown-grace stopped thread void])
+  (shadow port)
+  (export listen listener-option option port request response server state stats stop wait
+    wait-result)
 
-(define http.pause
+(shen-jit.library wait-lib ["libc.so.6" "libSystem.dylib"])
+(shen-jit.library wait-win ["kernel32.dll"])
+(define-foreign c-pause wait-lib "poll" (pointer int64 int32) --> int32 blocking)
+(define-foreign c-sleep wait-win "Sleep" (int32) --> void blocking)
+
+(define pause
   Milliseconds ->
-    (if (socket.windows?) (http.c-sleep Milliseconds) (http.c-pause [] 0 Milliseconds)))
+    (if (socket.windows?) (c-sleep Milliseconds) (c-pause [] 0 Milliseconds)))
 
-(define http.listener-options
-  Options -> (http.listener-config Options 16 1000 [] []))
+(define listener-options
+  Options -> (listener-config Options 16 1000 [] []))
 
-(define http.listener-config
+(define listener-config
   [] Cap Grace Request _ ->
-    (do (http.server-options Request) [Cap Grace Request])
+    (do (server-options Request) [Cap Grace Request])
   [[Name Value] | Rest] Cap Grace Request Seen ->
     (let _ (if (element? Name Seen) (error "http: duplicate listener option") true)
          N (buffer.index Value)
       (cases (= Name max-connections)
                (if (and (> N 0) (<= N 1024))
-                   (http.listener-config Rest N Grace Request [Name | Seen])
+                   (listener-config Rest N Grace Request [Name | Seen])
                    (error "http: max-connections must be 1..1024"))
              (= Name shutdown-grace)
                (if (<= N 600000)
-                   (http.listener-config Rest Cap N Request [Name | Seen])
+                   (listener-config Rest Cap N Request [Name | Seen])
                    (error "http: shutdown-grace must be 0..600000 ms"))
-             true (http.listener-config Rest Cap Grace [[Name N] | Request] [Name | Seen])))
+             true (listener-config Rest Cap Grace [[Name N] | Request] [Name | Seen])))
   _ _ _ _ _ -> (error "http: listener options must be [Name Number] pairs"))
 
 \\ Public control: image guard, port, stop flag, immutable snapshot, final result.
 \\ Private owner: listener token, workers, accepted/completed/failed/cancelled/peak,
 \\ primary failure, grace deadline and phase. Only the supervisor writes this record.
-(define http.listen
+(define listen
   Host Port Handler Options ->
-    (let Config (http.listener-options Options)
+    (let Config (listener-options Options)
          _ (clock.monotonic)
-         _ (grammar.prepare http.<head>)
+         _ (grammar.prepare <head>)
          L (socket.listen Host Port)
-      (socket.closing-on-error L (freeze (http.listener-start L Handler Config)))))
+      (socket.closing-on-error L (freeze (listener-start L Handler Config)))))
 
-(define http.listener-start
+(define listener-start
   L Handler Config ->
-    (let Guard (shen-jit.bytes->pointer (shen-jit.u32! (shen-jit.bytes 8) 0 1) 0 http.server)
-         S (io.record [http.server Guard (socket.port L) false
+    (let Guard (shen-jit.bytes->pointer (shen-jit.u32! (shen-jit.bytes 8) 0 1) 0 server)
+         S (io.record [server Guard (socket.port L) false
                        (io.record [listening 0 0 0 0 0 0]) []])
          O (io.record [(io.socket-token L) [] 0 0 0 0 0 [] [] listening])
-         _ (thread (freeze (http.supervisor S O Handler Config)))
+         _ (thread (freeze (supervisor S O Handler Config)))
       S))
 
-(define http.listener-check
+(define listener-check
   S ->
-    (let _ (if (io.tag? S http.server) true (error "http: not a server"))
+    (let _ (if (io.tag? S server) true (error "http: not a server"))
          _ (if (= (shen-jit.pointer-address (<-address S 1)) 0)
                (error "http: saved servers must be recreated") true)
       S))
 
-(define http.port
-  S -> (<-address (http.listener-check S) 2))
+(define port
+  S -> (<-address (listener-check S) 2))
 
-(define http.stop
-  S -> (do (address-> (http.listener-check S) 3 true) true))
+(define stop
+  S -> (do (address-> (listener-check S) 3 true) true))
 
-(define http.state
-  S -> (<-address (<-address (http.listener-check S) 4) 0))
+(define state
+  S -> (<-address (<-address (listener-check S) 4) 0))
 
-(define http.stats
+(define stats
   S ->
-    (let V (<-address (http.listener-check S) 4)
+    (let V (<-address (listener-check S) 4)
       [(<-address V 1) (<-address V 2) (<-address V 3)
        (<-address V 4) (<-address V 5) (<-address V 6)]))
 
-(define http.wait
+(define wait
   S Milliseconds ->
-    (do (http.listener-check S) (http.wait-until S (clock.deadline Milliseconds))))
+    (do (listener-check S) (wait-until S (clock.deadline Milliseconds))))
 
-(define http.wait-until
+(define wait-until
   S D ->
     (let Result (<-address S 5)
       (cond ((not (empty? Result)) Result)
             ((deadline.expired? D) [pending])
-            (true (do (http.pause (deadline.slice D 50)) (http.wait-until S D))))))
+            (true (do (pause (deadline.slice D 50)) (wait-until S D))))))
 
-(define http.publish
+(define publish
   S O ->
     (address-> S 4 (io.record [(<-address O 9) (length (<-address O 1))
                               (<-address O 2) (<-address O 3) (<-address O 4)
                               (<-address O 5) (<-address O 6)])))
 
-(define http.note-error
+(define note-error
   O Error ->
     (let Previous (<-address O 7)
       (address-> O 7 (if (empty? Previous) Error (io.secondary Previous Error)))))
 
-(define http.close-listener
+(define close-listener
   O ->
     (let Token (<-address O 0)
       (if (= (shen-jit.pointer-address Token) 0)
           true
-          (http.listener-closed O (io.socket-close Token "HTTP listener")))))
+          (listener-closed O (io.socket-close Token "HTTP listener")))))
 
-(define http.listener-closed
+(define listener-closed
   _ [ok] -> true
-  O [error Error] -> (do (http.note-error O Error) true))
+  O [error Error] -> (do (note-error O Error) true))
 
-(define http.reap
-  O -> (address-> O 1 (http.reap-workers O (<-address O 1) [])))
+(define reap
+  O -> (address-> O 1 (reap-workers O (<-address O 1) [])))
 
-(define http.reap-workers
+(define reap-workers
   _ [] Live -> (reverse Live)
   O [W | Rest] Live ->
     (let Result (<-address W 1)
       (if (empty? Result)
-          (http.reap-workers O Rest [W | Live])
+          (reap-workers O Rest [W | Live])
           (do (address-> O 3 (+ 1 (<-address O 3)))
-              (http.count-failure O Result)
-              (http.reap-workers O Rest Live)))))
+              (count-failure O Result)
+              (reap-workers O Rest Live)))))
 
-(define http.count-failure
+(define count-failure
   _ [ok _] -> true
   O [error _] -> (do (address-> O 4 (+ 1 (<-address O 4))) true))
 
-(define http.worker
+(define worker
   W Handler Options Stop ->
     (let E (<-address W 0)
          Result (io.with-endpoint E
-                  (/. Connection (http.serve-controlled Connection Handler Options Stop)))
+                  (/. Connection (serve-controlled Connection Handler Options Stop)))
       (address-> W 1 Result)))
 
-(define http.admit
+(define admit
   S O Handler Options ->
     (let Peer (socket.c-accept (io.socket-id (<-address O 0)) [] [])
          Code (if (< Peer 0) (io.socket-code) 0)
       (cond ((>= Peer 0)
               (if (<-address S 3)
                   (socket.close Peer)
-                  (http.launch S O (socket.closing-on-error Peer (freeze (socket.set-up Peer)))
+                  (launch S O (socket.closing-on-error Peer (freeze (socket.set-up Peer)))
                                Handler Options)))
             ((io.socket-again? Code) true)
-            (true (http.note-error O (io.socket-error accept "HTTP listener" Code))))))
+            (true (note-error O (io.socket-error accept "HTTP listener" Code))))))
 
-(define http.launch
+(define launch
   S O Peer Handler Options ->
     (let E (io.socket Peer "HTTP peer")
          W (io.record [E []])
@@ -151,88 +166,90 @@
          _ (address-> O 2 (+ 1 (<-address O 2)))
          N (length Workers)
          _ (if (> N (<-address O 6)) (address-> O 6 N) true)
-      (trap-error (thread (freeze (http.worker W Handler Options (freeze (<-address S 3)))))
+      (trap-error (thread (freeze (worker W Handler Options (freeze (<-address S 3)))))
         (/. X (address-> W 1
                 (io.finish [error (io.error thread "HTTP worker" (error-to-string X))] (io.close E)))))))
 
-(define http.begin-stop
+(define begin-stop
   O Grace ->
-    (do (http.close-listener O)
+    (do (close-listener O)
         (address-> O 8 (clock.deadline Grace))
         (address-> O 9 draining)))
 
-(define http.cancel-workers
+(define cancel-workers
   [] -> true
-  [W | Rest] -> (do (io.socket-cancel (<-address W 0)) (http.cancel-workers Rest)))
+  [W | Rest] -> (do (io.socket-cancel (<-address W 0)) (cancel-workers Rest)))
 
-(define http.supervise
+(define supervise
   S O Handler [Cap Grace Options] ->
-    (do (http.reap O)
+    (do (reap O)
         (if (and (= (<-address O 9) listening)
                  (or (<-address S 3) (not (empty? (<-address O 7)))))
-            (http.begin-stop O Grace) true)
-        (http.publish S O)
+            (begin-stop O Grace) true)
+        (publish S O)
         (cond ((= (<-address O 9) listening)
                 (do (if (< (length (<-address O 1)) Cap)
                         (if (socket.readable? (io.socket-id (<-address O 0)) 50)
-                            (http.admit S O Handler Options) true)
-                        (http.pause 50))
-                    (http.supervise S O Handler [Cap Grace Options])))
-              ((empty? (<-address O 1)) (http.finish-listener S O))
+                            (admit S O Handler Options) true)
+                        (pause 50))
+                    (supervise S O Handler [Cap Grace Options])))
+              ((empty? (<-address O 1)) (finish-listener S O))
               ((and (= (<-address O 9) draining) (deadline.expired? (<-address O 8)))
-                (do (http.cancel-workers (<-address O 1))
+                (do (cancel-workers (<-address O 1))
                     (address-> O 5 (length (<-address O 1)))
                     (address-> O 9 cancelling)
-                    (http.supervise S O Handler [Cap Grace Options])))
-              (true (do (http.pause 50) (http.supervise S O Handler [Cap Grace Options]))))))
+                    (supervise S O Handler [Cap Grace Options])))
+              (true (do (pause 50) (supervise S O Handler [Cap Grace Options]))))))
 
-(define http.finish-listener
+(define finish-listener
   S O ->
-    (let _ (http.close-listener O)
+    (let _ (close-listener O)
          _ (address-> O 9 stopped)
-         _ (http.publish S O)
+         _ (publish S O)
          Error (<-address O 7)
       (address-> S 5 (if (empty? Error) [ok] [error Error]))))
 
-(define http.supervisor
+(define supervisor
   S O Handler Config ->
-    (trap-error (http.supervise S O Handler Config)
-      (/. X (do (http.note-error O (io.error serve "HTTP listener" (error-to-string X)))
-                (http.close-listener O)
-                (http.cancel-workers (<-address O 1))
+    (trap-error (supervise S O Handler Config)
+      (/. X (do (note-error O (io.error serve "HTTP listener" (error-to-string X)))
+                (close-listener O)
+                (cancel-workers (<-address O 1))
                 (address-> O 5 (length (<-address O 1)))
                 (address-> O 9 cancelling)
-                (http.supervise S O Handler Config)))))
+                (supervise S O Handler Config)))))
 
 (datatype http-listener-results
   ___________________________
-  [ok] : http.wait-result;
+  [ok] : wait-result;
 
   ___________________________
-  [pending] : http.wait-result;
+  [pending] : wait-result;
 
   Error : io.error;
   ___________________________
-  [error Error] : http.wait-result;)
+  [error Error] : wait-result;)
 
 (datatype http-listener-options
   N : number;
   =================================
-  [max-connections N] : http.listener-option;
+  [max-connections N] : listener-option;
 
   N : number;
   =================================
-  [shutdown-grace N] : http.listener-option;
+  [shutdown-grace N] : listener-option;
 
-  Option : http.option;
+  Option : option;
   =================================
-  Option : http.listener-option;)
+  Option : listener-option;)
 
-(declare http.listen
-  [string --> [number --> [[http.request --> http.response] -->
-    [[list http.listener-option] --> http.server]]]])
-(declare http.port [http.server --> number])
-(declare http.stop [http.server --> boolean])
-(declare http.state [http.server --> symbol])
-(declare http.stats [http.server --> [list number]])
-(declare http.wait [http.server --> [number --> http.wait-result]])
+(declare listen
+  [string --> [number --> [[request --> response] -->
+    [[list listener-option] --> server]]]])
+(declare port [server --> number])
+(declare stop [server --> boolean])
+(declare state [server --> symbol])
+(declare stats [server --> [list number]])
+(declare wait [server --> [number --> wait-result]])
+
+)

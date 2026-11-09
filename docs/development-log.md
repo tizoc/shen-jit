@@ -899,6 +899,26 @@ that. Its readings decided nothing below.
 
 ### Kernel pins and reproducible stage 0
 
+- **Namespace migration** (2026-11-09, Apple M3 Max, against the library sources after release 0.6). All 28 optional Shen libraries now use
+  namespace blocks, replacing manually repeated prefixes while preserving the symbols of their 1,685 function and
+  macro definitions. HTTP, I/O and subprocess files contribute to shared namespaces. Exports cover the documented
+  operations and types and the helpers used across libraries; the runtime's `shen-jit` namespace stays open for
+  native authoring and FFI. Protocol tags, grammar vocabulary and generated instructions remain external, and local
+  names that collide with kernel or stlib names are shadowed. Reading each library before and after gives the same
+  expanded forms, allowing for generated variable names; this checks symbols in data as well as in calls.
+  An audit removed each of the 618 entries in the 26 external lists in turn and compared namespace expansion
+  and exports in base and stlib images. Every remaining entry affects the base image; eleven are already global
+  with stlib but still need preserving in the base image. The kernel preserves datatype rule separators without
+  external declarations, so none is listed.
+  The kernel pin is the released 43.5, including namespace interfaces and syntax annotation hooks.
+  Dependency setup checks the release archive's hash and uses its 23 precompiled KLambda files directly.
+  CI platform jobs fetch that release; source-tarball builds continue to need a C compiler alone.
+  The lowerer checker loads a renamed copy of the namespace extension for hosts whose bundled version is older.
+  Namespace clients cover imports, aliases, re-exports, shadowing, typed calls and scoped grammar, Datalog and native
+  forms in both executables, then again after saving and reloading each image: 14 checks in each of the four modes.
+  `make test-core test-libs` passes. Both stage 0 hosts pass the checker and the same manifest; the source tarball
+  builds and passes its namespace clients with `BOOTSTRAP=false`. The guide examples run. No runtime or JIT changes.
+
 - **Self-hosting check** (2026-11-01, Apple M3 Max). The lowerer inside Shen/JIT must give stage 0's output exactly:
   1,162 defuns in 0.29 s, against 0.36 s under Shen/Scheme. It found: `read-file` macroexpands, so stage 0 reads
   KLambda unprocessed; `symbol?` differs between hosts, so the lowerer has an exact primitive, also making it 13 times

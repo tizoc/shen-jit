@@ -1,73 +1,87 @@
 \\ Tree-sitter complete-input snapshots and structural queries. Load after ffi.shen and buffer.shen.
 \\ Native trees are closed before returning; snapshots own managed source, records and name tables.
 
-(if (bound? treesitter.*adapter-files*) true
-    (set treesitter.*adapter-files*
+(shen.x.namespace treesitter
+  (use buffer)
+  (use shen-jit)
+  (externals [capture-limit define-foreign define-foreign-procedure input-limit load-language
+    match-limit native node-limit ok parse pointer predicate query query-limit result-limit
+    timeout treesitter-error treesitter-options treesitter-results uint32])
+  (export *adapter-files* capture-count capture-match capture-name capture-node capture-pattern
+    child-by-field children end-byte end-point treesitter.error => error error-code error-domain
+    error-message error-offset error-operation error-resource error? extra? field first-child
+    fold has-error? kind treesitter.language => language language-name language-version
+    treesitter.load-language => load-language match-count missing? named? next-sibling node-count
+    option parent treesitter.parse => parse treesitter.query => query result root snapshot source
+    start-byte start-point text)
+
+(if (bound? *adapter-files*) true
+    (set *adapter-files*
       ["./build/shen-tree-sitter.so" "./lib/shen-tree-sitter.so" "./shen-tree-sitter.so"
        "./build/shen-tree-sitter.dll" "./lib/shen-tree-sitter.dll" "./shen-tree-sitter.dll"]))
 
-(shen-jit.library treesitter.adapter (value treesitter.*adapter-files*))
-(define-foreign treesitter.c-abi treesitter.adapter "shen_treesitter_abi" () --> uint32)
-(define-foreign-procedure treesitter.c-language treesitter.adapter "shen_treesitter_language" 1)
-(define-foreign-procedure treesitter.c-parse treesitter.adapter "shen_treesitter_parse" 2)
+(shen-jit.library adapter (value *adapter-files*))
+(define-foreign c-abi adapter "shen_treesitter_abi" () --> uint32)
+(define-foreign-procedure c-language adapter "shen_treesitter_language" 1)
+(define-foreign-procedure c-parse adapter "shen_treesitter_parse" 2)
 
-(define treesitter.record
-  Fields -> (treesitter.fill (absvector (length Fields)) 0 Fields))
+(define record
+  Fields -> (fill (absvector (length Fields)) 0 Fields))
 
-(define treesitter.fill
+(define fill
   V _ [] -> V
-  V At [X | Rest] -> (treesitter.fill (address-> V At X) (+ At 1) Rest))
+  V At [X | Rest] -> (fill (address-> V At X) (+ At 1) Rest))
 
-(define treesitter.tag?
+(define tag?
   V Tag -> (trap-error (and (absvector? V) (= (<-address V 0) Tag)) (/. E false)))
 
-(define treesitter.abi
-  -> (if (= (treesitter.c-abi) 1) true (error "treesitter: incompatible adapter; rebuild it")))
+(define abi
+  -> (if (= (c-abi) 1) true (error "treesitter: incompatible adapter; rebuild it")))
 
-(define treesitter.text-argument
+(define text-argument
   Text ->
     (let _ (if (string? Text) true (error "treesitter: expected a string"))
          Bytes (shen-jit.string->bytes Text)
          N (shen-jit.bytes-length Bytes)
-      (if (and (> N 0) (<= N 1048576) (treesitter.no-nul? Bytes 0 N))
+      (if (and (> N 0) (<= N 1048576) (no-nul? Bytes 0 N))
           Text
           (error "treesitter: expected 1..1048576 NUL-free bytes"))))
 
-(define treesitter.byte-length
+(define byte-length
   Text -> (shen-jit.bytes-length (shen-jit.string->bytes Text)))
 
-(define treesitter.no-nul?
+(define no-nul?
   _ End End -> true
   Bytes At End ->
-    (and (not (= (shen-jit.u8 Bytes At) 0)) (treesitter.no-nul? Bytes (+ At 1) End)))
+    (and (not (= (shen-jit.u8 Bytes At) 0)) (no-nul? Bytes (+ At 1) End)))
 
-(define treesitter.files
+(define files
   [] -> []
-  [File | Rest] -> [(treesitter.text-argument File) | (treesitter.files Rest)]
+  [File | Rest] -> [(text-argument File) | (files Rest)]
   _ -> (error "treesitter: grammar files must be a list of strings"))
 
 (define treesitter.error
   Op Domain Code Offset Resource Message -> [treesitter-error Op Domain Code Offset Resource Message])
 
-(define treesitter.error-operation
+(define error-operation
   [treesitter-error Op _ _ _ _ _] -> Op)
 
-(define treesitter.error-domain
+(define error-domain
   [treesitter-error _ Domain _ _ _ _] -> Domain)
 
-(define treesitter.error-code
+(define error-code
   [treesitter-error _ _ Code _ _ _] -> Code)
 
-(define treesitter.error-offset
+(define error-offset
   [treesitter-error _ _ _ Offset _ _] -> Offset)
 
-(define treesitter.error-resource
+(define error-resource
   [treesitter-error _ _ _ _ Resource _] -> Resource)
 
-(define treesitter.error-message
+(define error-message
   [treesitter-error _ _ _ _ _ Message] -> Message)
 
-(define treesitter.domain
+(define domain
   1 -> native
   2 -> timeout
   3 -> limit
@@ -75,44 +89,44 @@
   5 -> predicate
   6 -> language)
 
-(define treesitter.native-error
+(define native-error
   Op Resource Raw ->
-    [error (treesitter.error Op (treesitter.domain (<-address Raw 0)) (<-address Raw 1)
+    [error (treesitter.error Op (domain (<-address Raw 0)) (<-address Raw 1)
                             (<-address Raw 2) Resource (<-address Raw 3))])
 
-(define treesitter.foreign-error
+(define foreign-error
   Op Resource Exception ->
     [error (treesitter.error Op foreign 0 0 Resource (error-to-string Exception))])
 
 \\ A language stores its FFI entry name, not a native address. It reopens correctly in saved images.
 (define treesitter.load-language
   Name Files Entry ->
-    (let _ (treesitter.text-argument Name)
-         Paths (treesitter.files Files)
+    (let _ (text-argument Name)
+         Paths (files Files)
          _ (if (= Paths []) (error "treesitter: supply grammar library files") true)
-         _ (treesitter.text-argument Entry)
-         Function (gensym treesitter.grammar.)
+         _ (text-argument Entry)
+         Function (gensym grammar.)
          _ (shen-jit.library Function Paths)
          _ (shen-jit.ffi.define Function Function Entry [] pointer false 0)
       (trap-error
-        (do (treesitter.abi)
-            (let Raw (treesitter.c-language (eval-kl [Function]))
+        (do (abi)
+            (let Raw (c-language (eval-kl [Function]))
               (if (number? Raw)
-                  [ok (treesitter.record [treesitter.language Name Function Raw])]
-                  (treesitter.native-error load-language Name Raw))))
-        (/. X (treesitter.foreign-error load-language Name X)))))
+                  [ok (record [treesitter.language Name Function Raw])]
+                  (native-error load-language Name Raw))))
+        (/. X (foreign-error load-language Name X)))))
 
-(define treesitter.language-check
+(define language-check
   Language ->
-    (if (treesitter.tag? Language treesitter.language)
+    (if (tag? Language treesitter.language)
         Language
         (error "treesitter: not a language")))
 
-(define treesitter.language-name
-  Language -> (<-address (treesitter.language-check Language) 1))
+(define language-name
+  Language -> (<-address (language-check Language) 1))
 
-(define treesitter.language-version
-  Language -> (<-address (treesitter.language-check Language) 3))
+(define language-version
+  Language -> (<-address (language-check Language) 3))
 
 (define treesitter.limit
   N Maximum Positive ->
@@ -122,20 +136,20 @@
           (error "treesitter: limit must be ~A..~A" (if Positive 1 0) Maximum))))
 
 \\ Input bytes, nodes, captures, matches, result payload bytes, timeout ms, query bytes.
-(define treesitter.options
+(define options
   Options ->
-    (treesitter.options-loop Options
-      (treesitter.record [8388608 262144 65536 65536 67108864 30000 1048576]) []))
+    (options-loop Options
+      (record [8388608 262144 65536 65536 67108864 30000 1048576]) []))
 
-(define treesitter.options-loop
+(define options-loop
   [] Config _ -> Config
   [[Key Value] | Rest] Config Seen ->
     (if (element? Key Seen)
         (error "treesitter: repeated option ~A" Key)
-        (treesitter.options-loop Rest (treesitter.option Key Value Config) [Key | Seen]))
+        (options-loop Rest (option Key Value Config) [Key | Seen]))
   _ _ _ -> (error "treesitter: options must be [name value] pairs"))
 
-(define treesitter.option
+(define option
   input-limit N C -> (address-> C 0 (treesitter.limit N 268435456 false))
   node-limit N C -> (address-> C 1 (treesitter.limit N 4194304 true))
   capture-limit N C -> (address-> C 2 (treesitter.limit N 1048576 false))
@@ -146,221 +160,223 @@
   Key _ _ -> (error "treesitter: unknown option ~A" Key))
 
 (define treesitter.parse
-  Language Input Options -> (treesitter.analyze Language Input [] (treesitter.options Options)))
+  Language Input Options -> (analyze Language Input [] (options Options)))
 
 (define treesitter.query
   Language Input Query Options ->
     (if (string? Query)
-        (treesitter.analyze Language Input Query (treesitter.options Options))
+        (analyze Language Input Query (options Options))
         (error "treesitter: query must be a string")))
 
-(define treesitter.analyze
+(define analyze
   Language Input Query Config ->
-    (let Name (treesitter.language-name Language)
+    (let Name (language-name Language)
          N (buffer.length Input)
       (cond ((> N (<-address Config 0))
               [error (treesitter.error parse limit 0 0 Name "source exceeds input byte limit")])
-            ((and (string? Query) (> (treesitter.byte-length Query) (<-address Config 6)))
+            ((and (string? Query) (> (byte-length Query) (<-address Config 6)))
               [error (treesitter.error query limit 0 0 Name "query exceeds query byte limit")])
             (true
               (let View (if (shen-jit.pointer? (buffer.owner Input))
                             (buffer.wrap (buffer.bytes Input)) Input)
                    Op (if (= Query []) parse query)
                 (trap-error
-                  (do (treesitter.abi)
-                      (let Raw (treesitter.c-parse (eval-kl [(<-address Language 2)])
-                                  (treesitter.record [(buffer.owner View) (buffer.offset View)
+                  (do (abi)
+                      (let Raw (c-parse (eval-kl [(<-address Language 2)])
+                                  (record [(buffer.owner View) (buffer.offset View)
                                                       N Query Config]))
                         (if (number? (<-address Raw 0))
-                            (treesitter.native-error Op Name Raw)
-                            [ok (treesitter.record [treesitter.snapshot Name Raw])])))
-                  (/. X (treesitter.foreign-error Op Name X))))))))
+                            (native-error Op Name Raw)
+                            [ok (record [snapshot Name Raw])])))
+                  (/. X (foreign-error Op Name X))))))))
 
-(define treesitter.snapshot-check
+(define snapshot-check
   Snapshot ->
-    (if (treesitter.tag? Snapshot treesitter.snapshot)
+    (if (tag? Snapshot snapshot)
         (<-address Snapshot 2)
         (error "treesitter: not a snapshot")))
 
-(define treesitter.node-count
-  Snapshot -> (/ (shen-jit.bytes-length (<-address (treesitter.snapshot-check Snapshot) 1)) 48))
+(define node-count
+  Snapshot -> (/ (shen-jit.bytes-length (<-address (snapshot-check Snapshot) 1)) 48))
 
-(define treesitter.root
-  Snapshot -> (do (treesitter.snapshot-check Snapshot) 1))
+(define root
+  Snapshot -> (do (snapshot-check Snapshot) 1))
 
-(define treesitter.node-word
+(define node-word
   Snapshot Node Field ->
-    (let Raw (treesitter.snapshot-check Snapshot)
+    (let Raw (snapshot-check Snapshot)
          ID (buffer.index Node)
          Count (/ (shen-jit.bytes-length (<-address Raw 1)) 48)
       (if (and (> ID 0) (<= ID Count))
           (shen-jit.u32 (<-address Raw 1) (+ (* (- ID 1) 48) (* Field 4)))
           (error "treesitter: node ~A is outside this snapshot" ID))))
 
-(define treesitter.parent
-  Snapshot Node -> (treesitter.node-word Snapshot Node 0))
+(define parent
+  Snapshot Node -> (node-word Snapshot Node 0))
 
-(define treesitter.first-child
-  Snapshot Node -> (treesitter.node-word Snapshot Node 1))
+(define first-child
+  Snapshot Node -> (node-word Snapshot Node 1))
 
-(define treesitter.next-sibling
-  Snapshot Node -> (treesitter.node-word Snapshot Node 2))
+(define next-sibling
+  Snapshot Node -> (node-word Snapshot Node 2))
 
-(define treesitter.kind
+(define kind
   Snapshot Node ->
-    (<-address (<-address (treesitter.snapshot-check Snapshot) 2) (treesitter.node-word Snapshot Node 3)))
+    (<-address (<-address (snapshot-check Snapshot) 2) (node-word Snapshot Node 3)))
 
-(define treesitter.field
+(define field
   Snapshot Node ->
-    (<-address (<-address (treesitter.snapshot-check Snapshot) 3) (treesitter.node-word Snapshot Node 4)))
+    (<-address (<-address (snapshot-check Snapshot) 3) (node-word Snapshot Node 4)))
 
-(define treesitter.flag?
-  Snapshot Node Mask -> (not (= (shen-jit.bit-and (treesitter.node-word Snapshot Node 5) Mask) 0)))
+(define flag?
+  Snapshot Node Mask -> (not (= (shen-jit.bit-and (node-word Snapshot Node 5) Mask) 0)))
 
-(define treesitter.named?
-  Snapshot Node -> (treesitter.flag? Snapshot Node 1))
+(define named?
+  Snapshot Node -> (flag? Snapshot Node 1))
 
-(define treesitter.missing?
-  Snapshot Node -> (treesitter.flag? Snapshot Node 2))
+(define missing?
+  Snapshot Node -> (flag? Snapshot Node 2))
 
-(define treesitter.error?
-  Snapshot Node -> (treesitter.flag? Snapshot Node 4))
+(define error?
+  Snapshot Node -> (flag? Snapshot Node 4))
 
-(define treesitter.has-error?
-  Snapshot Node -> (treesitter.flag? Snapshot Node 8))
+(define has-error?
+  Snapshot Node -> (flag? Snapshot Node 8))
 
-(define treesitter.extra?
-  Snapshot Node -> (treesitter.flag? Snapshot Node 16))
+(define extra?
+  Snapshot Node -> (flag? Snapshot Node 16))
 
-(define treesitter.start-byte
-  Snapshot Node -> (treesitter.node-word Snapshot Node 6))
+(define start-byte
+  Snapshot Node -> (node-word Snapshot Node 6))
 
-(define treesitter.end-byte
-  Snapshot Node -> (treesitter.node-word Snapshot Node 7))
+(define end-byte
+  Snapshot Node -> (node-word Snapshot Node 7))
 
-(define treesitter.start-point
-  Snapshot Node -> [(treesitter.node-word Snapshot Node 8) (treesitter.node-word Snapshot Node 9)])
+(define start-point
+  Snapshot Node -> [(node-word Snapshot Node 8) (node-word Snapshot Node 9)])
 
-(define treesitter.end-point
-  Snapshot Node -> [(treesitter.node-word Snapshot Node 10) (treesitter.node-word Snapshot Node 11)])
+(define end-point
+  Snapshot Node -> [(node-word Snapshot Node 10) (node-word Snapshot Node 11)])
 
-(define treesitter.source
-  Snapshot -> (buffer.wrap (buffer.bytes (buffer.wrap (<-address (treesitter.snapshot-check Snapshot) 0)))))
+(define source
+  Snapshot -> (buffer.wrap (buffer.bytes (buffer.wrap (<-address (snapshot-check Snapshot) 0)))))
 
-(define treesitter.text
+(define text
   Snapshot Node ->
-    (let Start (treesitter.start-byte Snapshot Node)
-         End (treesitter.end-byte Snapshot Node)
-      (shen-jit.bytes->string (<-address (treesitter.snapshot-check Snapshot) 0) Start (- End Start))))
+    (let Start (start-byte Snapshot Node)
+         End (end-byte Snapshot Node)
+      (shen-jit.bytes->string (<-address (snapshot-check Snapshot) 0) Start (- End Start))))
 
-(define treesitter.children
-  Snapshot Node -> (treesitter.siblings Snapshot (treesitter.first-child Snapshot Node) []))
+(define children
+  Snapshot Node -> (siblings Snapshot (first-child Snapshot Node) []))
 
-(define treesitter.siblings
+(define siblings
   _ 0 Acc -> (reverse Acc)
-  Snapshot Node Acc -> (treesitter.siblings Snapshot (treesitter.next-sibling Snapshot Node) [Node | Acc]))
+  Snapshot Node Acc -> (siblings Snapshot (next-sibling Snapshot Node) [Node | Acc]))
 
-(define treesitter.child-by-field
-  Snapshot Node Field -> (treesitter.find-field Snapshot (treesitter.first-child Snapshot Node) Field))
+(define child-by-field
+  Snapshot Node Field -> (find-field Snapshot (first-child Snapshot Node) Field))
 
-(define treesitter.find-field
+(define find-field
   _ 0 _ -> 0
   Snapshot Node Field ->
-    (if (= (treesitter.field Snapshot Node) Field)
+    (if (= (field Snapshot Node) Field)
         Node
-        (treesitter.find-field Snapshot (treesitter.next-sibling Snapshot Node) Field)))
+        (find-field Snapshot (next-sibling Snapshot Node) Field)))
 
-(define treesitter.fold
-  F Acc Snapshot -> (treesitter.fold-loop F Acc Snapshot 1 (treesitter.node-count Snapshot)))
+(define fold
+  F Acc Snapshot -> (fold-loop F Acc Snapshot 1 (node-count Snapshot)))
 
-(define treesitter.fold-loop
+(define fold-loop
   _ Acc _ At End -> Acc where (> At End)
-  F Acc Snapshot At End -> (treesitter.fold-loop F (F Acc At) Snapshot (+ At 1) End))
+  F Acc Snapshot At End -> (fold-loop F (F Acc At) Snapshot (+ At 1) End))
 
 \\ Captures are in match order; IDs within each snapshot are one-based, patterns are zero-based.
-(define treesitter.capture-count
-  Snapshot -> (/ (shen-jit.bytes-length (<-address (treesitter.snapshot-check Snapshot) 4)) 16))
+(define capture-count
+  Snapshot -> (/ (shen-jit.bytes-length (<-address (snapshot-check Snapshot) 4)) 16))
 
-(define treesitter.match-count
-  Snapshot -> (<-address (treesitter.snapshot-check Snapshot) 6))
+(define match-count
+  Snapshot -> (<-address (snapshot-check Snapshot) 6))
 
-(define treesitter.capture-word
+(define capture-word
   Snapshot Capture Field ->
-    (let Raw (treesitter.snapshot-check Snapshot)
+    (let Raw (snapshot-check Snapshot)
          ID (buffer.index Capture)
          Count (/ (shen-jit.bytes-length (<-address Raw 4)) 16)
       (if (and (> ID 0) (<= ID Count))
           (shen-jit.u32 (<-address Raw 4) (+ (* (- ID 1) 16) (* Field 4)))
           (error "treesitter: capture ~A is outside this snapshot" ID))))
 
-(define treesitter.capture-match
-  Snapshot Capture -> (treesitter.capture-word Snapshot Capture 0))
+(define capture-match
+  Snapshot Capture -> (capture-word Snapshot Capture 0))
 
-(define treesitter.capture-pattern
-  Snapshot Capture -> (treesitter.capture-word Snapshot Capture 1))
+(define capture-pattern
+  Snapshot Capture -> (capture-word Snapshot Capture 1))
 
-(define treesitter.capture-name
+(define capture-name
   Snapshot Capture ->
-    (<-address (<-address (treesitter.snapshot-check Snapshot) 5)
-               (treesitter.capture-word Snapshot Capture 2)))
+    (<-address (<-address (snapshot-check Snapshot) 5)
+               (capture-word Snapshot Capture 2)))
 
-(define treesitter.capture-node
-  Snapshot Capture -> (treesitter.capture-word Snapshot Capture 3))
+(define capture-node
+  Snapshot Capture -> (capture-word Snapshot Capture 3))
 
 (datatype treesitter-results
   X : A;
   ============================
-  [ok X] : (treesitter.result A);
+  [ok X] : (result A);
 
   E : treesitter.error;
   ============================
-  [error E] : (treesitter.result A);)
+  [error E] : (result A);)
 
 (datatype treesitter-options
   Key : symbol; N : number;
   ============================
-  [Key N] : treesitter.option;)
+  [Key N] : option;)
 
 (declare treesitter.load-language
-  [string --> [[list string] --> [string --> [treesitter.result treesitter.language]]]])
-(declare treesitter.language-name [treesitter.language --> string])
-(declare treesitter.language-version [treesitter.language --> number])
+  [string --> [[list string] --> [string --> [result treesitter.language]]]])
+(declare language-name [treesitter.language --> string])
+(declare language-version [treesitter.language --> number])
 (declare treesitter.parse
-  [treesitter.language --> [buffer.view --> [[list treesitter.option] -->
-    [treesitter.result treesitter.snapshot]]]])
+  [treesitter.language --> [buffer.view --> [[list option] -->
+    [result snapshot]]]])
 (declare treesitter.query
-  [treesitter.language --> [buffer.view --> [string --> [[list treesitter.option] -->
-    [treesitter.result treesitter.snapshot]]]]])
-(declare treesitter.node-count [treesitter.snapshot --> number])
-(declare treesitter.root [treesitter.snapshot --> number])
-(declare treesitter.parent [treesitter.snapshot --> [number --> number]])
-(declare treesitter.first-child [treesitter.snapshot --> [number --> number]])
-(declare treesitter.next-sibling [treesitter.snapshot --> [number --> number]])
-(declare treesitter.kind [treesitter.snapshot --> [number --> string]])
-(declare treesitter.field [treesitter.snapshot --> [number --> string]])
-(declare treesitter.named? [treesitter.snapshot --> [number --> boolean]])
-(declare treesitter.missing? [treesitter.snapshot --> [number --> boolean]])
-(declare treesitter.error? [treesitter.snapshot --> [number --> boolean]])
-(declare treesitter.has-error? [treesitter.snapshot --> [number --> boolean]])
-(declare treesitter.extra? [treesitter.snapshot --> [number --> boolean]])
-(declare treesitter.start-byte [treesitter.snapshot --> [number --> number]])
-(declare treesitter.end-byte [treesitter.snapshot --> [number --> number]])
-(declare treesitter.start-point [treesitter.snapshot --> [number --> [list number]]])
-(declare treesitter.end-point [treesitter.snapshot --> [number --> [list number]]])
-(declare treesitter.source [treesitter.snapshot --> buffer.view])
-(declare treesitter.text [treesitter.snapshot --> [number --> string]])
-(declare treesitter.children [treesitter.snapshot --> [number --> [list number]]])
-(declare treesitter.child-by-field [treesitter.snapshot --> [number --> [string --> number]]])
-(declare treesitter.fold [[A --> [number --> A]] --> [A --> [treesitter.snapshot --> A]]])
-(declare treesitter.capture-count [treesitter.snapshot --> number])
-(declare treesitter.match-count [treesitter.snapshot --> number])
-(declare treesitter.capture-match [treesitter.snapshot --> [number --> number]])
-(declare treesitter.capture-pattern [treesitter.snapshot --> [number --> number]])
-(declare treesitter.capture-name [treesitter.snapshot --> [number --> string]])
-(declare treesitter.capture-node [treesitter.snapshot --> [number --> number]])
-(declare treesitter.error-operation [treesitter.error --> symbol])
-(declare treesitter.error-domain [treesitter.error --> symbol])
-(declare treesitter.error-code [treesitter.error --> number])
-(declare treesitter.error-offset [treesitter.error --> number])
-(declare treesitter.error-resource [treesitter.error --> string])
-(declare treesitter.error-message [treesitter.error --> string])
+  [treesitter.language --> [buffer.view --> [string --> [[list option] -->
+    [result snapshot]]]]])
+(declare node-count [snapshot --> number])
+(declare root [snapshot --> number])
+(declare parent [snapshot --> [number --> number]])
+(declare first-child [snapshot --> [number --> number]])
+(declare next-sibling [snapshot --> [number --> number]])
+(declare kind [snapshot --> [number --> string]])
+(declare field [snapshot --> [number --> string]])
+(declare named? [snapshot --> [number --> boolean]])
+(declare missing? [snapshot --> [number --> boolean]])
+(declare error? [snapshot --> [number --> boolean]])
+(declare has-error? [snapshot --> [number --> boolean]])
+(declare extra? [snapshot --> [number --> boolean]])
+(declare start-byte [snapshot --> [number --> number]])
+(declare end-byte [snapshot --> [number --> number]])
+(declare start-point [snapshot --> [number --> [list number]]])
+(declare end-point [snapshot --> [number --> [list number]]])
+(declare source [snapshot --> buffer.view])
+(declare text [snapshot --> [number --> string]])
+(declare children [snapshot --> [number --> [list number]]])
+(declare child-by-field [snapshot --> [number --> [string --> number]]])
+(declare fold [[A --> [number --> A]] --> [A --> [snapshot --> A]]])
+(declare capture-count [snapshot --> number])
+(declare match-count [snapshot --> number])
+(declare capture-match [snapshot --> [number --> number]])
+(declare capture-pattern [snapshot --> [number --> number]])
+(declare capture-name [snapshot --> [number --> string]])
+(declare capture-node [snapshot --> [number --> number]])
+(declare error-operation [treesitter.error --> symbol])
+(declare error-domain [treesitter.error --> symbol])
+(declare error-code [treesitter.error --> number])
+(declare error-offset [treesitter.error --> number])
+(declare error-resource [treesitter.error --> string])
+(declare error-message [treesitter.error --> string])
+
+)

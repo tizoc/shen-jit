@@ -320,6 +320,43 @@ begins with the line that loads it, such as:
 shen-jit eval -l lib/ffi.shen -l lib/buffer.shen -l lib/io.shen -l lib/io-file.shen -l program.shen
 ```
 
+The libraries use namespaces. Their existing qualified names work directly, and a namespace client can
+use prefixes or import their exported names:
+
+```shen
+(shen.x.namespace example.bytes
+  (use buffer => b)
+  (use cursor => c)
+  (export first-byte)
+
+  (define first-byte Text -> (c.read (c.new (b.from-string Text)))))
+
+(example.bytes.first-byte "A")    \\ 65
+```
+
+Exports include the public operations and types, and the support operations shared by libraries, such as
+`buffer.check` and `io.record`. HTTP, I/O and subprocess libraries contribute to their respective namespaces
+across several files. `lib/native.shen` and `lib/ffi.shen` extend the runtime's `shen-jit` namespace, which stays open.
+
+Namespace qualification applies to symbols in data too. Preserve a DSL's keywords with `with-externals`
+around its form, while its definition names and references still resolve normally:
+
+```shen
+(shen.x.namespace example.numeric
+  (export sum-to)
+
+  (with-externals [define-native word for return-word]
+    (define-native sum-to (N)
+      (word Acc 0)
+      (for I 0 N (word Acc (+ Acc I)))
+      (return-word Acc))))
+```
+
+Load `lib/native.shen` before reading that example. Result tags and options keep their original symbols,
+such as `[ok Value]`, `io-error` and `chunk-size`. A namespace client must preserve such vocabulary with
+`externals` or import it when the library exports it. `shadow` makes a system name local to a namespace;
+the libraries use it where a local operation would otherwise resolve to a kernel or stlib function.
+
 Most of them call C through [the FFI](#calling-c), which a static Linux build cannot do. There, buffers and cursors,
 grammars, JSON, I/O over memory, framing and Datalog still work.
 
@@ -885,8 +922,11 @@ marks each difference with *Deviation*.
 
 ### Building and testing
 
-From a checkout, `make deps` fetches the Shen kernel and an earlier release of Shen/JIT into `.deps/`, checked by hash.
-That release runs only to generate the files a source tarball already carries. It has executables for the platforms in
+From a checkout, `make deps` fetches the pinned Shen kernel release and an earlier release of Shen/JIT into `.deps/`,
+checked by hash. The kernel archive includes precompiled KLambda, sources and tests. CI downloads the same release
+for each platform.
+
+The earlier Shen/JIT release runs only to generate the files a source tarball already carries. It has executables for the platforms in
 [Install](#install), and on Windows `make deps` also needs `unzip`. Elsewhere, use a source tarball, or set `BOOTSTRAP`
 to a Shen of your own.
 
@@ -936,7 +976,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | Target | What it does |
 | --- | --- |
 | `make test-core` | `test`, `test-jit`, `test-ops`, `test-kl`, `check-lowerer`, `check-generated`, `test-kernel`, `test-stlib`, `test-thorn`, `test-native`, `test-ffi` and `test-overrides` |
-| `make test-libs` | `test-buffer`, `test-json`, `test-io`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog` and `test-curl` |
+| `make test-libs` | `test-buffer`, `test-json`, `test-io`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl` and `test-namespaces` |
 | `make test` | The runtime's unit tests |
 | `make test-jit`, `make test-ops` | The JIT and the instructions, on small programs |
 | `make test-kl` | The `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
@@ -944,6 +984,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-stlib` | The executable with the standard library |
 | `make test-thorn` | THORN, from the kernel, with no time limit: its inference counts and what goes unproved, as on Shen/Scheme |
 | `make test-native` | Native code written by hand: what runs, and what must be refused |
+| `make test-namespaces` | Library exports, aliases, imports, types and scoped DSL vocabulary in the base and stlib executables, and in their saved images |
 | `make test-json` | JSON syntax/encoding, Unicode, exact numbers, builders, typing and images/GC |
 | `make test-buffer` | Buffer/cursor bounds, copying, foreign lifetime, typed clients, format examples, grammars, typed grammars and images/GC |
 | `make test-io` | Bounded chunk I/O, binary files and framing, socket endpoints/echo, native lifetimes, typed results and images/GC |

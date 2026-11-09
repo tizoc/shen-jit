@@ -2,169 +2,182 @@
 \\ io.socket consumes a connected socket's raw integer. Do not use or wrap that integer again.
 \\ Data calls stay nonblocking; only the existing poll FFI releases the VM lock.
 
-(define-foreign io.socket-c-error socket.lib "WSAGetLastError" () --> int32)
+(shen.x.namespace io
+  (use buffer)
+  (use deadline)
+  (use shen-jit)
+  (use socket)
+  (externals [cancelled deadline define-foreign eof int32 ok poll posix read-write shutdown
+    timeout winsock write written])
+  (export close-result endpoint let-ok shutdown-write socket socket-again? socket-cancel
+    socket-check socket-close socket-code socket-deadline socket-error socket-id socket-token
+    socket-unlimited)
 
-(define io.socket-code
-  -> (if (socket.windows?) (io.socket-c-error) (shen-jit.errno)))
+(define-foreign socket-c-error socket.lib "WSAGetLastError" () --> int32)
 
-(define io.socket-error
+(define socket-code
+  -> (if (socket.windows?) (socket-c-error) (shen-jit.errno)))
+
+(define socket-error
   Op Name Code ->
-    (io.native-error Op (if (socket.windows?) winsock posix) Code Name
+    (native-error Op (if (socket.windows?) winsock posix) Code Name
       (if (socket.windows?) (make-string "socket error ~A" Code) (socket.c-strerror Code))))
 
-(define io.socket-again?
+(define socket-again?
   Code -> (or (= Code (socket.by-os 11 35 10035)) (= Code (socket.by-os 4 4 10004))))
 
 \\ Native identities reload dead in images. The token is never dereferenced or passed to C.
-(define io.socket-token
+(define socket-token
   S ->
     (let Address (+ S 1)
          B (shen-jit.bytes 8)
          _ (shen-jit.u32! B 0 (shen-jit.bit-and Address 4294967295))
          _ (shen-jit.u32! B 4 (shen-jit.shift-right Address 32))
-      (shen-jit.bytes->pointer B 0 io.socket)))
+      (shen-jit.bytes->pointer B 0 socket)))
 
-(define io.socket-id
+(define socket-id
   Token ->
     (let Address (shen-jit.pointer-address Token)
       (if (> Address 0) (- Address 1) (error "io: socket endpoint is stale"))))
 
 \\ A policy cell keeps one absolute deadline across every short transfer and poll retry.
-(define io.socket-budget
+(define socket-budget
   Policy Op Name ->
     (let D (<-address Policy 0)
       (cond ((<-address Policy 1)
-              [error (io.native-error Op cancelled 0 Name "socket operation cancelled")])
+              [error (native-error Op cancelled 0 Name "socket operation cancelled")])
             ((or (empty? D) (not (deadline.expired? D))) [ok])
-            (true [error (io.native-error Op timeout 0 Name "deadline expired")]))))
+            (true [error (native-error Op timeout 0 Name "deadline expired")]))))
 
-(define io.socket-slice
+(define socket-slice
   Policy ->
     (let D (<-address Policy 0)
       (if (empty? D) 100 (deadline.slice D 100))))
 
-(define io.socket-wait
+(define socket-wait
   Token Name Policy Event Op ->
-    (io.let-ok _ (io.socket-budget Policy Op Name)
-      (let Slice (io.socket-slice Policy)
+    (let-ok _ (socket-budget Policy Op Name)
+      (let Slice (socket-slice Policy)
         (if (= Slice 0)
-            [error (io.native-error Op timeout 0 Name "deadline expired")]
-            (let Ready (socket.c-poll (socket.pollfd (io.socket-id Token) Event) 1 Slice)
-                 Code (if (< Ready 0) (io.socket-code) 0)
-              (cond ((> Ready 0) (io.socket-budget Policy Op Name))
-                    ((or (= Ready 0) (io.socket-again? Code))
-                      (io.socket-wait Token Name Policy Event Op))
-                    (true [error (io.socket-error poll Name Code)])))))))
+            [error (native-error Op timeout 0 Name "deadline expired")]
+            (let Ready (socket.c-poll (socket.pollfd (socket-id Token) Event) 1 Slice)
+                 Code (if (< Ready 0) (socket-code) 0)
+              (cond ((> Ready 0) (socket-budget Policy Op Name))
+                    ((or (= Ready 0) (socket-again? Code))
+                      (socket-wait Token Name Policy Event Op))
+                    (true [error (socket-error poll Name Code)])))))))
 
-(define io.socket-read
+(define socket-read
   Token Name Policy Chunk ->
-    (io.let-ok _ (io.socket-budget Policy read Name)
-      (let N (socket.c-recv (io.socket-id Token) Chunk (shen-jit.bytes-length Chunk) 0)
-           Code (if (< N 0) (io.socket-code) 0)
+    (let-ok _ (socket-budget Policy read Name)
+      (let N (socket.c-recv (socket-id Token) Chunk (shen-jit.bytes-length Chunk) 0)
+           Code (if (< N 0) (socket-code) 0)
         (cond ((> N 0) [read N])
               ((= N 0) [eof])
-              ((io.socket-again? Code)
-                (io.let-ok _ (io.socket-wait Token Name Policy (socket.readable-event) read)
-                  (io.socket-read Token Name Policy Chunk)))
-              (true [error (io.socket-error read Name Code)])))))
+              ((socket-again? Code)
+                (let-ok _ (socket-wait Token Name Policy (socket.readable-event) read)
+                  (socket-read Token Name Policy Chunk)))
+              (true [error (socket-error read Name Code)])))))
 
-(define io.socket-write
+(define socket-write
   Token Name Policy Chunk ->
-    (io.let-ok _ (io.socket-budget Policy write Name)
-      (let N (socket.c-send (io.socket-id Token) Chunk (shen-jit.bytes-length Chunk) (socket.send-flags))
-           Code (if (< N 0) (io.socket-code) 0)
+    (let-ok _ (socket-budget Policy write Name)
+      (let N (socket.c-send (socket-id Token) Chunk (shen-jit.bytes-length Chunk) (socket.send-flags))
+           Code (if (< N 0) (socket-code) 0)
         (cond ((>= N 0) [written N])
-              ((io.socket-again? Code)
-                (io.let-ok _ (io.socket-wait Token Name Policy (socket.writable-event) write)
-                  (io.socket-write Token Name Policy Chunk)))
-              (true [error (io.socket-error write Name Code)])))))
+              ((socket-again? Code)
+                (let-ok _ (socket-wait Token Name Policy (socket.writable-event) write)
+                  (socket-write Token Name Policy Chunk)))
+              (true [error (socket-error write Name Code)])))))
 
-(define io.socket-close
+(define socket-close
   Token Name ->
-    (let S (io.socket-id Token)
+    (let S (socket-id Token)
          _ (shen-jit.pointer-kill Token)
          Result (socket.c-close S)
-         Code (if (< Result 0) (io.socket-code) 0)
-      (if (= Result 0) [ok] [error (io.socket-error close Name Code)])))
+         Code (if (< Result 0) (socket-code) 0)
+      (if (= Result 0) [ok] [error (socket-error close Name Code)])))
 
-(define io.socket-make
+(define socket-make
   S Name ->
-    (let Token (io.socket-token S)
-         Policy (io.record [[] false])
-         E (io.endpoint Name read-write 65536
-                        (/. B (io.socket-read Token Name Policy B))
-                        (/. B (io.socket-write Token Name Policy B))
-                        (freeze (io.socket-close Token Name)))
+    (let Token (socket-token S)
+         Policy (record [[] false])
+         E (endpoint Name read-write 65536
+                        (/. B (socket-read Token Name Policy B))
+                        (/. B (socket-write Token Name Policy B))
+                        (freeze (socket-close Token Name)))
       (do (address-> E 12 Token) (address-> E 13 Policy) E)))
 
-(define io.socket
+(define socket
   S Name ->
     (let N (buffer.index S)
          _ (if (and (string? Name)
                     (if (socket.windows?) (< N 2305843009213693951) (<= N 2147483647)))
                true
                (error "io: invalid socket or name"))
-      (trap-error (io.socket-make N Name)
+      (trap-error (socket-make N Name)
         (/. X (do (socket.c-close N) (simple-error (error-to-string X)))))))
 
-(define io.socket-check
+(define socket-check
   E ->
-    (let _ (io.endpoint-check E)
+    (let _ (endpoint-check E)
          Token (<-address E 12)
-         _ (if (and (shen-jit.pointer? Token) (= (shen-jit.pointer-kind Token) io.socket))
+         _ (if (and (shen-jit.pointer? Token) (= (shen-jit.pointer-kind Token) socket))
                true
                (error "io: not a socket endpoint"))
-         _ (io.check E read (<-address E 9))
+         _ (check E read (<-address E 9))
       Token))
 
-(define io.socket-deadline
+(define socket-deadline
   E D ->
-    (let _ (io.socket-check E)
+    (let _ (socket-check E)
          _ (deadline.check D)
       (do (address-> (<-address E 13) 0 D) E)))
 
-(define io.socket-unlimited
+(define socket-unlimited
   E ->
-    (let _ (io.socket-check E)
+    (let _ (socket-check E)
       (do (address-> (<-address E 13) 0 []) E)))
 
 \\ Cancellation is the only cross-task endpoint operation. It publishes one monotonic flag,
 \\ without closing or reusing a descriptor while its owner may still be inside poll.
-(define io.socket-cancel
+(define socket-cancel
   E ->
-    (let _ (io.endpoint-check E)
+    (let _ (endpoint-check E)
          Token (<-address E 12)
-         _ (if (and (shen-jit.pointer? Token) (= (shen-jit.pointer-kind Token) io.socket))
+         _ (if (and (shen-jit.pointer? Token) (= (shen-jit.pointer-kind Token) socket))
                true (error "io: not a socket endpoint"))
       (do (address-> (<-address E 13) 1 true) true)))
 
 \\ Flush before sending FIN. Read EOF, write shutdown and full close remain separate states.
-(define io.shutdown-write
+(define shutdown-write
   E ->
-    (let Token (io.socket-check E)
+    (let Token (socket-check E)
          W (<-address E 10)
       (if (= (<-address E 2) read)
           [ok]
-          (io.socket-shutdown-ready E Token (if (empty? W) [ok 0] (io.flush W))))))
+          (socket-shutdown-ready E Token (if (empty? W) [ok 0] (flush W))))))
 
-(define io.socket-shutdown-ready
+(define socket-shutdown-ready
   _ _ [error Error _] -> [error Error]
   E Token [ok N] ->
-    (io.socket-shutdown-budget E Token N (io.socket-budget (<-address E 13) shutdown (<-address E 1))))
+    (socket-shutdown-budget E Token N (socket-budget (<-address E 13) shutdown (<-address E 1))))
 
-(define io.socket-shutdown-budget
-  _ _ N [error Error] -> [error (io.progress Error N)]
+(define socket-shutdown-budget
+  _ _ N [error Error] -> [error (progress Error N)]
   E Token N [ok] ->
-    (let Result (socket.c-shutdown (io.socket-id Token) 1)
-         Code (if (< Result 0) (io.socket-code) 0)
+    (let Result (socket.c-shutdown (socket-id Token) 1)
+         Code (if (< Result 0) (socket-code) 0)
       (if (= Result 0)
           (do (address-> E 2 read)
               (address-> E 10 [])
               [ok])
-          [error (io.progress (io.socket-error shutdown (<-address E 1) Code) N)])))
+          [error (progress (socket-error shutdown (<-address E 1) Code) N)])))
 
-(declare io.socket [number --> [string --> io.endpoint]])
-(declare io.socket-deadline [io.endpoint --> [deadline --> io.endpoint]])
-(declare io.socket-unlimited [io.endpoint --> io.endpoint])
-(declare io.socket-cancel [io.endpoint --> boolean])
-(declare io.shutdown-write [io.endpoint --> io.close-result])
+(declare socket [number --> [string --> endpoint]])
+(declare socket-deadline [endpoint --> [deadline --> endpoint]])
+(declare socket-unlimited [endpoint --> endpoint])
+(declare socket-cancel [endpoint --> boolean])
+(declare shutdown-write [endpoint --> close-result])
+
+)

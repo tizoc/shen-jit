@@ -164,6 +164,7 @@ $(BUILD)/test_runtime: tests/test_runtime.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(RUNTIM
 # make, which check-generated compares.
 BOOTSTRAP ?= .deps/shen-jit/shen-jit$(EXE)
 KERNEL_KL ?= .deps/kernel/klambda
+KERNEL_NAMESPACES := $(dir $(patsubst %/,%,$(KERNEL_KL)))extensions/namespaces.shen
 GENERATED := stage0/*.sbc stage0/*.forms port/lower.kl bench/programs.sbc kl/ops.sbc stlib/stlib.kl
 
 ifneq ($(wildcard generated/stage0),)
@@ -189,7 +190,8 @@ $(BUILD)/tools/%.shen: src/lowerer/%.shen
 	  -e 's/(shen-jit\.inline-body /(stage0.inline-body /g' $< > $@
 $(BUILD)/tools/%.shen: lib/%.shen
 	mkdir -p $(BUILD)/tools
-	sed -e 's/shen-jit\.lower\./stage0.lower./g' $< > $@
+	sed -e 's/shen-jit\.lower\./stage0.lower./g' \
+	  -e 's/(use shen-jit.lower)/(use stage0.lower)/' $< > $@
 
 # The benchmark programs and the opcode tests, lowered by the lowerer.
 $(BUILD)/bench/programs.sbc: tests/bench/programs.kl $(STAGE0_TOOLS) | host
@@ -206,7 +208,7 @@ $(BUILD)/port/lower.kl: src/lowerer/lower.shen src/lowerer/tokl.shen | host
 	mkdir -p $(BUILD)/port
 	$(BOOTSTRAP) script src/lowerer/tokl.shen $@ > /dev/null
 
-$(BUILD)/stage0/.done: $(BUILD)/port/lower.kl src/port/shen-jit.kl $(STAGE0_TOOLS) | host
+$(BUILD)/stage0/.done: $(BUILD)/port/lower.kl src/port/shen-jit.kl $(STAGE0_TOOLS) $(wildcard $(KERNEL_KL)/*.kl) | host
 	mkdir -p $(BUILD)/stage0
 	$(BOOTSTRAP) script src/lowerer/stage0.shen $(KERNEL_KL)/ $(BUILD)/stage0/ > /dev/null
 	touch $@
@@ -273,7 +275,11 @@ test-ops: $(BUILD)/test_ops $(BUILD)/kl/ops.sbc
 
 stage0: $(BUILD)/stage0/.done
 
-check-lowerer: $(BUILD)/stage0/.done $(BUILD)/tools/native.shen
+$(BUILD)/tools/namespaces.shen: $(KERNEL_NAMESPACES)
+	mkdir -p $(BUILD)/tools
+	sed 's/shen\.x\.namespaces/stage0.namespaces/g' $< > $@
+
+check-lowerer: $(BUILD)/stage0/.done $(BUILD)/tools/native.shen $(BUILD)/tools/namespaces.shen
 	$(BOOTSTRAP) script src/lowerer/check.shen $(KERNEL_KL)/ $(BUILD)/stage0/ | tail -1 | awk '{ print } END { exit !/^0 failures/ }'
 
 $(BUILD)/test_kl: tests/test_kl.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(RUNTIME_HDR)
@@ -319,7 +325,11 @@ test-core: test test-jit test-ops test-kl check-lowerer check-generated test-ker
   test-native test-ffi test-overrides
 
 # Every library's suite, without the collections test-lib-stress adds (about 30 s).
-test-libs: test-buffer test-json test-io test-fs test-process test-tree-sitter test-http test-datalog test-curl
+test-libs: test-buffer test-json test-io test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces
+
+.PHONY: test-namespaces
+test-namespaces: $(BUILD)/shen-jit-stlib
+	sh tests/namespaces.sh $(SHEN_JIT) $(abspath $(BUILD)/shen-jit-stlib)
 
 # The libraries' saved images reloaded with a collection at every allocation, which their own suites
 # leave out for speed.

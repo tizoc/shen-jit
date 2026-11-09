@@ -27,51 +27,59 @@
 \\ handle.*limit* bytes, making one collects. That limit is 64 MB, or twice what was left after the
 \\ last such collection if that is more.
 
-(set handle.*held* 0)
-(set handle.*limit* 67108864)
+(shen.x.namespace handle
+  (use shen-jit)
+  (externals [closed])
+  (shadow close release)
+  (export close sweep wrap)
 
-(define handle.wrap
+(set *held* 0)
+(set *limit* 67108864)
+
+(define wrap
   M Release -> (let Record (absvector 2)
                     _ (address-> (address-> Record 0 M) 1 Release)
                     Handle (shen-jit.pointer-guard M Record)
-                 (do (set handle.*held* (+ (value handle.*held*) (shen-jit.bytes-length M)))
-                     (handle.make-room)
+                 (do (set *held* (+ (value *held*) (shen-jit.bytes-length M)))
+                     (make-room)
                      Handle)))
 
-(define handle.make-room
-  -> (if (> (value handle.*held*) (value handle.*limit*))
+(define make-room
+  -> (if (> (value *held*) (value *limit*))
          (do (shen-jit.collect)
-             (handle.sweep)
-             (set handle.*limit* (handle.larger 67108864 (* 2 (value handle.*held*)))))
-         (handle.sweep)))
+             (sweep)
+             (set *limit* (larger 67108864 (* 2 (value *held*)))))
+         (sweep)))
 
-(define handle.larger
+(define larger
   X Y -> (if (> X Y) X Y))
 
 \\ The record stands for the handle: it has no reference back to it, so that the handle can die.
-(define handle.release
+(define release
   Record -> (let Release (<-address Record 1)
               (if (= Release closed)
                   false
                   (let M (<-address Record 0)
                     (do (address-> Record 1 closed)
-                        (set handle.*held* (- (value handle.*held*) (shen-jit.bytes-length M)))
+                        (set *held* (- (value *held*) (shen-jit.bytes-length M)))
                         (Release M)
                         true)))))
 
-(define handle.close
+(define close
   H -> (let Record (shen-jit.pointer-owner H)
          (if (absvector? Record)
              (do (shen-jit.pointer-kill H)
-                 (handle.release Record))
+                 (release Record))
              (error "handle.close: ~S is not a handle" H))))
 
-(define handle.sweep
-  -> (handle.release-all (shen-jit.pointers-dead) 0))
+(define sweep
+  -> (release-all (shen-jit.pointers-dead) 0))
 
-(define handle.release-all
+(define release-all
   [] N -> N
-  [Record | Records] N -> (handle.release-all Records
-                                              (if (trap-error (handle.release Record) (/. E true))
+  [Record | Records] N -> (release-all Records
+                                              (if (trap-error (release Record) (/. E true))
                                                   (+ N 1)
                                                   N)))
+
+)
