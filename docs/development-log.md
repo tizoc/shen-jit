@@ -777,6 +777,15 @@ that. Its readings decided nothing below.
   0.043 for SWI-Prolog -O, and a real index needs a hash or jump table.
 - **Standing** (2026-11-04, Apple M3 Max, CPU time per iteration, seven programs, geometric means). 0.85 of SWI-Prolog
   10.0.2 -O and 0.50 of Shen/Scheme 0.52 when first compared, 0.65 and 0.38 after the changes above.
+- **SWI-Prolog's build, and x86-64** (2026-11-09, Apple M3 Max and Ryzen VM, the same build on both, best of 5). The standing above
+  was against Homebrew's SWI-Prolog, built with clang. SWI 10.0.2 built with gcc runs 1.6-1.8 times as fast on either
+  machine (geometric means 0.59 on the M3, 0.62 on the Ryzen), and profile-guided optimisation adds little. Against
+  gcc with profile-guided optimisation, Shen/JIT takes 1.11 times SWI's time on the M3 and 1.22 on the Ryzen, against
+  the official Docker image there. Shen/JIT does the same work on both, by callgrind: `nreverse` 307,400 instructions
+  an iteration on x86-64 and 319,200 on arm64, with 109,000 data accesses on each, and `hamilton` alike, so x86-64's
+  fewer registers cost Prolog code no extra memory traffic. The M3 runs Shen/JIT 1.39 times as fast as the Ryzen and
+  SWI 1.27: the wider core, and the kernel's Prolog vector, 10,000 words filled at every query, at 0.37 ns a word on
+  the Ryzen and 0.16 on the M3, 19% and 12% of `nreverse`. Nothing changed.
 - **`get-time` without interning** (2026-11-05, Apple M5, load about 25, against the build before). THORN asks for the
   time at every predicate call, and each call interned `run` and `unix`, about 2% of samples on RCC problems. Comparing
   the name instead: 10^7 calls 0.28 to 0.155 s, THORN's thm13 28.05 to 26.42 G instructions and rcc10 20.48 to 19.40 G.
