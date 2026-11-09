@@ -310,15 +310,189 @@ With `--seal`, `SHEN_JIT_SEAL=1` or `(shen-jit.seal +)`, new definitions are sea
 direct, and they cannot be redefined. `(shen-jit.seal -)` turns that off. This gains little, as open calls are
 inlined too, and patched when a function is redefined.
 
-### Datalog
+## Libraries
 
-The optional `lib/datalog.shen` evaluates relations, facts and recursive rules bottom up, to a fixed point, over symbols,
-strings, integers and records, with each rule compiled through the JIT and its join order chosen from the sizes of the
-relations as it runs, and answers a query by deriving only what bears on it.
-[Datalog](https://github.com/tizoc/shen-jit/blob/main/docs/datalog.md) covers loading, the language, the API and an example.
+The libraries in `lib/` are not in the image. A program loads those it uses by their paths in the archive or source
+tree, each after the ones it builds on, and a [saved program](#saving-a-program) keeps them. Each library's page
+begins with the line that loads it, such as:
 
-[Source facts in Datalog](https://github.com/tizoc/shen-jit/blob/main/example-apps/source-deps/README.md)
-connects Tree-sitter's C export to file-scoped call matching, diagnostics, reachability and reverse impact queries.
+```sh
+shen-jit eval -l lib/ffi.shen -l lib/buffer.shen -l lib/io.shen -l lib/io-file.shen -l program.shen
+```
+
+Most of them call C through [the FFI](#calling-c), which a static Linux build cannot do. There, buffers and cursors,
+grammars, JSON, I/O over memory, framing and Datalog still work.
+
+Four have a small C adapter of their own as well, which a C compiler builds once: filesystem operations, subprocesses,
+Tree-sitter, which also needs Tree-sitter 0.25 or later and a grammar compiled for it, and curl, which needs libcurl.
+`make fs`, `make process`, `make tree-sitter` and `make curl` build them in a checkout, and in a binary archive
+`sh lib/build-NAME.sh lib/shen-NAME.so` does, with `.dll` in place of `.so` on Windows. Loading the library never
+compiles its adapter: it looks for it in `build/`, `lib/` and the current directory, or where its `*adapter-files*`
+says, if that is set before loading.
+
+### Bytes and parsing
+
+[Buffers and cursors](https://github.com/tizoc/shen-jit/blob/main/docs/buffers.md): `lib/buffer.shen` gives checked
+views over a range of a byte buffer or of [memory outside the heap](#memory-outside-the-heap), which copy and compare,
+and `lib/cursor.shen` positions in them that move as they read. The libraries below read and write through such views.
+
+[Grammars over bytes](https://github.com/tizoc/shen-jit/blob/main/docs/grammar.md): `lib/grammar.shen` adds
+`defgrammar`, Shen-YACC's notation for parsers over views, compiled to the loops a scanner written by hand would use.
+A grammar can have types, as `defcc` does, and `grammar.read` parses from an I/O reader as the bytes arrive.
+
+[JSON](https://github.com/tizoc/shen-jit/blob/main/docs/json.md): `lib/json.shen` decodes JSON from views and encodes
+it into them, with strict UTF-8, numbers kept as written until converted exactly, and limits on what it reads and
+writes. It needs `lib/grammar.shen` loaded first.
+
+[Tree-sitter bindings](https://github.com/tizoc/shen-jit/blob/main/docs/tree-sitter.md): `lib/tree-sitter.shen` parses
+source code in a language that has a Tree-sitter grammar into a syntax tree, and runs structural queries over it,
+within limits on nodes, captures and time.
+
+### Input and output
+
+[Chunk I/O](https://github.com/tizoc/shen-jit/blob/main/docs/io.md): `lib/io.shen` gives readers and writers with
+buffers of a size they are given, over memory, and `lib/io-file.shen` over files, apart from Shen's streams. Each
+operation gives its result or its error as a value, a short transfer keeps what it moved, and a writer flushes as it
+closes.
+
+[Binary framing](https://github.com/tizoc/shen-jit/blob/main/docs/framing.md): `lib/frame.shen` reads binary messages
+of a bounded size through those readers, across chunks.
+
+[Operation deadlines](https://github.com/tizoc/shen-jit/blob/main/docs/deadlines.md): `lib/deadline.shen`, with
+`lib/clock.shen`, gives a whole operation a time budget on the monotonic clock, which its retries share.
+
+[Filesystem operations](https://github.com/tizoc/shen-jit/blob/main/docs/fs.md): `lib/fs.shen` adds paths, metadata,
+sorted directory listings and traversal within limits, exclusive temporary files and directories, renaming that
+never overwrites, replacing a file whole, and copying through the I/O library, which `tools/fs-copy.shen` does.
+
+[Subprocesses and pipelines](https://github.com/tizoc/shen-jit/blob/main/docs/processes.md): `lib/process.shen` and
+`lib/process-io.shen` start programs with explicit arguments, environment and working directory, talk to them over
+pipes through the I/O library, within limits on waits and output, join them into pipelines, and clean up after them,
+with their process groups or jobs. `tools/process-filter.shen` writes a command's output to a file only once the
+command has exited with 0.
+
+#### Sockets
+
+`lib/socket.shen` is TCP, over IPv4 and IPv6, written over [the FFI](#calling-c) in Shen alone.
+
+```shen
+(let S (socket.connect "example.com" 80)
+  (do (socket.send S "GET / HTTP/1.0c#13;c#10;c#13;c#10;")
+      (output "~A~%" (socket.recv-string S 4096))
+      (socket.close S)))
+```
+
+```sh
+shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l program.shen
+```
+
+A server, in a thread, with a client beside it:
+
+```shen
+(set l (socket.listen "127.0.0.1" 0))
+
+(thread (freeze (let S (socket.accept (value l))
+                  (do (socket.send S (socket.recv S 100))
+                      (socket.close S)))))
+
+(let C (socket.connect "127.0.0.1" (socket.port (value l)))
+  (do (socket.send C "hello")
+      (output "~A~%" (socket.recv-string C 100))    \\ hello
+      (socket.close C)))
+```
+
+| Function | What it does |
+| --- | --- |
+| `(socket.connect Host Port)` | Tries each address the name has |
+| `(socket.listen Host Port)`, `(socket.port S)` | Port 0 means any free one, and `socket.port` says which |
+| `(socket.accept Listener)` | Waits for a client, and gives its socket |
+| `(socket.send S Data)` | Sends all of a string or byte buffer |
+| `(socket.recv S N)` | Waits for data, and gives a buffer of at most N bytes. An empty one means the other end has finished |
+| `(socket.recv-into S B)`, `(socket.recv-string S N)` | Fills what it can of a buffer and says how much, and the same as `socket.recv` as a string |
+| `(socket.readable? S Ms)` | Whether there is something to read, waiting that long at most |
+| `(socket.shutdown S)`, `(socket.no-delay S)`, `(socket.close S)` | Tells the other end nothing more will be sent, sends small writes at once, and closes |
+
+A socket is an integer. Waiting lets other threads run, and Ctrl-C at the REPL ends it. A send to a closed connection
+raises instead of ending the process. The comments at the top of the file list every function.
+
+[Socket I/O endpoints](https://github.com/tizoc/shen-jit/blob/main/docs/io-sockets.md), `lib/io-socket.shen`, put a
+connection behind the I/O library's readers and writers, with deadlines.
+
+### HTTP
+
+`lib/http-*.shen` are HTTP/1.1 over the I/O library and sockets.
+[HTTP head framing](https://github.com/tizoc/shen-jit/blob/main/docs/http-head.md) reads a head within a size limit,
+keeping the bytes of the body that came with it.
+[HTTP requests and responses](https://github.com/tizoc/shen-jit/blob/main/docs/http.md) parses requests, reads bodies
+by Content-Length or chunked, within limits, with trailers kept apart, and encodes responses.
+[Streaming HTTP responses](https://github.com/tizoc/shen-jit/blob/main/docs/http-streaming.md) writes a response as it
+is made, with a length or chunked.
+[Bounded HTTP servers](https://github.com/tizoc/shen-jit/blob/main/docs/http-listener.md) accept connections up to a
+limit, keep them for later requests within limits, and shut down when asked. Ambiguous framing is refused.
+
+[HTTP clients with libcurl](https://github.com/tizoc/shen-jit/blob/main/docs/curl.md): `lib/curl.shen` makes HTTP and
+HTTPS requests through libcurl, with reusable clients, binary bodies, headers and trailers, timeouts, TLS
+verification and a limit on redirects, and can stream a response into an I/O writer. `tools/curl-fetch.shen`
+downloads to a file with it.
+
+### Data
+
+[Datalog](https://github.com/tizoc/shen-jit/blob/main/docs/datalog.md): `lib/datalog.shen` evaluates relations, facts
+and recursive rules bottom up, to a fixed point, over symbols, strings, integers and records, with each rule compiled
+through the JIT and its join order chosen from the sizes of the relations as it runs, and answers a query by deriving
+only what bears on it.
+
+#### SQLite
+
+`lib/sqlite.shen` is written over [the FFI](#calling-c), in Shen alone. It needs SQLite's library, which macOS and
+Windows 10 have, and most Linux systems do.
+
+```shen
+(let Db (sqlite.open "people.db")
+  (do (sqlite.exec Db "CREATE TABLE IF NOT EXISTS people (name TEXT, age INTEGER)")
+      (sqlite.run Db "INSERT INTO people VALUES (?, ?)" ["Ann" 30])
+      (output "~S~%" (sqlite.query Db "SELECT name, age FROM people WHERE age > ?" [20]))
+      (sqlite.close Db)))    \\ [["Ann" 30]]
+```
+
+```sh
+shen-jit eval -l lib/ffi.shen -l lib/sqlite.shen -l people.shen
+```
+
+| Function | What it does |
+| --- | --- |
+| `(sqlite.open Path)`, `(sqlite.close Db)` | `":memory:"` is a database in memory. Closing raises if a statement is still open |
+| `(sqlite.exec Db Sql)` | Runs statements with no parameters or results |
+| `(sqlite.run Db Sql Params)` | Runs one, and gives the rows it changed |
+| `(sqlite.query Db Sql Params)` | Gives its rows, each a list |
+| `(sqlite.each Db Sql Params F)` | Calls F on each row, keeping none |
+| `(sqlite.transaction Db (freeze ...))` | Commits, or rolls back on an error |
+| `(sqlite.last-insert-id Db)`, `(sqlite.version)` | The last row inserted, and the library's version |
+
+To use a statement many times: `sqlite.prepare`, `sqlite.bind`, `sqlite.step`, which gives `row` or `done`,
+`sqlite.row`, `sqlite.reset` and `sqlite.finalize`. The comments at the top of the file list every function.
+
+Values go in and come out as Shen values: a number is an INTEGER or a REAL, a string is TEXT, a byte buffer is a
+BLOB, and `[]` is NULL. `true` and `false` go in as 1 and 0. Errors raise, with SQLite's message. A connection belongs
+to one thread: other threads run while a query does, and some builds of SQLite, Apple's among them, do not allow two
+threads on one.
+
+### Example applications
+
+Each is in `example-apps/`, with a README and a test of its own, and in the release archives.
+
+- [`sqlite-http`](https://github.com/tizoc/shen-jit/blob/main/example-apps/sqlite-http/README.md): a counter served
+  over HTTP from SQLite, which takes JSON bodies and streams NDJSON exports.
+- [`depends`](https://github.com/tizoc/shen-jit/blob/main/example-apps/depends/README.md): a dependency analyser over
+  Shen and KL source files, built over Datalog as one executable: what calls what, cycles between files, dead code
+  from roots, call depths, and why one function reaches another.
+- [`source-facts`](https://github.com/tizoc/shen-jit/blob/main/example-apps/source-facts/README.md): walks a directory
+  of C with Tree-sitter and writes NDJSON facts about its files, function definitions and calls. Given a compilation
+  database, it preprocesses each file as the build does.
+- [`source-deps`](https://github.com/tizoc/shen-jit/blob/main/example-apps/source-deps/README.md): reads those facts
+  into Datalog, matches calls with definitions, and answers which functions one reaches and which depend on it.
+
+Smaller examples are in `tools/`, each on the page of the libraries it uses.
 
 ## Close to the machine
 
@@ -356,63 +530,6 @@ On a fixnum's 62 bits: `shen-jit.bit-and`, `bit-or`, `bit-xor`, `bit-not`, `shif
 
 [docs/bytecode.md](https://github.com/tizoc/shen-jit/blob/main/docs/bytecode.md), "Byte buffers and bit operations",
 has the details.
-
-### Buffer views and cursors
-
-The optional buffer/cursor libraries provide checked ranges over managed bytes or sized pointers, copying,
-logical equality and mutable positions. [Buffers and cursors](https://github.com/tizoc/shen-jit/blob/main/docs/buffers.md)
-covers loading, the API, ownership, typed clients and the JSON/binary examples.
-
-### Grammars over bytes
-
-The optional `lib/grammar.shen` adds `defgrammar`, Shen-YACC's notation for parsers over byte views, compiled to
-the loops a scanner written by hand would use. [Grammars over bytes](https://github.com/tizoc/shen-jit/blob/main/docs/grammar.md)
-covers the notation, values, errors, types and how to run one.
-
-### Chunk I/O
-
-Optional `lib/io.shen` adds bounded readers and writers over byte views, with memory endpoints;
-`lib/io-file.shen` adds native file descriptors through the FFI. They use their own endpoints and buffers,
-independently of Shen's default I/O. See [Chunk I/O](https://github.com/tizoc/shen-jit/blob/main/docs/io.md)
-for loading, file helpers, partial transfers, cleanup and typed results. [Binary framing](https://github.com/tizoc/shen-jit/blob/main/docs/framing.md)
-adds bounded messages over those readers; [Socket I/O endpoints](https://github.com/tizoc/shen-jit/blob/main/docs/io-sockets.md)
-connect the same I/O API to TCP connections. [Operation deadlines](https://github.com/tizoc/shen-jit/blob/main/docs/deadlines.md)
-provide total monotonic budgets; [HTTP head framing](https://github.com/tizoc/shen-jit/blob/main/docs/http-head.md)
-captures bounded header blocks while preserving body bytes. [HTTP requests and responses](https://github.com/tizoc/shen-jit/blob/main/docs/http.md)
-adds complete request heads, bounded bodies and response encoding.
-[Streaming HTTP responses](https://github.com/tizoc/shen-jit/blob/main/docs/http-streaming.md) support bounded producers and chunked output. [Bounded HTTP servers](https://github.com/tizoc/shen-jit/blob/main/docs/http-listener.md)
-covers connection limits and controlled shutdown, with a SQLite counter application in `example-apps/sqlite-http/`.
-
-[JSON](https://github.com/tizoc/shen-jit/blob/main/docs/json.md) provides bounded UTF-8 decoding and encoding,
-lossless number tokens and typed values. HTTP request bodies can use Content-Length or bounded chunked framing.
-
-### Filesystem operations
-
-Optional `lib/fs.shen` adds path helpers, metadata, bounded directory traversal, exclusive temporary
-files, copying and replacement over our I/O endpoints. `make fs` builds its platform adapter.
-[Filesystem operations](https://github.com/tizoc/shen-jit/blob/main/docs/fs.md) covers the API, ownership
-and `tools/fs-copy.shen`, a bounded copy application.
-
-### Subprocesses and pipelines
-
-Optional `lib/process.shen` and `lib/process-io.shen` launch external programs with explicit arguments,
-environment and working directory, communicate over bounded I/O pipes, and manage exit/termination.
-`make process` builds the native adapter. [Subprocesses and pipelines](https://github.com/tizoc/shen-jit/blob/main/docs/processes.md)
-covers captured/streamed output, cancellation, pipelines and the safe file-filter example.
-
-### Tree-sitter bindings
-
-Optional `lib/tree-sitter.shen` loads source-language grammars, parses byte views into owned tree
-snapshots and runs bounded structural queries. `make tree-sitter` builds its adapter against
-Tree-sitter 0.25 or later. [Tree-sitter bindings](https://github.com/tizoc/shen-jit/blob/main/docs/tree-sitter.md)
-covers traversal, captures, limits and the C source-fact application in `example-apps/source-facts/`.
-
-### HTTP clients with libcurl
-
-Optional `lib/curl.shen` provides bounded HTTP(S) requests, reusable clients, binary bodies, TLS verification
-and streaming downloads into our I/O sinks with backpressure. It needs the small C adapter built by `make curl`, plus libcurl's shared library.
-[HTTP clients with libcurl](https://github.com/tizoc/shen-jit/blob/main/docs/curl.md) covers installation,
-the API and `tools/curl-fetch.shen`, a downloader using our file I/O library.
 
 ### Calling C
 
@@ -465,6 +582,7 @@ Functions are found at their first call, so a saved program finds them again. On
 Windows in `GetLastError`, where `(shen-jit.c-errno)` is the C library's.
 
 [Calling C in full](https://github.com/tizoc/shen-jit/blob/main/docs/ffi.md) has the rest, and how it works.
+[Sockets](#sockets) and [SQLite](#sqlite) are larger examples, written over it in Shen alone.
 
 #### Pointers
 
@@ -581,85 +699,6 @@ shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l lib/mmap.shen -l lib/handle.
 - **A copy from `shen-jit.pointer-sized` keeps its handle alive,** until the handle is closed, after which it must not be
   used.
 - **The function that releases it must not refer to the handle,** or the handle will never die.
-
-### SQLite
-
-`lib/sqlite.shen` is written over the FFI, in Shen alone. It needs SQLite's library, which macOS and Windows 10 have,
-and most Linux systems do.
-
-```shen
-(let Db (sqlite.open "people.db")
-  (do (sqlite.exec Db "CREATE TABLE IF NOT EXISTS people (name TEXT, age INTEGER)")
-      (sqlite.run Db "INSERT INTO people VALUES (?, ?)" ["Ann" 30])
-      (output "~S~%" (sqlite.query Db "SELECT name, age FROM people WHERE age > ?" [20]))
-      (sqlite.close Db)))    \\ [["Ann" 30]]
-```
-
-```sh
-shen-jit eval -l lib/ffi.shen -l lib/sqlite.shen -l people.shen
-```
-
-| Function | What it does |
-| --- | --- |
-| `(sqlite.open Path)`, `(sqlite.close Db)` | `":memory:"` is a database in memory. Closing raises if a statement is still open |
-| `(sqlite.exec Db Sql)` | Runs statements with no parameters or results |
-| `(sqlite.run Db Sql Params)` | Runs one, and gives the rows it changed |
-| `(sqlite.query Db Sql Params)` | Gives its rows, each a list |
-| `(sqlite.each Db Sql Params F)` | Calls F on each row, keeping none |
-| `(sqlite.transaction Db (freeze ...))` | Commits, or rolls back on an error |
-| `(sqlite.last-insert-id Db)`, `(sqlite.version)` | The last row inserted, and the library's version |
-
-To use a statement many times: `sqlite.prepare`, `sqlite.bind`, `sqlite.step`, which gives `row` or `done`,
-`sqlite.row`, `sqlite.reset` and `sqlite.finalize`. The comments at the top of the file list every function.
-
-Values go in and come out as Shen values: a number is an INTEGER or a REAL, a string is TEXT, a byte buffer is a
-BLOB, and `[]` is NULL. `true` and `false` go in as 1 and 0. Errors raise, with SQLite's message. A connection belongs
-to one thread: other threads run while a query does, and some builds of SQLite, Apple's among them, do not allow two
-threads on one.
-
-### Sockets
-
-`lib/socket.shen` is TCP, over IPv4 and IPv6, also in Shen alone.
-
-```shen
-(let S (socket.connect "example.com" 80)
-  (do (socket.send S "GET / HTTP/1.0c#13;c#10;c#13;c#10;")
-      (output "~A~%" (socket.recv-string S 4096))
-      (socket.close S)))
-```
-
-```sh
-shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l program.shen
-```
-
-A server, in a thread, with a client beside it:
-
-```shen
-(set l (socket.listen "127.0.0.1" 0))
-
-(thread (freeze (let S (socket.accept (value l))
-                  (do (socket.send S (socket.recv S 100))
-                      (socket.close S)))))
-
-(let C (socket.connect "127.0.0.1" (socket.port (value l)))
-  (do (socket.send C "hello")
-      (output "~A~%" (socket.recv-string C 100))    \\ hello
-      (socket.close C)))
-```
-
-| Function | What it does |
-| --- | --- |
-| `(socket.connect Host Port)` | Tries each address the name has |
-| `(socket.listen Host Port)`, `(socket.port S)` | Port 0 means any free one, and `socket.port` says which |
-| `(socket.accept Listener)` | Waits for a client, and gives its socket |
-| `(socket.send S Data)` | Sends all of a string or byte buffer |
-| `(socket.recv S N)` | Waits for data, and gives a buffer of at most N bytes. An empty one means the other end has finished |
-| `(socket.recv-into S B)`, `(socket.recv-string S N)` | Fills what it can of a buffer and says how much, and the same as `socket.recv` as a string |
-| `(socket.readable? S Ms)` | Whether there is something to read, waiting that long at most |
-| `(socket.shutdown S)`, `(socket.no-delay S)`, `(socket.close S)` | Tells the other end nothing more will be sent, sends small writes at once, and closes |
-
-A socket is an integer. Waiting lets other threads run, and Ctrl-C at the REPL ends it. A send to a closed connection
-raises instead of ending the process. The comments at the top of the file list every function.
 
 ### C written for Shen
 

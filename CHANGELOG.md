@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- The guide has a part for the libraries, grouped by what they do, which says once how to load them and build their
+  adapters, and lists the example applications. "Close to the machine" keeps the runtime's own: bytes and bits,
+  calling C, memory outside the heap, C written for Shen and native code by hand.
+
 ## [0.6] - 2026-11-08
 
 ### Added
