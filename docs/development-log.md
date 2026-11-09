@@ -795,6 +795,16 @@ that. Its readings decided nothing below.
   tuning 0.97 to 1.01 on both, THORN 0.98 to 1.01. What is left of it, about 70 instructions on x86-64, is mostly
   checking three times that the bindings are a vector; a primitive for the whole of it would take those. The same
   for `shen.gc`, which takes a variable's ticket back when a clause fails: no change, so left out.
+- **`shen-jit.newpv`, a primitive** (2026-11-09, Apple M3 Max and Ryzen VM, best of 5, alternating with the build
+  before). The rest of `shen.newpv`'s cost, inline: one test that the bindings are a vector with room for the next
+  offset, two stores and the variable, where three primitives tested the vector three times. About 45 lines with
+  its C path. `nreverse` 288,500 to 243,600 instructions an iteration on x86-64. M3: `subset` 0.87, `nreverse` 0.88,
+  `tak` 0.94, `hamilton` 0.95, `queens-8` 0.95, Einstein and `coloring` 1.00; Ryzen: 0.86, 0.90, 0.97, 0.95, 0.99,
+  0.99, 1.00. Workloads never used for tuning: the kernel suite 1.00 on the M3 and 0.95 on the Ryzen, as the
+  typechecker makes its variables through it too, the rest 0.94 to 1.00 and THORN 0.98 to 1.03, 0.99 to 1.02 over 9
+  rounds on the Ryzen. With the override before it, `nreverse` 0.81 on both, `subset` 0.82 and 0.83, `hamilton` 0.92
+  and 0.86. `tests/differential.shen` leaves it out of the ways that call twice on one object, as it moves the
+  offset on.
 - **`get-time` without interning** (2026-11-05, Apple M5, load about 25, against the build before). THORN asks for the
   time at every predicate call, and each call interned `run` and `unix`, about 2% of samples on RCC problems. Comparing
   the name instead: 10^7 calls 0.28 to 0.155 s, THORN's thm13 28.05 to 26.42 G instructions and rcc10 20.48 to 19.40 G.

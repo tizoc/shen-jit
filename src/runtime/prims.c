@@ -106,6 +106,7 @@ const Primitive primitive_table[] = {
     {"shen-jit.pvar-offset", 1, NULL},
     {"shen-jit.deref", 3, NULL},
     {"shen-jit.same?", 2, NULL},
+    {"shen-jit.newpv", 2, NULL},
     {"shen-jit.thread", 1, NULL},
     {"shen-jit.foreign", 2, NULL},
     {"shen-jit.pointer?", 1, NULL},
@@ -1783,6 +1784,19 @@ V sj_primitive(VM *vm, size_t index)
         return (uint64_t)fixval(a) << 8 | PVAR_TAG;
     case P_PVARP: return boolean(is_pvar(a));
     case P_SAMEP: return boolean(a == b);
+    case P_NEWPV: {
+        /* A new variable in the vector of bindings a, whose element 1 is the
+           next offset: its binding becomes b, which marks none, and the
+           offset moves on, as the kernel's shen.newpv does. */
+        if (!is_type(a, T_VECTOR) || hdr_size(ptr(a)[0]) < 2)
+            return sj_raise_value(vm, "shen-jit.newpv: ~S is not a vector of bindings", a);
+        V n = ptr(a)[2];
+        if (!is_fix(n) || fixval(n) < 0 || (uint64_t)fixval(n) >= hdr_size(ptr(a)[0]))
+            return sj_raise_value(vm, "shen-jit.newpv: no room for a variable at ~S", n);
+        ptr(a)[1 + fixval(n)] = b;
+        ptr(a)[2] = fix(fixval(n) + 1);
+        return (uint64_t)fixval(n) << 8 | PVAR_TAG;
+    }
     case P_THREAD: return thread_start(vm);
     case P_FOREIGN: case P_POINTERP: case P_POINTER_KIND: case P_POINTER_ADDRESS: case P_BYTES_POINTER:
     case P_POINTER_STRING: case P_POINTER_BYTES: case P_ERRNO: case P_C_ERRNO: case P_POINTER_KILL:

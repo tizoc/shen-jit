@@ -2740,6 +2740,32 @@ static void emit_prim(Emit *e, const uint32_t *p)
         store_result(e, dst);
         break;
     }
+    case P_NEWPV:
+        /* Element 1 of the bindings is the next offset N, a fixnum below
+           their size: element N becomes the second argument, element 1 N + 1,
+           and the result the variable N. Anything else takes the slow path. */
+        sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, arg[0]));
+        slow = slow_path(e, SLOW_PRIM, tag_cmp(c, SLJIT_NOT_EQUAL, R2, R1, TAG_OBJECT));
+        slow->catch_label = quiet_catch(e); /* C raises wherever this fails */
+        sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R1), -TAG_OBJECT);
+        sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));
+        slow->from[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM(T_VECTOR << 3 | TAG_HEADER));
+        sljit_emit_op2(c, SLJIT_LSHR, R2, R2, IMM(8));
+        sljit_emit_op1(c, SLJIT_MOV, R0, SLJIT_MEM1(SLJIT_R1), 2 * WORD - TAG_OBJECT);
+        sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R0, IMM(3));
+        slow->from[2] = sljit_emit_jump(c, SLJIT_NOT_ZERO);
+        sljit_emit_op2(c, SLJIT_LSHR, R3, R0, IMM(2));
+        slow->from[3] = sljit_emit_cmp(c, SLJIT_GREATER_EQUAL, R3, R2);
+        sljit_emit_op2(c, SLJIT_SHL, R3, R3, IMM(3));
+        sljit_emit_op2(c, SLJIT_ADD, R2, R1, R3);
+        sljit_emit_op1(c, SLJIT_MOV, R3, OPND(e, arg[1]));
+        sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R2), WORD - TAG_OBJECT, R3);
+        sljit_emit_op2(c, SLJIT_ADD, R3, R0, IMM(4));
+        sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R1), 2 * WORD - TAG_OBJECT, R3);
+        sljit_emit_op2(c, SLJIT_SHL, R0, R0, IMM(6));
+        sljit_emit_op2(c, SLJIT_OR, R0, R0, IMM(PVAR_TAG));
+        store_result(e, dst);
+        break;
     case P_BIT_AND:
     case P_BIT_OR:
     case P_BIT_XOR: {
