@@ -7,6 +7,7 @@
   (use deadline)
   (use io)
   (use shen-jit)
+  (import struct defstruct)
   (externals [bool bytes cancel cancelled chunk-size cleanup-timeout clear-environment cwd
     deadline define-foreign define-foreign-procedure environment eof exited group inherit int32
     library ok pending pipe posix process-environment-settings process-options process-results
@@ -110,46 +111,66 @@
   I [append Path] -> (io.record [5 (text Path false)]) where (> I 0)
   _ _ -> (error "process: invalid standard stream option"))
 
-\\ cwd, overrides, clear environment, streams, group, search, timeout, cleanup timeout,
-\\ stdout limit, stderr limit, chunk size, cancellation predicate, termination grace.
+\\ Validated options. The streams vector and its entries are read by the adapter, so they stay
+\\ absvectors: one [Kind Path] pair for each of stdin, stdout and stderr.
+(define show-config
+  C -> (make-string "#<process options ~S>" (config.cwd C)))
+
+(defstruct config
+  (printer show-config)
+  (mutable cwd)
+  (mutable environment)
+  (mutable clear-environment)
+  streams
+  (mutable group)
+  (mutable search-path)
+  (mutable timeout)
+  (mutable cleanup-timeout)
+  (mutable stdout-limit)
+  (mutable stderr-limit)
+  (mutable chunk-size)
+  (mutable cancel)
+  (mutable terminate-grace))
+
 (define options
   Options Run ->
     (let Mode (if Run pipe inherit)
          Streams (io.record [(stream-option 0 Mode)
                              (stream-option 1 Mode)
                              (stream-option 2 Mode)])
-         Config (io.record ["." [] false Streams Run true 30000 1000 1048576 1048576 16384
-                            (freeze false) 100])
+         Config (config.make "." [] false Streams Run true 30000 1000 1048576 1048576 16384
+                             (freeze false) 100)
       (configure Config Options [] Run)))
 
 (define configure
   Config [] _ _ -> Config
   Config [[Name Value] | Rest] Seen Run ->
     (let _ (if (element? Name Seen) (error "process: duplicate option") true)
-         _ (cond ((= Name cwd) (address-> Config 0 (text Value false)))
-                 ((= Name environment) (do (env-options Value) (address-> Config 1 Value)))
-                 ((= Name clear-environment) (address-> Config 2 (process.boolean Value)))
+         _ (cond ((= Name cwd) (config.cwd-> Config (text Value false)))
+                 ((= Name environment) (do (env-options Value) (config.environment-> Config Value)))
+                 ((= Name clear-environment)
+                   (config.clear-environment-> Config (process.boolean Value)))
                  ((and (not Run) (= Name stdin))
-                   (address-> (<-address Config 3) 0 (stream-option 0 Value)))
+                   (address-> (config.streams Config) 0 (stream-option 0 Value)))
                  ((and (not Run) (= Name stdout))
-                   (address-> (<-address Config 3) 1 (stream-option 1 Value)))
+                   (address-> (config.streams Config) 1 (stream-option 1 Value)))
                  ((and (not Run) (= Name stderr))
-                   (address-> (<-address Config 3) 2 (stream-option 2 Value)))
-                 ((= Name group) (address-> Config 4 (process.boolean Value)))
-                 ((= Name search-path) (address-> Config 5 (process.boolean Value)))
+                   (address-> (config.streams Config) 2 (stream-option 2 Value)))
+                 ((= Name group) (config.group-> Config (process.boolean Value)))
+                 ((= Name search-path) (config.search-path-> Config (process.boolean Value)))
                  ((and Run (= Name timeout))
-                   (address-> Config 6 (limit Value 2147483647 false)))
+                   (config.timeout-> Config (limit Value 2147483647 false)))
                  ((and Run (= Name cleanup-timeout))
-                   (address-> Config 7 (limit Value 60000 true)))
+                   (config.cleanup-timeout-> Config (limit Value 60000 true)))
                  ((and Run (= Name stdout-limit))
-                   (address-> Config 8 (limit Value 2305843009213693951 false)))
+                   (config.stdout-limit-> Config (limit Value 2305843009213693951 false)))
                  ((and Run (= Name stderr-limit))
-                   (address-> Config 9 (limit Value 2305843009213693951 false)))
+                   (config.stderr-limit-> Config (limit Value 2305843009213693951 false)))
                  ((and Run (= Name chunk-size))
-                   (address-> Config 10 (limit Value 65536 true)))
-                 ((and Run (= Name cancel)) (address-> Config 11 Value))
+                   (config.chunk-size-> Config (limit Value 65536 true)))
+                 ((and Run (= Name cancel)) (config.cancel-> Config Value))
                  ((and Run (= Name terminate-grace))
-                   (address-> Config 12 (limit Value 60000 false)))
+                   (config.terminate-grace-> Config (limit Value 60000 false)))
                  (true (error "process: unknown option ~A" Name)))
       (configure Config Rest [Name | Seen] Run))
   _ _ _ _ -> (error "process: options must be [Name Value] pairs"))
@@ -189,9 +210,9 @@
 
 (define process.environment
   Config ->
-    (io.let-ok Entries (if (<-address Config 2) [ok []]
+    (io.let-ok Entries (if (config.clear-environment Config) [ok []]
                           (native environment "environment" (freeze (c-environment))))
-      (let Result (env-apply Entries (<-address Config 1))
+      (let Result (env-apply Entries (config.environment Config))
            _ (strings Result 0 8388608)
         [ok Result])))
 
@@ -207,11 +228,22 @@
   [error Error] [ok] -> [error Error]
   [error Error] [error Other] -> [error (io.secondary Error Other)])
 
+\\ A pipe endpoint's context: its native pipe, and the budget and cancellation that pipe-until sets.
+(define show-pipe-context
+  _ -> "#<process pipe>")
+
+(defstruct pipe-context
+  (printer show-pipe-context)
+  pointer
+  (mutable budget)
+  (mutable cancel))
+
 (define pipe-stop
   Context ->
-    (cond ((thaw (<-address Context 3)) [error (io.native-error transfer cancelled 0
+    (cond ((thaw (pipe-context.cancel Context)) [error (io.native-error transfer cancelled 0
                                                "process pipe" "pipe operation cancelled")])
-          ((and (not (= (<-address Context 2) [])) (deadline.expired? (<-address Context 2)))
+          ((and (not (= (pipe-context.budget Context) []))
+                (deadline.expired? (pipe-context.budget Context)))
             [error (io.native-error transfer timeout 0 "process pipe" "pipe deadline expired")])
           (true [ok])))
 
@@ -219,20 +251,20 @@
   Context Bytes ->
     (io.let-ok _ (pipe-stop Context)
                N (native read "process stdout/stderr"
-                   (freeze (c-read (<-address Context 1) Bytes)))
+                   (freeze (c-read (pipe-context.pointer Context) Bytes)))
       (cond ((> N 0) [read N])
             ((= N 0) [eof])
-            (true (do (c-pause [(<-address Context 1)] 20)
+            (true (do (c-pause [(pipe-context.pointer Context)] 20)
                       (pipe-read Context Bytes))))))
 
 (define pipe-write
   Context Bytes ->
     (io.let-ok _ (pipe-stop Context)
                N (native write "process stdin"
-                   (freeze (c-write (<-address Context 1) Bytes)))
+                   (freeze (c-write (pipe-context.pointer Context) Bytes)))
       (if (> N 0)
           [written N]
-          (do (c-pause [(<-address Context 1)] 20)
+          (do (c-pause [(pipe-context.pointer Context)] 20)
               (pipe-write Context Bytes)))))
 
 (define pipe-close
@@ -243,7 +275,7 @@
 (define pipe-new
   [] _ -> []
   Pointer Direction ->
-    (let Context (io.record [pipe-context Pointer [] (freeze false)])
+    (let Context (pipe-context.make Pointer [] (freeze false))
          E (io.endpoint "process pipe" Direction 65536
              (/. B (pipe-read Context B))
              (/. B (pipe-write Context B))
@@ -252,32 +284,55 @@
          _ (io.endpoint.context-> E Context)
       E))
 
+\\ A child handle. Raw is the adapter's [Token Stdin Stdout Stderr Pid]; Pipes holds the stdin,
+\\ stdout and stderr endpoints, or [], indexed by stream number.
+(define status-text
+  [running] -> "running"
+  [exited N] -> (make-string "exited ~A" N)
+  [signalled N] -> (make-string "signalled ~A" N)
+  S -> (make-string "~S" S))
+
+(define show-child
+  C -> (make-string "#<child ~A ~A>" (<-address (subprocess.raw C) 4)
+                    (if (subprocess.closed C) "closed" (status-text (subprocess.status C)))))
+
+(defstruct subprocess
+  (printer show-child)
+  raw
+  program
+  pipes
+  (mutable closed)
+  (mutable close-result)
+  (mutable busy)
+  (mutable status)
+  group)
+
 \\ The native spawn constructs this record before starting the child, so allocation failure is safe.
 (define child-new
   Program Group Raw ->
     (let Pipes (io.record [(pipe-new (<-address Raw 1) write)
                           (pipe-new (<-address Raw 2) read)
                           (pipe-new (<-address Raw 3) read)])
-      (io.record [child Raw Program Pipes false [] false [running] Group])))
+      (subprocess.make Raw Program Pipes false [] false [running] Group)))
 
 (define check
-  Child -> (if (io.tag? Child child) Child (error "process: not a child handle")))
+  Child -> (if (subprocess? Child) Child (error "process: not a child handle")))
 
 (define live
   Child ->
     (let _ (check Child)
-         Token (<-address (<-address Child 1) 0)
-      (if (or (<-address Child 4) (= (shen-jit.pointer-address Token) 0))
+         Token (<-address (subprocess.raw Child) 0)
+      (if (or (subprocess.closed Child) (= (shen-jit.pointer-address Token) 0))
           (error "process: child is closed or stale")
           Token)))
 
 (define pid
-  Child -> (<-address (<-address (check Child) 1) 4))
+  Child -> (<-address (subprocess.raw (check Child)) 4))
 
 (define stream
   Child Index ->
     (let _ (live Child)
-         E (<-address (<-address Child 3) Index)
+         E (<-address (subprocess.pipes Child) Index)
       (if (= E []) (error "process: standard stream was not piped") E)))
 
 (define process.stdin
@@ -293,10 +348,10 @@
   E Budget Cancel ->
     (let _ (io.check E (io.endpoint.mode E) [])
          Context (io.endpoint.context E)
-         _ (if (io.tag? Context pipe-context) true (error "process: not a process pipe"))
+         _ (if (pipe-context? Context) true (error "process: not a process pipe"))
          _ (deadline.check Budget)
-         _ (address-> Context 2 Budget)
-         _ (address-> Context 3 Cancel)
+         _ (pipe-context.budget-> Context Budget)
+         _ (pipe-context.cancel-> Context Cancel)
       E))
 
 (define spawn-config
@@ -313,15 +368,15 @@
 (define spawn-native
   Program Args Config Home Env ->
     (spawn-with Program Args Config Home Env
-      (/. Raw [ok (child-new Program (<-address Config 4) Raw)])))
+      (/. Raw [ok (child-new Program (config.group Config) Raw)])))
 
 (define spawn-with
   Program Args Config Home Env Constructor ->
-    (let Cwd (io.file-path-at (<-address Config 0) Home)
+    (let Cwd (io.file-path-at (config.cwd Config) Home)
       (trap-error
         (let Raw (c-spawn
-                   (io.record [Program Args Env Cwd (<-address Config 3)
-                               (<-address Config 4) (<-address Config 5)]) Constructor)
+                   (io.record [Program Args Env Cwd (config.streams Config)
+                               (config.group Config) (config.search-path Config)]) Constructor)
           (if (absvector? Raw) (reply spawn Program Raw) Raw))
         (/. X [error (io.native-error spawn foreign 0 Program (error-to-string X))]))))
 
@@ -339,9 +394,9 @@
 (define poll
   Child ->
     (let Token (live Child)
-      (io.let-ok Raw (native wait (<-address Child 2) (freeze (c-poll Token)))
+      (io.let-ok Raw (native wait (subprocess.program Child) (freeze (c-poll Token)))
         (let Status (status-native Raw)
-             _ (address-> Child 7 Status)
+             _ (subprocess.status-> Child Status)
           [ok Status]))))
 
 (define wait-loop
@@ -361,7 +416,7 @@
 (define signal
   Child Force ->
     (let Token (live Child)
-      (unit (native terminate (<-address Child 2)
+      (unit (native terminate (subprocess.program Child)
                       (freeze (c-signal Token Force))))))
 
 (define process.terminate
@@ -380,20 +435,21 @@
 (define process.close
   Child ->
     (let _ (check Child)
-      (if (<-address Child 4)
-          (<-address Child 5)
+      (if (subprocess.closed Child)
+          (subprocess.close-result Child)
           (let Token (live Child)
-               _ (if (<-address Child 6) (error "process: communication is in progress") true)
+               _ (if (subprocess.busy Child) (error "process: communication is in progress") true)
             (io.let-ok Status (poll Child)
               (if (= Status [running])
-                  [error (io.error close (<-address Child 2) "wait for the child before closing it")]
-                  (let Pipes (close-pipes (<-address Child 3) 0 3 [ok])
+                  [error (io.error close (subprocess.program Child)
+                                   "wait for the child before closing it")]
+                  (let Pipes (close-pipes (subprocess.pipes Child) 0 3 [ok])
                        Closed (unit
-                                (native close (<-address Child 2)
+                                (native close (subprocess.program Child)
                                   (freeze (c-close Token (function invalidate)))))
                        Result (finish-unit Pipes Closed)
-                       _ (address-> Child 4 true)
-                       _ (address-> Child 5 Result)
+                       _ (subprocess.closed-> Child true)
+                       _ (subprocess.close-result-> Child Result)
                     Result)))))))
 
 (datatype process-streams

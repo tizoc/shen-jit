@@ -15,13 +15,13 @@
 
 (process-pure.check "spawn inherits stdio" [0 0 0]
   (freeze (let C (process.options [] false)
-            (map (/. I (<-address (<-address (<-address C 3) I) 0)) [0 1 2]))))
+            (map (/. I (<-address (<-address (process.config.streams C) I) 0)) [0 1 2]))))
 (process-pure.check "run uses three pipes and a group" [2 2 2 true]
   (freeze (let C (process.options [] true)
-            (append (map (/. I (<-address (<-address (<-address C 3) I) 0)) [0 1 2])
-                    [(<-address C 4)]))))
+            (append (map (/. I (<-address (<-address (process.config.streams C) I) 0)) [0 1 2])
+                    [(process.config.group C)]))))
 (process-pure.check "streaming quota does not allocate an output buffer" 1073741824
-  (freeze (<-address (process.options [[stdout-limit 1073741824]] true) 8)))
+  (freeze (process.config.stdout-limit (process.options [[stdout-limit 1073741824]] true))))
 (process-pure.raises "capture has a separate allocation limit"
   (freeze (process.capture-limits (process.options [[stdout-limit 1073741824]] true))))
 

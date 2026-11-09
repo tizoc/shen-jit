@@ -7,6 +7,7 @@
   (use deadline)
   (use io)
   (use shen-jit)
+  (import struct defstruct)
   (externals [cancel cancelled chunk-size cleanup-timeout closed communicate done eof exited ok
     process-commands running shen stderr-limit stdout-limit terminate-grace timeout write written])
   (shadow abort close output run)
@@ -37,7 +38,7 @@
   [] -> []
   [Child | Rest] ->
     (append (keep (/. E (and (not (= E [])) (not (= (io.endpoint.state E) closed))))
-              (map (/. I (<-address (<-address Child 3) I)) [0 1 2]))
+              (map (/. I (<-address (subprocess.pipes Child) I)) [0 1 2]))
             (communication-pipes Rest)))
 
 (define keep
@@ -58,7 +59,7 @@
 (define busy-children
   [] Flag -> true
   [Child | Rest] Flag ->
-    (do (address-> Child 6 Flag) (busy-children Rest Flag)))
+    (do (subprocess.busy-> Child Flag) (busy-children Rest Flag)))
 
 (define close-active
   E ->
@@ -71,14 +72,33 @@
   [E | Rest] Result ->
     (close-active-pipes Rest (finish-unit Result (close-active E))))
 
-\\ Each output owns a bounded collector, or borrows an independent I/O sink.
-\\ endpoint, sink, limit, count, reversed chunks, eof, child, stream number.
+\\ Each output owns a bounded collector, or borrows an independent I/O sink ([] when it collects).
+\\ Chunks are the collected views, latest first; index is the child's stream number, 1 or 2.
+(define stream-name
+  1 -> "stdout"
+  _ -> "stderr")
+
+(define show-collector
+  O -> (make-string "#<process ~A ~A bytes>" (stream-name (collector.index O))
+                    (collector.count O)))
+
+(defstruct collector
+  (printer show-collector)
+  endpoint
+  sink
+  limit
+  (mutable count)
+  (mutable chunks)
+  (mutable eof)
+  child
+  index)
+
 (define output
   Child Index Sink Limit ->
-    (let E (<-address (<-address Child 3) Index)
+    (let E (<-address (subprocess.pipes Child) Index)
       (if (or (= E []) (= (io.endpoint.state E) closed))
           []
-          (io.record [E Sink Limit 0 [] false Child Index]))))
+          (collector.make E Sink Limit 0 [] false Child Index))))
 
 (define outputs
   Children OutSink ErrSink Config ->
@@ -87,8 +107,8 @@
 (define outputs-loop
   [] _ _ _ Acc -> (reverse Acc)
   [Child | Rest] OutSink ErrSink Config Acc ->
-    (let Err (output Child 2 ErrSink (<-address Config 9))
-         Out (output Child 1 OutSink (<-address Config 8))
+    (let Err (output Child 2 ErrSink (config.stderr-limit Config))
+         Out (output Child 1 OutSink (config.stdout-limit Config))
          Next (if (= Err []) Acc [Err | Acc])
          Next (if (= Out []) Next [Out | Next])
       (outputs-loop Rest OutSink ErrSink Config Next)))
@@ -96,101 +116,132 @@
 (define error-at
   Domain Resource Message -> (io.native-error communicate Domain 0 Resource Message))
 
+\\ Input: its source, a staging buffer, the unwritten part of it from at to end, whether the
+\\ source is exhausted, and the bytes written to the child.
+(define show-feed
+  F -> (make-string "#<process input ~A written>" (feed-state.written F)))
+
+(defstruct feed-state
+  (printer show-feed)
+  source
+  buffer
+  (mutable at)
+  (mutable end)
+  (mutable eof)
+  (mutable written))
+
+\\ One exchange: whether the last round made progress, its budget, the children (the first is
+\\ fed), the input feed, the outputs and the options.
+(define show-session
+  S -> (make-string "#<process session ~A children>" (length (session.children S))))
+
+(defstruct session
+  (printer show-session)
+  (mutable progress)
+  budget
+  children
+  feed
+  outputs
+  config)
+
+(define first-stdin
+  State -> (<-address (subprocess.pipes (hd (session.children State))) 0))
+
 (define check-cancel
   State ->
-    (cond ((thaw (<-address (<-address State 8) 11))
+    (cond ((thaw (config.cancel (session.config State)))
             [error (error-at cancelled "process" "process operation cancelled")])
-          ((deadline.expired? (<-address State 1))
+          ((deadline.expired? (session.budget State))
             [error (error-at timeout "process" "process deadline expired")])
           (true [ok])))
 
 (define feed
   State ->
-    (let Feed (<-address State 5)
-         E (<-address (<-address (hd (<-address State 4)) 3) 0)
+    (let Feed (session.feed State)
+         E (first-stdin State)
       (cond ((or (= E []) (= (io.endpoint.state E) closed)) [ok])
-            ((< (<-address Feed 2) (<-address Feed 3)) (feed-write State E Feed))
-            ((<-address Feed 4)
-              (do (address-> State 0 true) (close-active E)))
+            ((< (feed-state.at Feed) (feed-state.end Feed)) (feed-write State E Feed))
+            ((feed-state.eof Feed)
+              (do (session.progress-> State true) (close-active E)))
             (true
               (feed-read State E Feed
-                (io.read-some (<-address Feed 0) (<-address Feed 1) []))))))
+                (io.read-some (feed-state.source Feed) (feed-state.buffer Feed) []))))))
 
 (define feed-read
   State E Feed [read N] ->
-    (do (address-> Feed 2 0)
-        (address-> Feed 3 N)
+    (do (feed-state.at-> Feed 0)
+        (feed-state.end-> Feed N)
         (feed-write State E Feed))
   State E Feed [eof] ->
-    (do (address-> Feed 4 true)
-        (address-> State 0 true)
+    (do (feed-state.eof-> Feed true)
+        (session.progress-> State true)
         (close-active E))
   _ _ _ [error Error] -> [error Error])
 
 (define feed-write
   State E Feed ->
-    (let At (<-address Feed 2)
-         View (buffer.slice (<-address Feed 1) At (- (<-address Feed 3) At))
+    (let At (feed-state.at Feed)
+         View (buffer.slice (feed-state.buffer Feed) At (- (feed-state.end Feed) At))
          Bytes (buffer.bytes View)
       (io.let-ok N (native write "process stdin"
                      (freeze (c-write (io.endpoint.guard E) Bytes)))
         (do (if (> N 0)
-                (do (address-> Feed 2 (+ At N))
-                    (address-> Feed 5 (+ (<-address Feed 5) N))
-                    (address-> State 0 true)) true)
+                (do (feed-state.at-> Feed (+ At N))
+                    (feed-state.written-> Feed (+ (feed-state.written Feed) N))
+                    (session.progress-> State true)) true)
             [ok]))))
 
 (define capture-output
   Output View ->
     (let N (buffer.length View)
          Owned (buffer.wrap (buffer.bytes View))
-         _ (address-> Output 4 [Owned | (<-address Output 4)])
-         _ (address-> Output 3 (+ (<-address Output 3) N))
+         _ (collector.chunks-> Output [Owned | (collector.chunks Output)])
+         _ (collector.count-> Output (+ (collector.count Output) N))
       [ok]))
 
 (define sink-output
   _ _ End End -> [ok]
   Output View At End ->
-    (let Result (io.write-some (<-address Output 1) (buffer.slice View At (- End At)) [])
+    (let Result (io.write-some (collector.sink Output) (buffer.slice View At (- End At)) [])
       (sink-step Output View At End Result)))
 
 (define sink-step
   Output View At End [written N] ->
-    (do (address-> Output 3 (+ (<-address Output 3) N))
+    (do (collector.count-> Output (+ (collector.count Output) N))
         (sink-output Output View (+ At N) End))
-  Output _ _ _ [error Error] -> [error (io.progress Error (<-address Output 3))])
+  Output _ _ _ [error Error] -> [error (io.progress Error (collector.count Output))])
 
 (define deliver-output
   _ _ 0 -> [ok]
   Output Chunk N ->
     (let View (buffer.slice Chunk 0 N)
-      (if (= (<-address Output 1) [])
+      (if (= (collector.sink Output) [])
           (capture-output Output View)
           (sink-output Output View 0 N))))
 
 (define read-output
   State Output Chunk ->
-    (if (<-address Output 5)
+    (if (collector.eof Output)
         [ok]
-        (let E (<-address Output 0)
+        (let E (collector.endpoint Output)
           (io.let-ok N (native read "process output"
                          (freeze (c-read (io.endpoint.guard E) (buffer.owner Chunk))))
             (cond ((< N 0) [ok])
                   ((= N 0)
-                    (do (address-> State 0 true)
-                        (address-> Output 5 true)
+                    (do (session.progress-> State true)
+                        (collector.eof-> Output true)
                         (close-active E)))
                   (true
-                    (let Left (- (<-address Output 2) (<-address Output 3))
+                    (let Left (- (collector.limit Output) (collector.count Output))
                          Keep (io.min Left N)
-                         _ (address-> State 0 true)
+                         _ (session.progress-> State true)
                       (io.let-ok _ (deliver-output Output Chunk Keep)
                         (if (> N Left)
                             [error (io.progress
                                      (error-at limit
-                                       (if (= (<-address Output 7) 1) "stdout" "stderr")
+                                       (stream-name (collector.index Output))
                                        "process output limit exceeded")
-                                     (<-address Output 3))]
+                                     (collector.count Output))]
                             [ok])))))))))
 
 (define read-outputs
@@ -202,59 +253,59 @@
 (define poll-children
   [] -> [ok]
   [Child | Rest] ->
-    (io.let-ok _ (if (<-address Child 4) [ok done] (poll Child))
+    (io.let-ok _ (if (subprocess.closed Child) [ok done] (poll Child))
       (poll-children Rest)))
 
 (define children-done?
   [] -> true
   [Child | Rest] ->
-    (and (not (= (<-address Child 7) [running])) (children-done? Rest)))
+    (and (not (= (subprocess.status Child) [running])) (children-done? Rest)))
 
 (define outputs-done?
   [] -> true
-  [Output | Rest] -> (and (<-address Output 5) (outputs-done? Rest)))
+  [Output | Rest] -> (and (collector.eof Output) (outputs-done? Rest)))
 
 (define input-done?
   State ->
-    (let E (<-address (<-address (hd (<-address State 4)) 3) 0)
+    (let E (first-stdin State)
       (or (= E []) (= (io.endpoint.state E) closed))))
 
 (define wait-pointers
   State ->
-    (let Feed (<-address State 5)
-         Input (<-address (<-address (hd (<-address State 4)) 3) 0)
-         Output (map (/. O (io.endpoint.guard (<-address O 0)))
-                     (keep (/. O (not (<-address O 5))) (<-address State 6)))
+    (let Feed (session.feed State)
+         Input (first-stdin State)
+         Output (map (/. O (io.endpoint.guard (collector.endpoint O)))
+                     (keep (/. O (not (collector.eof O))) (session.outputs State)))
       (if (and (not (= Input [])) (not (= (io.endpoint.state Input) closed))
-               (< (<-address Feed 2) (<-address Feed 3)))
+               (< (feed-state.at Feed) (feed-state.end Feed)))
           [(io.endpoint.guard Input) | Output]
           Output)))
 
 (define pump
   State Chunk ->
     (io.let-ok _ (check-cancel State)
-               _ (do (address-> State 0 false) (feed State))
-               _ (read-outputs State (<-address State 6) Chunk)
-               _ (poll-children (<-address State 4))
-      (if (and (input-done? State) (outputs-done? (<-address State 6))
-               (children-done? (<-address State 4)))
+               _ (do (session.progress-> State false) (feed State))
+               _ (read-outputs State (session.outputs State) Chunk)
+               _ (poll-children (session.children State))
+      (if (and (input-done? State) (outputs-done? (session.outputs State))
+               (children-done? (session.children State)))
           [ok]
-          (do (if (<-address State 0) true
+          (do (if (session.progress State) true
                   (c-pause (wait-pointers State)
-                    (deadline.slice (<-address State 1) 20)))
+                    (deadline.slice (session.budget State) 20)))
               (pump State Chunk)))))
 
 (define signal-children
   [] _ Result -> Result
   [Child | Rest] Force Result ->
     (signal-children Rest Force
-      (finish-unit Result (if (<-address Child 4) [ok] (signal Child Force)))))
+      (finish-unit Result (if (subprocess.closed Child) [ok] (signal Child Force)))))
 
 \\ Read the budget once per round: a second reading could find it expired just after the first
 \\ did not, and give up without forcing.
 (define cleanup-wait
   State Budget Grace Forced Result ->
-    (let Children (<-address State 4)
+    (let Children (session.children State)
          Polled (poll-children Children)
          Result (finish-unit Result Polled)
          Late (deadline.expired? Budget)
@@ -272,62 +323,62 @@
 
 (define groups?
   [] -> false
-  [Child | Rest] -> (or (and (not (<-address Child 4)) (<-address Child 8))
+  [Child | Rest] -> (or (and (not (subprocess.closed Child)) (subprocess.group Child))
                        (groups? Rest)))
 
 (define cleanup-error
   State Error ->
-    (let Config (<-address State 8)
-         Budget (clock.deadline (<-address Config 7))
-         Grace (deadline.within Budget (<-address Config 12))
-         Signals (signal-children (<-address State 4) false [ok])
-         Pipes (close-active-pipes (communication-pipes (<-address State 4)) Signals)
+    (let Config (session.config State)
+         Budget (clock.deadline (config.cleanup-timeout Config))
+         Grace (deadline.within Budget (config.terminate-grace Config))
+         Signals (signal-children (session.children State) false [ok])
+         Pipes (close-active-pipes (communication-pipes (session.children State)) Signals)
       (io.finish [error Error] (cleanup-wait State Budget Grace false Pipes))))
 
 (define close-finished
   [] Result -> Result
   [Child | Rest] Result ->
     (close-finished Rest
-      (if (= (<-address Child 7) [running])
+      (if (= (subprocess.status Child) [running])
           Result
           (finish-unit Result (close Child)))))
 
 (define output-for
   [] _ _ -> []
   [Output | Rest] Child Index ->
-    (if (and (shen-jit.same? (<-address Output 6) Child) (= (<-address Output 7) Index))
+    (if (and (shen-jit.same? (collector.child Output) Child) (= (collector.index Output) Index))
         Output
         (output-for Rest Child Index)))
 
 (define collected-count
   [] -> 0
-  Output -> (<-address Output 3))
+  Output -> (collector.count Output))
 
 (define collected-bytes
   [] -> (buffer.new 0)
   Output ->
-    (if (= (<-address Output 1) [])
-        (io.join (<-address Output 3) (reverse (<-address Output 4)))
+    (if (= (collector.sink Output) [])
+        (io.join (collector.count Output) (reverse (collector.chunks Output)))
         (buffer.new 0)))
 
 (define reports
   [] _ _ -> []
   [Child | Rest] State First ->
-    (let Out (output-for (<-address State 6) Child 1)
-         Err (output-for (<-address State 6) Child 2)
-         Report (io.record [report Child (<-address Child 7)
-                            (if First (<-address (<-address State 5) 5) 0)
-                            (collected-count Out) (collected-count Err)
-                            (collected-bytes Out) (collected-bytes Err)
-                            (if First (feed-pending (<-address State 5)) (buffer.new 0))
-                            (not (= Out [])) (not (= Err []))])
+    (let Out (output-for (session.outputs State) Child 1)
+         Err (output-for (session.outputs State) Child 2)
+         Report (report.make Child (subprocess.status Child)
+                  (if First (feed-state.written (session.feed State)) 0)
+                  (collected-count Out) (collected-count Err)
+                  (collected-bytes Out) (collected-bytes Err)
+                  (if First (feed-pending (session.feed State)) (buffer.new 0))
+                  (not (= Out [])) (not (= Err [])))
       [Report | (reports Rest State false)]))
 
 (define exchange
   Children Source OutSink ErrSink Config Budget Own ->
     (let Pipes (communication-pipes Children)
          _ (check-children Children)
-         Input (<-address (<-address (hd Children) 3) 0)
+         Input (<-address (subprocess.pipes (hd Children)) 0)
          _ (if (and (not (= Input [])) (= (io.endpoint.state Input) open))
                true (error "process: communication requires an open stdin pipe"))
          _ (check-pipes Pipes)
@@ -336,10 +387,10 @@
          _ (if (= ErrSink []) true (io.check ErrSink write []))
          _ (if (or (shen-jit.same? Source OutSink) (shen-jit.same? Source ErrSink))
                (error "process: input source and output sinks must differ") true)
-         Feed (io.record [Source (buffer.new (<-address Config 10)) 0 0 false 0])
+         Feed (feed-state.make Source (buffer.new (config.chunk-size Config)) 0 0 false 0)
          Outputs (outputs Children OutSink ErrSink Config)
-         Chunk (buffer.new (<-address Config 10))
-         State (io.record [false Budget [] [] Children Feed Outputs Own Config])
+         Chunk (buffer.new (config.chunk-size Config))
+         State (session.make false Budget Children Feed Outputs Config)
          _ (lock-pipes Pipes true)
          _ (busy-children Children true)
          Result (trap-error (pump State Chunk)
@@ -358,7 +409,7 @@
   [] -> true
   [Child | Rest] ->
     (do (live Child)
-        (if (<-address Child 6) (error "process: communication is already in progress") true)
+        (if (subprocess.busy Child) (error "process: communication is already in progress") true)
         (check-children Rest)))
 
 (define single-result
@@ -371,14 +422,14 @@
     (let Config (communication-options Options)
          _ (capture-limits Config)
          Source (view-source Input)
-         Budget (clock.deadline (<-address Config 6))
+         Budget (clock.deadline (config.timeout Config))
       (single-result (exchange [Child] Source [] [] Config Budget false))))
 
 (define communicate-to
   Child Source OutSink ErrSink Options ->
     (let _ (stream-arguments Source OutSink ErrSink)
          Config (communication-options Options)
-         Budget (clock.deadline (<-address Config 6))
+         Budget (clock.deadline (config.timeout Config))
       (single-result (exchange [Child] Source OutSink ErrSink Config Budget false))))
 
 (define run
@@ -386,7 +437,7 @@
     (let Config (options Options true)
          _ (capture-limits Config)
          Source (view-source Input)
-         Budget (clock.deadline (<-address Config 6))
+         Budget (clock.deadline (config.timeout Config))
       (io.let-ok Child (spawn-config Program Args Config)
         (single-result (owned-exchange [Child] Source [] [] Config Budget)))))
 
@@ -394,33 +445,50 @@
   Program Args Source OutSink ErrSink Options ->
     (let Config (options Options true)
          _ (stream-arguments Source OutSink ErrSink)
-         Budget (clock.deadline (<-address Config 6))
+         Budget (clock.deadline (config.timeout Config))
       (io.let-ok Child (spawn-config Program Args Config)
         (single-result (owned-exchange [Child] Source OutSink ErrSink Config Budget)))))
 
+\\ An execution report. Its child handle stays valid after the report is made.
+(define show-report
+  R -> (make-string "#<report ~A>" (status-text (report.status R))))
+
+(defstruct report
+  (printer show-report)
+  child
+  status
+  input-count
+  output-count
+  error-count
+  output-bytes
+  error-bytes
+  pending-input
+  output-observed
+  error-observed)
+
 (define report-check
-  Report -> (if (io.tag? Report report) Report (error "process: not an execution report")))
+  Report -> (if (report? Report) Report (error "process: not an execution report")))
 
 (define child
-  Report -> (<-address (report-check Report) 1))
+  Report -> (report.child (report-check Report)))
 
 (define status
-  Report -> (<-address (report-check Report) 2))
+  Report -> (report.status (report-check Report)))
 
 (define input-count
-  Report -> (<-address (report-check Report) 3))
+  Report -> (report.input-count (report-check Report)))
 
 (define output-count
-  Report -> (<-address (report-check Report) 4))
+  Report -> (report.output-count (report-check Report)))
 
 (define error-count
-  Report -> (<-address (report-check Report) 5))
+  Report -> (report.error-count (report-check Report)))
 
 (define output-bytes
-  Report -> (<-address (report-check Report) 6))
+  Report -> (report.output-bytes (report-check Report)))
 
 (define error-bytes
-  Report -> (<-address (report-check Report) 7))
+  Report -> (report.error-bytes (report-check Report)))
 
 (define success?
   Report -> (= (status Report) [exited 0]))
@@ -439,42 +507,48 @@
         (commands-rest Rest (+ Count 1)))
   _ _ -> (error "process: pipeline commands must be [Program Args] pairs"))
 
+\\ The children a pipeline has started, latest first, and the list including the one being
+\\ spawned, which becomes the started list once its spawn succeeds.
+(defstruct registry
+  (mutable started)
+  (mutable spawning))
+
 (define pipeline-start
-  [] _ _ _ _ Registry -> [ok (reverse (<-address Registry 0))]
+  [] _ _ _ _ Registry -> [ok (reverse (registry.started Registry))]
   [[Program Args] | Rest] Config Home Env Previous Registry ->
     (let _ (if (= Previous []) true
-               (address-> (<-address Config 3) 0
+               (address-> (config.streams Config) 0
                  (io.record [6 (io.endpoint.guard (stdout Previous))])))
          Result (spawn-with Program Args Config Home Env
                   (/. Raw
-                    (let Child (child-new Program (<-address Config 4) Raw)
-                         Node [Child | (<-address Registry 0)]
-                         _ (address-> Registry 1 Node)
+                    (let Child (child-new Program (config.group Config) Raw)
+                         Node [Child | (registry.started Registry)]
+                         _ (registry.spawning-> Registry Node)
                       [ok Child])))
       (pipeline-started Result Rest Config Home Env Previous Registry)))
 
 (define pipeline-started
   [ok Child] Rest Config Home Env Previous Registry ->
-    (let _ (address-> Registry 0 (<-address Registry 1))
-         _ (address-> Registry 1 [])
+    (let _ (registry.started-> Registry (registry.spawning Registry))
+         _ (registry.spawning-> Registry [])
          Closed (if (= Previous []) [ok] (io.close (stdout Previous)))
       (if (= Closed [ok])
           (pipeline-start Rest Config Home Env Child Registry)
-          [error (hd (tl Closed)) (reverse (<-address Registry 0))]))
+          [error (hd (tl Closed)) (reverse (registry.started Registry))]))
   [error Error] _ _ _ _ _ Registry ->
-    (do (address-> Registry 1 []) [error Error (reverse (<-address Registry 0))]))
+    (do (registry.spawning-> Registry []) [error Error (reverse (registry.started Registry))]))
 
 (define abort-reports
   [] -> []
   [Child | Rest] ->
-    [(io.record [report Child (<-address Child 7) 0 0 0
-                 (buffer.new 0) (buffer.new 0) (buffer.new 0) false false])
+    [(report.make Child (subprocess.status Child) 0 0 0
+                  (buffer.new 0) (buffer.new 0) (buffer.new 0) false false)
      | (abort-reports Rest)])
 
 (define abort
   [] Error _ -> [error Error []]
   Children Error Config ->
-    (let State (io.record [false [] [] [] Children [] [] true Config])
+    (let State (session.make false [] Children [] [] Config)
          _ (busy-children Children true)
          Result (cleanup-error State Error)
          _ (busy-children Children false)
@@ -494,7 +568,7 @@
          Config (options Options true)
          _ (capture-limits Config)
          Source (view-source Input)
-         Budget (clock.deadline (<-address Config 6))
+         Budget (clock.deadline (config.timeout Config))
          Home (value *home-directory*)
       (io.let-ok _ (ready)
                  Env (environment Config)
@@ -505,7 +579,7 @@
     (let _ (commands Commands 0)
          _ (stream-arguments Source OutSink ErrSink)
          Config (options Options true)
-         Budget (clock.deadline (<-address Config 6))
+         Budget (clock.deadline (config.timeout Config))
          Home (value *home-directory*)
       (io.let-ok _ (ready)
                  Env (environment Config)
@@ -513,11 +587,11 @@
 
 (define build-pipeline
   Commands Config Home Env Source OutSink ErrSink Budget ->
-    (let Registry (io.record [[] []])
+    (let Registry (registry.make [] [])
       (trap-error
         (let Started (pipeline-start Commands Config Home Env [] Registry)
           (pipeline-exchange Started Source OutSink ErrSink Config Budget))
-        (/. X (abort (reverse (<-address Registry 0))
+        (/. X (abort (reverse (registry.started Registry))
                 (error-at shen "pipeline setup" (error-to-string X)) Config)))))
 
 (define pipeline-exchange
@@ -527,8 +601,8 @@
 
 (define capture-limits
   Config ->
-    (do (process.limit (<-address Config 8) 268435456 false)
-        (process.limit (<-address Config 9) 268435456 false)))
+    (do (process.limit (config.stdout-limit Config) 268435456 false)
+        (process.limit (config.stderr-limit Config) 268435456 false)))
 
 (define io-arguments
   Source OutSink ErrSink ->
@@ -591,10 +665,11 @@
 (define feed-pending
   Feed ->
     (buffer.wrap (buffer.bytes
-      (buffer.slice (<-address Feed 1) (<-address Feed 2) (- (<-address Feed 3) (<-address Feed 2))))))
+      (buffer.slice (feed-state.buffer Feed) (feed-state.at Feed)
+                    (- (feed-state.end Feed) (feed-state.at Feed))))))
 
 (define pending-input
-  Report -> (<-address (report-check Report) 8))
+  Report -> (report.pending-input (report-check Report)))
 
 (define input-read-count
   Report -> (+ (input-count Report) (buffer.length (pending-input Report))))
@@ -603,10 +678,10 @@
 (declare input-read-count [report --> number])
 
 (define output-observed?
-  Report -> (<-address (report-check Report) 9))
+  Report -> (report.output-observed (report-check Report)))
 
 (define error-observed?
-  Report -> (<-address (report-check Report) 10))
+  Report -> (report.error-observed (report-check Report)))
 
 (declare output-observed? [report --> boolean])
 (declare error-observed? [report --> boolean])

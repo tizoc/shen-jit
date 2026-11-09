@@ -99,7 +99,7 @@
        (let Reads (io.record [0])
             Clock (freeze (let N (<-address Reads 0) (do (address-> Reads 0 (+ N 1)) N)))
             Child (process-test.ok (process.spawn (value process-test.helper) ["hold" "10000"] []))
-            _ (process.cleanup-wait (io.record [false [] [] [] [Child]])
+            _ (process.cleanup-wait (process.session.make false [] [Child] [] [] [])
                 (deadline.after Clock Budget) (deadline.after (freeze 0) 1) false [ok])
             Wait (process.wait Child 1000)
             _ (if (= Wait [pending]) (do (process.kill Child) (process.wait Child 1000)) true)

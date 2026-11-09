@@ -899,6 +899,14 @@ that. Its readings decided nothing below.
 
 ### Managed structs
 
+- **Subprocess records as structs** (2026-11-09, Apple M3 Max, measured while other builds ran, load 3–4).
+  Options, children, pipe contexts, output collectors, the input feed, an exchange's state, reports and a
+  pipeline's registry are structs; numbered reads fall from 64 to 19 in `process.shen` and from 136 to 7 in
+  `process-io.shen`. What `lib/process.c` reads stays a vector: the spawn request, the streams and their
+  `[Kind Path]` pairs; so do the vector it returns and the pipes, indexed by stream number. Medians of 11
+  alternated runs: 2M `process.options` with four options 306 against 253 ms, 15M rounds of the report's
+  readers 345 against 319, 8 runs of `cat` over 8 MiB in 1 KiB chunks 354 against 356.
+
 - **Views, cursors and I/O records as structs** (2026-11-09, Apple M3 Max, against the same library sources before).
   Byte views, cursors, I/O endpoints, readers and writers, framers, deadlines and a socket's policy are structs,
   and grammars, JSON, subprocesses and the filesystem library read them through exported readers such as
