@@ -64,6 +64,21 @@
   X Bs -> (let B (assoc X Bs) (if (cons? B) (tl B) X)) where (symbol? X)
   X _ -> X)
 
+\\ Whether every lambda in X is a goal as the Prolog compiler passes one: four
+\\ parameters, applied as the last arguments of a call.
+(define shen-jit.lower.only-goals?
+  [lambda B [lambda L [lambda K [lambda C [F | Args]]]]]
+  -> (and (shen-jit.symbol? F) (not (shen-jit.lower.occurs? lambda Args))
+          (shen-jit.lower.ends-with? [B L K C] Args))
+  [lambda | _] -> false
+  [X | Xs] -> (and (shen-jit.lower.only-goals? X) (shen-jit.lower.only-goals? Xs))
+  _ -> true)
+
+(define shen-jit.lower.ends-with?
+  Ys Xs -> (= Ys Xs) where (= (length Ys) (length Xs))
+  Ys [_ | Xs] -> (shen-jit.lower.ends-with? Ys Xs)
+  _ _ -> false)
+
 (define shen-jit.lower.occurs?
   X X -> true
   X [Y | Ys] -> (or (shen-jit.lower.occurs? X Y) (shen-jit.lower.occurs? X Ys))
@@ -316,6 +331,14 @@
 \\   [apply F] [apply F X] [trap X E Handler]
 
 (define shen-jit.lower.norm
+  \\ A query as the kernel compiles prolog?: its vector of bindings goes back when the
+  \\ query ends, for the next one to take. Not when the query makes a lambda other than
+  \\ a goal passed to findall or call, which may outlive it and read the vector.
+  Scope [[[[[lambda B [lambda L [lambda K [lambda C Body]]]] [shen.prolog-vector]] Lock] Key] Cont]
+  -> (shen-jit.lower.norm Scope [let B [shen.prolog-vector]
+                                  [shen-jit.prolog-done B [let L Lock [let K Key [let C Cont Body]]]]])
+      where (and (shen-jit.lower.only-goals? Body) (shen-jit.sealed? shen-jit.prolog-done)
+                 (empty? (intersection [let lambda shen.prolog-vector shen-jit.prolog-done] Scope)))
   \\ ((fn F) X1 ... Xn) for a sealed F of arity n >= 1 is (F X1 ... Xn): F's
   \\ lambda form applies F to its n arguments, and F cannot be redefined.
   Scope [[fn F] | Args] -> [call F (shen-jit.lower.norm-list Scope Args)]

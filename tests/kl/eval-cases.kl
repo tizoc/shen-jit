@@ -862,6 +862,15 @@ has them."
 (value true (shen.pvar? (shen.make-prolog-variable 2)))
 (value t.pvar-prolog (defun t.pvar-prolog () (let B (shen.prolog-vector) (let X (shen.newpv B) (let Before (shen.lazyderef X B) (let Bound (shen.bindv X a B) (let After (shen.lazyderef X B) (let Undone (shen.unwind X B ok) (cons (= Before X) (cons After (cons Undone (cons (= (shen.lazyderef X B) X) (cons (shen.ticket-number B) ())))))))))))))
 (value (true a ok true 3) (t.pvar-prolog))
+"A query's vector goes back when it ends, for the next query: each starts at offset 2,
+nested queries have their own, and one that makes a lambda keeps its vector."
+(value t.pool-q (defun t.pool-q () (((((lambda B (lambda L (lambda K (lambda C (let X (shen.newpv B) (do (address-> B 3 junk) (shen.ticket-number B))))))) (shen.prolog-vector)) (@v true (@v 0 (vector 0)))) 0) (freeze true))))
+(value (3 3 3) (cons (t.pool-q) (cons (t.pool-q) (cons (t.pool-q) ()))))
+(value t.pool-inner (defun t.pool-inner () (((((lambda B (lambda L (lambda K (lambda C (let Y (shen.newpv B) (do (shen.bindv Y b B) (shen.deref Y B))))))) (shen.prolog-vector)) (@v true (@v 0 (vector 0)))) 0) (freeze true))))
+(value t.pool-outer (defun t.pool-outer () (((((lambda B (lambda L (lambda K (lambda C (let X (shen.newpv B) (do (shen.bindv X a B) (let I (t.pool-inner) (cons (shen.deref X B) (cons I ()))))))))) (shen.prolog-vector)) (@v true (@v 0 (vector 0)))) 0) (freeze true))))
+(value ((a b) (a b)) (cons (t.pool-outer) (cons (t.pool-outer) ())))
+(value t.pool-closure (defun t.pool-closure () (((((lambda B (lambda L (lambda K (lambda C (let X (shen.newpv B) (do (shen.bindv X 7 B) (lambda Y (shen.deref X B)))))))) (shen.prolog-vector)) (@v true (@v 0 (vector 0)))) 0) (freeze true))))
+(value 7 (let F (t.pool-closure) (let Q1 (t.pool-q) (let Q2 (t.pool-outer) (F 0)))))
 (value t.pvar-chain (defun t.pvar-chain () (let B (shen.prolog-vector) (let X (shen.newpv B) (let Y (shen.newpv B) (let Z (shen.newpv B) (do (shen.bindv X Y B) (do (shen.bindv Y (cons Z 1) B) (do (shen.bindv Z 2 B) (cons (shen.lazyderef Z B) (cons (hd (shen.deref X B)) (cons (tl (shen.deref X B)) ()))))))))))))
 (value (2 2 1) (t.pvar-chain))
 "A cut then (when false), which the lowerer folds: it fails, and locks the

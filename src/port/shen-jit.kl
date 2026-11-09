@@ -165,6 +165,38 @@ continuation into its uses, and a primitive as one call."
 
 (defun shen.gc (Bindings Computation) (shen-jit.gc Bindings Computation))
 
+"A query's vector of bindings, of (prolog-memory) words, filled at each query in the
+kernel. The lowerer gives it back when the query ends (shen-jit.prolog-done), and the
+next query takes it, its next offset set back to 2: making a variable stores its
+binding, so what an earlier query left above that offset is never read."
+
+(defun shen.prolog-vector ()
+  (let Free (trap-error (value shen-jit.*free-prolog-vectors*) (lambda E ()))
+    (if (cons? Free)
+        (do (set shen-jit.*free-prolog-vectors* (tl Free))
+            (shen-jit.reuse-prolog-vector (hd Free) (value shen.*prolog-memory*)))
+        (shen-jit.new-prolog-vector))))
+
+"Only a vector of the size queries now take, in case (prolog-memory N) changed."
+
+(defun shen-jit.reuse-prolog-vector (Vector Memory)
+  (if (and (trap-error (do (<-address Vector (- Memory 1)) true) (lambda E false))
+           (trap-error (do (<-address Vector Memory) false) (lambda E true)))
+      (address-> Vector 1 2)
+      (shen-jit.new-prolog-vector)))
+
+(defun shen-jit.new-prolog-vector ()
+  (let Vector (absvector (value shen.*prolog-memory*))
+    (do (address-> Vector 0 shen.print-prolog-vector) (address-> Vector 1 2))))
+
+"No call between reading the free list and setting it, so another thread cannot
+take the same vector: threads switch at function entries and loop checks."
+
+(defun shen-jit.prolog-done (Vector Result)
+  (do (set shen-jit.*free-prolog-vectors*
+           (cons Vector (trap-error (value shen-jit.*free-prolog-vectors*) (lambda E ()))))
+      Result))
+
 (defun shen.pvar? (X) (shen-jit.pvar? X))
 
 (defun shen.lazyderef (X Bindings) (shen-jit.deref X Bindings shen.-null-))

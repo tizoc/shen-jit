@@ -29,7 +29,7 @@ The functions that Shen/Scheme 0.54 replaces in its `src/overrides.shen`, with w
 | `shen.push-factorised-branch`, `shen.eval-factorised-branch` | its own factorised compilation | none | Not applicable: Shen/JIT factorises with the kernel's `shen.factor` |
 | `unwind-types`, `toplevel-display-exception`, `show-exceptions?`, `interactive-error?` | error display with Chez conditions | the port's `shen.toplevel-display-exception` prints backtraces | Done where it applies |
 
-`shen.prolog-vector` needed no override: the kernel's makes an absvector of `(prolog-memory N)` words per query, which the collector handles by skipping repeated pointers and keeping vectors of 32K words or more apart, uncopied.
+The kernel's `shen.prolog-vector` makes an absvector of `(prolog-memory N)` words per query, 80 KB by default, which the collector handles by skipping repeated pointers and keeping vectors of 32K words or more apart, uncopied.
 
 ## Overridden by Shen/JIT only
 
@@ -47,6 +47,7 @@ The functions that Shen/Scheme 0.54 replaces in its `src/overrides.shen`, with w
 | `shen.str->bytes` | Copies the string into one byte buffer and reads it backwards to build the list, avoiding repeated copies of the remaining string in `read-from-string` |
 | `shen.make-prolog-variable`, `shen.deref`, `shen.bindv`, `shen.unwind` | A variable is an immediate value holding its binding's offset, so these use `shen-jit.pvar` and `shen-jit.pvar-offset` |
 | `shen.newpv` | `shen-jit.newpv`, inline, where the kernel's calls `shen.ticket-number`, `shen.make-prolog-variable` and `shen.nextticket`: the same stores in the same order. Every clause variable is made through it, the typechecker's too |
+| `shen.prolog-vector` | Takes a vector that an earlier query gave back, if one has the size `(prolog-memory N)` gives now, with its next offset set back to 2, and makes one only otherwise. The lowerer gives a query's vector back when it ends ([bytecode.md](bytecode.md)). What an earlier query left above the offset is never read, since making a variable stores its binding |
 | `shen.gc` | `shen-jit.gc`, inline, where the kernel's is a call that compares with `false` and then calls `shen.ticket-number` and `shen.decrement-ticket`. One call wraps the code after each variable is made |
 | `shen.<-out`, `shen.hds=?` | Small enough to inline into their callers across the kernel, 59 and 35 functions, and into user `defcc` code |
 | `shen.<shortnatters>`, `shen.<whitespaces>`, `shen.<digits>`, `shen.<alphanums>` | Loops over a run of bytes, where the kernel's rules call a rule and build a parse result per byte. Same results, including where a comment ends at a tab |

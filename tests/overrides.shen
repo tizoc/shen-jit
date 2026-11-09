@@ -43,7 +43,7 @@
            (/. File (o.for-each
                       (/. Form (shen.dict-> (value o.*kernel*) (hd (tl Form)) Form))
                       (o.defuns (cn Dir (cn "/klambda/" (cn File ".kl"))))))
-           ["core" "dict" "prolog" "reader" "sys" "writer" "yacc" "toplevel" "extension-launcher"]))
+           ["core" "dict" "prolog" "macros" "reader" "sys" "writer" "yacc" "toplevel" "extension-launcher"]))
 
 (define o.for-each
   _ [] -> done
@@ -741,7 +741,7 @@ b" (n->string 0) (n->string 255)] (o.strings)))
 
 (define o.prolog-group
   -> [shen.make-prolog-variable shen.pvar? shen.lazyderef shen.deref shen.bindv shen.unwind shen.lzy= shen.lzy=!
-      shen.bind! shen.occurs-check? shen.newpv shen.gc])
+      shen.bind! shen.occurs-check? shen.newpv shen.gc shen.prolog-vector])
 
 (define o.pcall
   k F Args -> (o.apply (o.k F) Args)
@@ -900,9 +900,35 @@ b" (n->string 0) (n->string 255)] (o.strings)))
                                                                      (make-string "shen.gc of ~A and ~S" (hd B) C)))
                                              [false true]))
                            Bindings)
+               (output "shen.prolog-vector~%")
+               (o.for-each (/. Memory (o.compare-worlds (/. W (o.prolog-vector-shape W Memory))
+                                                        (make-string "shen.prolog-vector at ~A words" Memory)))
+                           [3 10 1000 10000])
+               (prolog-memory 10000)
                (output "shen.lazyderef, shen.deref, shen.bindv, shen.unwind~%")
                (o.for-each (/. Case (o.deref-edge Case))
                            (o.cases2 (append [[var2 2] [var31 31] [var32 32] [var1000 1000]] (map (/. V [(hd V) (o.make V)]) Others)) Bindings)))))
+
+\\ What a query sees of a new vector of bindings: its first two elements and its size. The port's may be
+\\ one an earlier query gave back, here one that holds a binding and a later offset, made at another size.
+\\ What a query's end does in compiled code (shen-jit.prolog-done).
+(define o.give-back
+  V -> (set shen-jit.*free-prolog-vectors* (cons V (trap-error (value shen-jit.*free-prolog-vectors*) (/. E [])))))
+
+(define o.prolog-vector-shape
+  W Memory -> (let Before (if (= W p)
+                              (let _ (prolog-memory 7)
+                                   V (o.pcall W shen.prolog-vector [])
+                                   _ (address-> V 2 junk)
+                                   _ (address-> V 1 5)
+                                (o.give-back V))
+                              skip)
+                   _ (prolog-memory Memory)
+                   Given (if (= W p) (o.give-back (o.pcall W shen.prolog-vector [])) skip)
+                   V (o.pcall W shen.prolog-vector [])
+                [(<-address V 0) (<-address V 1)
+                 (trap-error (do (<-address V (- Memory 1)) in) (/. E out))
+                 (trap-error (do (<-address V Memory) in) (/. E out))]))
 
 (define o.world-call
   P V Call -> (let _ (set o.*case-values* [(o.make V)])

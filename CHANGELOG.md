@@ -13,6 +13,9 @@ All notable changes to this project are documented in this file. The format is b
 - Prolog makes each clause variable inline, with one primitive, instead of three calls, and gives its number back
   inline when a clause fails: short queries take 14-28% less time, and the kernel's test suite, which mostly
   typechecks, 8-11% less.
+- A query reuses the vector of bindings an earlier one gave back, instead of making and filling one of
+  `(prolog-memory N)` words: short queries take a further 13-25% less time, and installing the standard library,
+  which typechecks it, 14-16% less.
 
 ## [0.6] - 2026-11-08
 

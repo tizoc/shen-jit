@@ -281,6 +281,11 @@ the shifts. The others are calls to C.
 - `(shen.cut B L K (freeze (when false B L K C)))`, with every argument a variable: `!` then
   `(when false)`, which THORN emits for every predicate. The continuation fails, so it is
   `(if (shen.unlocked? L) (shen.lock K L) false)`, with no closure and no call to `shen.cut`.
+- A query as the kernel compiles `prolog?`,
+  `((((lambda B (lambda L (lambda K (lambda C Body)))) (shen.prolog-vector)) Lock) Key) Cont)`, where every `lambda`
+  in Body is a goal as the Prolog compiler passes one to `findall` or `call`: its vector of bindings is given back
+  when Body returns (`shen-jit.prolog-done`), for the next query's `shen.prolog-vector` to take. A query that makes
+  any other `lambda` keeps its vector, which that closure may read later.
 - `(= (shen.deref X B) (shen.deref Y B))`, with B a variable, a number or `[]`, which the Prolog compiler makes of
   `(when (= X Y))`: `(shen-jit.deref= X Y B)`, which dereferences as it compares and copies neither term.
 - `(let G (freeze E) Body)`, where Body uses G only in `(thaw G)` and as the last argument

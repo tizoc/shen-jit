@@ -817,6 +817,17 @@ that. Its readings decided nothing below.
     that the failure path calls a helper, it inlines, but `subset` took 1.28 times as long: inlined code counts at
     its size where the lowerer decides whether to copy a clause's head continuation into its uses (1,500 nodes),
     and two continuations of `subset-sum` became closures again. A primitive counts as one call.
+- **Reusing Prolog vectors** (2026-11-09, Apple M3 Max and Ryzen VM, best of 5, alternating with the build before).
+  Every query made and filled an absvector of `(prolog-memory N)` words, 10,000 by default, which cost 0.37 ns a word
+  on the Ryzen and 0.16 on the M3. A lowering rule gives a query's vector back to a free list when the query ends,
+  and the port's `shen.prolog-vector` takes one of the right size from it, with its next offset set back to 2:
+  making a variable stores its binding, so nothing above the offset is read. A query that makes a `lambda` other
+  than a goal for `findall` or `call` keeps its vector, as the closure may read it later. Taking and giving back
+  read and set the list with no call between, so another thread cannot take the same vector. About 30 lines. M3:
+  `nreverse` 0.81, `subset` 0.87, `hamilton` 0.97, `queens-8` 0.97, `coloring`, `tak` and Einstein 0.98; Ryzen
+  0.75, 0.83, 0.96, 0.92, 0.96, 0.80, 1.00. `tak` sets `(prolog-memory 1000000)` and made 8 MB per query.
+  Installing the standard library, which typechecks it, 0.86 and 0.84; the kernel suite 1.02 and 0.99, THORN
+  0.99 to 1.02. A vector given back keeps what its bindings point to alive until another query overwrites them.
 - **Rejected: unifying two terms that are not pairs inline** (2026-11-09, Apple M3 Max). `is` and `is!` call the
   unifier even for a variable and an atom. Done in the lowered code, with the unifier only for pairs: `nreverse`
   9.2 to 9.1 µs, so the call was not the cost, while the larger code again turned two of `subset-sum`'s
