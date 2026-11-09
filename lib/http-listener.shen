@@ -10,6 +10,7 @@
   (use io)
   (use shen-jit)
   (use socket)
+  (import struct defstruct)
   (externals [accept blocking cancelling define-foreign draining http-listener-options
     http-listener-results int32 int64 listening max-connections ok pending pointer serve
     shutdown-grace stopped thread void])
@@ -47,8 +48,53 @@
   _ _ _ _ _ -> (error "http: listener options must be [Name Number] pairs"))
 
 \\ Public control: image guard, port, stop flag, immutable snapshot, final result.
-\\ Private owner: listener token, workers, accepted/completed/failed/cancelled/peak,
-\\ primary failure, grace deadline and phase. Only the supervisor writes this record.
+\\ Private registry: listener token, workers, accepted/completed/failed/cancelled/peak,
+\\ primary failure, grace deadline and phase. Only the supervisor writes the registry.
+(define show-server
+  S -> (make-string "#<http server port ~A ~A>" (server.port S) (snapshot.phase (server.snapshot S))))
+
+(defstruct server
+  (printer show-server)
+  guard
+  port
+  (mutable stopping)
+  (mutable snapshot)
+  (mutable result))
+
+(defstruct snapshot
+  phase
+  live
+  accepted
+  completed
+  failed
+  cancelled
+  peak)
+
+(define show-registry
+  O -> (make-string "#<http listener ~A>" (registry.phase O)))
+
+(defstruct registry
+  (printer show-registry)
+  token
+  (mutable workers)
+  (mutable accepted)
+  (mutable completed)
+  (mutable failed)
+  (mutable cancelled)
+  (mutable peak)
+  (mutable error)
+  (mutable grace)
+  (mutable phase))
+
+\\ A worker: its endpoint and, once it has finished, its result.
+(define show-task
+  W -> (if (empty? (task.result W)) "#<http worker running>" "#<http worker done>"))
+
+(defstruct task
+  (printer show-task)
+  endpoint
+  (mutable result))
+
 (define listen
   Host Port Handler Options ->
     (let Config (listener-options Options)
@@ -60,33 +106,32 @@
 (define listener-start
   L Handler Config ->
     (let Guard (shen-jit.bytes->pointer (shen-jit.u32! (shen-jit.bytes 8) 0 1) 0 server)
-         S (io.record [server Guard (socket.port L) false
-                       (io.record [listening 0 0 0 0 0 0]) []])
-         O (io.record [(io.socket-token L) [] 0 0 0 0 0 [] [] listening])
+         S (server.make Guard (socket.port L) false (snapshot.make listening 0 0 0 0 0 0) [])
+         O (registry.make (io.socket-token L) [] 0 0 0 0 0 [] [] listening)
          _ (thread (freeze (supervisor S O Handler Config)))
       S))
 
 (define listener-check
   S ->
-    (let _ (if (io.tag? S server) true (error "http: not a server"))
-         _ (if (= (shen-jit.pointer-address (<-address S 1)) 0)
+    (let _ (if (server? S) true (error "http: not a server"))
+         _ (if (= (shen-jit.pointer-address (server.guard S)) 0)
                (error "http: saved servers must be recreated") true)
       S))
 
 (define port
-  S -> (<-address (listener-check S) 2))
+  S -> (server.port (listener-check S)))
 
 (define stop
-  S -> (do (address-> (listener-check S) 3 true) true))
+  S -> (do (server.stopping-> (listener-check S) true) true))
 
 (define state
-  S -> (<-address (<-address (listener-check S) 4) 0))
+  S -> (snapshot.phase (server.snapshot (listener-check S))))
 
 (define stats
   S ->
-    (let V (<-address (listener-check S) 4)
-      [(<-address V 1) (<-address V 2) (<-address V 3)
-       (<-address V 4) (<-address V 5) (<-address V 6)]))
+    (let V (server.snapshot (listener-check S))
+      [(snapshot.live V) (snapshot.accepted V) (snapshot.completed V)
+       (snapshot.failed V) (snapshot.cancelled V) (snapshot.peak V)]))
 
 (define wait
   S Milliseconds ->
@@ -94,25 +139,25 @@
 
 (define wait-until
   S D ->
-    (let Result (<-address S 5)
+    (let Result (server.result S)
       (cond ((not (empty? Result)) Result)
             ((deadline.expired? D) [pending])
             (true (do (pause (deadline.slice D 50)) (wait-until S D))))))
 
 (define publish
   S O ->
-    (address-> S 4 (io.record [(<-address O 9) (length (<-address O 1))
-                              (<-address O 2) (<-address O 3) (<-address O 4)
-                              (<-address O 5) (<-address O 6)])))
+    (server.snapshot-> S (snapshot.make (registry.phase O) (length (registry.workers O))
+                           (registry.accepted O) (registry.completed O) (registry.failed O)
+                           (registry.cancelled O) (registry.peak O))))
 
 (define note-error
   O Error ->
-    (let Previous (<-address O 7)
-      (address-> O 7 (if (empty? Previous) Error (io.secondary Previous Error)))))
+    (let Previous (registry.error O)
+      (registry.error-> O (if (empty? Previous) Error (io.secondary Previous Error)))))
 
 (define close-listener
   O ->
-    (let Token (<-address O 0)
+    (let Token (registry.token O)
       (if (= (shen-jit.pointer-address Token) 0)
           true
           (listener-closed O (io.socket-close Token "HTTP listener")))))
@@ -122,35 +167,35 @@
   O [error Error] -> (do (note-error O Error) true))
 
 (define reap
-  O -> (address-> O 1 (reap-workers O (<-address O 1) [])))
+  O -> (registry.workers-> O (reap-workers O (registry.workers O) [])))
 
 (define reap-workers
   _ [] Live -> (reverse Live)
   O [W | Rest] Live ->
-    (let Result (<-address W 1)
+    (let Result (task.result W)
       (if (empty? Result)
           (reap-workers O Rest [W | Live])
-          (do (address-> O 3 (+ 1 (<-address O 3)))
+          (do (registry.completed-> O (+ 1 (registry.completed O)))
               (count-failure O Result)
               (reap-workers O Rest Live)))))
 
 (define count-failure
   _ [ok _] -> true
-  O [error _] -> (do (address-> O 4 (+ 1 (<-address O 4))) true))
+  O [error _] -> (do (registry.failed-> O (+ 1 (registry.failed O))) true))
 
 (define worker
   W Handler Options Stop ->
-    (let E (<-address W 0)
+    (let E (task.endpoint W)
          Result (io.with-endpoint E
                   (/. Connection (serve-controlled Connection Handler Options Stop)))
-      (address-> W 1 Result)))
+      (task.result-> W Result)))
 
 (define admit
   S O Handler Options ->
-    (let Peer (socket.c-accept (io.socket-id (<-address O 0)) [] [])
+    (let Peer (socket.c-accept (io.socket-id (registry.token O)) [] [])
          Code (if (< Peer 0) (io.socket-code) 0)
       (cond ((>= Peer 0)
-              (if (<-address S 3)
+              (if (server.stopping S)
                   (socket.close Peer)
                   (launch S O (socket.closing-on-error Peer (freeze (socket.set-up Peer)))
                                Handler Options)))
@@ -160,63 +205,63 @@
 (define launch
   S O Peer Handler Options ->
     (let E (io.socket Peer "HTTP peer")
-         W (io.record [E []])
-         Workers [W | (<-address O 1)]
-         _ (address-> O 1 Workers)
-         _ (address-> O 2 (+ 1 (<-address O 2)))
+         W (task.make E [])
+         Workers [W | (registry.workers O)]
+         _ (registry.workers-> O Workers)
+         _ (registry.accepted-> O (+ 1 (registry.accepted O)))
          N (length Workers)
-         _ (if (> N (<-address O 6)) (address-> O 6 N) true)
-      (trap-error (thread (freeze (worker W Handler Options (freeze (<-address S 3)))))
-        (/. X (address-> W 1
+         _ (if (> N (registry.peak O)) (registry.peak-> O N) true)
+      (trap-error (thread (freeze (worker W Handler Options (freeze (server.stopping S)))))
+        (/. X (task.result-> W
                 (io.finish [error (io.error thread "HTTP worker" (error-to-string X))] (io.close E)))))))
 
 (define begin-stop
   O Grace ->
     (do (close-listener O)
-        (address-> O 8 (clock.deadline Grace))
-        (address-> O 9 draining)))
+        (registry.grace-> O (clock.deadline Grace))
+        (registry.phase-> O draining)))
 
 (define cancel-workers
   [] -> true
-  [W | Rest] -> (do (io.socket-cancel (<-address W 0)) (cancel-workers Rest)))
+  [W | Rest] -> (do (io.socket-cancel (task.endpoint W)) (cancel-workers Rest)))
 
 (define supervise
   S O Handler [Cap Grace Options] ->
     (do (reap O)
-        (if (and (= (<-address O 9) listening)
-                 (or (<-address S 3) (not (empty? (<-address O 7)))))
+        (if (and (= (registry.phase O) listening)
+                 (or (server.stopping S) (not (empty? (registry.error O)))))
             (begin-stop O Grace) true)
         (publish S O)
-        (cond ((= (<-address O 9) listening)
-                (do (if (< (length (<-address O 1)) Cap)
-                        (if (socket.readable? (io.socket-id (<-address O 0)) 50)
+        (cond ((= (registry.phase O) listening)
+                (do (if (< (length (registry.workers O)) Cap)
+                        (if (socket.readable? (io.socket-id (registry.token O)) 50)
                             (admit S O Handler Options) true)
                         (pause 50))
                     (supervise S O Handler [Cap Grace Options])))
-              ((empty? (<-address O 1)) (finish-listener S O))
-              ((and (= (<-address O 9) draining) (deadline.expired? (<-address O 8)))
-                (do (cancel-workers (<-address O 1))
-                    (address-> O 5 (length (<-address O 1)))
-                    (address-> O 9 cancelling)
+              ((empty? (registry.workers O)) (finish-listener S O))
+              ((and (= (registry.phase O) draining) (deadline.expired? (registry.grace O)))
+                (do (cancel-workers (registry.workers O))
+                    (registry.cancelled-> O (length (registry.workers O)))
+                    (registry.phase-> O cancelling)
                     (supervise S O Handler [Cap Grace Options])))
               (true (do (pause 50) (supervise S O Handler [Cap Grace Options]))))))
 
 (define finish-listener
   S O ->
     (let _ (close-listener O)
-         _ (address-> O 9 stopped)
+         _ (registry.phase-> O stopped)
          _ (publish S O)
-         Error (<-address O 7)
-      (address-> S 5 (if (empty? Error) [ok] [error Error]))))
+         Error (registry.error O)
+      (server.result-> S (if (empty? Error) [ok] [error Error]))))
 
 (define supervisor
   S O Handler Config ->
     (trap-error (supervise S O Handler Config)
       (/. X (do (note-error O (io.error serve "HTTP listener" (error-to-string X)))
                 (close-listener O)
-                (cancel-workers (<-address O 1))
-                (address-> O 5 (length (<-address O 1)))
-                (address-> O 9 cancelling)
+                (cancel-workers (registry.workers O))
+                (registry.cancelled-> O (length (registry.workers O)))
+                (registry.phase-> O cancelling)
                 (supervise S O Handler Config)))))
 
 (datatype http-listener-results

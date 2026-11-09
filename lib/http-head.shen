@@ -7,8 +7,24 @@
   (use deadline)
   (use io)
   (use shen-jit)
+  (import struct defstruct)
   (externals [deadline done eof http-head http-head-results invalid more ok timeout])
   (export head-reader head-result read-head read-head-until)
+
+\\ A head reader: its borrowed reader, byte limit, accumulator, used count, CRLF state, saved
+\\ result and busy flag.
+(define show-head
+  F -> (make-string "#<head-reader ~A/~A bytes>" (head-state.used F) (head-state.limit F)))
+
+(defstruct head-state
+  (printer show-head)
+  reader
+  limit
+  (mutable storage)
+  (mutable used)
+  (mutable crlf)
+  (mutable result)
+  (mutable busy))
 
 (define head-reader
   R Limit ->
@@ -16,25 +32,24 @@
          _ (if (and (>= N 4) (<= N 1048576)) true
                (error "http: head limit must be 4..1048576 bytes"))
          _ (io.reader-check R)
-      (io.record [head-reader R N (buffer.new N) 0 0 [] false])))
+      (head-state.make R N (buffer.new N) 0 0 [] false)))
 
-\\ Slots: tag, borrowed reader, byte limit, accumulator, used count, CRLF state, result, busy.
 (define head-check
   F ->
-    (let _ (if (io.tag? F head-reader) true (error "http: not a head reader"))
-         _ (if (<-address F 7) (error "http: head read is already in flight") true)
-         _ (io.reader-check (<-address F 1))
+    (let _ (if (head-state? F) true (error "http: not a head reader"))
+         _ (if (head-state.busy F) (error "http: head read is already in flight") true)
+         _ (io.reader-check (head-state.reader F))
       F))
 
 (define head-error
-  F Message -> [error (io.progress (io.error http-head "HTTP head" Message) (<-address F 4))])
+  F Message -> [error (io.progress (io.error http-head "HTTP head" Message) (head-state.used F))])
 
 (define head-budget
   _ [] -> [ok]
   F D ->
     (if (deadline.expired? D)
         [error (io.progress (io.native-error read timeout 0 "HTTP head" "deadline expired")
-                           (<-address F 4))]
+                           (head-state.used F))]
         [ok]))
 
 (define read-head
@@ -46,35 +61,35 @@
 (define head-run
   F D ->
     (let _ (head-check F)
-         Saved (<-address F 6)
+         Saved (head-state.result F)
       (if (not (empty? Saved))
           Saved
-          (do (address-> F 7 true)
+          (do (head-state.busy-> F true)
               (let Result (trap-error (head-loop F D)
-                             (/. X (do (address-> F 7 false)
+                             (/. X (do (head-state.busy-> F false)
                                        (head-finish F (head-error F (error-to-string X)))
                                        (simple-error (error-to-string X)))))
-                (do (address-> F 7 false) (head-finish F Result)))))))
+                (do (head-state.busy-> F false) (head-finish F Result)))))))
 
 (define head-finish
   F Result ->
-    (do (address-> F 6 Result)
-        (address-> F 3 [])
+    (do (head-state.result-> F Result)
+        (head-state.storage-> F [])
         Result))
 
 (define head-loop
   F D -> (io.let-ok _ (head-budget F D)
-           (if (= (<-address F 4) (<-address F 2))
+           (if (= (head-state.used F) (head-state.limit F))
                (head-error F "head exceeds byte limit")
-               (head-input F D (io.peek-some (<-address F 1))))))
+               (head-input F D (io.peek-some (head-state.reader F))))))
 
 (define head-input
   F _ [eof] ->
-    (if (= (<-address F 4) 0) [eof] (head-error F "incomplete head"))
-  F _ [error Error] -> [error (io.progress Error (<-address F 4))]
+    (if (= (head-state.used F) 0) [eof] (head-error F "incomplete head"))
+  F _ [error Error] -> [error (io.progress Error (head-state.used F))]
   F D [ok V] ->
     (let Result (head-scan (buffer.owner V) (buffer.offset V) (buffer.end V)
-                                (<-address F 5) (- (<-address F 2) (<-address F 4)) 0)
+                                (head-state.crlf F) (- (head-state.limit F) (head-state.used F)) 0)
       (head-scanned F D V Result)))
 
 \\ Scan each new span once. A partial CR or CRLFCR is retained as state, never rescanned.
@@ -97,16 +112,16 @@
 
 (define head-copy
   F V Count ->
-    (let Used (<-address F 4)
-      (do (buffer.copy! (<-address F 3) Used V 0 Count)
-          (io.consume (<-address F 1) Count)
-          (address-> F 4 (+ Used Count))
+    (let Used (head-state.used F)
+      (do (buffer.copy! (head-state.storage F) Used V 0 Count)
+          (io.consume (head-state.reader F) Count)
+          (head-state.used-> F (+ Used Count))
           F)))
 
 (define head-scanned
   F D V [more Count State] ->
     (do (head-copy F V Count)
-        (address-> F 5 State)
+        (head-state.crlf-> F State)
         (head-loop F D))
   F _ V [limit Count] ->
     (do (head-copy F V Count) (head-error F "head exceeds byte limit"))
@@ -115,7 +130,7 @@
   F D V [done Count] ->
     (do (head-copy F V Count)
         (io.let-ok _ (head-budget F D)
-          [head (buffer.wrap (buffer.bytes (buffer.slice (<-address F 3) 0 (<-address F 4))))])))
+          [head (buffer.wrap (buffer.bytes (buffer.slice (head-state.storage F) 0 (head-state.used F))))])))
 
 (datatype http-head-results
   V : buffer.view;

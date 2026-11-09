@@ -899,6 +899,15 @@ that. Its readings decided nothing below.
 
 ### Managed structs
 
+- **HTTP records as structs** (2026-11-09, Apple M3 Max, measured while other builds ran). Head readers,
+  requests, body readers, chunk and output limits, buffered and streamed responses, a response's source,
+  plan and output, the server's configuration and connection, and the listener's server, snapshot, registry
+  and workers are structs. A response's readers dispatch on the two predicates instead of picking slot 4 or 5
+  by tag. The server builds its body and output limits once, not for each request. Medians of 7 alternated
+  runs: parsing a request and reading its fields, 239 against 234 ms for 100000; reading 100000 requests with
+  bodies, 202 against 193; encoding 100000 responses, 100 against 101. `server-options` takes about 50 ns
+  more, once per connection, for the three records it builds; each request saves about 110 ns of limits.
+
 - **curl, filesystem, Tree-sitter and grammar records as structs** (2026-11-09, Apple M3 Max, measured while
   other builds ran). curl's clients, responses and stream state, the filesystem's metadata, split paths,
   limits and traversal state, Tree-sitter's languages and snapshots, and a grammar's capture cells, used only

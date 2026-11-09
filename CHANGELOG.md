@@ -10,13 +10,17 @@ All notable changes to this project are documented in this file. The format is b
 - `defstruct`, available at startup: fixed managed records with read-only fields by default, optional mutable
   fields and `->` setters, positional constructors and shared labelled `struct.make` syntax, namespace support
   and stable image/reload metadata. Records print with their type and fields, or through a declaration's
-  `(printer F)`. The first client is the private state of `buffer.builder`; its public API stays the same.
+  `(printer F)`.
 
 ### Changed
 
 - All optional Shen libraries use namespaces, with explicit dependency prefixes and exported operations, types and
   shared support functions. Their qualified API names and data formats stay the same. The kernel pin moves to
   43.5 for namespace interfaces and syntax annotation hooks, using the release's precompiled KLambda.
+- The libraries' fixed records are structs: views, cursors, I/O endpoints, readers and writers, subprocess, HTTP,
+  curl, filesystem and Tree-sitter records, and Datalog's classes and indexes. They print briefly, as
+  `#<endpoint "stdin" open>`, and libraries read each other's through exported readers such as
+  `io.endpoint.state`. Public APIs and errors stay the same.
 - The guide has a part for the libraries, grouped by what they do, which says once how to load them and build their
   adapters, and lists the example applications. "Close to the machine" keeps the runtime's own: bytes and bits,
   calling C, memory outside the heap, C written for Shen and native code by hand.
@@ -26,6 +30,12 @@ All notable changes to this project are documented in this file. The format is b
 - A query reuses the vector of bindings an earlier one gave back, instead of making and filling one of
   `(prolog-memory N)` words: short queries take a further 13-25% less time, and installing the standard library,
   which typechecks it, 14-16% less.
+
+### Fixed
+
+- Printing an I/O endpoint, reader or writer, a framer, an HTTP head or body reader or response, or a child
+  process called the library function named by the record's tag, which the writer takes for a printer, and
+  raised an error or printed something else.
 
 ## [0.6] - 2026-11-08
 

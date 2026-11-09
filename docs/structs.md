@@ -128,32 +128,38 @@ The struct expander consumes protection only in literal field positions, preserv
 
 With the older `package` form, include `defstruct` and `struct.make` in its external-symbol list when used.
 
-## Cost and the buffer pilot
+## Cost
 
 A constructor allocates one vector with one tag slot plus one slot per field. Its values are ordinary
 managed Shen values, and construction can trigger GC. Readers and setters use constant slot indices;
 they allocate nothing on success and consult no schema or field-name table. The predicate uses the
-runtime's existing safe tagged-vector primitive. Ordinary JIT inlining applies to these functions.
-Labelled syntax adds local bindings to preserve evaluation order and builds no runtime field list.
+runtime's tagged-vector primitive, with no handler. Labelled syntax adds local bindings to preserve
+evaluation order and builds no runtime field list.
 
-This is useful for compiler state, builders, cursors and other fixed records currently written as
-numbered `absvector` accesses. It does not have the allocation/GC contract of the native authoring DSL.
+Readers, setters and the predicate are small enough to inline, and then cost what the `<-address` or
+`address->` they replace does. Two things differ from a vector written by hand:
 
-The first migration is the private state of `buffer.builder`:
+- Code compiled before a declaration calls its operations instead of inlining them, since they did not
+  exist yet. Declare a struct before the definitions that use it.
+- The constructor is a call. For a record made in great numbers, with no tag before, a struct adds a word
+  and a call to each: Datalog's union-find cells stay vectors for that reason.
 
-```shen
-(defstruct builder-state
-  limit
-  (mutable storage)
-  (mutable length)
-  (mutable sealed))
-```
+A struct's name resolves as any other name in a namespace: one that is already a global function, such as
+stlib's `index`, needs `(shadow index)` for the struct to be the namespace's own.
 
-The implementation uses `builder-state.length`, `builder-state.storage->` and the other named operations.
-Its five-slot storage, byte limit, geometric growth, finish/seal behavior and public `buffer.*` API are
-preserved.
+This is for builders, cursors, connection state and other fixed records otherwise written as numbered
+`absvector` accesses. It does not have the allocation/GC contract of the native authoring DSL.
 
-Byte views, cursors, I/O endpoints, readers and writers, framers and deadlines are structs too, and the
-libraries that read them, such as grammars and subprocesses, use their exported readers, such as
-`buffer.view.start` and `io.endpoint.state`. Their public API and errors are unchanged. The compiler
-and the other libraries' manually laid out records have not been migrated.
+## In the libraries
+
+The libraries' fixed records are structs: byte views, cursors and builders, I/O endpoints, readers and
+writers, framers and deadlines, subprocess options, children and reports, HTTP requests, responses, body
+readers and server state, curl clients and responses, filesystem metadata and traversal state,
+Tree-sitter languages and snapshots, and Datalog's classes, indexes and demand stores. They print as
+`#<view 0..5>`, `#<endpoint "stdin" open>` or `#<child 1234 exited 0>`, and their public API and errors
+are unchanged. Libraries that read another's records use its exported readers, such as
+`buffer.view.start` and `io.endpoint.state`.
+
+Some stay vectors: what a C adapter reads by position (subprocess spawn requests, curl and Tree-sitter
+configurations) or returns, records that generated or native code reads by slot (a grammar's parse
+state), one-slot counters, and a handle's record, which the runtime's pointer guard holds.

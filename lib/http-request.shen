@@ -7,6 +7,7 @@
   (use grammar)
   (use io)
   (use shen-jit)
+  (import struct defstruct)
   (externals [? at bad chunk-count-limit chunk-line-limit chunk-metadata-limit chunked deadline
     defgrammar done eof fixed http http-body http-chunk-options http-request more ok problem
     require text timeout too-large trailer-fields-limit trailer-limit unread unsupported])
@@ -323,6 +324,23 @@
         (invalid "forbidden trailer field")
         (trailer-names Rest Connection)))
 
+\\ A request: its request line and fields, the body's length (or chunked until read), the body (unread
+\\ until read), the body limit, trailers and framing.
+(define show-request
+  Q -> (make-string "#<request ~A ~A>" (request.method Q) (request.target Q)))
+
+(defstruct request
+  (printer show-request)
+  method
+  target
+  version
+  headers
+  length
+  body
+  limit
+  trailers
+  framing)
+
 (define validate-request
   [Method Target Version] Fields Limit ->
     (let Hosts (field-values Fields "host")
@@ -352,10 +370,10 @@
                 (cond ((= Framing unsupported) (http.problem 501 "transfer coding is unsupported"))
                       ((= N too-large) (http.problem 413 "request body exceeds limit"))
                       ((= Framing chunked)
-                        [ok (io.record [request Method Target Version Fields N unread Limit [] chunked])])
+                        [ok (request.make Method Target Version Fields N unread Limit [] chunked)])
                       ((and (= Method "TRACE") (> N 0)) (http.problem 400 "TRACE cannot have a body"))
                       (true
-                        [ok (io.record [request Method Target Version Fields N unread Limit [] fixed])])))))))
+                        [ok (request.make Method Target Version Fields N unread Limit [] fixed)])))))))
 
 (define syntax-error
   X ->
@@ -405,37 +423,37 @@
 
 \\ Requests retain immutable metadata; a body read returns a new request with owned body bytes.
 (define request-check
-  Request -> (if (io.tag? Request request) Request (error "http: not a request")))
+  Request -> (if (request? Request) Request (error "http: not a request")))
 
 (define method
-  Request -> (<-address (request-check Request) 1))
+  Request -> (request.method (request-check Request)))
 
 (define target
-  Request -> (<-address (request-check Request) 2))
+  Request -> (request.target (request-check Request)))
 
 (define version
-  Request -> (<-address (request-check Request) 3))
+  Request -> (request.version (request-check Request)))
 
 (define headers
-  Request -> (<-address (request-check Request) 4))
+  Request -> (request.headers (request-check Request)))
 
 (define content-length
   Request ->
-    (let N (<-address (request-check Request) 5)
+    (let N (request.length (request-check Request))
       (if (= N chunked) (error "http: chunked body length is not known until read") N)))
 
 (define chunked?
-  Request -> (= (<-address (request-check Request) 9) chunked))
+  Request -> (= (request.framing (request-check Request)) chunked))
 
 (define trailers
-  Request -> (do (body Request) (<-address Request 8)))
+  Request -> (do (body Request) (request.trailers Request)))
 
 (define header-values
   Request Name -> (field-values (headers Request) (lower Name)))
 
 (define body
   Request ->
-    (let Body (<-address (request-check Request) 6)
+    (let Body (request.body (request-check Request))
       (if (= Body unread) (error "http: request body has not been read") (buffer.check Body))))
 
 (define complete-request
@@ -443,27 +461,47 @@
 
 (define completed-request
   Request Body Trailers ->
-    (io.record [request (method Request) (target Request) (version Request)
-                (headers Request) (buffer.length Body) Body (<-address Request 7)
-                Trailers (<-address Request 9)]))
+    (request.make (method Request) (target Request) (version Request) (headers Request)
+                  (buffer.length Body) Body (request.limit Request) Trailers (request.framing Request)))
 
 (define body-reader
   R Request -> (body-reader-with R Request []))
 
+\\ A body reader: its borrowed reader, the request, the body's length or chunked, the saved result, the
+\\ busy flag, the chunked body's builder, the bytes of data and of chunk metadata read, the chunk count
+\\ and the chunked limits.
+(define show-body
+  B -> (make-string "#<body-reader ~A bytes>" (body-state.total B)))
+
+(defstruct body-state
+  (printer show-body)
+  reader
+  request
+  length
+  (mutable result)
+  (mutable busy)
+  (mutable builder)
+  (mutable total)
+  (mutable metadata)
+  (mutable chunks)
+  limits)
+
 (define body-reader-with
-  R Request Options ->
+  R Request Options -> (body-reader-limits R Request (chunk-options Options)))
+
+(define body-reader-limits
+  R Request Limits ->
     (let _ (io.reader-check R)
          _ (request-check Request)
-         N (<-address Request 5)
-         _ (if (= (<-address Request 6) unread) true (error "http: request already has a body"))
-         Limits (chunk-options Options)
-      (io.record [body-reader R Request N [] false [] 0 0 0 Limits])))
+         N (request.length Request)
+         _ (if (= (request.body Request) unread) true (error "http: request already has a body"))
+      (body-state.make R Request N [] false [] 0 0 0 Limits)))
 
 (define body-check
   B ->
-    (let _ (if (io.tag? B body-reader) true (error "http: not a body reader"))
-         _ (if (<-address B 5) (error "http: body read is already in flight") true)
-         _ (io.reader-check (<-address B 1))
+    (let _ (if (body-state? B) true (error "http: not a body reader"))
+         _ (if (body-state.busy B) (error "http: body read is already in flight") true)
+         _ (io.reader-check (body-state.reader B))
       B))
 
 (define body-budget
@@ -482,29 +520,33 @@
 (define body-run
   B D ->
     (let _ (body-check B)
-         Saved (<-address B 4)
+         Saved (body-state.result B)
       (if (not (empty? Saved))
           Saved
-          (do (address-> B 5 true)
+          (do (body-state.busy-> B true)
               (let Result (trap-error (io.let-ok _ (body-budget B D 0) (body-ready B D))
-                             (/. X (do (address-> B 5 false)
-                                       (address-> B 6 [])
-                                       (address-> B 4 (http.problem 400 "body read aborted"))
+                             (/. X (do (body-state.busy-> B false)
+                                       (body-state.builder-> B [])
+                                       (body-state.result-> B (http.problem 400 "body read aborted"))
                                        (simple-error (error-to-string X)))))
-                (do (address-> B 5 false) (address-> B 6 []) (address-> B 4 Result) Result))))))
+                (do (body-state.busy-> B false)
+                    (body-state.builder-> B [])
+                    (body-state.result-> B Result)
+                    Result))))))
 
 (define body-ready
   B D ->
-    (if (= (<-address B 3) chunked)
-        (do (address-> B 6 (buffer.builder (<-address (<-address B 2) 7))) (chunk-next B D))
-        (let V (buffer.new (<-address B 3))
-          (body-read B D V (io.reader-exact (<-address B 1) V)))))
+    (if (= (body-state.length B) chunked)
+        (do (body-state.builder-> B (buffer.builder (request.limit (body-state.request B))))
+            (chunk-next B D))
+        (let V (buffer.new (body-state.length B))
+          (body-read B D V (io.reader-exact (body-state.reader B) V)))))
 
 (define body-read
   _ _ _ [eof N] ->
     [error (io.progress (io.native-error http-body http 400 "HTTP body" "incomplete request body") N)]
   _ _ _ [error Error N] -> [error (io.progress Error N)]
-  B D V [ok N] -> (io.let-ok _ (body-budget B D N) [ok (complete-request (<-address B 2) V)]))
+  B D V [ok N] -> (io.let-ok _ (body-budget B D N) [ok (complete-request (body-state.request B) V)]))
 
 (declare parse-request [buffer.view --> [number --> [io.result request]]])
 (declare read-request [io.reader --> [number --> [number --> [grammar.read-result request]]]])
@@ -531,24 +573,41 @@
   chunk-count-limit -> 4
   _ -> (error "http: unknown chunked body option"))
 
+(defstruct chunk-limits
+  line-limit
+  metadata-limit
+  trailer-limit
+  trailer-fields-limit
+  count-limit)
+
 (define chunk-options
-  Options -> (chunk-configure (io.record [8192 65536 16384 100 4096]) Options []))
+  Options ->
+    (let Set (chunk-configure Options [])
+      (chunk-limits.make (option-value chunk-line-limit Set 8192)
+                         (option-value chunk-metadata-limit Set 65536)
+                         (option-value trailer-limit Set 16384)
+                         (option-value trailer-fields-limit Set 100)
+                         (option-value chunk-count-limit Set 4096))))
+
+\\ Options checked: [[Name N] ...], each name once; the value given for Name, or Default.
+(define option-value
+  Name Set Default -> (let Entry (assoc Name Set) (if (empty? Entry) Default (hd (tl Entry)))))
 
 (define chunk-configure
-  Limits [] _ -> Limits
-  Limits [[Name Value] | Rest] Seen ->
+  [] Set -> Set
+  [[Name Value] | Rest] Set ->
     (let I (chunk-option-index Name)
-         _ (if (element? Name Seen) (error "http: duplicate chunked body option") true)
+         _ (if (empty? (assoc Name Set)) true (error "http: duplicate chunked body option"))
          N (buffer.index Value)
          _ (if (and (<= N 1048576) (or (not (element? I [0 4])) (> N 0)))
                true (error "http: invalid chunked body limit"))
-         _ (address-> Limits I N)
-      (chunk-configure Limits Rest [Name | Seen]))
-  _ _ _ -> (error "http: chunked body options must be [Name Number] pairs"))
+      (chunk-configure Rest [[Name N] | Set]))
+  _ _ -> (error "http: chunked body options must be [Name Number] pairs"))
 
 (define chunk-error
   B Status Message ->
-    [error (io.progress (io.native-error http-body http Status "HTTP chunked body" Message) (<-address B 7))])
+    [error (io.progress (io.native-error http-body http Status "HTTP chunked body" Message)
+                        (body-state.total B))])
 
 (define chunk-syntax
   B X -> (chunk-syntax-result B (syntax-error X)))
@@ -558,12 +617,13 @@
 
 (define chunk-next
   B D ->
-    (io.let-ok _ (body-budget B D (<-address B 7))
-      (if (>= (<-address B 9) (<-address (<-address B 10) 4))
+    (io.let-ok _ (body-budget B D (body-state.total B))
+      (if (>= (body-state.chunks B) (chunk-limits.count-limit (body-state.limits B)))
           (chunk-error B 413 "chunk count exceeds limit")
-          (do (address-> B 9 (+ 1 (<-address B 9)))
+          (do (body-state.chunks-> B (+ 1 (body-state.chunks B)))
               (io.let-ok V (chunk-line B D)
-                N (trap-error [ok (chunk-size V (- (<-address (<-address B 2) 7) (<-address B 7)))]
+                N (trap-error [ok (chunk-size V (- (request.limit (body-state.request B))
+                                                   (body-state.total B)))]
                     (/. X (chunk-syntax B X)))
                 (chunk-sized B D N))))))
 
@@ -571,49 +631,50 @@
   B D too-large -> (chunk-error B 413 "request body exceeds limit")
   B D 0 -> (chunk-trailers B D 0 0 [])
   B D N ->
-    (if (= (method (<-address B 2)) "TRACE")
+    (if (= (method (body-state.request B)) "TRACE")
         (chunk-error B 400 "TRACE cannot have a body")
         (let V (buffer.new N)
-          (chunk-data B D V (io.reader-exact (<-address B 1) V)))))
+          (chunk-data B D V (io.reader-exact (body-state.reader B) V)))))
 
 (define chunk-data
   B _ _ [eof N] ->
-    (do (address-> B 7 (+ (<-address B 7) N)) (chunk-error B 400 "incomplete chunk data"))
-  B _ _ [error Error N] -> [error (io.progress Error (+ (<-address B 7) N))]
+    (do (body-state.total-> B (+ (body-state.total B) N)) (chunk-error B 400 "incomplete chunk data"))
+  B _ _ [error Error N] -> [error (io.progress Error (+ (body-state.total B) N))]
   B D V [ok N] ->
-    (do (buffer.append! (<-address B 6) V)
-        (address-> B 7 (+ (<-address B 7) N))
-        (io.let-ok _ (body-budget B D (<-address B 7))
-          (if (> 2 (- (<-address (<-address B 10) 1) (<-address B 8)))
+    (do (buffer.append! (body-state.builder B) V)
+        (body-state.total-> B (+ (body-state.total B) N))
+        (io.let-ok _ (body-budget B D (body-state.total B))
+          (if (> 2 (- (chunk-limits.metadata-limit (body-state.limits B)) (body-state.metadata B)))
               (chunk-error B 413 "chunk metadata exceeds limit")
               (let End (buffer.new 2)
-                (chunk-end B D End (io.reader-exact (<-address B 1) End)))))))
+                (chunk-end B D End (io.reader-exact (body-state.reader B) End)))))))
 
 (define chunk-end
   B _ _ [eof _] -> (chunk-error B 400 "incomplete chunk delimiter")
-  B _ _ [error Error _] -> [error (io.progress Error (<-address B 7))]
+  B _ _ [error Error _] -> [error (io.progress Error (body-state.total B))]
   B D End [ok _] ->
-    (do (address-> B 8 (+ 2 (<-address B 8)))
+    (do (body-state.metadata-> B (+ 2 (body-state.metadata B)))
         (if (and (= (buffer.u8 End 0) 13) (= (buffer.u8 End 1) 10))
             (chunk-next B D)
             (chunk-error B 400 "invalid chunk delimiter"))))
 
 (define chunk-line
   B D ->
-    (chunk-line-more B D (buffer.builder (+ 2 (<-address (<-address B 10) 0))) false))
+    (chunk-line-more B D (buffer.builder (+ 2 (chunk-limits.line-limit (body-state.limits B)))) false))
 
 (define chunk-line-more
   B D Out CR ->
-    (io.let-ok _ (body-budget B D (<-address B 7))
-      (let Left (io.min (- (+ 2 (<-address (<-address B 10) 0)) (buffer.builder-length Out))
-                       (- (<-address (<-address B 10) 1) (<-address B 8)))
+    (io.let-ok _ (body-budget B D (body-state.total B))
+      (let Limits (body-state.limits B)
+           Left (io.min (- (+ 2 (chunk-limits.line-limit Limits)) (buffer.builder-length Out))
+                        (- (chunk-limits.metadata-limit Limits) (body-state.metadata B)))
         (if (= Left 0)
             (chunk-error B 413 "chunk metadata exceeds limit")
-            (chunk-line-input B D Out CR (io.peek-up-to (<-address B 1) (io.min Left 64)))))))
+            (chunk-line-input B D Out CR (io.peek-up-to (body-state.reader B) (io.min Left 64)))))))
 
 (define chunk-line-input
   B _ _ _ [eof] -> (chunk-error B 400 "incomplete chunked body line")
-  B _ _ _ [error Error] -> [error (io.progress Error (<-address B 7))]
+  B _ _ _ [error Error] -> [error (io.progress Error (body-state.total B))]
   B D Out CR [ok V] ->
     (chunk-line-scanned B D Out V
       (chunk-line-scan (buffer.owner V) (buffer.offset V) (buffer.end V) CR)))
@@ -630,8 +691,8 @@
 (define chunk-line-copy
   B Out V N ->
     (do (buffer.append! Out (buffer.slice V 0 N))
-        (address-> B 8 (+ (<-address B 8) N))
-        (io.consume (<-address B 1) N)))
+        (body-state.metadata-> B (+ (body-state.metadata B) N))
+        (io.consume (body-state.reader B) N)))
 
 (define chunk-line-scanned
   B _ _ _ [bad] -> (chunk-error B 400 "invalid chunked body line")
@@ -640,7 +701,8 @@
   B D Out V [done End] ->
     (let _ (chunk-line-copy B Out V (- End (buffer.offset V)))
          Line (buffer.finish Out)
-      (io.let-ok _ (body-budget B D (<-address B 7)) [ok (buffer.slice Line 0 (- (buffer.length Line) 2))])))
+      (io.let-ok _ (body-budget B D (body-state.total B))
+        [ok (buffer.slice Line 0 (- (buffer.length Line) 2))])))
 
 (define chunk-hex-end
   Data At End ->
@@ -693,15 +755,18 @@
   B D Bytes Count Acc ->
     (io.let-ok V (chunk-line B D)
      (let Total (+ Bytes (buffer.length V) 2)
-      (cond ((> Total (<-address (<-address B 10) 2)) (chunk-error B 413 "trailers exceed byte limit"))
+          Limits (body-state.limits B)
+      (cond ((> Total (chunk-limits.trailer-limit Limits)) (chunk-error B 413 "trailers exceed byte limit"))
             ((= (buffer.length V) 0)
-              [ok (completed-request (<-address B 2) (buffer.finish (<-address B 6)) (reverse Acc))])
-            ((>= Count (<-address (<-address B 10) 3)) (chunk-error B 413 "trailers exceed field limit"))
+              [ok (completed-request (body-state.request B) (buffer.finish (body-state.builder B))
+                                     (reverse Acc))])
+            ((>= Count (chunk-limits.trailer-fields-limit Limits))
+              (chunk-error B 413 "trailers exceed field limit"))
             (true
               (let Field (trap-error
                             (let Pair (field (buffer.owner V) (buffer.offset V) (buffer.end V))
                                  _ (trailer-names [(hd Pair)]
-                                     (token-list (header-values (<-address B 2) "connection")))
+                                     (token-list (header-values (body-state.request B) "connection")))
                               [ok Pair])
                             (/. X (chunk-syntax B X)))
                 (io.let-ok Pair Field (chunk-trailers B D Total (+ Count 1) [Pair | Acc]))))))))

@@ -99,7 +99,7 @@ the type and initializer expressions to normal resolution. A separate name enume
 check generated definitions against imports. Neither callback receives namespace context or installs
 schemas. The source expander registers schemas in source order and consumes protection only in literal
 field positions.
-The extension is in the startup image; `buffer.builder` is its first client. See [structs.md](structs.md).
+The extension is in the startup image, and the libraries' fixed records use it. See [structs.md](structs.md).
 
 ## Guest frames and calling convention
 

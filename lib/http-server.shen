@@ -8,6 +8,7 @@
   (use grammar)
   (use io)
   (use shen-jit)
+  (import struct defstruct)
   (externals [application body-limit body-timeout chunk-count-limit chunk-line-limit
     chunk-metadata-limit chunk-size connection-timeout define-foreign eof head-limit head-timeout
     http http-head http-server-options idle-timeout int64 library ok pointer read-buffer-size
@@ -71,7 +72,7 @@
 (define server-response
   Response ->
     (let _ (response-check Response)
-         Fields (<-address Response 2)
+         Fields (response-field-list Response)
       (if (has-date? Fields)
           Response
           (let Date (trap-error (date-value (c-time [])) (/. X []))
@@ -101,16 +102,48 @@
   read-buffer-size -> 17
   _ -> (error "http: unknown server option"))
 
+\\ A server's configuration, with the limits its body readers and responses take built once.
+(defstruct server-config
+  head-limit
+  body-limit
+  output
+  head-timeout
+  body-timeout
+  write-timeout
+  chunk
+  (mutable request-limit)
+  idle-timeout
+  connection-timeout
+  read-buffer-size)
+
 (define server-options
   Options ->
-    (configure (io.record [16384 1048576 16384 1048576 5000 5000 5000
-                               8192 65536 16384 100 4096 16384 4096 100 5000 60000 16384]) Options []))
+    (let Set (configure Options [])
+      (server-config.make
+        (option-value head-limit Set 16384)
+        (option-value body-limit Set 1048576)
+        (output-limits.make (option-value response-head-limit Set 16384)
+                            (option-value response-body-limit Set 1048576)
+                            (option-value response-chunk-size Set 16384)
+                            (option-value response-chunk-count-limit Set 4096))
+        (option-value head-timeout Set 5000)
+        (option-value body-timeout Set 5000)
+        (option-value write-timeout Set 5000)
+        (chunk-limits.make (option-value chunk-line-limit Set 8192)
+                           (option-value chunk-metadata-limit Set 65536)
+                           (option-value trailer-limit Set 16384)
+                           (option-value trailer-fields-limit Set 100)
+                           (option-value chunk-count-limit Set 4096))
+        (option-value request-limit Set 100)
+        (option-value idle-timeout Set 5000)
+        (option-value connection-timeout Set 60000)
+        (option-value read-buffer-size Set 16384))))
 
 (define configure
-  Config [] _ -> Config
-  Config [[Name Value] | Rest] Seen ->
+  [] Set -> Set
+  [[Name Value] | Rest] Set ->
     (let I (option-index Name)
-         _ (if (element? Name Seen) (error "http: duplicate server option") true)
+         _ (if (empty? (assoc Name Set)) true (error "http: duplicate server option"))
          N (buffer.index Value)
          _ (if (element? I [0 2])
                (if (and (>= N (if (= I 2) 128 4)) (<= N 1048576))
@@ -123,14 +156,13 @@
          _ (if (= I 17)
                (if (and (> N 0) (<= N 65536)) true
                    (error "http: read buffer size must be 1..65536")) true)
-         _ (address-> Config I N)
-      (configure Config Rest [Name | Seen]))
-  _ _ _ -> (error "http: server options must be [Name Number] pairs"))
+      (configure Rest [[Name N] | Set]))
+  _ _ -> (error "http: server options must be [Name Number] pairs"))
 
 (define serve-one
   E Handler Options ->
     (let Config (server-options Options)
-         _ (address-> Config 14 1)
+         _ (server-config.request-limit-> Config 1)
       (connection E Handler Config (freeze false))))
 
 (define serve-connection
@@ -140,60 +172,66 @@
   E Handler Options Stop -> (connection E Handler (server-options Options) Stop))
 
 \\ One task owns the socket, its single reader and every source returned by its handler.
-\\ Connection slots: endpoint, reader, handler, config, stop thunk, total deadline,
+\\ A session: endpoint, reader, handler, config, stop thunk, total deadline,
 \\ completed request count and acknowledged wire bytes.
+(define show-session
+  C -> (make-string "#<http connection ~A requests>" (session.requests C)))
+
+(defstruct session
+  (printer show-session)
+  endpoint
+  reader
+  handler
+  config
+  stop
+  deadline
+  (mutable requests)
+  (mutable written))
+
 (define connection
   E Handler Config Stop ->
     (do (io.socket-check E)
         (grammar.prepare <head>)
         (io.with-endpoint E
-          (/. Peer (let R (io.reader Peer [[chunk-size (<-address Config 17)]])
-                       C (io.record [Peer R Handler Config Stop
-                                     (clock.deadline (<-address Config 16)) 0 0])
+          (/. Peer (let R (io.reader Peer [[chunk-size (server-config.read-buffer-size Config)]])
+                       C (session.make Peer R Handler Config Stop
+                           (clock.deadline (server-config.connection-timeout Config)) 0 0)
                     (connection-read C))))))
 
 \\ A head that fits the reader is read in place as it arrives; a larger limit frames it first.
 (define connection-read
   C ->
-    (if (thaw (<-address C 4))
-        [ok (<-address C 7)]
-        (let Config (<-address C 3)
-             R (<-address C 1)
-             D (deadline.within (<-address C 5) (<-address Config 4))
-             _ (io.socket-deadline (<-address C 0) D)
-          (if (<= (<-address Config 0) (io.window-size R))
-              (connection-parsed C (read-request R (<-address Config 0) (<-address Config 1)))
-              (connection-head C (read-head-until (head-reader R (<-address Config 0)) D))))))
+    (if (thaw (session.stop C))
+        [ok (session.written C)]
+        (let Config (session.config C)
+             R (session.reader C)
+             Limit (server-config.head-limit Config)
+             D (deadline.within (session.deadline C) (server-config.head-timeout Config))
+             _ (io.socket-deadline (session.endpoint C) D)
+          (if (<= Limit (io.window-size R))
+              (connection-parsed C (read-request R Limit (server-config.body-limit Config)))
+              (connection-head C (read-head-until (head-reader R Limit) D))))))
 
 (define connection-head
-  C [eof] -> [ok (<-address C 7)]
+  C [eof] -> [ok (session.written C)]
   C [error Error] -> (connection-fail C Error)
   C [head V] ->
-    (connection-parsed C (parse-request V (<-address (<-address C 3) 1))))
+    (connection-parsed C (parse-request V (server-config.body-limit (session.config C)))))
 
 (define connection-parsed
-  C [eof] -> [ok (<-address C 7)]
+  C [eof] -> [ok (session.written C)]
   C [error Error] -> (connection-fail C Error)
   C [ok Q] ->
-    (let Config (<-address C 3)
-         D (deadline.within (<-address C 5) (<-address Config 5))
-         _ (io.socket-deadline (<-address C 0) D)
-         B (body-reader-with (<-address C 1) Q (server-body-options Config))
+    (let Config (session.config C)
+         D (deadline.within (session.deadline C) (server-config.body-timeout Config))
+         _ (io.socket-deadline (session.endpoint C) D)
+         B (body-reader-limits (session.reader C) Q (server-config.chunk Config))
       (connection-body C (read-body-until B D))))
-
-(define server-body-options
-  Config -> [[chunk-line-limit (<-address Config 7)] [chunk-metadata-limit (<-address Config 8)]
-             [trailer-limit (<-address Config 9)] [trailer-fields-limit (<-address Config 10)]
-             [chunk-count-limit (<-address Config 11)]])
-
-(define server-output-limits
-  Config -> (io.record [(<-address Config 2) (<-address Config 3)
-                       (<-address Config 12) (<-address Config 13)]))
 
 (define connection-body
   C [error Error] -> (connection-fail C Error)
   C [ok Q] ->
-    (let Handler (<-address C 2)
+    (let Handler (session.handler C)
          Result (trap-error [ok (Handler Q)]
                   (/. X [error (output-error (error-to-string X))]))
       (connection-handled C Q Result)))
@@ -201,17 +239,17 @@
 (define connection-handled
   C _ [error Error] -> (connection-fail C Error)
   C Q [ok Response] ->
-    (let Config (<-address C 3)
-         D (deadline.within (<-address C 5) (<-address Config 6))
-         _ (io.socket-deadline (<-address C 0) D)
+    (let Config (session.config C)
+         D (deadline.within (session.deadline C) (server-config.write-timeout Config))
+         _ (io.socket-deadline (session.endpoint C) D)
          Prepared (trap-error
                     (let R (server-response Response)
                          Close (or (response-closes? R)
                                    (element? "close" (token-list (header-values Q "connection")))
-                                   (>= (+ (<-address C 6) 1) (<-address Config 14))
-                                   (thaw (<-address C 4)))
+                                   (>= (+ (session.requests C) 1) (server-config.request-limit Config))
+                                   (thaw (session.stop C)))
                          Plan (prepare-response (method Q) R
-                                (server-output-limits Config) Close D)
+                                (server-config.output Config) Close D)
                       (@p Close Plan))
                     (/. X (@p true (finish-source
                                      [error (output-error (error-to-string X))]
@@ -221,24 +259,25 @@
 (define connection-prepared
   C _ _ [error Error] -> (connection-fail C Error)
   C D Close [ok Plan] ->
-    (io.let-ok N (send-plan (<-address C 0) D Plan)
-      (let _ (address-> C 6 (+ (<-address C 6) 1))
-           _ (address-> C 7 (+ (<-address C 7) N))
-        (if (or Close (thaw (<-address C 4)) (deadline.expired? (<-address C 5)))
-            [ok (<-address C 7)]
-            (connection-idle C (deadline.within (<-address C 5) (<-address (<-address C 3) 15)))))))
+    (io.let-ok N (send-plan (session.endpoint C) D Plan)
+      (let _ (session.requests-> C (+ (session.requests C) 1))
+           _ (session.written-> C (+ (session.written C) N))
+        (if (or Close (thaw (session.stop C)) (deadline.expired? (session.deadline C)))
+            [ok (session.written C)]
+            (connection-idle C (deadline.within (session.deadline C)
+                                                 (server-config.idle-timeout (session.config C))))))))
 
 \\ Idle time starts after the response. Short bounded waits observe shutdown without
 \\ cancelling an active request or renewing the idle/connection deadline.
 (define connection-idle
   C D ->
-    (if (or (thaw (<-address C 4)) (deadline.expired? D))
-        [ok (<-address C 7)]
-        (let _ (io.socket-deadline (<-address C 0) (deadline.within D 50))
-          (connection-available C D (io.peek-up-to (<-address C 1) 1)))))
+    (if (or (thaw (session.stop C)) (deadline.expired? D))
+        [ok (session.written C)]
+        (let _ (io.socket-deadline (session.endpoint C) (deadline.within D 50))
+          (connection-available C D (io.peek-up-to (session.reader C) 1)))))
 
 (define connection-available
-  C _ [eof] -> [ok (<-address C 7)]
+  C _ [eof] -> [ok (session.written C)]
   C _ [ok _] -> (connection-read C)
   C D [error Error] ->
     (if (= (io.error-domain Error) timeout)
@@ -247,8 +286,8 @@
 
 (define connection-fail
   C Error ->
-    (server-fail-until (<-address C 0) (<-address C 3) Error
-      (deadline.within (<-address C 5) (<-address (<-address C 3) 6))))
+    (server-fail-until (session.endpoint C) (session.config C) Error
+      (deadline.within (session.deadline C) (server-config.write-timeout (session.config C)))))
 
 (define server-status
   Error ->
@@ -266,7 +305,8 @@
       (if (= Status 0)
           [error Error]
           (let Response (server-response (response Status [] (buffer.new 0)))
-               Wire (encode-for "GET" Response (<-address Config 2) (<-address Config 3))
+               Wire (encode-for "GET" Response (output-limits.head-limit (server-config.output Config))
+                                (output-limits.body-limit (server-config.output Config)))
                _ (io.socket-deadline E D)
             (server-rejected Error (io.write-all E Wire []))))))
 
