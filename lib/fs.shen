@@ -5,6 +5,7 @@
   (use buffer)
   (use io)
   (use shen-jit)
+  (import struct defstruct)
   (externals [blocking bool bytes continue copy crt define-foreign define-foreign-procedure
     depth-limit directory done entry-limit eof fs-options fs-visits int32 int64 io-error library
     lstat mkdir name-byte-limit ok other posix random read-write rename replace resolve rmdir shen
@@ -141,6 +142,14 @@
           Next
           (last-separator B At Next))))
 
+\\ A path's bytes, where its root ends, where it ends without trailing separators, and its last
+\\ separator before that, or -1.
+(defstruct split
+  bytes
+  root
+  end
+  slash)
+
 (define parts
   Path ->
     (let _ (checked Path)
@@ -148,15 +157,15 @@
          Root (root-end B (shen-jit.bytes-length B))
          End (trim-end B Root (shen-jit.bytes-length B))
          Slash (last-separator B -1 End)
-      (io.record [B Root End Slash])))
+      (split.make B Root End Slash)))
 
 (define parent
   Path ->
     (let P (parts Path)
-         B (<-address P 0)
-         Root (<-address P 1)
-         End (<-address P 2)
-         Slash (<-address P 3)
+         B (split.bytes P)
+         Root (split.root P)
+         End (split.end P)
+         Slash (split.slash P)
       (cond ((<= End Root) (shen-jit.bytes->string B 0 Root))
             ((< Slash 0) ".")
             (true (shen-jit.bytes->string B 0 (if (< Slash Root) Root Slash))))))
@@ -164,11 +173,11 @@
 (define name
   Path ->
     (let P (parts Path)
-         End (<-address P 2)
-         At (+ (<-address P 3) 1)
-      (if (<= End (<-address P 1))
+         End (split.end P)
+         At (+ (split.slash P) 1)
+      (if (<= End (split.root P))
           ""
-          (shen-jit.bytes->string (<-address P 0) At (- End At)))))
+          (shen-jit.bytes->string (split.bytes P) At (- End At)))))
 
 (define last-dot
   _ At 0 -> At
@@ -212,12 +221,20 @@
   2 -> symlink
   _ -> other)
 
+\\ Metadata: modified and accessed are (@p Seconds Nanoseconds).
+(defstruct info
+  path
+  kind
+  size
+  modified
+  accessed)
+
 (define stat-path
   Path Follow ->
     (io.let-ok Raw (native (if Follow stat lstat) Path (freeze (c-stat Path Follow)))
-      [ok (io.record [info-state Path (kind-number (<-address Raw 0)) (<-address Raw 1)
-                      (@p (<-address Raw 2) (<-address Raw 3))
-                      (@p (<-address Raw 4) (<-address Raw 5))])]))
+      [ok (info.make Path (kind-number (<-address Raw 0)) (<-address Raw 1)
+                     (@p (<-address Raw 2) (<-address Raw 3))
+                     (@p (<-address Raw 4) (<-address Raw 5)))]))
 
 (define fs.stat
   Path -> (io.let-ok Resolved (fs.resolve Path) (stat-path Resolved true)))
@@ -226,22 +243,22 @@
   Path -> (io.let-ok Resolved (fs.resolve Path) (stat-path Resolved false)))
 
 (define info-check
-  Info -> (if (io.tag? Info info-state) Info (error "fs: not metadata")))
+  Info -> (if (info? Info) Info (error "fs: not metadata")))
 
 (define path
-  Info -> (<-address (info-check Info) 1))
+  Info -> (info.path (info-check Info)))
 
 (define kind
-  Info -> (<-address (info-check Info) 2))
+  Info -> (info.kind (info-check Info)))
 
 (define size
-  Info -> (<-address (info-check Info) 3))
+  Info -> (info.size (info-check Info)))
 
 (define modified
-  Info -> (<-address (info-check Info) 4))
+  Info -> (info.modified (info-check Info)))
 
 (define accessed
-  Info -> (<-address (info-check Info) 5))
+  Info -> (info.accessed (info-check Info)))
 
 (define absent?
   Error ->
@@ -260,16 +277,20 @@
     (let N (buffer.index Value)
       (if (<= N Maximum) N (error "fs: option exceeds its maximum"))))
 
+\\ The limits of a listing or a walk; a listing has no depth.
+(defstruct limits
+  (mutable entries)
+  (mutable name-bytes)
+  (mutable depth))
+
 (define configure
   Config [] _ _ -> Config
   Config [[Name Value] | Rest] Seen Walk ->
     (let _ (if (element? Name Seen) (error "fs: duplicate option") true)
-         I (cond ((= Name entry-limit) 0)
-                 ((= Name name-byte-limit) 1)
-                 ((and Walk (= Name depth-limit)) 2)
+         _ (cond ((= Name entry-limit) (limits.entries-> Config (fs.limit Value 1000000)))
+                 ((= Name name-byte-limit) (limits.name-bytes-> Config (fs.limit Value 67108864)))
+                 ((and Walk (= Name depth-limit)) (limits.depth-> Config (fs.limit Value 256)))
                  (true (error "fs: unknown option")))
-         N (fs.limit Value (cond ((= I 0) 1000000) ((= I 1) 67108864) (true 256)))
-         _ (address-> Config I N)
       (configure Config Rest [Name | Seen] Walk))
   _ _ _ _ -> (error "fs: options must be [Name Value] pairs"))
 
@@ -278,12 +299,18 @@
 
 (define fs.list
   Path Options ->
-    (let Config (configure (io.record [4096 1048576]) Options [] false)
+    (let Config (configure (limits.make 4096 1048576 0) Options [] false)
       (io.let-ok Resolved (fs.resolve Path)
-                 Raw (list-path Resolved (<-address Config 0) (<-address Config 1))
+                 Raw (list-path Resolved (limits.entries Config) (limits.name-bytes Config))
         [ok (<-address Raw 0)])))
 
 \\ State counts visited and scheduled entries, and all listed name bytes; stop releases pending lists.
+(defstruct walk-state
+  (mutable visited)
+  (mutable scheduled)
+  (mutable name-bytes)
+  (mutable stopped))
+
 (define visit
   Visit Info Depth ->
     (trap-error
@@ -300,40 +327,40 @@
 (define walk-node
   Path Depth Config State Visit ->
     (io.let-ok Info (stat-path Path false)
-      (let _ (address-> State 0 (+ (<-address State 0) 1))
+      (let _ (walk-state.visited-> State (+ (walk-state.visited State) 1))
         (io.let-ok Action (visit Visit Info Depth)
-          (cond ((= Action stop) (do (address-> State 3 true) [ok done]))
+          (cond ((= Action stop) (do (walk-state.stopped-> State true) [ok done]))
                 ((or (= Action skip) (not (= (kind Info) directory))
-                     (>= Depth (<-address Config 2))) [ok done])
+                     (>= Depth (limits.depth Config))) [ok done])
                 (true (walk-directory Path Depth Config State Visit)))))))
 
 (define walk-directory
   Path Depth Config State Visit ->
-    (let Entries (- (<-address Config 0) (<-address State 1))
-         Bytes (- (<-address Config 1) (<-address State 2))
+    (let Entries (- (limits.entries Config) (walk-state.scheduled State))
+         Bytes (- (limits.name-bytes Config) (walk-state.name-bytes State))
       (io.let-ok Raw (list-path Path Entries Bytes)
         (let Names (<-address Raw 0)
-             _ (address-> State 1 (+ (<-address State 1) (length Names)))
-             _ (address-> State 2 (+ (<-address State 2) (<-address Raw 1)))
+             _ (walk-state.scheduled-> State (+ (walk-state.scheduled State) (length Names)))
+             _ (walk-state.name-bytes-> State (+ (walk-state.name-bytes State) (<-address Raw 1)))
           (walk-children Path Names (+ Depth 1) Config State Visit)))))
 
 (define walk-children
   _ [] _ _ _ _ -> [ok done]
   Parent [Name | Rest] Depth Config State Visit ->
     (io.let-ok _ (walk-node (join Parent Name) Depth Config State Visit)
-      (if (<-address State 3)
+      (if (walk-state.stopped State)
           [ok done]
           (walk-children Parent Rest Depth Config State Visit))))
 
 (define walk-result
-  State [ok _] -> [ok (@p (<-address State 0) (<-address State 3))]
-  State [error Error] -> [error (io.progress Error (<-address State 0))])
+  State [ok _] -> [ok (@p (walk-state.visited State) (walk-state.stopped State))]
+  State [error Error] -> [error (io.progress Error (walk-state.visited State))])
 
 (define fs.walk
   Path Options Visit ->
-    (let Config (configure (io.record [10000 16777216 64]) Options [] true)
-         _ (if (> (<-address Config 0) 0) true (error "fs: walk entry-limit must include the root"))
-         State (io.record [0 1 0 false])
+    (let Config (configure (limits.make 10000 16777216 64) Options [] true)
+         _ (if (> (limits.entries Config) 0) true (error "fs: walk entry-limit must include the root"))
+         State (walk-state.make 0 1 0 false)
       (io.let-ok Root (fs.resolve Path)
         (walk-result State (walk-node Root 0 Config State Visit)))))
 

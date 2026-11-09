@@ -4,6 +4,7 @@
 (shen.x.namespace treesitter
   (use buffer)
   (use shen-jit)
+  (import struct defstruct)
   (externals [capture-limit define-foreign define-foreign-procedure input-limit load-language
     match-limit native node-limit ok parse pointer predicate query query-limit result-limit
     timeout treesitter-error treesitter-options treesitter-results uint32])
@@ -25,15 +26,13 @@
 (define-foreign-procedure c-language adapter "shen_treesitter_language" 1)
 (define-foreign-procedure c-parse adapter "shen_treesitter_parse" 2)
 
+\\ The adapter reads a configuration and a parse's input by position: they stay vectors.
 (define record
   Fields -> (fill (absvector (length Fields)) 0 Fields))
 
 (define fill
   V _ [] -> V
   V At [X | Rest] -> (fill (address-> V At X) (+ At 1) Rest))
-
-(define tag?
-  V Tag -> (trap-error (and (absvector? V) (= (<-address V 0) Tag)) (/. E false)))
 
 (define abi
   -> (if (= (c-abi) 1) true (error "treesitter: incompatible adapter; rebuild it")))
@@ -99,6 +98,11 @@
     [error (treesitter.error Op foreign 0 0 Resource (error-to-string Exception))])
 
 \\ A language stores its FFI entry name, not a native address. It reopens correctly in saved images.
+(defstruct lang
+  name
+  entry
+  version)
+
 (define treesitter.load-language
   Name Files Entry ->
     (let _ (text-argument Name)
@@ -112,21 +116,21 @@
         (do (abi)
             (let Raw (c-language (eval-kl [Function]))
               (if (number? Raw)
-                  [ok (record [treesitter.language Name Function Raw])]
+                  [ok (lang.make Name Function Raw)]
                   (native-error load-language Name Raw))))
         (/. X (foreign-error load-language Name X)))))
 
 (define language-check
   Language ->
-    (if (tag? Language treesitter.language)
+    (if (lang? Language)
         Language
         (error "treesitter: not a language")))
 
 (define language-name
-  Language -> (<-address (language-check Language) 1))
+  Language -> (lang.name (language-check Language)))
 
 (define language-version
-  Language -> (<-address (language-check Language) 3))
+  Language -> (lang.version (language-check Language)))
 
 (define treesitter.limit
   N Maximum Positive ->
@@ -168,6 +172,16 @@
         (analyze Language Input Query (options Options))
         (error "treesitter: query must be a string")))
 
+\\ A snapshot: its language's name, and what the adapter gave: the source, nodes, kind and field
+\\ names, captures, capture names and the match count.
+(define show-snapshot
+  S -> (make-string "#<snapshot ~S>" (snapshot.language S)))
+
+(defstruct snapshot
+  (printer show-snapshot)
+  language
+  raw)
+
 (define analyze
   Language Input Query Config ->
     (let Name (language-name Language)
@@ -182,18 +196,18 @@
                    Op (if (= Query []) parse query)
                 (trap-error
                   (do (abi)
-                      (let Raw (c-parse (eval-kl [(<-address Language 2)])
+                      (let Raw (c-parse (eval-kl [(lang.entry Language)])
                                   (record [(buffer.owner View) (buffer.offset View)
                                                       N Query Config]))
                         (if (number? (<-address Raw 0))
                             (native-error Op Name Raw)
-                            [ok (record [snapshot Name Raw])])))
+                            [ok (snapshot.make Name Raw)])))
                   (/. X (foreign-error Op Name X))))))))
 
 (define snapshot-check
   Snapshot ->
-    (if (tag? Snapshot snapshot)
-        (<-address Snapshot 2)
+    (if (snapshot? Snapshot)
+        (snapshot.raw Snapshot)
         (error "treesitter: not a snapshot")))
 
 (define node-count

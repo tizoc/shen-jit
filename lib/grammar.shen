@@ -15,6 +15,7 @@
   (use buffer)
   (use io)
   (use shen-jit)
+  (import struct defstruct)
   (externals [? at defgrammar eof grammar-read-results none ok plain require skip span text u16-be
     u32-be unknown])
   (shadow bind call compile every? inline list pos read run stream subst type value)
@@ -374,9 +375,14 @@
   X -> [X] where (variable? X)
   _ -> [])
 
+\\ What a rule's end builds, latest first, and the symbols its items name, which are built at once.
+(defstruct captures
+  (mutable deferred)
+  used)
+
 (define rule
   [Name Buf End S Count Values Stack Scope Inner _] [Items Sem Guard] Pos ->
-    (let Cell (address-> (address-> (absvector 2) 0 []) 1 (symbols (mapcan (function item-uses) Items)))
+    (let Cell (captures.make [] (symbols (mapcan (function item-uses) Items)))
          C [Name Buf End S Count Values Stack Scope Inner Cell]
       (seq C Items Pos -1 (/. P (done C P Sem Guard)))))
 
@@ -384,7 +390,7 @@
 (define done
   C P Sem Guard ->
     (let Cell (cell C)
-         Deferred (if (absvector? Cell) (reverse (<-address Cell 0)) [])
+         Deferred (if (captures? Cell) (reverse (captures.deferred Cell)) [])
          Checked (if (= Guard grammar.none) [] (subst C Guard))
          Named (symbols Checked)
          Early (mapcan (/. D (if (element? (hd D) Named) [D] [])) Deferred)
@@ -506,8 +512,8 @@
 (define defer
   C Name Var Code ->
     (let Cell (cell C)
-      (if (and (absvector? Cell) (not (element? Name (<-address Cell 1))))
-          (do (address-> Cell 0 [[Var | Code] | (<-address Cell 0)]) true)
+      (if (and (captures? Cell) (not (element? Name (captures.used Cell))))
+          (do (captures.deferred-> Cell [[Var | Code] | (captures.deferred Cell)]) true)
           false)))
 
 (define subst-values

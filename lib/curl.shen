@@ -5,6 +5,7 @@
   (use buffer)
   (use io)
   (use shen-jit)
+  (import struct defstruct)
   (externals [body-limit ca-file callback chunk-size connect-timeout curl curl-options
     define-foreign define-foreign-procedure header-limit int32 ok proxy redirect-limit request
     request-limit timeout write written])
@@ -30,15 +31,25 @@
 (define version
   -> (do (abi-check) (c-version)))
 
+\\ A client: its libcurl handle, and the result of closing it once that has run.
+(define show-client
+  C -> (make-string "#<curl client ~A>"
+         (if (= (shen-jit.pointer-address (client.handle C)) 0) "closed" "open")))
+
+(defstruct client
+  (printer show-client)
+  handle
+  (mutable closed))
+
 (define open
-  -> (do (abi-check) (io.record [client-state (c-open) []])))
+  -> (do (abi-check) (client.make (c-open) [])))
 
 (define client-check
-  Client -> (if (io.tag? Client client-state) Client (error "curl: not a client")))
+  Client -> (if (client? Client) Client (error "curl: not a client")))
 
 (define live
   Client ->
-    (let P (<-address (client-check Client) 1)
+    (let P (client.handle (client-check Client))
       (if (= (shen-jit.pointer-address P) 0)
           (error "curl: client is closed or stale") P)))
 
@@ -48,13 +59,13 @@
 (define curl.close
   Client ->
     (let _ (client-check Client)
-         P (<-address Client 1)
-         Saved (<-address Client 2)
+         P (client.handle Client)
+         Saved (client.closed Client)
       (if (not (empty? Saved))
           Saved
           (let Result (trap-error (do (c-close P (function invalidate)) [ok])
                          (/. X [error (io.error close "curl client" (error-to-string X))]))
-            (do (if (= (shen-jit.pointer-address P) 0) (address-> Client 2 Result) true)
+            (do (if (= (shen-jit.pointer-address P) 0) (client.closed-> Client Result) true)
                 Result)))))
 
 (define scope-result
@@ -81,6 +92,7 @@
   chunk-size -> 8
   _ -> (error "curl: unknown option"))
 
+\\ The adapter reads a configuration, and a request's input below, by position: they stay vectors.
 (define options
   Options -> (configure (io.record [1048576 1048576 65536 30000 5000 0 [] []]) Options [] false))
 
@@ -222,16 +234,33 @@
     (do (live Client)
         (perform Client (request-input Method URL Fields Body Options))))
 
+\\ A response. A streamed one has no body, only the count of bytes its sink accepted.
+(define show-response
+  R -> (make-string "#<curl response ~A ~S>" (response.status R) (response.url R)))
+
+(defstruct response
+  (printer show-response)
+  status
+  url
+  (mutable body)
+  headers
+  trailers
+  raw-headers
+  raw-trailers
+  elapsed
+  redirects
+  (mutable body-length))
+
 (define result
   URL Native ->
     (if (= (<-address Native 0) 0)
         (let Head (buffer.wrap (<-address Native 7))
              Trailers (buffer.wrap (<-address Native 8))
-          [ok (io.record [response-state (<-address Native 4) (<-address Native 5)
-                          (buffer.wrap (<-address Native 6)) (parse-fields Head true)
-                          (parse-fields Trailers false) Head Trailers
-                          (<-address Native 9) (<-address Native 10)
-                          (shen-jit.bytes-length (<-address Native 6))])])
+          [ok (response.make (<-address Native 4) (<-address Native 5)
+                             (buffer.wrap (<-address Native 6)) (parse-fields Head true)
+                             (parse-fields Trailers false) Head Trailers
+                             (<-address Native 9) (<-address Native 10)
+                             (shen-jit.bytes-length (<-address Native 6)))])
         [error (io.progress (io.native-error request
                              (cond ((element? (<-address Native 1) [2 3]) limit)
                                    ((= (<-address Native 0) 28) timeout)
@@ -247,8 +276,17 @@
   URL Options -> (fetch "GET" URL [] (buffer.new 0) Options))
 
 \\ Streaming state: current sink, bytes accepted by it, first error. Only one chunk is live here.
+(define show-sink-state
+  S -> (make-string "#<curl stream ~A bytes>" (sink-state.written S)))
+
+(defstruct sink-state
+  (printer show-sink-state)
+  (mutable sink)
+  (mutable written)
+  (mutable failure))
+
 (define stream-mark
-  R Count -> (do (address-> R 3 []) (address-> R 10 Count) R))
+  R Count -> (do (response.body-> R []) (response.body-length-> R Count) R))
 
 (define sink-result
   [ok Sink] -> [ok (io.endpoint-check Sink)]
@@ -257,8 +295,8 @@
 
 (define stream-opened
   State [ok Sink] ->
-    (do (address-> State 0 Sink) (io.check Sink write []) true)
-  State [error Error] -> (do (address-> State 2 Error) false))
+    (do (sink-state.sink-> State Sink) (io.check Sink write []) true)
+  State [error Error] -> (do (sink-state.failure-> State Error) false))
 
 (define stream-write
   State Bytes ->
@@ -267,16 +305,16 @@
 (define stream-write-loop
   _ _ End End -> true
   State View At End ->
-    (let Sink (<-address State 0)
+    (let Sink (sink-state.sink State)
          Result (trap-error (io.write-some Sink (buffer.slice View At (- End At)) [])
-                  (/. X [error (io.error write (<-address Sink 1) (error-to-string X))]))
+                  (/. X [error (io.error write (io.endpoint.name Sink) (error-to-string X))]))
       (stream-written State View At End Result)))
 
 (define stream-written
   State View At End [written N] ->
-    (do (address-> State 1 (+ (<-address State 1) N))
+    (do (sink-state.written-> State (+ (sink-state.written State) N))
         (stream-write-loop State View (+ At N) End))
-  State _ _ _ [error Error] -> (do (address-> State 2 Error) false))
+  State _ _ _ [error Error] -> (do (sink-state.failure-> State Error) false))
 
 (define stream-event
   State _ _ [] Bytes -> (stream-write State Bytes)
@@ -290,11 +328,11 @@
 (define stream-deliver
   State Open URL Native Bytes ->
     (trap-error (stream-event State Open URL Native Bytes)
-      (/. X (do (address-> State 2 (io.error callback URL (error-to-string X))) false))))
+      (/. X (do (sink-state.failure-> State (io.error callback URL (error-to-string X))) false))))
 
 (define stream-completed
-  State [ok R] -> [ok (stream-mark R (<-address State 1))]
-  State [error Error] -> [error (io.progress Error (<-address State 1))])
+  State [ok R] -> [ok (stream-mark R (sink-state.written State))]
+  State [error Error] -> [error (io.progress Error (sink-state.written State))])
 
 (define stream-perform
   Client Input Open State ->
@@ -303,14 +341,14 @@
          Native (trap-error
                   (result URL (c-stream P Input (/. Head Bytes (stream-deliver State Open URL Head Bytes))))
                   (/. X [error (io.error request URL (error-to-string X))]))
-         Error (<-address State 2)
+         Error (sink-state.failure State)
       (stream-completed State (if (empty? Error) Native [error Error]))))
 
 (define request-to
   Client Method URL Fields Body Sink Options ->
     (do (live Client) (io.check Sink write [])
         (stream-perform Client (input Method URL Fields Body (stream-options Options))
-          (/. Head [ok Sink]) (io.record [[] 0 []]))))
+          (/. Head [ok Sink]) (sink-state.make [] 0 []))))
 
 (define stream-close
   [] -> [ok]
@@ -321,16 +359,16 @@
   Client Method URL Fields Body Open Options ->
     (let _ (live Client)
          Input (input Method URL Fields Body (stream-options Options))
-         State (io.record [[] 0 []])
+         State (sink-state.make [] 0 [])
          Result (stream-perform Client Input Open State)
-      (stream-completed State (io.finish Result (stream-close (<-address State 0))))))
+      (stream-completed State (io.finish Result (stream-close (sink-state.sink State))))))
 
 (define get-to
   URL Sink Options ->
     (let _ (io.check Sink write [])
          Input (input "GET" URL [] (buffer.new 0) (stream-options Options))
       (with-client
-        (/. Client (stream-perform Client Input (/. Head [ok Sink]) (io.record [[] 0 []]))))))
+        (/. Client (stream-perform Client Input (/. Head [ok Sink]) (sink-state.make [] 0 []))))))
 
 \\ Parse only the final status block; native callbacks retain trailers separately.
 (define find-byte
@@ -384,31 +422,31 @@
   _ _ -> (error "curl: response continuation without a field"))
 
 (define response-check
-  R -> (if (io.tag? R response-state) R (error "curl: not a response")))
+  R -> (if (response? R) R (error "curl: not a response")))
 
 (define status
-  R -> (<-address (response-check R) 1))
+  R -> (response.status (response-check R)))
 (define url
-  R -> (<-address (response-check R) 2))
+  R -> (response.url (response-check R)))
 (define body
-  R -> (let Body (<-address (response-check R) 3)
+  R -> (let Body (response.body (response-check R))
          (if (empty? Body) (error "curl: response body was streamed") Body)))
 (define streamed?
-  R -> (empty? (<-address (response-check R) 3)))
+  R -> (empty? (response.body (response-check R))))
 (define body-length
-  R -> (<-address (response-check R) 10))
+  R -> (response.body-length (response-check R)))
 (define headers
-  R -> (<-address (response-check R) 4))
+  R -> (response.headers (response-check R)))
 (define trailers
-  R -> (<-address (response-check R) 5))
+  R -> (response.trailers (response-check R)))
 (define raw-headers
-  R -> (<-address (response-check R) 6))
+  R -> (response.raw-headers (response-check R)))
 (define raw-trailers
-  R -> (<-address (response-check R) 7))
+  R -> (response.raw-trailers (response-check R)))
 (define elapsed
-  R -> (<-address (response-check R) 8))
+  R -> (response.elapsed (response-check R)))
 (define redirects
-  R -> (<-address (response-check R) 9))
+  R -> (response.redirects (response-check R)))
 
 (define field-values
   [] _ -> []

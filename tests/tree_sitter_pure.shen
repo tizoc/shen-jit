@@ -23,7 +23,7 @@
   (ts-test.raises? (freeze (treesitter.query [] (buffer.new 0) [] []))))
 
 \\ Limits precede native resolution, including on static builds.
-(let Language (treesitter.record [treesitter.language "unresolved" missing 15])
+(let Language (treesitter.lang.make "unresolved" missing 15)
   (do (ts-test.check "input budget before native work"
         (= (ts-test.error-domain (treesitter.parse Language (buffer.new 2) [[input-limit 1]])) limit))
       (ts-test.check "query budget before native work"

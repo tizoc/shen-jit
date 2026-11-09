@@ -899,6 +899,15 @@ that. Its readings decided nothing below.
 
 ### Managed structs
 
+- **curl, filesystem, Tree-sitter and grammar records as structs** (2026-11-09, Apple M3 Max, measured while
+  other builds ran). curl's clients, responses and stream state, the filesystem's metadata, split paths,
+  limits and traversal state, Tree-sitter's languages and snapshots, and a grammar's capture cells, used only
+  while compiling, are structs. What an adapter reads by position and checks the length of stays a vector:
+  curl's and Tree-sitter's configurations and request inputs. A grammar's parse state and stream record stay
+  vectors too, as generated code reads them with primitives in its inner loop. Medians of 7 alternated runs:
+  `fs.parent` and `fs.name` 485 against 452 ms, Tree-sitter's node readers 435 against 400, JSON decoding
+  384 against 384.
+
 - **Datalog's fixed records as structs** (2026-11-09, Apple M3 Max). An equivalence's classes, a relation's
   hash index and a database by demand's store are structs; the KL the planner generates, a native kernel's
   parameters included, reads them with the accessors. `make bench-datalog`'s main rows, old and new library
