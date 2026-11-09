@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- `defstruct`, available at startup: fixed managed records with read-only fields by default, optional mutable
+  fields and `->` setters, positional constructors and shared labelled `struct.make` syntax, namespace support
+  and stable image/reload metadata. The first client is the private state of `buffer.builder`; its public API stays the same.
+
 ### Changed
 
 - All optional Shen libraries use namespaces, with explicit dependency prefixes and exported operations, types and

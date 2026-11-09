@@ -310,6 +310,24 @@ With `--seal`, `SHEN_JIT_SEAL=1` or `(shen-jit.seal +)`, new definitions are sea
 direct, and they cannot be redefined. `(shen-jit.seal -)` turns that off. This gains little, as open calls are
 inlined too, and patched when a function is redefined.
 
+## Managed structs
+
+`defstruct` replaces numbered `absvector` slots with named fields and ordinary generated functions.
+It is available at startup. In a source file:
+
+```shen
+(defstruct entry key (mutable value))
+(let E (struct.make entry
+         value <- 42;
+         key <- "answer";)
+  (do (entry.value-> E 43) (entry.value E)))    \\ 43
+```
+
+Fields are read-only by default; mutable fields get `->` setters that return the record. Construction
+allocates one managed vector and can trigger GC; field reads and writes allocate nothing on success.
+The [struct reference](https://github.com/tizoc/shen-jit/blob/main/docs/structs.md) covers positional
+constructors, shared `struct.make` syntax, namespace exports, reload rules and the current source-file/type limitations.
+
 ## Libraries
 
 The libraries in `lib/` are not in the image. A program loads those it uses by their paths in the archive or source
@@ -975,7 +993,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 
 | Target | What it does |
 | --- | --- |
-| `make test-core` | `test`, `test-jit`, `test-ops`, `test-kl`, `check-lowerer`, `check-generated`, `test-kernel`, `test-stlib`, `test-thorn`, `test-native`, `test-ffi` and `test-overrides` |
+| `make test-core` | `test`, `test-jit`, `test-ops`, `test-kl`, `check-lowerer`, `check-generated`, `test-kernel`, `test-stlib`, `test-thorn`, `test-native`, `test-ffi`, `test-overrides` and `test-structs` |
 | `make test-libs` | `test-buffer`, `test-json`, `test-io`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl` and `test-namespaces` |
 | `make test` | The runtime's unit tests |
 | `make test-jit`, `make test-ops` | The JIT and the instructions, on small programs |
@@ -984,6 +1002,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-stlib` | The executable with the standard library |
 | `make test-thorn` | THORN, from the kernel, with no time limit: its inference counts and what goes unproved, as on Shen/Scheme |
 | `make test-native` | Native code written by hand: what runs, and what must be refused |
+| `make test-structs` | Managed records, mutation, labelled evaluation order, namespace aliases, declaration validation and saved images in both executables |
 | `make test-namespaces` | Library exports, aliases, imports, types and scoped DSL vocabulary in the base and stlib executables, and in their saved images |
 | `make test-json` | JSON syntax/encoding, Unicode, exact numbers, builders, typing and images/GC |
 | `make test-buffer` | Buffer/cursor bounds, copying, foreign lifetime, typed clients, format examples, grammars, typed grammars and images/GC |

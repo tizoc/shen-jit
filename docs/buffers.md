@@ -36,6 +36,9 @@ for each byte.
 
 ## Bounded builders
 
+The private builder state uses a [managed struct](structs.md) for its limit, storage, length and sealed
+flag. The storage layout and public builder operations below keep their existing behavior.
+
 `buffer.builder Limit` creates an empty single-owner builder. `buffer.append! B View` copies input bytes;
 `buffer.append-byte! B Byte` appends one exact byte. Both return B. `buffer.builder-length B` reports the
 current length, and `buffer.finish B` transfers managed storage to an owned logical view and seals B.

@@ -165,7 +165,7 @@ $(BUILD)/test_runtime: tests/test_runtime.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(RUNTIM
 BOOTSTRAP ?= .deps/shen-jit/shen-jit$(EXE)
 KERNEL_KL ?= .deps/kernel/klambda
 KERNEL_NAMESPACES := $(dir $(patsubst %/,%,$(KERNEL_KL)))extensions/namespaces.shen
-GENERATED := stage0/*.sbc stage0/*.forms port/lower.kl bench/programs.sbc kl/ops.sbc stlib/stlib.kl
+GENERATED := stage0/*.sbc stage0/*.forms port/lower.kl port/struct.kl port/shen-jit.kl bench/programs.sbc kl/ops.sbc stlib/stlib.kl
 
 ifneq ($(wildcard generated/stage0),)
 $(BUILD)/generated.done:
@@ -173,7 +173,7 @@ $(BUILD)/generated.done:
 	cp -R generated/. $(BUILD)/
 	touch $(BUILD)/stage0/.done $@
 
-$(BUILD)/stage0/.done $(BUILD)/port/lower.kl $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stlib/stlib.kl: $(BUILD)/generated.done
+$(BUILD)/stage0/.done $(BUILD)/port/lower.kl $(BUILD)/port/struct.kl $(BUILD)/port/shen-jit.kl $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stlib/stlib.kl: $(BUILD)/generated.done
 	@:
 else
 # The kernel's precompiled standard library, for make stlib.
@@ -208,7 +208,14 @@ $(BUILD)/port/lower.kl: src/lowerer/lower.shen src/lowerer/tokl.shen | host
 	mkdir -p $(BUILD)/port
 	$(BOOTSTRAP) script src/lowerer/tokl.shen $@ > /dev/null
 
-$(BUILD)/stage0/.done: $(BUILD)/port/lower.kl src/port/shen-jit.kl $(STAGE0_TOOLS) $(wildcard $(KERNEL_KL)/*.kl) | host
+$(BUILD)/port/struct.kl: src/port/struct.shen src/lowerer/tokl.shen | host
+	mkdir -p $(BUILD)/port
+	$(BOOTSTRAP) script src/lowerer/tokl.shen $@ src/port/struct.shen > /dev/null
+
+$(BUILD)/port/shen-jit.kl: src/port/shen-jit.kl $(BUILD)/port/struct.kl
+	cat $^ > $@
+
+$(BUILD)/stage0/.done: $(BUILD)/port/lower.kl $(BUILD)/port/shen-jit.kl $(STAGE0_TOOLS) $(wildcard $(KERNEL_KL)/*.kl) | host
 	mkdir -p $(BUILD)/stage0
 	$(BOOTSTRAP) script src/lowerer/stage0.shen $(KERNEL_KL)/ $(BUILD)/stage0/ > /dev/null
 	touch $@
@@ -224,7 +231,7 @@ host:
 	@command -v $(BOOTSTRAP) > /dev/null || { echo "no host at $(BOOTSTRAP): run make deps, or set BOOTSTRAP"; exit 1; }
 	@test -d $(KERNEL_KL) || { echo "no kernel at $(KERNEL_KL): run make deps, or set KERNEL_KL"; exit 1; }
 
-generated: $(BUILD)/stage0/.done $(BUILD)/port/lower.kl $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stlib/stlib.kl
+generated: $(BUILD)/stage0/.done $(BUILD)/port/lower.kl $(BUILD)/port/shen-jit.kl $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stlib/stlib.kl
 
 # A change to the lowerer, the port or the test programs updates the manifest
 # in the same commit; any other difference is drift.
@@ -239,7 +246,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi buffers grammar io fs processes tree-sitter framing io-sockets deadlines http-head http http-streaming http-listener json datalog curl
+GUIDE_PAGES := design semantics bytecode ffi structs buffers grammar io fs processes tree-sitter framing io-sockets deadlines http-head http http-streaming http-listener json datalog curl
 GUIDE_PANDOC := pandoc -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
 guide:
@@ -322,7 +329,7 @@ test-kernel-stress:
 
 # What a change to the runtime, the JIT, the lowerer or the port must pass (about 20 s).
 test-core: test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn \
-  test-native test-ffi test-overrides
+  test-native test-ffi test-overrides test-structs
 
 # Every library's suite, without the collections test-lib-stress adds (about 30 s).
 test-libs: test-buffer test-json test-io test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces
@@ -330,6 +337,10 @@ test-libs: test-buffer test-json test-io test-fs test-process test-tree-sitter t
 .PHONY: test-namespaces
 test-namespaces: $(BUILD)/shen-jit-stlib
 	sh tests/namespaces.sh $(SHEN_JIT) $(abspath $(BUILD)/shen-jit-stlib)
+
+.PHONY: test-structs
+test-structs: $(BUILD)/shen-jit-stlib
+	sh tests/structs.sh $(SHEN_JIT) $(abspath $(BUILD)/shen-jit-stlib)
 
 # The libraries' saved images reloaded with a collection at every allocation, which their own suites
 # leave out for speed.
@@ -445,7 +456,7 @@ test-differential: $(BUILD)/shen-jit
 
 # The port's overrides against the kernel's own definitions, as compiled and through C (a second). The
 # limit refuses a huge vector soon, and the kernel's shen.f-error asks a question.
-OVERRIDES_TEST = SHEN_JIT_MAX_HEAP=256M $(1) $(BUILD)/shen-jit script tests/overrides.shen $(KERNEL_DIR) src/port/shen-jit.kl $(BUILD)/overrides < /dev/null | \
+OVERRIDES_TEST = SHEN_JIT_MAX_HEAP=256M $(1) $(BUILD)/shen-jit script tests/overrides.shen $(KERNEL_DIR) $(BUILD)/port/shen-jit.kl $(BUILD)/overrides < /dev/null | \
 	  grep -a 'FAIL\|uncaught\| checks, ' | awk '{ print } END { exit !/ 0 failed$$/ }'
 
 test-overrides: $(BUILD)/shen-jit

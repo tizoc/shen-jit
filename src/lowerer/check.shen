@@ -420,7 +420,7 @@
   -> (let Read (map (/. F [(hd F) | (shen-jit.check.defuns (read-from-string-unprocessed
                                                                   (read-file-as-string (hd (tl F)))))])
                       (append (map (/. F [F (cn In (cn F ".kl"))]) (shen-jit.check.files))
-                              [["shen-jit" "src/port/shen-jit.kl"]
+                              [["shen-jit" "build/port/shen-jit.kl"]
                                ["lower" "build/port/lower.kl"]]))
           Inputs (shen-jit.check.select-overrides Read)
           Defuns (mapcan (/. I (tl I)) Inputs)

@@ -8,6 +8,7 @@ local PAGES = {
   semantics = 'Shen/JIT semantics',
   bytecode = 'Shen/JIT instructions and frames',
   ffi = 'Calling C',
+  structs = 'Managed structs',
   buffers = 'Buffers and cursors',
   grammar = 'Grammars over bytes',
   io = 'Chunk I/O',

@@ -15,7 +15,7 @@ checkout's own workflow, and git ignores it.
 | --- | --- |
 | `src/runtime/` | The C runtime: values and objects, collector, image, primitives, reader, loader, JIT, profiler, and the executable (`main.c`) |
 | `src/lowerer/` | The lowerer (`lower.shen`) and the stage 0 tools; see [src/lowerer/README.md](src/lowerer/README.md) |
-| `src/port/shen-jit.kl` | Port code: overrides and the `shen-jit.*` functions |
+| `src/port/` | Port code: overrides, the `shen-jit.*` functions, and the `defstruct` source extension |
 | `docs/` | The guide's source, and how it works |
 | `site/` | What renders the guide: pandoc's template and a filter |
 | `include/` | `shen.h`, for C written for Shen |
@@ -84,7 +84,7 @@ Run what the change can break, and nothing more: CI runs everything on every pus
 | Documentation only | Nothing; `make guide` if a rendered page's layout changed, and the examples you changed |
 
 `make test-core` is `test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn
-test-native test-ffi test-overrides`, and `make test-libs` is `test-buffer test-json test-io test-fs test-process
+test-native test-ffi test-overrides test-structs`, and `make test-libs` is `test-buffer test-json test-io test-fs test-process
 test-tree-sitter test-http test-datalog test-curl test-namespaces`.
 
 Keep each suite fast. A check that needs a collection at every allocation, a long wait or a large input goes in a

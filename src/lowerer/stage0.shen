@@ -41,7 +41,7 @@
 \\ compiled to KLambda by src/lowerer/tokl.shen.
 (define shen-jit.stage0.kernel-inputs
   In -> (append (shen-jit.stage0.named In (shen-jit.stage0.files))
-                [["shen-jit" "src/port/shen-jit.kl"] ["lower" "build/port/lower.kl"]]))
+                [["shen-jit" "build/port/shen-jit.kl"] ["lower" "build/port/lower.kl"]]))
 
 (define shen-jit.stage0.named
   In Files -> (map (/. F [F (cn In (cn F ".kl"))]) Files))

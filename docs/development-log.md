@@ -897,6 +897,38 @@ that. Its readings decided nothing below.
   against labels. Not done: typed parameters, which would repeat checks every access already makes; a definer of its own;
   source mapping, until errors in an expansion are hard to read.
 
+### Managed structs
+
+- **`defstruct` source extension and buffer builder pilot** (2026-11-09, Apple M3 Max, macOS, against
+  the namespace-migrated handwritten buffer builder). A declaration generates ordinary `.make`, predicate,
+  reader and mutable `->` setter functions over one tagged `absvector`. Fields are read-only by default.
+  The shared `struct.make` macro takes a literal type and labelled fields, evaluates each expression once
+  in source order, then calls the positional constructor. Under namespaces, the kernel resolves the head
+  and calls a registered annotator, which protects field descriptors and labels, before qualifying the
+  initializer expressions; a separate name enumerator checks generated definitions against imports. Neither
+  callback installs schemas or needs namespace context: the source expander registers them in source order.
+  Generated bodies do not capture shadowed primitives. Rejected during development: a port override of the
+  kernel's namespace qualifier with per-constructor syntax metadata, which the kernel's annotation hooks
+  made unnecessary. Schemas survive images; identical declarations reuse their fresh private tag, and
+  incompatible layouts fail before replacing functions. Tags have no function binding, so the kernel
+  writer cannot call a public type name or constructor as a printer. The source keyword leaves the
+  ordinary function binding available to the kernel's tutorial programs. This adds no C or JIT machinery;
+  the already existing tagged-vector primitive is registered for the generated predicates. The compiler's
+  own records have not been migrated.
+  An exact-size predicate used extra bounds probes and made the byte-at-a-time loop about 10% slower;
+  rejected, since manually forged vectors are outside the record API. The predicate tests the nominal tag
+  directly. Seven interleaved runs under the same executable, changing only buffer source, appended 1,048,576
+  bytes in median 30.9 ms handwritten versus 31.3 ms with structs, and encoded 16,384 JSON objects (1,720,320
+  bytes) in 50.3 versus 50.9 ms. The checks agreed. Construction allocates five slots; readers/setters
+  contain only constant-index address operations, and labelled calls build no runtime field list.
+  Two rounds of the independent workloads against an image of the same pinned kernel without this extension
+  gave 193 versus 191 ms for the kernel suite and 30 versus 27 ms for extension tests; the other row ratios
+  were 0.94–1.05, too short to claim a speed change. `make test-core test-libs` passes, including 45 struct
+  checks in each of base, stlib and their restored images. Both bootstrap hosts reproduce the manifest and
+  pass the lowerer checker. A fresh source tarball builds with `BOOTSTRAP=false` and passes the struct and
+  namespace clients in both executables and their restored images. The guide examples run. Source-file
+  declarations only; typed declarations and pattern integration remain outside this pilot.
+
 ### Kernel pins and reproducible stage 0
 
 - **Namespace migration** (2026-11-09, Apple M3 Max, against the library sources after release 0.6). All 28 optional Shen libraries now use

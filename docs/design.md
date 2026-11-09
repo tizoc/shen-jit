@@ -27,7 +27,8 @@ and types, and records arities and lambda forms. Shen/JIT avoids recording those
 itself and saving the result.
 
 **Stage 0,** under a host, lowers the kernel's KLambda, leaving out what the port overrides, then the port
-(`src/port/shen-jit.kl`) and the lowerer itself, which `tokl.shen` compiles to KLambda first. The output is
+(`build/port/shen-jit.kl`) and the lowerer itself. `tokl.shen` compiles the lowerer and
+`src/port/struct.shen` to KLambda first; the latter is appended to `src/port/shen-jit.kl` to form the port. The output is
 files of definitions as text, in `build/stage0`, so no state of the host reaches the target. Release tarballs carry this
 output, so they build with a C compiler alone, and `generated.sha256` holds its hashes.
 
@@ -76,6 +77,28 @@ mechanically.
 A code object owns its bytecode, constants, frame size and compiled code. Closures and active frames hold their
 code independently of named bindings, so replacing a binding does not disturb an old closure or a running
 frame.
+
+## Managed struct source extension
+
+`src/port/struct.shen` registers `defstruct` with the kernel's source reader before ordinary macro
+expansion and arity discovery. It emits ordinary definitions over one tagged `absvector`: a positional
+`.make`, a predicate, field readers and `->` setters for mutable fields. The constructor allocates only
+the record; accessors contain direct constant-index address operations and the predicate calls the
+existing `shen-jit.tagged?` primitive. No C or JIT change is involved.
+
+Schemas live in the property vector; syntax registrations are global state. Both persist in images.
+Each schema gets a fresh unbound tag, reused on an identical declaration and kept separate from callable
+names so the kernel writer cannot treat a public constructor as a printer. Incompatible declarations
+are rejected before replacing generated functions. The shared `struct.make` macro expands labelled
+construction into ordered local bindings and a positional call; no field-name lookup occurs at runtime.
+
+The kernel's namespace extension dispatches form annotators by resolved head, before qualifying
+arguments. The struct annotator adds `protect` to field descriptors and constructor labels, leaving
+the type and initializer expressions to normal resolution. A separate name enumerator lets namespaces
+check generated definitions against imports. Neither callback receives namespace context or installs
+schemas. The source expander registers schemas in source order and consumes protection only in literal
+field positions.
+The extension is in the startup image; `buffer.builder` is its first client. See [structs.md](structs.md).
 
 ## Guest frames and calling convention
 

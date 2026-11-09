@@ -43,7 +43,7 @@
            (/. File (o.for-each
                       (/. Form (shen.dict-> (value o.*kernel*) (hd (tl Form)) Form))
                       (o.defuns (cn Dir (cn "/klambda/" (cn File ".kl"))))))
-           ["core" "dict" "prolog" "macros" "reader" "sys" "writer" "yacc" "toplevel" "extension-launcher"]))
+           ["core" "dict" "prolog" "macros" "reader" "sys" "writer" "yacc" "toplevel" "extension-launcher" "extension-namespaces"]))
 
 (define o.for-each
   _ [] -> done

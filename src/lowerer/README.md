@@ -7,7 +7,7 @@ Shen, and its stage 0 driver.
 | --- | --- | --- |
 | `lower.shen` | 1173 | The lowerer: normalization, then emission (tail positions, closure conversion, slots and windows). |
 | `stage0.shen` | 224 | Driver: lowers the kernel KLambda files and the port to `build/stage0/<file>.sbc`. |
-| `tokl.shen` | 39 | Compiles `lower.shen` to KLambda for stage 0. |
+| `tokl.shen` | 47 | Compiles the lowerer and struct source extension to KLambda for stage 0. |
 | `host.shen` | 43 | What the lowerer takes from Shen/JIT, defined for running under a host. |
 | `check.shen` | 455 | Test code: reads the output back and checks it against the rules in `lib/native.shen`, checks normalization's output, unit cases. |
 
@@ -28,13 +28,15 @@ makes the same files. The steps, from the repository's root, once `make` has wri
 
 ```sh
 HOST script src/lowerer/tokl.shen     # src/lowerer/lower.shen -> build/port/lower.kl
+HOST script src/lowerer/tokl.shen build/port/struct.kl src/port/struct.shen
 HOST script src/lowerer/stage0.shen   # [KLAMBDA-DIR [OUT-DIR [FILE ...]]]
 HOST script src/lowerer/check.shen    # [KLAMBDA-DIR [SBC-DIR]]
 ```
 
 Stage 0 lowers the 22 kernel files other than stlib, which is built apart (`make stlib`),
-then the port: `src/port/shen-jit.kl` and the lowerer itself,
-compiled to KLambda by `tokl.shen`, so it can run inside Shen/JIT for
+then the port: `build/port/shen-jit.kl`, assembled from `src/port/shen-jit.kl` and
+`src/port/struct.shen` compiled to KLambda by `tokl.shen`, and the lowerer itself,
+also compiled by `tokl.shen`, so it can run inside Shen/JIT for
 `eval-kl`. It reads KLambda with `read-from-string-unprocessed`,
 because `read-file` macroexpands (it turns `(input+ X Y)` into a
 `shen.input-h+` call), and the kernel's definitions are the raw forms. Besides

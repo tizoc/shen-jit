@@ -386,7 +386,8 @@ may use as values, as (fn shen-jit.u8)."
       (shen.set-lambda-form-entry (cons F (shen-jit.absvector3 shen-jit.lazy-form N 0)))))
 
 (defun shen-jit.register-primitives ()
-  (do (shen-jit.primitive shen-jit.bytes 1)
+  (do (shen-jit.primitive shen-jit.tagged? 2)
+    (do (shen-jit.primitive shen-jit.bytes 1)
     (do (shen-jit.primitive shen-jit.bytes? 1)
     (do (shen-jit.primitive shen-jit.bytes-length 1)
     (do (shen-jit.primitive shen-jit.u8 2)
@@ -442,7 +443,7 @@ may use as values, as (fn shen-jit.u8)."
     (do (shen-jit.primitive shen-jit.pointers-dead 0)
     (do (shen-jit.primitive shen-jit.pointer-read-only 1)
     (do (shen-jit.primitive shen-jit.collect 0)
-    (do (shen-jit.primitive shen-jit.write-bytes 4) shen.skip))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+    (do (shen-jit.primitive shen-jit.write-bytes 4) shen.skip)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
 
 "Stage 1 calls this after the kernel and extensions are initialised: it
 registers the port functions meant for Shen code. (shen-jit.exit N) ends
@@ -456,6 +457,7 @@ thread at a time holding a lock (thread.c). It is defined here, once sealing has
 ended, since programs may define their own thread."
 
 (defun shen-jit.initialise ()
+  (do (shen-jit.struct.initialise)
   (do (shen-jit.register-primitives)
   (do (eval-kl (cons defun (cons thread (cons (cons x ()) (cons (cons shen-jit.thread (cons x ())) ())))))
   (do (shen.initialise-arity-table
@@ -474,7 +476,7 @@ ended, since programs may define their own thread."
           (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.exit))
               (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.code))
                   (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.save-executable))
-                      (set shen-jit.defined ()))))))))))
+                      (set shen-jit.defined ())))))))))))
 
 "Definitions are factorised as they are evaluated, as Shen/Scheme's compiler
 does: the kernel's shen.factor binds each selector once and shares the tests

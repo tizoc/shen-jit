@@ -6,6 +6,8 @@
 
 (shen.x.namespace buffer
   (use shen-jit)
+  (use struct)
+  (import struct defstruct)
   (shadow index length)
   (export append! append-byte! builder builder-length bytes check copy! buffer.cursor => cursor
     end equal? finish from-string index length make new offset owner range slice storage
@@ -117,62 +119,70 @@
 
 \\ A single-owner builder grows geometrically under an explicit byte limit.
 \\ Finish transfers its managed storage to a view and seals the builder.
+(defstruct builder-state
+  limit
+  (mutable storage)
+  (mutable length)
+  (mutable sealed))
+
 (define builder
   Limit ->
     (let N (index Limit)
-         B (absvector 5)
-      (do (address-> B 0 builder-state) (address-> B 1 N)
-          (address-> B 2 (new 0)) (address-> B 3 0) (address-> B 4 false) B)))
+      (struct.make builder-state
+        limit <- N;
+        storage <- (new 0);
+        length <- 0;
+        sealed <- false;)))
 
 (define builder-check
   B ->
-    (if (trap-error (and (absvector? B) (= (<-address B 0) builder-state) (not (<-address B 4)))
-          (/. X false))
-        B (error "buffer: not an open builder")))
+    (if (and (builder-state? B) (not (builder-state.sealed B)))
+        B
+        (error "buffer: not an open builder")))
 
 (define builder-length
-  B -> (<-address (builder-check B) 3))
+  B -> (builder-state.length (builder-check B)))
 
 (define builder-reserve
   B Need ->
-    (let Old (<-address B 2)
+    (let Old (builder-state.storage B)
          Cap (length Old)
       (if (<= Need Cap)
           Old
-          (let Limit (<-address B 1)
+          (let Limit (builder-state.limit B)
                Grow (if (= Cap 0) (if (< Limit 256) Limit 256)
                         (+ Cap (if (< Cap (- Limit Cap)) Cap (- Limit Cap))))
                Next (new (if (> Need Grow) Need Grow))
-               _ (copy! Next 0 Old 0 (<-address B 3))
-            (do (address-> B 2 Next) Next)))))
+               _ (copy! Next 0 Old 0 (builder-state.length B))
+            (do (builder-state.storage-> B Next) Next)))))
 
 (define append!
   B V ->
     (let _ (builder-check B)
          N (length V)
-         At (<-address B 3)
-         _ (if (<= N (- (<-address B 1) At)) true (error "buffer: builder exceeds byte limit"))
+         At (builder-state.length B)
+         _ (if (<= N (- (builder-state.limit B) At)) true (error "buffer: builder exceeds byte limit"))
          End (+ At N)
          Out (builder-reserve B End)
          _ (copy! Out At V 0 N)
-      (do (address-> B 3 End) B)))
+      (builder-state.length-> B End)))
 
 (define append-byte!
   B Byte ->
     (let _ (builder-check B)
          Value (shen-jit.bit-or Byte 0)
          _ (if (and (>= Value 0) (<= Value 255)) true (error "buffer: invalid byte"))
-         At (<-address B 3)
-         _ (if (< At (<-address B 1)) true (error "buffer: builder exceeds byte limit"))
+         At (builder-state.length B)
+         _ (if (< At (builder-state.limit B)) true (error "buffer: builder exceeds byte limit"))
          Out (builder-reserve B (+ At 1))
          _ (u8! Out At Value)
-      (do (address-> B 3 (+ At 1)) B)))
+      (builder-state.length-> B (+ At 1))))
 
 (define finish
   B ->
     (let _ (builder-check B)
-         Out (slice (<-address B 2) 0 (<-address B 3))
-      (do (address-> B 4 true) (address-> B 2 []) Out)))
+         Out (slice (builder-state.storage B) 0 (builder-state.length B))
+      (do (builder-state.sealed-> B true) (builder-state.storage-> B []) Out)))
 
 (declare view? [A --> boolean])
 (declare new [number --> view])
