@@ -366,8 +366,8 @@
 (define dt.chains
   _ _ _ _ [] _ Acc -> Acc
   Index Tuples Find Want [K | Ks] Off Acc
-  -> (let P (Find (<-address Index 0) Tuples (<-address Index 2) K)
-          N (dt.chain-length P (<-address Index 1) Tuples 0 K Off)
+  -> (let P (Find (datalog.index.table Index) Tuples (datalog.index.mask Index) K)
+          N (dt.chain-length P (datalog.index.next Index) Tuples 0 K Off)
        (dt.chains Index Tuples Find Want Ks Off (if (= N (tl (assoc-or K Want))) Acc (+ Acc 1)))))
 
 (define assoc-or
@@ -399,7 +399,7 @@
           Counts (dt.key-counts Tuples Column (shen.dict 8))
           K (datalog.find-kernel 2 [Column])
           Find (eval-kl [lambda a [lambda b [lambda c [lambda d [K a b c d]]]]])
-          _ (dt.check (cn "kernels: an index counts its keys, " Label) (<-address Index 4) (shen.dict-count Counts))
+          _ (dt.check (cn "kernels: an index counts its keys, " Label) (datalog.index.keys Index) (shen.dict-count Counts))
        (dt.check (cn "kernels: each chain holds its tuples, " Label)
                  (dt.chains Index (<-address R 2) Find Counts (shen.dict-keys Counts) (* 4 (- Column 1)) 0) 0)))
 
@@ -1310,7 +1310,7 @@
   (dt.check "by demand, a query as written" (datalog.sort (datalog.ask Kept (depends c X))) [[c a] [c b] [c d]]))
 (let Kept (datalog.demand-db dt.graph (value dt.graph-facts))
      _ (datalog.match Kept [reach 20 [var "X"]])
-  (dt.check "by demand, computing less" (datalog.count (shen.<-dict (<-address (hd (tl (tl Kept))) 1) (datalog.demand dt.graph reach [b f])) reach@bf) 5))
+  (dt.check "by demand, computing less" (datalog.count (shen.<-dict (datalog.demand-store.dbs (hd (tl (tl Kept)))) (datalog.demand dt.graph reach [b f])) reach@bf) 5))
 
 \* Asking by index: what a question's index finds is what the relation holds, after an add that
    replaces a key's tuple. *\

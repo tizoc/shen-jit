@@ -53,6 +53,8 @@
 
 (shen.x.namespace datalog
   (use shen-jit)
+  (use struct)
+  (import struct defstruct)
   (externals [!= % a absent again aggregate all any assign b band bit-and bit-or bit-xor block
     bor bshl bshr bxor c cat check choice compare count csv d db defdatalog define-native demand
     e emit eq equivalence exit f fact filter fold for grow i insert integer j k keyed l lattice
@@ -60,7 +62,7 @@
     relation replace restart return-word rounds rule s s32 same scan shift-left shift-right
     shift-right-signed skip start strlen substr t to-number to-string tsv u32 u32! u64 u64! u<
     unless unpack v var w while word x])
-  (shadow atom? bound? log2 nth run some? sort subset?)
+  (shadow atom? bound? index log2 nth run some? sort subset?)
   (export add ask bytes->facts code datalog.count => count datalog.define => define demand-db
     explain holds? match datalog.plans => plans query read-facts relation->bytes
     datalog.remove => remove run run-naive solve sorted stats tuples write-facts defdatalog)
@@ -1510,7 +1512,7 @@
 \\ 7 the bytes of a tuple, 8 an equivalence's classes, a table by key for a relation of one tuple a
 \\ key, its entries as the relation's own table's and as many, or 0, 9 the merges its tuples came in, and
 \\ each index from 10, by a number kept with the program across runs. A run starts only those it
-\\ looks up. An index is a vector of its table, chain, mask and keys.
+\\ looks up. An index is a struct of its own, made by new-index.
 \\ Kind is true for an equivalence, keyed for a relation of one tuple a key, or false.
 (define new-relation
   Arity Kind
@@ -1826,7 +1828,7 @@
   [[absent Rel Keys Terms] | Steps] [Relations Constants Indexes] Prefix N
   -> [let r [<-address s (relation-slot Rel Relations)]
        [if (if (empty? Keys)
-               [> [<-address [<-address r 8] 8] 0]
+               [> [classes.pairs [<-address r 8]] 0]
                [cons? [eq-pairs r all (list-form Keys) (list-form (map (/. T (value-form T Constants)) Terms))]])
            true
            (gen Steps [Relations Constants Indexes] Prefix N)]]
@@ -1874,9 +1876,9 @@
                    true]]
              (let Field (index-slot Rel Keys Indexes)
                   Stride (stride (arity-in Rel Relations))
-                  First [Find [<-address i 0] [<-address r 2] [<-address i 2] | Forms]
+                  First [Find [index.table i] [<-address r 2] [index.mask i] | Forms]
                [let i [<-address r Field]
-                 [let p (if (= Source old) [skip-chain First [<-address i 1] [<-address r 5]] First)
+                 [let p (if (= Source old) [skip-chain First [index.next i] [<-address r 5]] First)
                    [if [> p 0]
                        (gen-chain Stride Columns Steps Ctx Prefix N)
                        true]]]))]))
@@ -1890,7 +1892,7 @@
        (if (whole-tuple? Rel Keys Relations)
            [> [Find [<-address r 3] [<-address r 2] [shen-jit.u32 [<-address r 4] 8] | Forms] 0]
            (let I [<-address r (index-slot Rel Keys Indexes)]
-             [> [Find [<-address I 0] [<-address r 2] [<-address I 2] | Forms] 0]))))
+             [> [Find [index.table I] [<-address r 2] [index.mask I] | Forms] 0]))))
 
 \\ A loop over the pairs of an equivalence that List gives, as [X Y] words.
 (define gen-pairs
@@ -1936,7 +1938,7 @@
                          [do Body [Name [shen-jit.u32 n [* q 4]] n b s | Live]]]]
                      true]]
           _ (set *forms* [Form | (value *forms*)])
-       [Name p [<-address i 1] [<-address r 2] s | Live]))
+       [Name p [index.next i] [<-address r 2] s | Live]))
 
 (define column-form
   [eq X _] 1 -> X
@@ -2034,8 +2036,8 @@
                                                  a]]
                                            | (value *forms*)])
                 [let i [<-address r (index-slot Rel Keys Indexes)]
-                  [Name [Find [<-address i 0] [<-address r 2] [<-address i 2] | Forms]
-                        [<-address i 1] [<-address r 2] s (fold-init Op)]]))))
+                  [Name [Find [index.table i] [<-address r 2] [index.mask i] | Forms]
+                        [index.next i] [<-address r 2] s (fold-init Op)]]))))
 
 (define gen-plan
   Steps Ctx Prefix
@@ -2337,11 +2339,11 @@
 \\ its ranges after it, and H's table and mask.
 (define class-params
   Slot -> (let C [<-address (record-form Slot) 8]
-            [(param (word-name "Cx" Slot) [<-address C 3])
-             (param (word-name "Ch" Slot) [<-address C 4])
-             (param (word-name "Cm" Slot) [<-address C 5])
-             (param (word-name "Cn" Slot) [<-address C 6])
-             (param (word-name "Cc" Slot) [<-address C 7])]))
+            [(param (word-name "Cx" Slot) [classes.layout C])
+             (param (word-name "Ch" Slot) [classes.table C])
+             (param (word-name "Cm" Slot) [classes.mask C])
+             (param (word-name "Cn" Slot) [classes.positions C])
+             (param (word-name "Cc" Slot) [classes.changed-from C])]))
 
 \\ Statements that run Inner for each position Q the value at byte B pairs with, from all, old or
 \\ new pairs: its class's range, its old part's, or the class's less the part's. The ranges are read
@@ -2491,8 +2493,8 @@
                    Index [<-address (record-form Slot) Field]
                 [[block Block
                    | (append (probe-loop (native-label "probe") Values
-                               (param (index-name "Itab" Slot Field) [<-address Index 0])
-                               (param (index-name "Imask" Slot Field) [<-address Index 2])
+                               (param (index-name "Itab" Slot Field) [index.table Index])
+                               (param (index-name "Imask" Slot Field) [index.mask Index])
                                Q Stride (equal-keys Tuples Q Keys Values) [[exit Block]])
                              Rest)]])))))
 
@@ -2532,14 +2534,14 @@
                            Probe (native-label "probe")
                         [[word P 0]
                          | (append (probe-loop Probe Values
-                                     (param (index-name "Itab" Slot Field) [<-address Index 0])
-                                     (param (index-name "Imask" Slot Field) [<-address Index 2])
+                                     (param (index-name "Itab" Slot Field) [index.table Index])
+                                     (param (index-name "Imask" Slot Field) [index.mask Index])
                                      Q Stride (equal-keys Tuples Q Keys Values)
                                      [[word P [bit-and (protect E) (mask)]] [exit Probe]])
                                    [[while (native-label "chain") [> P 0]
                                       [word Q [* [- P 1] Stride]]
                                       [do | (Update Tuples Q)]
-                                      [word P [u32 (param (index-name "Inext" Slot Field) [<-address Index 1])
+                                      [word P [u32 (param (index-name "Inext" Slot Field) [index.next Index])
                                                    [shift-left [- P 1] 2]]]]])]))
           Checked (if (= Op sum)
                       [[unless [u< [+ Acc 2147483648] 4294967296] [return-word (overflow-code)]]]
@@ -2602,9 +2604,9 @@
           Field (index-slot Rel Keys Indexes)
           Index [<-address (record-form Slot) Field]
           Tuples (tuples-param Slot)
-          Table (param (index-name "Itab" Slot Field) [<-address Index 0])
-          Next (param (index-name "Inext" Slot Field) [<-address Index 1])
-          Mask (param (index-name "Imask" Slot Field) [<-address Index 2])
+          Table (param (index-name "Itab" Slot Field) [index.table Index])
+          Next (param (index-name "Inext" Slot Field) [index.next Index])
+          Mask (param (index-name "Imask" Slot Field) [index.mask Index])
           P (word-name "P" Level)
           Q (word-name "Q" Level)
           Probe (word-name "probe" Level)
@@ -2758,7 +2760,7 @@
 
 \\ Where the first loop starts: the new tuples or all of them; 0 if the plan begins with no loop.
 (define first-start
-  [[scan Rel new _] | _] Relations -> [<-address [<-address [<-address s (relation-slot Rel Relations)] 8] 7]
+  [[scan Rel new _] | _] Relations -> [classes.changed-from [<-address [<-address s (relation-slot Rel Relations)] 8]]
                                        where (equivalence? Rel)
   [[scan Rel new _] | _] Relations -> [<-address [<-address s (relation-slot Rel Relations)] 5]
   [[scan _ _ _] | _] _ -> 0
@@ -2792,21 +2794,44 @@
 \\ ---------------------------------------------------------------------------
 \\ Running.
 
+\\ An index: its table, its chain, the table's mask, the closure of the kernel that adds tuples to
+\\ it, and how many keys it has.
+(defstruct index
+  (printer show-index)
+  (mutable table)
+  (mutable next)
+  (mutable mask)
+  indexer
+  (mutable keys))
+
+(define show-index
+  I -> (make-string "#<index ~A keys>" (index.keys I)))
+
+\\ What a database by demand keeps: its facts, and a database for each adornment asked.
+(defstruct demand-store
+  (printer show-demand-store)
+  (mutable facts)
+  dbs)
+
+(define show-demand-store
+  Kept -> (make-string "#<demand-store ~A facts, ~A adornments>"
+                       (length (demand-store.facts Kept)) (shen.dict-count (demand-store.dbs Kept))))
+
 \\ Room for Added more tuples of which every key may be new, and their chains.
 (define index-room
   Index Added Count
-  -> (let Size (+ 1 (<-address Index 2))
-          Wanted (* 2 (+ (<-address Index 4) Added))
+  -> (let Size (+ 1 (index.mask Index))
+          Wanted (* 2 (+ (index.keys Index) Added))
           NewSize (power-at-least Size Wanted)
           _ (if (= NewSize Size)
                 skip
-                (do (address-> Index 0 (larger-table (<-address Index 0) Size NewSize))
-                    (address-> Index 2 (- NewSize 1))))
-          Next (<-address Index 1)
+                (do (index.table-> Index (larger-table (index.table Index) Size NewSize))
+                    (index.mask-> Index (- NewSize 1))))
+          Next (index.next Index)
           Bytes (shen-jit.bytes-length Next)
        (if (>= Bytes (* 4 Count))
            true
-           (address-> Index 1 (shen-jit.copy-bytes (shen-jit.bytes (* 8 Count)) 0 Next 0 Bytes)))))
+           (index.next-> Index (shen-jit.copy-bytes (shen-jit.bytes (* 8 Count)) 0 Next 0 Bytes)))))
 
 (define power-at-least
   P N -> (if (>= P N) P (power-at-least (* 2 P) N)))
@@ -2815,9 +2840,9 @@
 (define index-range
   Rec Index From To
   -> (let _ (index-room Index (- To From) To)
-          F (<-address Index 3)
-          New (F (<-address Index 0) (<-address Index 1) (<-address Rec 2) (<-address Index 2) From To)
-       (address-> Index 4 (+ New (<-address Index 4)))))
+          F (index.indexer Index)
+          New (F (index.table Index) (index.next Index) (<-address Rec 2) (index.mask Index) From To)
+       (index.keys-> Index (+ New (index.keys Index)))))
 
 (define index-all
   [] _ _ _ -> true
@@ -2831,7 +2856,7 @@
 (set *merges* 0)
 
 (define merge
-  Rec -> (merge-classes Rec) where (classes? Rec)
+  Rec -> (merge-classes Rec) where (has-classes? Rec)
   Rec -> (let From (<-address Rec 6)
               To (count-of Rec)
               _ (if (> To From)
@@ -2853,43 +2878,59 @@
 \\ Their earlier positions become holes, whose ranges are empty, and a table by value, H, an index of
 \\ X's first column, finds a value's latest position, and so the class it was in. When X is full, H
 \\ half full or holes outnumber values, every class is laid out again, into new ones. The record:
-\\ 0 each value's cell, 1 the cells changed since, 2 how many holes, 3 X, 4 H, 5 H's mask, 6 how many
-\\ positions, holes included, 7 where the classes that changed start, 8 how many pairs, 9 whether the
-\\ last merge laid any out, 10 the size of a pair's class on average, or -1 until asked for, 11 H's
-\\ chains.
-(define new-classes
-  -> (let C (absvector 12)
-          _ (address-> C 0 (shen.dict 64))
-          _ (address-> C 1 [])
-          _ (address-> C 2 0)
-          _ (address-> C 3 (shen-jit.bytes 0))
-          _ (address-> C 4 (shen-jit.bytes (* 16 8)))
-          _ (address-> C 5 15)
-          _ (address-> C 6 0)
-          _ (address-> C 7 0)
-          _ (address-> C 8 0)
-          _ (address-> C 9 false)
-          _ (address-> C 10 -1)
-          _ (address-> C 11 (shen-jit.bytes 0))
-       C))
+\\ each value's cell, the cells changed since, how many holes, X, H, H's mask, how many positions,
+\\ holes included, where the classes that changed start, how many pairs, whether the last merge laid
+\\ any out, the size of a pair's class on average, or -1 until asked for, and H's chains.
+(defstruct classes
+  (printer show-classes)
+  cells
+  (mutable changed)
+  (mutable holes)
+  (mutable layout)
+  (mutable table)
+  (mutable mask)
+  (mutable positions)
+  (mutable changed-from)
+  (mutable pairs)
+  (mutable laid-out)
+  (mutable class-size)
+  (mutable chains))
 
-(define classes?
-  Rec -> (absvector? (<-address Rec 8)))
+(define show-classes
+  C -> (make-string "#<classes ~A values, ~A pairs>" (shen.dict-count (classes.cells C)) (classes.pairs C)))
+
+(define new-classes
+  -> (struct.make classes
+       cells <- (shen.dict 64);
+       changed <- [];
+       holes <- 0;
+       layout <- (shen-jit.bytes 0);
+       table <- (shen-jit.bytes (* 16 8));
+       mask <- 15;
+       positions <- 0;
+       changed-from <- 0;
+       pairs <- 0;
+       laid-out <- false;
+       class-size <- -1;
+       chains <- (shen-jit.bytes 0);))
+
+(define has-classes?
+  Rec -> (classes? (<-address Rec 8)))
 
 (define size-of
-  Rec -> (if (classes? Rec) (<-address (<-address Rec 8) 8) (count-of Rec)))
+  Rec -> (if (has-classes? Rec) (classes.pairs (<-address Rec 8)) (count-of Rec)))
 
 \\ The inbox into the classes: whether any pair was new, and if so the next round's new pairs are
 \\ those, and the relation's size is its pairs, which an add's marks compare.
 (define merge-classes
   Rec -> (let C (<-address Rec 8)
-              Before (<-address C 8)
+              Before (classes.pairs C)
               Changed (join-pairs Rec C 0 (count-of Rec) false)
               _ (empty-inbox Rec)
            (if Changed
                (do (address-> Rec 5 Before)
                    (lay-out C)
-                   (address-> Rec 6 (<-address C 8))
+                   (address-> Rec 6 (classes.pairs C))
                    true)
                (do (settle-classes C) false))))
 
@@ -2913,11 +2954,12 @@
 \\ Joins two values' classes: whether that changed a class or made one. Each value's entry is its
 \\ class's cell, [Root Size Members Changed], shared by its members, so that a join looks each value
 \\ up once and re-points only the smaller class's values. The pairs grow by twice the product of the
-\\ classes' sizes, or by one for a new value. Cells are told apart by their roots.
+\\ classes' sizes, or by one for a new value. Cells are told apart by their roots. A cell stays an
+\\ untagged vector: a struct's tag and constructor made joins slower.
 (define join
-  C A B -> (let EA (dict-find (<-address C 0) A)
+  C A B -> (let EA (dict-find (classes.cells C) A)
                 CA (if (cons? EA) (tl EA) (new-cell C A))
-                EB (dict-find (<-address C 0) B)
+                EB (dict-find (classes.cells C) B)
                 CB (if (cons? EB) (tl EB) (new-cell C B))
              (cases (= (<-address CA 0) (<-address CB 0)) (and (not (and (cons? EA) (cons? EB))) (changed C CA))
                     (< (<-address CA 1) (<-address CB 1)) (join-into C CB CA)
@@ -2929,21 +2971,21 @@
               _ (address-> Cell 1 1)
               _ (address-> Cell 2 [V])
               _ (address-> Cell 3 false)
-              _ (shen.dict-> (<-address C 0) V Cell)
-              _ (address-> C 8 (+ (<-address C 8) 1))
+              _ (shen.dict-> (classes.cells C) V Cell)
+              _ (classes.pairs-> C (+ (classes.pairs C) 1))
            Cell))
 
 (define changed
   C Cell -> (do (if (<-address Cell 3)
                     skip
-                    (do (address-> Cell 3 true) (address-> C 1 [Cell | (<-address C 1)])))
+                    (do (address-> Cell 3 true) (classes.changed-> C [Cell | (classes.changed C)])))
                 true))
 
 \\ The smaller class's values point at the larger's cell, and its own cell, now empty, is left.
 (define join-into
   C Big Small
-  -> (let _ (point (<-address C 0) (<-address Small 2) Big)
-          _ (address-> C 8 (+ (<-address C 8) (* 2 (* (<-address Small 1) (<-address Big 1)))))
+  -> (let _ (point (classes.cells C) (<-address Small 2) Big)
+          _ (classes.pairs-> C (+ (classes.pairs C) (* 2 (* (<-address Small 1) (<-address Big 1)))))
           _ (address-> Big 2 (append (<-address Small 2) (<-address Big 2)))
           _ (address-> Big 1 (+ (<-address Big 1) (<-address Small 1)))
           _ (address-> Small 1 0)
@@ -2961,20 +3003,20 @@
 
 \\ Each class once, by the values that are their roots.
 (define fold-classes
-  F C Acc -> (shen.dict-fold (/. V Cell Acc (if (= V (<-address Cell 0)) (F Cell Acc) Acc)) (<-address C 0) Acc))
+  F C Acc -> (shen.dict-fold (/. V Cell Acc (if (= V (<-address Cell 0)) (F Cell Acc) Acc)) (classes.cells C) Acc))
 
 \\ The classes that changed, each once, at the end of X; or every class again, into a new X and H,
 \\ if there is no room or the holes would outnumber the values.
 (define lay-out
-  C -> (let Classes (changed-classes (<-address C 1) [])
+  C -> (let Classes (changed-classes (classes.changed C) [])
             Moved (datalog.sum (map (function length) Classes) 0)
-            Live (shen.dict-count (<-address C 0))
-            _ (address-> C 9 true)
-            _ (address-> C 10 -1)
-            _ (address-> C 1 [])
-         (if (or (> (* 20 (+ (<-address C 6) Moved)) (shen-jit.bytes-length (<-address C 3)))
-                 (> (* 2 Live) (<-address C 5))
-                 (> (+ (<-address C 2) Moved) Live))
+            Live (shen.dict-count (classes.cells C))
+            _ (classes.laid-out-> C true)
+            _ (classes.class-size-> C -1)
+            _ (classes.changed-> C [])
+         (if (or (> (* 20 (+ (classes.positions C) Moved)) (shen-jit.bytes-length (classes.layout C)))
+                 (> (* 2 Live) (classes.mask C))
+                 (> (+ (classes.holes C) Moved) Live))
              (lay-out-all C Live)
              (lay-out-some C Classes))))
 
@@ -2982,15 +3024,15 @@
 \\ are old now; their earlier positions holes, and H told where they are.
 (define lay-out-some
   C Classes
-  -> (let X (<-address C 3)
-          From (<-address C 6)
-          _ (reset-old X (<-address C 7) From false)
+  -> (let X (classes.layout C)
+          From (classes.positions C)
+          _ (reset-old X (classes.changed-from C) From false)
           Changed (filter-parts true (map (/. Ms (parts C Ms)) Classes))
           _ (map (/. Ps (map (/. Part (map (/. V (hole C X V)) (tl Part))) (tl Ps))) Changed)
           End (place-classes X Changed From)
-          _ ((index-function 5 [1]) (<-address C 4) (<-address C 11) X (<-address C 5) From End)
-          _ (address-> C 6 End)
-          _ (address-> C 7 From)
+          _ ((index-function 5 [1]) (classes.table C) (classes.chains C) X (classes.mask C) From End)
+          _ (classes.positions-> C End)
+          _ (classes.changed-from-> C From)
        true))
 
 \\ Every class, those that changed last, into a new X with room for twice the values and an H for
@@ -3007,13 +3049,13 @@
           H (shen-jit.bytes (* 8 Size))
           Next (shen-jit.bytes (* 4 Room))
           _ ((index-function 5 [1]) H Next X (- Size 1) 0 End)
-          _ (address-> C 3 X)
-          _ (address-> C 4 H)
-          _ (address-> C 5 (- Size 1))
-          _ (address-> C 6 End)
-          _ (address-> C 7 From)
-          _ (address-> C 2 0)
-          _ (address-> C 11 Next)
+          _ (classes.layout-> C X)
+          _ (classes.table-> C H)
+          _ (classes.mask-> C (- Size 1))
+          _ (classes.positions-> C End)
+          _ (classes.changed-from-> C From)
+          _ (classes.holes-> C 0)
+          _ (classes.chains-> C Next)
        true))
 
 \\ A value's position, if it has one, made a hole: an empty class that no pair reads.
@@ -3026,12 +3068,12 @@
                       _ (shen-jit.u32! X (+ B 8) 0)
                       _ (shen-jit.u32! X (+ B 12) 0)
                       _ (shen-jit.u32! X (+ B 16) 0)
-                   (address-> C 2 (+ (<-address C 2) 1))))))
+                   (classes.holes-> C (+ (classes.holes C) 1))))))
 
 \\ A class's parts: [Changed [Old Values] ... [new Values]], Old where the class each was in when
 \\ last laid out starts, before X changes.
 (define parts
-  C Ms -> (let X (<-address C 3)
+  C Ms -> (let X (classes.layout C)
                Olds (map (/. V (let P (class-position C V) (if (= P 0) new (shen-jit.u32 X (- (* 20 P) 16))))) Ms)
             (cases (not (all-same? (tl Olds) (hd Olds))) [true | (group-parts Olds Ms (shen.dict 8))]
                    (= (hd Olds) new) [true [new | Ms]]
@@ -3086,26 +3128,26 @@
 \\ squares, as a real, since the cubes may not fit an integer. Made when a plan asks, and kept until
 \\ a class changes.
 (define pair-class-size
-  C -> (if (< (<-address C 10) 0)
-           (let S (<-address C 8)
+  C -> (if (< (classes.class-size C) 0)
+           (let S (classes.pairs C)
                 W (fold-classes (/. Cell W (let K (<-address Cell 1) (+ W (* K (/ (* K K) S))))) C 0)
-                _ (address-> C 10 W)
+                _ (classes.class-size-> C W)
              W)
-           (<-address C 10)))
+           (classes.class-size C)))
 
 \\ Nothing new: the old pairs are all, until a class changes again.
 (define settle-classes
-  C -> (if (<-address C 9)
-           (do (reset-old (<-address C 3) (<-address C 7) (<-address C 6) false)
-               (address-> C 7 (<-address C 6))
-               (address-> C 9 false))
+  C -> (if (classes.laid-out C)
+           (do (reset-old (classes.layout C) (classes.changed-from C) (classes.positions C) false)
+               (classes.changed-from-> C (classes.positions C))
+               (classes.laid-out-> C false))
            skip))
 
 \\ Every pair new, for a component's first round.
 (define start-classes
-  C -> (do (reset-old (<-address C 3) 0 (<-address C 6) true)
-           (address-> C 7 0)
-           (address-> C 9 true)))
+  C -> (do (reset-old (classes.layout C) 0 (classes.positions C) true)
+           (classes.changed-from-> C 0)
+           (classes.laid-out-> C true)))
 
 (define reset-old
   X P N Empty -> (if (>= P N)
@@ -3126,7 +3168,7 @@
        (if (cons? Known)
            (tl Known)
            (let Find (find-kernel 5 [1])
-                F (eval-kl [lambda c [lambda v [Find [<-address c 4] [<-address c 3] [<-address c 5] v]]])
+                F (eval-kl [lambda c [lambda v [Find [classes.table c] [classes.layout c] [classes.mask c] v]]])
                 _ (shen.dict-> (value *kernels*) Name F)
              F))))
 
@@ -3134,8 +3176,8 @@
 (define eq-pairs
   Rec Source Keys Values
   -> (let C (<-address Rec 8)
-          X (<-address C 3)
-       (cases (empty? Keys) (eq-all X Source (if (= Source new) (<-address C 7) 0) (<-address C 6) [])
+          X (classes.layout C)
+       (cases (empty? Keys) (eq-all X Source (if (= Source new) (classes.changed-from C) 0) (classes.positions C) [])
               (= Keys [1 2])
               (let P (class-position C (hd Values))
                    Q (class-position C (hd (tl Values)))
@@ -3191,7 +3233,7 @@
 (define start-round
   [] -> true
   [Rel | Rels] -> (do (address-> Rel 5 0)
-                      (if (classes? Rel) (start-classes (<-address Rel 8)) skip)
+                      (if (has-classes? Rel) (start-classes (<-address Rel 8)) skip)
                       (start-round Rels)))
 
 \\ What a run needs: [Name Relations Constants S].
@@ -3218,7 +3260,7 @@
        (cases (= Known 0) Size
               (= Size 0) 0
               (= Known Arity) 1
-              (classes? Rec) (pair-class-size (<-address Rec 8))
+              (has-classes? Rec) (pair-class-size (<-address Rec 8))
               true (per-key Rec Size Rel Keys Known Arity Run))))
 
 (define per-key
@@ -3227,8 +3269,8 @@
           Slot (if (and (cons? Table) (element? Keys (tl Table)))
                    (index-slot Rel Keys (get Name indexes))
                    none)
-       (if (and (not (= Slot none)) (element? Slot (<-address Rec 1)) (> (<-address (<-address Rec Slot) 4) 0))
-           (/ Size (<-address (<-address Rec Slot) 4))
+       (if (and (not (= Slot none)) (element? Slot (<-address Rec 1)) (> (index.keys (<-address Rec Slot)) 0))
+           (/ Size (index.keys (<-address Rec Slot)))
            (shen-jit.shift-left 1 (quotient (* (log2 Size 0) (- Arity Known)) Arity 0)))))
 
 (define estimator
@@ -3252,13 +3294,12 @@
 
 (define new-index
   N Keys Count
-  -> (let I (absvector 5)
-          _ (address-> I 0 (shen-jit.bytes (* 16 8)))
-          _ (address-> I 1 (shen-jit.bytes (* 4 (if (> Count 8) Count 8))))
-          _ (address-> I 2 15)
-          _ (address-> I 3 (index-function N Keys))
-          _ (address-> I 4 0)
-       I))
+  -> (struct.make index
+       table <- (shen-jit.bytes (* 16 8));
+       next <- (shen-jit.bytes (* 4 (if (> Count 8) Count 8)));
+       mask <- 15;
+       indexer <- (index-function N Keys);
+       keys <- 0;))
 
 (define use-index
   Rel Keys [Name Relations Constants S]
@@ -3656,7 +3697,7 @@
 \\ nothing that changed stays as it is. The database changes in place.
 
 (define add
-  [demand Name Kept] New -> (do (address-> Kept 0 (append (<-address Kept 0) New))
+  [demand Name Kept] New -> (do (demand-store.facts-> Kept (append (demand-store.facts Kept) New))
                                 (each-kept Kept (/. Db (add Db New)))
                                 [demand Name Kept])
   [db Name S Interned Rounds Plans Facts] New
@@ -3796,7 +3837,7 @@
 \\ order, and the rest stay. A fact the database does not have is no change.
 
 (define datalog.remove
-  [demand Name Kept] Gone -> (do (address-> Kept 0 (hd (split-facts (<-address Kept 0) (fact-set Gone (shen.dict 8)) [] [])))
+  [demand Name Kept] Gone -> (do (demand-store.facts-> Kept (hd (split-facts (demand-store.facts Kept) (fact-set Gone (shen.dict 8)) [] [])))
                                  (each-kept Kept (/. Db (datalog.remove Db Gone)))
                                  [demand Name Kept])
   [db Name S Interned Rounds Plans Facts] Gone
@@ -3870,7 +3911,7 @@
   -> (let Rec (relation-of [db Name S | Rest] Rel)
           Types (types-of Name Rel)
           Records [S | (nth 7 (datalog.program Name))]
-       (if (classes? Rec)
+       (if (has-classes? Rec)
            (map (/. P [(word-value (hd P) (hd Types) Records) (word-value (hd (tl P)) (hd Types) Records)])
                 (eq-pairs Rec all [] []))
            (read-tuples 0 (<-address Rec 6) (<-address Rec 2) (<-address Rec 7) Types Records []))))
@@ -3887,7 +3928,7 @@
           Ids (find-values Values (types-of Name Rel) Interned [S | (nth 7 (datalog.program Name))])
           Find (finder (length Values))
        (cases (= Ids no) false
-              (classes? Rec) (cons? (eq-pairs Rec all [1 2] Ids))
+              (has-classes? Rec) (cons? (eq-pairs Rec all [1 2] Ids))
               true (> (Find Rec Ids) 0))))
 
 (define match
@@ -3900,7 +3941,7 @@
 (define tuples-for
   Db Rel Terms
   -> (let Keys (key-columns Terms 1 [])
-       (cases (or (empty? Keys) (classes? (relation-of Db Rel))) (tuples Db Rel)
+       (cases (or (empty? Keys) (has-classes? (relation-of Db Rel))) (tuples Db Rel)
               (= (length Keys) (length Terms)) (if (holds? Db [Rel | Terms]) [Terms] [])
               true (tuples-at Db Rel Keys (map (/. K (nth K Terms)) Keys)))))
 
@@ -3996,7 +4037,7 @@
                    (tl Known)
                    (let Db (hd Ctx)
                         Rec (relation-of Db Rel)
-                        Tuples (if (classes? Rec)
+                        Tuples (if (has-classes? Rec)
                                    (map (/. T [T | 0]) (tuples Db Rel))
                                    (with-merges (reverse (tuples Db Rel)) 0 (reverse (<-address Rec 9))))
                         _ (shen.dict-> Cache Rel Tuples)
@@ -4237,20 +4278,17 @@
 
 (define demand-db
   Name Facts -> (let _ (datalog.program Name)
-                     Kept (absvector 2)
-                     _ (address-> Kept 0 Facts)
-                     _ (address-> Kept 1 (shen.dict 8))
-                  [demand Name Kept]))
+                  [demand Name (demand-store.make Facts (shen.dict 8))]))
 
 (define match-demand
   Name Kept [Rel | Terms]
   -> (let Asked (asked Name [Rel | Terms])
           Seed (hd (tl Asked))
-          Entry (dict-find (<-address Kept 1) (hd Asked))
-          Db (cases (not (cons? Entry)) (run (hd Asked) [Seed | (<-address Kept 0)])
+          Entry (dict-find (demand-store.dbs Kept) (hd Asked))
+          Db (cases (not (cons? Entry)) (run (hd Asked) [Seed | (demand-store.facts Kept)])
                     (holds? (tl Entry) Seed) (tl Entry)
                     true (add (tl Entry) [Seed]))
-          _ (shen.dict-> (<-address Kept 1) (hd Asked) Db)
+          _ (shen.dict-> (demand-store.dbs Kept) (hd Asked) Db)
        (match-tuples (tuples-for Db (hd (tl (tl Asked))) Terms) Terms [])))
 
 \\ The tuples whose columns Keys hold these values, by an index on them, started if there is none
@@ -4272,7 +4310,7 @@
 (define chain-tuples
   0 _ _ _ _ Acc -> Acc
   P I Rec Types Records Acc
-  -> (chain-tuples (shen-jit.u32 (<-address I 1) (* 4 (- P 1))) I Rec Types Records
+  -> (chain-tuples (shen-jit.u32 (index.next I) (* 4 (- P 1))) I Rec Types Records
        [(tuple-at (<-address Rec 2) (* (- P 1) (<-address Rec 7)) Types Records) | Acc]))
 
 \\ A closure of the find kernel for an index on Keys, given the index, the tuples and the values.
@@ -4283,13 +4321,13 @@
        (if (cons? Known)
            (tl Known)
            (let Find (find-kernel Arity Keys)
-                F (eval-kl [lambda i [lambda t [lambda l [Find [<-address i 0] t [<-address i 2] | (list-forms (length Keys) l)]]]])
+                F (eval-kl [lambda i [lambda t [lambda l [Find [index.table i] t [index.mask i] | (list-forms (length Keys) l)]]]])
                 _ (shen.dict-> (value *kernels*) Name F)
              F))))
 
 (define each-kept
-  Kept F -> (map (/. D (shen.dict-> (<-address Kept 1) D (F (tl (dict-find (<-address Kept 1) D)))))
-                 (shen.dict-keys (<-address Kept 1))))
+  Kept F -> (map (/. D (shen.dict-> (demand-store.dbs Kept) D (F (tl (dict-find (demand-store.dbs Kept) D)))))
+                 (shen.dict-keys (demand-store.dbs Kept))))
 
 (define datalog.demand
   Name Rel Adorn

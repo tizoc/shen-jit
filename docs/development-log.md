@@ -899,6 +899,17 @@ that. Its readings decided nothing below.
 
 ### Managed structs
 
+- **Datalog's fixed records as structs** (2026-11-09, Apple M3 Max). An equivalence's classes, a relation's
+  hash index and a database by demand's store are structs; the KL the planner generates, a native kernel's
+  parameters included, reads them with the accessors. `make bench-datalog`'s main rows, old and new library
+  alternated, 5 rounds at load 2–3: every row within noise, closure sparse 79.8 against 79.4 ms, nonlinear 133.2
+  against 132.3, skewed join 90.0 against 84.3, demand (path X 7) 72.8 against 71.9. The first timings, taken
+  while other builds ran at load 3–4.5, showed +3–8% on the same rows. Rejected: a class's cell as a struct.
+  It had no tag, so a struct adds a word to each value's cell and a constructor call, which is not inlined:
+  an equivalence run with twenty adds took 30.66 against 29.17 ms (+5.1%, 12 alternated rounds, with the
+  distributions barely overlapping). A call compiled before its struct's declaration is not inlined, so the
+  declarations come first. stlib defines `index`, so the namespace shadows it, or the struct would be global.
+
 - **Subprocess records as structs** (2026-11-09, Apple M3 Max, measured while other builds ran, load 3–4).
   Options, children, pipe contexts, output collectors, the input feed, an exchange's state, reports and a
   pipeline's registry are structs; numbered reads fall from 64 to 19 in `process.shen` and from 136 to 7 in
