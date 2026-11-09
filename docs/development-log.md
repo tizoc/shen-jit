@@ -1078,6 +1078,16 @@ that. Its readings decided nothing below.
 
 - **Shen/Scheme 0.54** (2026-11-06, Apple M3 Max, against 0.53). It compares with numeric literals soundly and raises when a `cond` has no true clause, so `eq-int-real-literal` and `ctl-cond-no-match` are no longer deviations, and its `hash` still gives 8 and 8.0 different values. All 157 contract examples pass, it makes the same generated files as a host, and it gives THORN's 35 counts. Its timings are under "x86-64 Linux" below.
 
+- **Kernel 43.6** (2026-11-09, Apple M3 Max). The programmable pattern-matching extension rewrote a custom
+  pattern's list arguments into surface syntax, which pattern compilation refuses, so `(box [A | _])` failed
+  with "not a legitimate constructor" under a head of no known arity, as a labelled struct pattern would be.
+  Arguments now keep `(cons A _)`. A first fix compiled bound arguments from a second walk over the original
+  pattern, guarded by a length check; rejected for this one, two lines and a four-line function. The
+  published archive's contents equal a local build of the release workflow's steps; its KLambda differs
+  from 43.5 in the version, the extension's two functions and variable numbers in the extensions compiled
+  after it. Stage 0 output changes in those files. `make test-core test-libs` passes, with 154 kernel and
+  239 extension checks.
+
 ### Not tried yet
 
 - **Correctly rounded fractions and negative exponents.** They do not overflow, so they read as the kernel reads them, as under Shen/Scheme: `0.3` as `0.30000000000000004`, and `1e-300` as `1.0000000000000022e-300`. Measured on 2026-11-05, 59% of random fractions land on the nearest double, the worst 1 unit

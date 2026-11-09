@@ -17,7 +17,8 @@ All notable changes to this project are documented in this file. The format is b
 
 - All optional Shen libraries use namespaces, with explicit dependency prefixes and exported operations, types and
   shared support functions. Their qualified API names and data formats stay the same. The kernel pin moves to
-  43.5 for namespace interfaces and syntax annotation hooks, using the release's precompiled KLambda.
+  43.6 for namespace interfaces and syntax annotation hooks, using the release's precompiled KLambda. With it,
+  a list pattern inside a custom pattern of the pattern-matching extension compiles.
 - The libraries' fixed records are structs: views, cursors, I/O endpoints, readers and writers, subprocess, HTTP,
   curl, filesystem and Tree-sitter records, and Datalog's classes and indexes. They print briefly, as
   `#<endpoint "stdin" open>`, and libraries read each other's through exported readers such as
