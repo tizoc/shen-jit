@@ -128,7 +128,8 @@
 \\ nothing named F, and has no real literals (stage 0 and shen-jit may
 \\ read their last bits differently); otherwise []. A call to a sealed F
 \\ with as many arguments as F's parameters becomes the body, two levels
-\\ deep at most. A closure in the body becomes one of the caller's.
+\\ deep at most, or at any depth if it is one primitive over parameters and
+\\ constants. A closure in the body becomes one of the caller's.
 
 (define shen-jit.lower.inline-form
   F Params Body -> [Params Body] where (and (shen-jit.lower.inlinable? F Body)
@@ -165,14 +166,30 @@
                                                 [call F Refs]])))
 
 (define shen-jit.lower.open-body
-  F N -> (let Depth (trap-error (value shen-jit.lower.*inline-depth*) (/. E 0))
-              Inline (if (and (< Depth 2) (not (shen-jit.sealed? F))) (shen-jit.inline-body F) [])
-           (if (and (cons? Inline) (= (length (hd Inline)) N)) Inline [])))
+  F N -> (if (shen-jit.sealed? F) [] (shen-jit.lower.inline-at F N)))
 
 (define shen-jit.lower.inline-body
+  F N -> (if (shen-jit.sealed? F) (shen-jit.lower.inline-at F N) []))
+
+\\ A body that is one primitive over parameters and constants, such as a
+\\ struct's reader, calls nothing, so it is inlined at any depth.
+(define shen-jit.lower.inline-at
   F N -> (let Depth (trap-error (value shen-jit.lower.*inline-depth*) (/. E 0))
-              Inline (if (and (< Depth 2) (shen-jit.sealed? F)) (shen-jit.inline-body F) [])
-           (if (and (cons? Inline) (= (length (hd Inline)) N)) Inline [])))
+              Inline (shen-jit.inline-body F)
+           (if (and (cons? Inline) (= (length (hd Inline)) N)
+                    (or (< Depth 2) (shen-jit.lower.leaf? (hd (tl Inline)))))
+               Inline
+               [])))
+
+(define shen-jit.lower.leaf?
+  [Op | Args] -> (and (= (length Args) (shen-jit.lower.prim-arity Op))
+                      (shen-jit.lower.atoms? Args))
+  _ -> false)
+
+(define shen-jit.lower.atoms?
+  [] -> true
+  [[_ | _] | _] -> false
+  [_ | Xs] -> (shen-jit.lower.atoms? Xs))
 
 \\ The arguments go to fresh variables first, so binding the parameters cannot
 \\ capture a variable an argument uses; the body is normalized in its own

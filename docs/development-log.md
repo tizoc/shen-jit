@@ -672,6 +672,15 @@ cannot. The kernel suite is the kernel's `tests/runme.shen`; the stlib install l
   that day). 253 → 310 µs a round, 269 without open inlining and 308 with one level of it, so taking it back means
   inlining less. Compile-heavy workloads lost 3-5%; switching open inlining off takes 1% back.
 
+- **One-primitive bodies inlined at any depth** (2026-11-09, Apple M3 Max, load 3–5 with other work running,
+  old and new executables alternated). The lowerer inlines small bodies two levels deep; a body that is one
+  primitive over parameters and constants, such as a struct's reader, setter or predicate, now inlines at any
+  depth, as it calls nothing. A buffer view's `check`, inlined into `buffer.u8`, had left its readers as calls.
+  Library rows, medians of 9: `buffer.u8` 396 against 386 ms, `buffer.slice` 351 against 338, framing 402
+  against 386, the others 0.4–1.3% faster. `make bench`, three rounds: geomean 1.00, no result differences;
+  two pattern-matching rows at 1.15–1.18 timed 1.00 alone, a matter of placement. `make bench-independent`,
+  7 rounds: every row within 1% but startup (5 against 4 ms). Stage 0 output changes in `t-star` and `types`.
+
 ### Factorisation
 
 - **No factoriser in the lowerer** (design, 2026-11-01). That VM's bytecode compiler took about 3.4k lines with
