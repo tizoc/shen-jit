@@ -133,8 +133,13 @@
 
 (define shen-jit.lower.inline-form
   F Params Body -> [Params Body] where (and (shen-jit.lower.inlinable? F Body)
-                                            (<= (shen-jit.lower.size Body) 15))
+                                            (shen-jit.lower.small? Body))
   _ _ _ -> [])
+
+\\ A body of primitives alone calls nothing, so it may be larger.
+(define shen-jit.lower.small?
+  Body -> (let Size (shen-jit.lower.size Body)
+            (or (<= Size 15) (and (<= Size 32) (shen-jit.lower.leaf? Body)))))
 
 (define shen-jit.lower.inlinable?
   F [F | _] -> false
@@ -171,8 +176,8 @@
 (define shen-jit.lower.inline-body
   F N -> (if (shen-jit.sealed? F) (shen-jit.lower.inline-at F N) []))
 
-\\ A body that is one primitive over parameters and constants, such as a
-\\ struct's reader, calls nothing, so it is inlined at any depth.
+\\ A body of primitives over parameters and constants, such as a struct's
+\\ reader or constructor, calls nothing, so it is inlined at any depth.
 (define shen-jit.lower.inline-at
   F N -> (let Depth (trap-error (value shen-jit.lower.*inline-depth*) (/. E 0))
               Inline (shen-jit.inline-body F)
@@ -183,13 +188,13 @@
 
 (define shen-jit.lower.leaf?
   [Op | Args] -> (and (= (length Args) (shen-jit.lower.prim-arity Op))
-                      (shen-jit.lower.atoms? Args))
+                      (shen-jit.lower.leaves? Args))
   _ -> false)
 
-(define shen-jit.lower.atoms?
+(define shen-jit.lower.leaves?
   [] -> true
-  [[_ | _] | _] -> false
-  [_ | Xs] -> (shen-jit.lower.atoms? Xs))
+  [X | Xs] -> (and (shen-jit.lower.leaf? X) (shen-jit.lower.leaves? Xs)) where (cons? X)
+  [_ | Xs] -> (shen-jit.lower.leaves? Xs))
 
 \\ The arguments go to fresh variables first, so binding the parameters cannot
 \\ capture a variable an argument uses; the body is normalized in its own

@@ -681,6 +681,17 @@ cannot. The kernel suite is the kernel's `tests/runme.shen`; the stlib install l
   two pattern-matching rows at 1.15–1.18 timed 1.00 alone, a matter of placement. `make bench-independent`,
   7 rounds: every row within 1% but startup (5 against 4 ms). Stage 0 output changes in `t-star` and `types`.
 
+- **Bodies of primitives alone inlined up to twice the size** (2026-11-09, Apple M3 Max, load 3–5 with other
+  work running, executables alternated against the commit before). A struct's constructor is now one nested
+  expression, `(address-> (address-> (address-> (absvector 3) 0 Tag) 1 A) 2 B)`, with no `let`, and a body made only of
+  primitives over parameters and constants inlines up to 32 atoms instead of 15, and at any depth: a
+  constructor of up to nine fields. 5M constructions: two fields 22.6 against 19.3 ms, four fields 94.3
+  against 91.9 (the loop keeps every record, so copying dominates). An equivalence run with Datalog's
+  union-find cell as a struct, 16 rounds: 30.62 ms with the constructor called, 30.35 inlined, against
+  29.89–29.91 with the plain vector, which stays: the word the tag adds remains. `make bench`, three rounds:
+  geomean 1.00; two equality rows at 1.06–1.07 timed 0.98–0.99 alone. `make bench-independent`, 7 rounds:
+  0.93–1.01. Stage 0 output changes in `yacc`, which now inlines a few more of its small functions.
+
 ### Factorisation
 
 - **No factoriser in the lowerer** (design, 2026-11-01). That VM's bytecode compiler took about 3.4k lines with

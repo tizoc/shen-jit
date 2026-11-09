@@ -137,10 +137,10 @@
   0 _ -> []
   N I -> [(intern (cn "StructField" (str I))) | (arguments (- N 1) (+ I 1))])
 
+\\ Each store returns the vector, so the constructor is one nested expression of primitives.
 (define stores
-  [] _ -> [(protect Record)]
-  [Arg | Args] I
-  -> [[address-> (protect Record) I Arg] | (stores Args (+ I 1))])
+  Vector [] _ -> Vector
+  Vector [Arg | Args] I -> (stores [address-> Vector I Arg] Args (+ I 1)))
 
 (define definition
   Name Args Body -> [define Name | (append Args [-> Body])])
@@ -153,8 +153,7 @@
         (definition
           (member Name make)
           Args
-          [let (protect Record) [absvector (+ 1 (length Fields))]
-            [do [address-> (protect Record) 0 Tag] | (stores Args 1)]])
+          (stores [address-> [absvector (+ 1 (length Fields))] 0 Tag] Args 1))
         (definition
           (predicate-name Name)
           [(protect Record)]

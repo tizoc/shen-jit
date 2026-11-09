@@ -136,13 +136,14 @@ they allocate nothing on success and consult no schema or field-name table. The 
 runtime's tagged-vector primitive, with no handler. Labelled syntax adds local bindings to preserve
 evaluation order and builds no runtime field list.
 
-Readers, setters and the predicate are small enough to inline, and then cost what the `<-address` or
-`address->` they replace does. Two things differ from a vector written by hand:
+Readers, setters, the predicate and a constructor of up to nine fields are inlined, and then cost what
+the `<-address`, `address->` and `absvector` they replace do. Two things differ from a vector written by
+hand:
 
 - Code compiled before a declaration calls its operations instead of inlining them, since they did not
   exist yet. Declare a struct before the definitions that use it.
-- The constructor is a call. For a record made in great numbers, with no tag before, a struct adds a word
-  and a call to each: Datalog's union-find cells stay vectors for that reason.
+- A record that had no tag gains a word. For one made in great numbers that shows: Datalog's union-find
+  cells stay vectors for that reason.
 
 A struct's name resolves as any other name in a namespace: one that is already a global function, such as
 stlib's `index`, needs `(shadow index)` for the struct to be the namespace's own.
