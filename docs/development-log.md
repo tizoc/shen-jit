@@ -899,6 +899,16 @@ that. Its readings decided nothing below.
 
 ### Managed structs
 
+- **Printers** (2026-11-09, Apple M3 Max). The kernel's writer prints a vector by calling the function bound
+  to its first slot, so each struct's private tag is now defined as its printer: by default the type and
+  fields, `#<entry key: "answer" value: 42>`, or the declaration's `(printer F)`. Before, the tag was left
+  unbound, and a record printed as `<<entry.%struct-tag7 "answer" 42>>`, a gensym that varies from one process to the next.
+  The tag was also marked a system function, which forbids defining it; nothing relied on that, so it no
+  longer is. Records whose first slot is a public function name print by calling it: an `io.endpoint`
+  raised `cn: #<procedure> is not a string` when printed, as the constructor received the record. A
+  private tag cannot meet a public name. The printer is not part of the layout, so a reload may change it.
+  Construction, readers, setters and the predicate are unchanged.
+
 - **`defstruct` source extension and buffer builder pilot** (2026-11-09, Apple M3 Max, macOS, against
   the namespace-migrated handwritten buffer builder). A declaration generates ordinary `.make`, predicate,
   reader and mutable `->` setter functions over one tagged `absvector`. Fields are read-only by default.

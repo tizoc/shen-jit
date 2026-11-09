@@ -44,6 +44,30 @@ and setters assume a record of the declared type; they do not validate its tag o
 the predicate at boundaries. The representation is private: manually forging an absvector or changing
 its tag/slots with `address->` bypasses these contracts and read-only fields.
 
+## Printing
+
+A record prints with its type and fields, each value as `~S` shows it:
+
+```shen
+(entry.make "answer" 42)    \\ #<entry key: "answer" value: 42>
+```
+
+`(printer F)`, anywhere in the declaration, prints with F instead: F takes the record and returns a
+string. F is a function name or any expression that gives a function, and resolves where the declaration is, as any
+other reference does. Use it for records that hold closures, buffers or large values:
+
+```shen
+(define show-entry E -> (make-string "#<entry ~A>" (entry.key E)))
+
+(defstruct entry
+  (printer show-entry)
+  key
+  (mutable value))
+```
+
+The printer is not part of the layout: a reload may change it, and records made before take the new one.
+A declaration has one printer at most.
+
 ## Labelled construction
 
 The shared `struct.make` macro accepts a literal struct type followed by labelled fields, in any order:
@@ -93,8 +117,8 @@ the same imports and export checks as ordinary references.
 Identical declarations can be reloaded. They reuse the original private tag, so existing records remain
 valid. Changing field order, field names or mutability raises before any generated function is replaced;
 start a fresh process to experiment with a different layout. Schemas, syntax registrations and
-records survive saved images. A tag is a fresh, unbound symbol, separate from every public operation,
-so printing a record does not accidentally call its constructor or a function with the type's name.
+records survive saved images. A tag is a fresh symbol, separate from every public operation, bound
+only to the record's printer.
 
 The kernel's namespace annotator protects field descriptors and construction labels before name
 resolution. A separate declaration callback checks generated names against imports. Both are registered

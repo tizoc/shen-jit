@@ -2,6 +2,16 @@
 (defstruct struct-test.cell key (mutable value))
 (defstruct struct-test.other key (mutable value))
 (defstruct struct-test.empty)
+(define struct-test.show R -> (make-string "#<shown ~A>" (struct-test.shown.key R)))
+(defstruct struct-test.shown (printer struct-test.show) key)
+(defstruct struct-test.inline key (printer (/. R (make-string "inline ~A" (struct-test.inline.key R)))))
+
+(shen.x.namespace struct-test.printing
+  (import struct defstruct)
+  (export point point.make)
+  \\ The printer resolves in this namespace, as any reference does.
+  (define show P -> (make-string "point ~A" (point.x P)))
+  (defstruct point (printer show) x))
 
 (shen.x.namespace struct-test.tools
   (shadow length)

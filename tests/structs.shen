@@ -32,11 +32,29 @@
   (freeze (let R (struct-test.cell.make "text" [a b]) [(struct-test.cell.key R) (struct-test.cell.value R)])))
 (struct-test.check "predicate is safe on other values" [false false false false false false false false]
   (freeze (map (fn struct-test.cell?) [1 "x" a [] [a] (absvector 0) (vector 0) (@p 1 2)])))
-(struct-test.check "private tag is not a printer" -1 (freeze (arity (<-address (struct-test.cell.make a 1) 0))))
-(struct-test.check "printing does not call a public type-name function" true
+(struct-test.check "default printer" "#<struct-test.cell key: a value: c#34;textc#34;>"
+  (freeze (make-string "~S" (struct-test.cell.make a "text"))))
+(struct-test.check "default printer nests and prints empty structs" "[#<struct-test.cell key: #<struct-test.empty> value: [1 2]>]"
+  (freeze (make-string "~S" [(struct-test.cell.make (struct-test.empty.make) [1 2])])))
+(struct-test.check "printing does not call a public type-name function" "#<struct-test.cell key: a value: 1>"
   (freeze (do (struct-test.install "(define struct-test.cell X -> (simple-error c#34;called as printerc#34;))")
-              (let R (struct-test.cell.make a 1)
-                (= (make-string "<<~A a 1>>" (<-address R 0)) (make-string "~S" R))))))
+              (make-string "~S" (struct-test.cell.make a 1)))))
+(struct-test.check "custom printer function" "#<shown 7>"
+  (freeze (make-string "~S" (struct-test.shown.make 7))))
+(struct-test.check "custom printer expression" "inline 8"
+  (freeze (make-string "~A" (struct-test.inline.make 8))))
+(struct-test.check "namespace printer resolves locally" "point 9"
+  (freeze (make-string "~S" (struct-test.printing.point.make 9))))
+(struct-test.check "printer is not a field" [1 true]
+  (freeze (let R (struct-test.shown.make 1) [(struct-test.shown.key R) (struct-test.shown? R)])))
+(struct-test.check "one printer at most" true
+  (freeze (struct-test.refused? "(defstruct struct-test.bad (printer f) (printer g) x)")))
+(struct-test.check "a changed printer keeps the layout and old values" ["changed" saved]
+  (freeze (let Old (struct-test.shown.make saved)
+               _ (struct-test.install "(defstruct struct-test.shown (printer (/. R c#34;changedc#34;)) key)")
+               Text (make-string "~A" Old)
+               _ (struct-test.install "(defstruct struct-test.shown (printer struct-test.show) key)")
+            [Text (struct-test.shown.key Old)])))
 
 (struct-test.check "label order and source evaluation order" [first second [second first]]
   (freeze (let _ (set struct-test.*order* [])

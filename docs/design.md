@@ -87,8 +87,9 @@ the record; accessors contain direct constant-index address operations and the p
 existing `shen-jit.tagged?` primitive. No C or JIT change is involved.
 
 Schemas live in the property vector; syntax registrations are global state. Both persist in images.
-Each schema gets a fresh unbound tag, reused on an identical declaration and kept separate from callable
-names so the kernel writer cannot treat a public constructor as a printer. Incompatible declarations
+Each schema gets a fresh tag, reused on an identical declaration. The kernel's writer calls a function
+bound to a vector's first slot to print it, so the tag is defined as the record's printer, the default
+one or the declaration's `(printer F)`; a public constructor is never called as a printer. Incompatible declarations
 are rejected before replacing generated functions. The shared `struct.make` macro expands labelled
 construction into ordered local bindings and a positional call; no field-name lookup occurs at runtime.
 

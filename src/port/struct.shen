@@ -1,9 +1,10 @@
 \\ Fixed managed structs, expanded before ordinary macros. Fields are read-only unless mutable.
 \\ The generated functions use one tagged absvector and constant slot numbers; no field registry
-\\ is consulted by a constructor, reader or setter at run time.
+\\ is consulted by a constructor, reader or setter at run time. The private tag is the record's
+\\ printer, which the kernel's writer calls: a default one, or (printer F) to call F on the record.
 
 (package shen-jit.struct
-  [defstruct mutable make %struct-tag struct struct.make shen-jit.tagged?]
+  [defstruct mutable printer make %struct-tag struct struct.make shen-jit.tagged? shen.app shen.s]
 
 (define initialise
   -> (do (shen.register-source-form defstruct (fn expand))
@@ -35,11 +36,27 @@
   (@s "." Rest) _ -> (local-text Rest "")
   (@s C Rest) Local -> (local-text Rest (cn Local C)))
 
+(define marker
+  [protect X] -> (marker X)
+  X -> (local-label X) where (name? X)
+  _ -> [])
+
 (define fields
   _ [] _ -> []
   Name [[Marker Field] | Rest] Seen -> (field Name Field true Rest Seen)
-    where (and (name? Marker) (= (local-label Marker) mutable))
+    where (= (marker Marker) mutable)
+  Name [[Marker _] | Rest] Seen -> (fields Name Rest Seen)
+    where (= (marker Marker) printer)
   Name [Field | Rest] Seen -> (field Name Field false Rest Seen))
+
+\\ [] for the default printer, or [F] for (printer F).
+(define printer-option
+  _ [] Found -> Found
+  Name [[Marker F] | Rest] [] -> (printer-option Name Rest [F])
+    where (= (marker Marker) printer)
+  Name [[Marker _] | _] _ -> (shen-jit.struct.fail Name "more than one printer" Marker)
+    where (= (marker Marker) printer)
+  Name [_ | Rest] Found -> (printer-option Name Rest Found))
 
 (define field
   Name Raw Mutable Rest Seen
@@ -105,12 +122,12 @@
               (let _ (check-operations Name (operations Name Fields))
                    Tag (fresh-tag Name)
                    Description [Tag Fields]
-                (do (systemf Tag)
-                    (put Name shen-jit.struct.schema Description)
+                (do (put Name shen-jit.struct.schema Description)
                     Description))))))
 
-\\ Each layout gets an unbound tag of its own. Re-reading it reuses the stored tag, including
-\\ after an image reload. A public type/constructor name can therefore never become its printer.
+\\ Each layout gets a fresh tag of its own, bound only to its printer. Re-reading it reuses the
+\\ stored tag, including after an image reload. A public type or constructor name never becomes
+\\ the record's printer.
 (define fresh-tag
   Name -> (let Tag (gensym (member Name %struct-tag))
             (if (= (arity Tag) -1) Tag (fresh-tag Name))))
@@ -129,10 +146,11 @@
   Name Args Body -> [define Name | (append Args [-> Body])])
 
 (define generate
-  Name Fields
+  Name Fields Printer
   -> (let Tag (hd (schema Name))
           Args (arguments (length Fields) 1)
-       [(definition
+       [(definition Tag [(protect Record)] (printer-body Name Fields Printer))
+        (definition
           (member Name make)
           Args
           [let (protect Record) [absvector (+ 1 (length Fields))]
@@ -142,6 +160,17 @@
           [(protect Record)]
           [shen-jit.tagged? (protect Record) Tag])
         | (accessors Name Fields 1)]))
+
+\\ The default printer shows the type and each field: #<point x: 1 y: 2>.
+(define printer-body
+  _ _ [F] -> [F (protect Record)]
+  Name Fields [] -> [cn (cn "#<" (str Name)) (field-strings Fields 1)])
+
+(define field-strings
+  [] _ -> ">"
+  [[Field _] | Fields] I
+  -> [cn (cn " " (cn (str Field) ": "))
+         [shen.app [<-address (protect Record) I] (field-strings Fields (+ I 1)) shen.s]])
 
 (define accessors
   _ [] _ -> []
@@ -162,8 +191,9 @@
 (define expand
   [defstruct Name | Written]
   -> (let Fields (describe Name Written)
+          Printer (printer-option Name (map (fn syntax-value) Written) [])
           _ (register Name Fields)
-       (generate Name Fields))
+       (generate Name Fields Printer))
   Form -> (shen-jit.struct.fail defstruct "invalid declaration" Form))
 
 \\ Labelled construction preserves source evaluation order, then calls the ordinary .make.
@@ -215,7 +245,9 @@
   [struct.make Name | Args] -> [struct.make Name | (protect-labels Args)]
   Form -> Form)
 
+\\ A printer's function resolves in the caller's scope like any other reference.
 (define protect-field
+  [Marker F] -> [[protect Marker] F] where (= (marker Marker) printer)
   Field -> [protect Field])
 
 (define protect-labels

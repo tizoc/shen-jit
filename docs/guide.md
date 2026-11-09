@@ -323,7 +323,8 @@ It is available at startup. In a source file:
   (do (entry.value-> E 43) (entry.value E)))    \\ 43
 ```
 
-Fields are read-only by default; mutable fields get `->` setters that return the record. Construction
+Fields are read-only by default; mutable fields get `->` setters that return the record. A record prints
+as `#<entry key: "answer" value: 43>`, or through a function of its own, `(printer F)`. Construction
 allocates one managed vector and can trigger GC; field reads and writes allocate nothing on success.
 The [struct reference](https://github.com/tizoc/shen-jit/blob/main/docs/structs.md) covers positional
 constructors, shared `struct.make` syntax, namespace exports, reload rules and the current source-file/type limitations.
