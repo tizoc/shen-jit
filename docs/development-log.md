@@ -832,6 +832,21 @@ that. Its readings decided nothing below.
   unifier even for a variable and an atom. Done in the lowered code, with the unifier only for pairs: `nreverse`
   9.2 to 9.1 µs, so the call was not the cost, while the larger code again turned two of `subset-sum`'s
   continuations into closures (14.0 to 18.7 µs). As a primitive it would stay small, but there is little to gain.
+- **Rejected: making a clause's variables where they are first needed** (2026-11-09, kernel 43.4, counted in its
+  KLambda). The Prolog compiler makes a clause's body variables after its head matches and before its first goal,
+  so a goal that fails first leaves variables made for later goals unused. Moving each `newpv` and `gc` into the
+  continuation of the first goal that does not use it could apply to 12 variables in the whole kernel, 11 in
+  `t-star.kl` and 1 in `types.kl`, of 65, and saves two inline primitives each time that goal fails. It would also
+  number variables in another order, which shows where an unbound one prints as `VarN`.
+- **Not pursued: fewer continuation closures** (2026-11-09). The closures left in compiled Prolog are the
+  continuations passed to the next predicate, which only inlining that predicate or a compiler without
+  continuations would avoid; head continuations are already copied into their uses within the size limits, whose
+  cost in compile time was measured when they were set. In `hamilton`, `freeze` is 6% of the instructions, but that
+  is the continuations' own code running, not their making.
+- **First-argument indexing, checked again** (2026-11-09, Ryzen VM, callgrind over the kernel suite). The rejection
+  above stands: the Prolog that real code runs, the typechecker, spends its time in `shen.search-user-datatypes-h`
+  (3.3% of JIT-compiled instructions), `shen.bind!` (2.6%), `shen.deref` (1.9%) and list searches, not in scanning
+  many clauses of one predicate.
 - **`get-time` without interning** (2026-11-05, Apple M5, load about 25, against the build before). THORN asks for the
   time at every predicate call, and each call interned `run` and `unix`, about 2% of samples on RCC problems. Comparing
   the name instead: 10^7 calls 0.28 to 0.155 s, THORN's thm13 28.05 to 26.42 G instructions and rcc10 20.48 to 19.40 G.
