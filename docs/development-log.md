@@ -786,6 +786,15 @@ that. Its readings decided nothing below.
   fewer registers cost Prolog code no extra memory traffic. The M3 runs Shen/JIT 1.39 times as fast as the Ryzen and
   SWI 1.27: the wider core, and the kernel's Prolog vector, 10,000 words filled at every query, at 0.37 ns a word on
   the Ryzen and 0.16 on the M3, 19% and 12% of `nreverse`. Nothing changed.
+- **`shen.newpv` in one function** (2026-11-09, Apple M3 Max and Ryzen VM, best of 5, alternating with the build
+  before). A clause makes each of its variables through `shen.newpv`, which called `shen.ticket-number`,
+  `shen.make-prolog-variable` and `shen.nextticket`: with `nextticket`, 27% of `nreverse`'s instructions and 12% of
+  `hamilton`'s on x86-64. An override does the same stores in one function of inline primitives. `nreverse` 307,400
+  to 288,500 instructions an iteration. M3: `nreverse` 0.93, `subset` 0.94, `hamilton` 0.96, `queens-8` 0.97, `tak`
+  0.97, Einstein 0.99, `coloring` 1.00; Ryzen: 0.89, 0.97, 0.91, 0.94, 0.98, 1.01, 0.99. Workloads never used for
+  tuning 0.97 to 1.01 on both, THORN 0.98 to 1.01. What is left of it, about 70 instructions on x86-64, is mostly
+  checking three times that the bindings are a vector; a primitive for the whole of it would take those. The same
+  for `shen.gc`, which takes a variable's ticket back when a clause fails: no change, so left out.
 - **`get-time` without interning** (2026-11-05, Apple M5, load about 25, against the build before). THORN asks for the
   time at every predicate call, and each call interned `run` and `unix`, about 2% of samples on RCC problems. Comparing
   the name instead: 10^7 calls 0.28 to 0.155 s, THORN's thm13 28.05 to 26.42 G instructions and rcc10 20.48 to 19.40 G.

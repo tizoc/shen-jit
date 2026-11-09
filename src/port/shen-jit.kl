@@ -154,6 +154,17 @@ is!."
 
 (defun shen.make-prolog-variable (N) (shen-jit.pvar N))
 
+"Compiled Prolog code makes every variable of a clause before its first test, each
+through shen.newpv, which calls shen.ticket-number, shen.make-prolog-variable and
+shen.nextticket. Here it is one function of inline primitives, with the same stores
+in the same order."
+
+(defun shen.newpv (Bindings)
+  (let N (<-address Bindings 1)
+    (do (address-> Bindings N shen.-null-)
+        (do (address-> Bindings 1 (+ N 1))
+            (shen-jit.pvar N)))))
+
 (defun shen.pvar? (X) (shen-jit.pvar? X))
 
 (defun shen.lazyderef (X Bindings) (shen-jit.deref X Bindings shen.-null-))
