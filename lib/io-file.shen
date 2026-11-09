@@ -163,7 +163,7 @@
                         (/. B (file-read Token Path B))
                         (/. B (file-write Token Path B))
                         (freeze (file-close Token Path)))
-      (do (address-> E 12 Token) E)))
+      (do (endpoint.guard-> E Token) E)))
 
 (define open-file
   Path Mode ->

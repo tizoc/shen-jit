@@ -36,7 +36,7 @@
 (define communication-pipes
   [] -> []
   [Child | Rest] ->
-    (append (keep (/. E (and (not (= E [])) (not (= (<-address E 7) closed))))
+    (append (keep (/. E (and (not (= E [])) (not (= (io.endpoint.state E) closed))))
               (map (/. I (<-address (<-address Child 3) I)) [0 1 2]))
             (communication-pipes Rest)))
 
@@ -47,13 +47,13 @@
 (define check-pipes
   [] -> true
   [E | Rest] ->
-    (do (io.check E (<-address E 2) [])
+    (do (io.check E (io.endpoint.mode E) [])
         (check-pipes Rest)))
 
 (define lock-pipes
   [] Flag -> true
   [E | Rest] Flag ->
-    (do (address-> E 11 Flag) (lock-pipes Rest Flag)))
+    (do (io.endpoint.busy-> E Flag) (lock-pipes Rest Flag)))
 
 (define busy-children
   [] Flag -> true
@@ -62,9 +62,9 @@
 
 (define close-active
   E ->
-    (if (= (<-address E 7) closed)
-        (<-address E 8)
-        (do (address-> E 11 false) (io.close E))))
+    (if (= (io.endpoint.state E) closed)
+        (io.endpoint.close-result E)
+        (do (io.endpoint.busy-> E false) (io.close E))))
 
 (define close-active-pipes
   [] Result -> Result
@@ -76,7 +76,7 @@
 (define output
   Child Index Sink Limit ->
     (let E (<-address (<-address Child 3) Index)
-      (if (or (= E []) (= (<-address E 7) closed))
+      (if (or (= E []) (= (io.endpoint.state E) closed))
           []
           (io.record [E Sink Limit 0 [] false Child Index]))))
 
@@ -108,7 +108,7 @@
   State ->
     (let Feed (<-address State 5)
          E (<-address (<-address (hd (<-address State 4)) 3) 0)
-      (cond ((or (= E []) (= (<-address E 7) closed)) [ok])
+      (cond ((or (= E []) (= (io.endpoint.state E) closed)) [ok])
             ((< (<-address Feed 2) (<-address Feed 3)) (feed-write State E Feed))
             ((<-address Feed 4)
               (do (address-> State 0 true) (close-active E)))
@@ -133,7 +133,7 @@
          View (buffer.slice (<-address Feed 1) At (- (<-address Feed 3) At))
          Bytes (buffer.bytes View)
       (io.let-ok N (native write "process stdin"
-                     (freeze (c-write (<-address E 12) Bytes)))
+                     (freeze (c-write (io.endpoint.guard E) Bytes)))
         (do (if (> N 0)
                 (do (address-> Feed 2 (+ At N))
                     (address-> Feed 5 (+ (<-address Feed 5) N))
@@ -174,7 +174,7 @@
         [ok]
         (let E (<-address Output 0)
           (io.let-ok N (native read "process output"
-                         (freeze (c-read (<-address E 12) (buffer.owner Chunk))))
+                         (freeze (c-read (io.endpoint.guard E) (buffer.owner Chunk))))
             (cond ((< N 0) [ok])
                   ((= N 0)
                     (do (address-> State 0 true)
@@ -217,17 +217,17 @@
 (define input-done?
   State ->
     (let E (<-address (<-address (hd (<-address State 4)) 3) 0)
-      (or (= E []) (= (<-address E 7) closed))))
+      (or (= E []) (= (io.endpoint.state E) closed))))
 
 (define wait-pointers
   State ->
     (let Feed (<-address State 5)
          Input (<-address (<-address (hd (<-address State 4)) 3) 0)
-         Output (map (/. O (<-address (<-address O 0) 12))
+         Output (map (/. O (io.endpoint.guard (<-address O 0)))
                      (keep (/. O (not (<-address O 5))) (<-address State 6)))
-      (if (and (not (= Input [])) (not (= (<-address Input 7) closed))
+      (if (and (not (= Input [])) (not (= (io.endpoint.state Input) closed))
                (< (<-address Feed 2) (<-address Feed 3)))
-          [(<-address Input 12) | Output]
+          [(io.endpoint.guard Input) | Output]
           Output)))
 
 (define pump
@@ -328,7 +328,7 @@
     (let Pipes (communication-pipes Children)
          _ (check-children Children)
          Input (<-address (<-address (hd Children) 3) 0)
-         _ (if (and (not (= Input [])) (= (<-address Input 7) open))
+         _ (if (and (not (= Input [])) (= (io.endpoint.state Input) open))
                true (error "process: communication requires an open stdin pipe"))
          _ (check-pipes Pipes)
          _ (io.check Source read [])
@@ -444,7 +444,7 @@
   [[Program Args] | Rest] Config Home Env Previous Registry ->
     (let _ (if (= Previous []) true
                (address-> (<-address Config 3) 0
-                 (io.record [6 (<-address (stdout Previous) 12)])))
+                 (io.record [6 (io.endpoint.guard (stdout Previous))])))
          Result (spawn-with Program Args Config Home Env
                   (/. Raw
                     (let Child (child-new Program (<-address Config 4) Raw)

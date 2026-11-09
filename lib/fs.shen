@@ -556,7 +556,7 @@
   _ _ _ End End -> [ok End]
   State E View At End ->
     (let Result (trap-error (io.write-some E (buffer.slice View At (- End At)) [])
-                   (/. X [error (io.error write (<-address E 1) (error-to-string X))]))
+                   (/. X [error (io.error write (io.endpoint.name E) (error-to-string X))]))
       (write-step State E View At End Result)))
 
 (define write-step
@@ -580,7 +580,7 @@
 (define copy-read
   Input Output Chunk State Limit ->
     (let Read (trap-error (io.read-some Input Chunk [])
-                 (/. X [error (io.error read (<-address Input 1) (error-to-string X))]))
+                 (/. X [error (io.error read (io.endpoint.name Input) (error-to-string X))]))
       (copy-step Input Output Chunk State Limit Read)))
 
 (define copy-step

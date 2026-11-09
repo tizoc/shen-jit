@@ -151,4 +151,9 @@ The first migration is the private state of `buffer.builder`:
 
 The implementation uses `builder-state.length`, `builder-state.storage->` and the other named operations.
 Its five-slot storage, byte limit, geometric growth, finish/seal behavior and public `buffer.*` API are
-preserved. The compiler and other manually laid out records have not been migrated.
+preserved.
+
+Byte views, cursors, I/O endpoints, readers and writers, framers and deadlines are structs too, and the
+libraries that read them, such as grammars and subprocesses, use their exported readers, such as
+`buffer.view.start` and `io.endpoint.state`. Their public API and errors are unchanged. The compiler
+and the other libraries' manually laid out records have not been migrated.

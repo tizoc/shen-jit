@@ -38,7 +38,7 @@
 (deadline-test.raises "duration overflow" (freeze (deadline.after (freeze 2305843009213693951) 1)))
 (deadline-test.raises "not a budget" (freeze (deadline.remaining [])))
 (let D (deadline.after (freeze 10) 20)
-     _ (shen-jit.pointer-kill (<-address D 4))
+     _ (shen-jit.pointer-kill (deadline.budget.guard D))
   (deadline-test.raises "saved/stale deadline" (freeze (deadline.remaining D))))
 
 (let Time (io.record [100])

@@ -108,10 +108,10 @@
   _ I I -> I
   Data I Stop -> (if (= (shen-jit.u8 Data I) 92) I (scan-run Data (+ I 1) Stop)))
 
-\\ V is the span the grammar made: owner, start and end in slots 1 to 3.
+\\ V is the span the grammar made.
 (define unescape
-  V -> (let Start (<-address V 2) Stop (<-address V 3) Out (shen-jit.bytes (- Stop Start))
-         (shen-jit.bytes->string Out 0 (scan-decode (<-address V 1) Start Stop Out 0))))
+  V -> (let Start (buffer.view.start V) Stop (buffer.view.end V) Out (shen-jit.bytes (- Stop Start))
+         (shen-jit.bytes->string Out 0 (scan-decode (buffer.view.owner V) Start Stop Out 0))))
 
 (define new-key?
   Seen Key -> (if (trap-error (shen.<-dict Seen Key) (/. E false))

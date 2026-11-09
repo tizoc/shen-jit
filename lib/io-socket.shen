@@ -7,6 +7,7 @@
   (use deadline)
   (use shen-jit)
   (use socket)
+  (import struct defstruct)
   (externals [cancelled deadline define-foreign eof int32 ok poll posix read-write shutdown
     timeout winsock write written])
   (export close-result endpoint let-ok shutdown-write socket socket-again? socket-cancel
@@ -40,18 +41,23 @@
     (let Address (shen-jit.pointer-address Token)
       (if (> Address 0) (- Address 1) (error "io: socket endpoint is stale"))))
 
-\\ A policy cell keeps one absolute deadline across every short transfer and poll retry.
+\\ A policy keeps one absolute deadline across every short transfer and poll retry, and the
+\\ cancellation flag.
+(defstruct socket-policy
+  (mutable budget)
+  (mutable cancelled))
+
 (define socket-budget
   Policy Op Name ->
-    (let D (<-address Policy 0)
-      (cond ((<-address Policy 1)
+    (let D (socket-policy.budget Policy)
+      (cond ((socket-policy.cancelled Policy)
               [error (native-error Op cancelled 0 Name "socket operation cancelled")])
             ((or (empty? D) (not (deadline.expired? D))) [ok])
             (true [error (native-error Op timeout 0 Name "deadline expired")]))))
 
 (define socket-slice
   Policy ->
-    (let D (<-address Policy 0)
+    (let D (socket-policy.budget Policy)
       (if (empty? D) 100 (deadline.slice D 100))))
 
 (define socket-wait
@@ -101,12 +107,12 @@
 (define socket-make
   S Name ->
     (let Token (socket-token S)
-         Policy (record [[] false])
+         Policy (socket-policy.make [] false)
          E (endpoint Name read-write 65536
                         (/. B (socket-read Token Name Policy B))
                         (/. B (socket-write Token Name Policy B))
                         (freeze (socket-close Token Name)))
-      (do (address-> E 12 Token) (address-> E 13 Policy) E)))
+      (do (endpoint.guard-> E Token) (endpoint.context-> E Policy) E)))
 
 (define socket
   S Name ->
@@ -121,47 +127,47 @@
 (define socket-check
   E ->
     (let _ (endpoint-check E)
-         Token (<-address E 12)
+         Token (endpoint.guard E)
          _ (if (and (shen-jit.pointer? Token) (= (shen-jit.pointer-kind Token) socket))
                true
                (error "io: not a socket endpoint"))
-         _ (check E read (<-address E 9))
+         _ (check E read (endpoint.reader E))
       Token))
 
 (define socket-deadline
   E D ->
     (let _ (socket-check E)
          _ (deadline.check D)
-      (do (address-> (<-address E 13) 0 D) E)))
+      (do (socket-policy.budget-> (endpoint.context E) D) E)))
 
 (define socket-unlimited
   E ->
     (let _ (socket-check E)
-      (do (address-> (<-address E 13) 0 []) E)))
+      (do (socket-policy.budget-> (endpoint.context E) []) E)))
 
 \\ Cancellation is the only cross-task endpoint operation. It publishes one monotonic flag,
 \\ without closing or reusing a descriptor while its owner may still be inside poll.
 (define socket-cancel
   E ->
     (let _ (endpoint-check E)
-         Token (<-address E 12)
+         Token (endpoint.guard E)
          _ (if (and (shen-jit.pointer? Token) (= (shen-jit.pointer-kind Token) socket))
                true (error "io: not a socket endpoint"))
-      (do (address-> (<-address E 13) 1 true) true)))
+      (do (socket-policy.cancelled-> (endpoint.context E) true) true)))
 
 \\ Flush before sending FIN. Read EOF, write shutdown and full close remain separate states.
 (define shutdown-write
   E ->
     (let Token (socket-check E)
-         W (<-address E 10)
-      (if (= (<-address E 2) read)
+         W (endpoint.writer E)
+      (if (= (endpoint.mode E) read)
           [ok]
           (socket-shutdown-ready E Token (if (empty? W) [ok 0] (flush W))))))
 
 (define socket-shutdown-ready
   _ _ [error Error _] -> [error Error]
   E Token [ok N] ->
-    (socket-shutdown-budget E Token N (socket-budget (<-address E 13) shutdown (<-address E 1))))
+    (socket-shutdown-budget E Token N (socket-budget (endpoint.context E) shutdown (endpoint.name E))))
 
 (define socket-shutdown-budget
   _ _ N [error Error] -> [error (progress Error N)]
@@ -169,10 +175,10 @@
     (let Result (socket.c-shutdown (socket-id Token) 1)
          Code (if (< Result 0) (socket-code) 0)
       (if (= Result 0)
-          (do (address-> E 2 read)
-              (address-> E 10 [])
+          (do (endpoint.mode-> E read)
+              (endpoint.writer-> E [])
               [ok])
-          [error (progress (socket-error shutdown (<-address E 1) Code) N)])))
+          [error (progress (socket-error shutdown (endpoint.name E) Code) N)])))
 
 (declare socket [number --> [string --> endpoint]])
 (declare socket-deadline [endpoint --> [deadline --> endpoint]])

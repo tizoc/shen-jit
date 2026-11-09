@@ -5,82 +5,86 @@
 (shen.x.namespace cursor
   (use buffer)
   (use shen-jit)
+  (import struct defstruct)
   (shadow fork read)
   (export buffer bytes cursor? fork new offset peek position read remaining seek skip
     cursor.string => string view)
 
-(define cursor?
-  C -> (trap-error (and (absvector? C) (= (<-address C 0) buffer.cursor))
-                   (/. E false)))
+(define show
+  C -> (make-string "#<cursor at ~A>" (state.position C)))
 
-(define make
-  View Position -> (address-> (address-> (address-> (absvector 3)
-                             0 buffer.cursor) 1 View) 2 Position))
+(defstruct state
+  (printer show)
+  view
+  (mutable position))
+
+(define cursor?
+  C -> (state? C))
 
 (define check
-  C -> (if (cursor? C)
-           (do (buffer.check (<-address C 1)) C)
+  C -> (if (state? C)
+           (do (buffer.check (state.view C)) C)
            (error "cursor: ~S is not a cursor" C)))
 
 (define new
-  View -> (make (buffer.check View) 0))
+  View -> (state.make (buffer.check View) 0))
 
 (define buffer
-  C -> (<-address (check C) 1))
+  C -> (state.view (check C)))
 
 (define position
-  C -> (<-address (check C) 2))
+  C -> (state.position (check C)))
 
 (define offset
   C -> (let Checked (check C)
-         (+ (<-address (<-address Checked 1) 2) (<-address Checked 2))))
+         (+ (buffer.view.start (state.view Checked)) (state.position Checked))))
 
 (define remaining
-  C -> (let Checked (check C) View (<-address Checked 1)
-         (- (- (<-address View 3) (<-address View 2)) (<-address Checked 2))))
+  C -> (let Checked (check C) View (state.view Checked)
+         (- (- (buffer.view.end View) (buffer.view.start View)) (state.position Checked))))
 
 (define peek
-  C -> (let Checked (check C) View (<-address Checked 1)
-            I (<-address Checked 2) Start (<-address View 2)
-         (if (= (+ Start I) (<-address View 3))
+  C -> (let Checked (check C) View (state.view Checked)
+            I (state.position Checked) Start (buffer.view.start View)
+         (if (= (+ Start I) (buffer.view.end View))
              -1
-             (shen-jit.u8 (<-address View 1) (+ Start I)))))
+             (shen-jit.u8 (buffer.view.owner View) (+ Start I)))))
 
 (define read
   C -> (let Byte (peek C)
          (if (= Byte -1) -1
-             (do (address-> C 2 (+ (<-address C 2) 1)) Byte))))
+             (do (state.position-> C (+ (state.position C) 1)) Byte))))
 
 (define seek
-  C Position -> (let Checked (check C) View (<-address Checked 1)
-                     I (buffer.range (- (<-address View 3) (<-address View 2)) Position 0)
-                  (do (address-> Checked 2 I) C)))
+  C Position -> (let Checked (check C) View (state.view Checked)
+                     I (buffer.range (- (buffer.view.end View) (buffer.view.start View)) Position 0)
+                  (do (state.position-> Checked I) C)))
 
 (define skip
-  C Count -> (let Checked (check C) View (<-address Checked 1)
-                 I (<-address Checked 2)
-                 _ (buffer.range (- (<-address View 3) (<-address View 2)) I Count)
-              (do (address-> Checked 2 (+ I Count)) C)))
+  C Count -> (let Checked (check C) View (state.view Checked)
+                 I (state.position Checked)
+                 _ (buffer.range (- (buffer.view.end View) (buffer.view.start View)) I Count)
+              (do (state.position-> Checked (+ I Count)) C)))
 
 (define fork
   C -> (let Checked (check C)
-         (make (<-address Checked 1) (<-address Checked 2))))
+         (state.make (state.view Checked) (state.position Checked))))
 
 \\ Construct/copy first, then publish progress, so failed captures never advance.
 (define view
-  C Count -> (let Checked (check C) I (<-address Checked 2)
-                 Out (buffer.slice (<-address Checked 1) I Count)
-              (do (address-> Checked 2 (+ I Count)) Out)))
+  C Count -> (let Checked (check C) I (state.position Checked)
+                 Out (buffer.slice (state.view Checked) I Count)
+              (do (state.position-> Checked (+ I Count)) Out)))
 
 (define bytes
-  C Count -> (let Checked (check C) I (<-address Checked 2)
-                 Out (buffer.bytes (buffer.slice (<-address Checked 1) I Count))
-              (do (address-> Checked 2 (+ I Count)) Out)))
+  C Count -> (let Checked (check C) I (state.position Checked)
+                 Out (buffer.bytes (buffer.slice (state.view Checked) I Count))
+              (do (state.position-> Checked (+ I Count)) Out)))
 
 (define cursor.string
-  C Count -> (let Checked (check C) I (<-address Checked 2)
-                 Out (buffer.string (buffer.slice (<-address Checked 1) I Count))
-              (do (address-> Checked 2 (+ I Count)) Out)))
+  C Count -> (let Checked (check C) I (state.position Checked)
+                 Out (buffer.string (buffer.slice (state.view Checked) I Count))
+              (do (state.position-> Checked (+ I Count)) Out)))
 
 (declare cursor? [A --> boolean])
 (declare new [buffer.view --> buffer.cursor])

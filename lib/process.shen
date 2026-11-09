@@ -248,8 +248,8 @@
              (/. B (pipe-read Context B))
              (/. B (pipe-write Context B))
              (freeze (pipe-close Pointer)))
-         _ (address-> E 12 Pointer)
-         _ (address-> E 13 Context)
+         _ (io.endpoint.guard-> E Pointer)
+         _ (io.endpoint.context-> E Context)
       E))
 
 \\ The native spawn constructs this record before starting the child, so allocation failure is safe.
@@ -291,8 +291,8 @@
 
 (define pipe-until
   E Budget Cancel ->
-    (let _ (io.check E (<-address E 2) [])
-         Context (<-address E 13)
+    (let _ (io.check E (io.endpoint.mode E) [])
+         Context (io.endpoint.context E)
          _ (if (io.tag? Context pipe-context) true (error "process: not a process pipe"))
          _ (deadline.check Budget)
          _ (address-> Context 2 Budget)

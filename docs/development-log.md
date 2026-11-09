@@ -899,6 +899,21 @@ that. Its readings decided nothing below.
 
 ### Managed structs
 
+- **Views, cursors and I/O records as structs** (2026-11-09, Apple M3 Max, against the same library sources before).
+  Byte views, cursors, I/O endpoints, readers and writers, framers, deadlines and a socket's policy are structs,
+  and grammars, JSON, subprocesses and the filesystem library read them through exported readers such as
+  `buffer.view.start` and `io.endpoint.state`. Field order follows the old slots, and with every struct's fields
+  moved two slots later the library suites still pass, so nothing they run reads these by number. Printing an
+  endpoint, reader, writer, framer, HTTP head or body reader, response or child used to call the library function
+  named by its tag, which the writer takes for a printer. Old and new sources under one executable, alternated,
+  medians of 9 runs at load 2.8: a cursor over 64 KB, 442 against 415 ms; `buffer.u8`, 387 against 398 (+2.8%);
+  `buffer.slice`, 361 against 351; a reader's `read-into`, 405 against 391; `peek-up-to` and `consume`, 389
+  against 380; a writer, 412 against 400; framing, 399 against 401; a deadline, 231 against 225. The predicate
+  needs no handler, which is most of the gain. `buffer.u8` is slower because `check`, inlined into it, now holds
+  calls to the accessors, which the lowerer's inline depth of two leaves as calls: with `check`'s two reads
+  written as `<-address`, it took 385 against 383. Not done: inlining a body that is one primitive at any depth,
+  which would cover every struct accessor; a change to the lowerer for 3% on one function.
+
 - **Printers** (2026-11-09, Apple M3 Max). The kernel's writer prints a vector by calling the function bound
   to its first slot, so each struct's private tag is now defined as its printer: by default the type and
   fields, `#<entry key: "answer" value: 42>`, or the declaration's `(printer F)`. Before, the tag was left

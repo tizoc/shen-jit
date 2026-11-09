@@ -37,7 +37,7 @@
 \\ every system). On macOS loopback data can arrive a moment after the peer's send returns, and a
 \\ wait then would spend ticks of a clock that counts its calls.
 (define timed-test.buffered
-  E N -> (timed-test.buffered-by (io.socket-id (<-address E 12)) N (+ (clock.monotonic) 2000)))
+  E N -> (timed-test.buffered-by (io.socket-id (io.endpoint.guard E)) N (+ (clock.monotonic) 2000)))
 
 (define timed-test.buffered-by
   S N End -> (cond ((>= (socket.c-recv S (shen-jit.bytes N) N 2) N) true)
@@ -77,7 +77,7 @@
 (let Pair (timed-test.pair)
      C (hd Pair)
      S (hd (tl Pair))
-     _ (address-> C 3 1)
+     _ (io.endpoint.capacity-> C 1)
      _ (io.write-all S (buffer.from-string "abcdef") [])
      _ (timed-test.buffered C 6)
      _ (io.socket-deadline C (timed-test.advancing))
@@ -97,7 +97,7 @@
 (let Pair (timed-test.pair)
      C (hd Pair)
      S (hd (tl Pair))
-     _ (address-> C 3 1)
+     _ (io.endpoint.capacity-> C 1)
      _ (io.socket-deadline C (timed-test.advancing))
      Source (buffer.from-string "abcdef")
      Result (io.write-all C Source [])

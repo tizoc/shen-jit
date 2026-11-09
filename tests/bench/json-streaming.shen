@@ -52,7 +52,7 @@
 
 \\ The bytes a builder holds, without finishing it.
 (define stream.contents
-  B -> (<-address B 2))
+  B -> (buffer.builder-state.storage B))
 
 (define stream.at-end?
   Message Now -> (= Message (make-string "json: byte ~A: unexpected end" Now)))

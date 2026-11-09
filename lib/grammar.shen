@@ -34,15 +34,15 @@
                         (= P -1) (Fail At "no match")
                         true (Fail P "trailing input")))
 
-\\ The view is checked once, then read as cursor.shen reads it: owner, start, end in slots 1 to 3.
+\\ The view is checked once, then read as cursor.shen reads it: owner, start and end.
 (define parse
   Rule View Fail ->
-    (let V (buffer.check View) S (state) At (<-address V 2) End (<-address V 3)
-      (result ((fn Rule) (<-address V 1) At End S) S At End Fail)))
+    (let V (buffer.check View) S (state) At (buffer.view.start V) End (buffer.view.end V)
+      (result ((fn Rule) (buffer.view.owner V) At End S) S At End Fail)))
 
 (define match?
-  Rule View -> (let V (buffer.check View) End (<-address V 3)
-                 (= ((fn Rule) (<-address V 1) (<-address V 2) End (state)) End)))
+  Rule View -> (let V (buffer.check View) End (buffer.view.end V)
+                 (= ((fn Rule) (buffer.view.owner V) (buffer.view.start V) End (state)) End)))
 
 \\ The same over a range of storage that a library has already checked.
 (define parse-range
@@ -690,8 +690,8 @@
 (define parse-form
   Rule View Fail ->
     (let V (gensym (protect V)) S (gensym (protect S)) At (gensym (protect At)) End (gensym (protect End))
-      [let V [buffer.check View] S [state] At [<-address V 2] End [<-address V 3]
-        (finish (call-rule Rule [<-address V 1] At End S) S At End Fail)]))
+      [let V [buffer.check View] S [state] At [buffer.view.start V] End [buffer.view.end V]
+        (finish (call-rule Rule [buffer.view.owner V] At End S) S At End Fail)]))
 
 (define finish
   Call S At End Fail ->
@@ -701,8 +701,8 @@
 (define match-form
   Rule View ->
     (let V (gensym (protect V)) End (gensym (protect End))
-      [let V [buffer.check View] End [<-address V 3]
-        [= (call-rule Rule [<-address V 1] [<-address V 2] End [state]) End]]))
+      [let V [buffer.check View] End [buffer.view.end V]
+        [= (call-rule Rule [buffer.view.owner V] [buffer.view.start V] End [state]) End]]))
 
 (define range-form
   Rule Buffer At End Fail ->
@@ -768,7 +768,7 @@
               N (io.min (io.window-fill R (io.min (+ X 1) Limit)) Limit)
               _ (address-> E 0 N)
            (or (> N X)
-               (do (address-> E 2 (if (>= X Limit) limit (<-address R 5))) false))))
+               (do (address-> E 2 (if (>= X Limit) limit (io.reader.terminal R))) false))))
 
 (define copy-span
   Buf At End -> (buffer.wrap (shen-jit.copy-bytes (shen-jit.bytes (- End At)) 0 Buf At (- End At))))

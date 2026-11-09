@@ -112,7 +112,7 @@
 (let Pair (io-socket-test.pair)
      C (hd Pair)
      S (hd (tl Pair))
-     Token (<-address S 12)
+     Token (io.endpoint.guard S)
      _ (socket.c-close (io.socket-id Token))
      Result (io.read-some S (buffer.new 1) [])
      Error (hd (tl Result))
@@ -132,14 +132,14 @@
      S (hd (tl Pair))
      W (io.writer S [])
      _ (io.write W (buffer.from-string "pending"))
-     _ (socket.c-close (io.socket-id (<-address S 12)))
+     _ (socket.c-close (io.socket-id (io.endpoint.guard S)))
      Result (io.shutdown-write S)
      Error (hd (tl Result))
   (do (io-socket-test.check "shutdown reports failed flush" write
         (freeze (io.error-operation Error)))
       (io-socket-test.check "failed shutdown retains pending bytes" 7 (freeze (io.pending W)))
       (io-socket-test.check "failed shutdown leaves write state open" read-write
-        (freeze (<-address S 2)))
+        (freeze (io.endpoint.mode S)))
       (io.close S)
       (io.close C)))
 

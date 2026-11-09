@@ -6,6 +6,7 @@
   (use buffer)
   (use io)
   (use shen-jit)
+  (import struct defstruct)
   (externals [eof frame frame-results ok])
   (shadow limit)
   (export encode next position reader result)
@@ -49,22 +50,32 @@
           (buffer.copy! Out 6 Payload 0 N)
           Out)))
 
-\\ Framer slots: tag, borrowed I/O reader, payload limit, terminal result, in-flight flag.
+\\ A framer: its borrowed I/O reader, payload limit, terminal result and in-flight flag.
+(define show-reader
+  F -> (make-string "#<frame reader limit ~A>" (reader.limit F)))
+
+(defstruct reader
+  (printer show-reader)
+  input
+  limit
+  (mutable terminal)
+  (mutable busy))
+
 (define reader
   R Limit ->
     (let Max (limit Limit)
          _ (io.reader-check R)
-      (io.record [reader R Max [] false])))
+      (reader.make R Max [] false)))
 
 (define check
   F ->
-    (let _ (if (io.tag? F reader) true (error "frame: not a reader"))
-         _ (if (<-address F 4) (error "frame: operation is already in flight") true)
-         _ (io.reader-check (<-address F 1))
+    (let _ (if (reader? F) true (error "frame: not a reader"))
+         _ (if (reader.busy F) (error "frame: operation is already in flight") true)
+         _ (io.reader-check (reader.input F))
       F))
 
 (define position
-  F -> (io.position (<-address (check F) 1)))
+  F -> (io.position (reader.input (check F))))
 
 (define frame.error
   Message Progress ->
@@ -72,21 +83,21 @@
 
 (define finish
   F [frame Tag Payload] -> [frame Tag Payload]
-  F Terminal -> (do (address-> F 3 Terminal) Terminal))
+  F Terminal -> (do (reader.terminal-> F Terminal) Terminal))
 
 (define next
   F ->
     (let _ (check F)
-         Terminal (<-address F 3)
+         Terminal (reader.terminal F)
       (if (not (empty? Terminal))
           Terminal
           (let B (shen-jit.bytes 6)
-               _ (address-> F 4 true)
-               Result (trap-error (read-header F B (io.reader-exact (<-address F 1) (buffer.wrap B)))
-                        (/. X (do (address-> F 4 false)
-                                  (address-> F 3 (frame.error (error-to-string X) 0))
+               _ (reader.busy-> F true)
+               Result (trap-error (read-header F B (io.reader-exact (reader.input F) (buffer.wrap B)))
+                        (/. X (do (reader.busy-> F false)
+                                  (reader.terminal-> F (frame.error (error-to-string X) 0))
                                   (simple-error (error-to-string X)))))
-            (do (address-> F 4 false) (finish F Result))))))
+            (do (reader.busy-> F false) (finish F Result))))))
 
 (define read-header
   _ _ [eof 0] -> [eof]
@@ -95,10 +106,10 @@
   F B [ok 6] ->
     (let Tag (uint B 0 2 0)
          N (uint B 2 4 0)
-      (if (> N (<-address F 2))
+      (if (> N (reader.limit F))
           (frame.error "payload exceeds limit" 6)
           (let Payload (buffer.new N)
-            (read-payload Tag Payload (io.reader-exact (<-address F 1) Payload))))))
+            (read-payload Tag Payload (io.reader-exact (reader.input F) Payload))))))
 
 (define read-payload
   Tag Payload [ok _] -> [frame Tag Payload]

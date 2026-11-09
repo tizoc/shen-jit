@@ -102,7 +102,7 @@
              Err (io-file-test.err (io.open-file Bad read))
           (do (io-file-test.check "Windows invalid UTF-8 path domain" win32 (freeze (io.error-domain Err)))
               (io-file-test.check "Windows invalid UTF-8 path code" true (freeze (> (io.error-code Err) 0))))))
-    (let E (io-file-test.ok (io.open-file (io-file-test.path "binary") read)) Token (<-address E 12)
+    (let E (io-file-test.ok (io.open-file (io-file-test.path "binary") read)) Token (io.endpoint.guard E)
      _ (io.file-c-close (io.file-fd Token)) Result (io.read-some E (buffer.new 1) [])
      Saved (io-file-test.err Result) _ (io.close E)
   (do (io-file-test.check "native read failure is not EOF" read (freeze (io.error-operation Saved)))

@@ -5,11 +5,15 @@
 (shen.x.namespace io
   (use buffer)
   (use shen-jit)
+  (use struct)
+  (import struct defstruct)
   (externals [accepted callback chunk chunk-size closed eof flush io-error io-results library ok
     pending-timeout read-write retry-timeout shen timeout write written])
   (shadow count min)
   (export accept-result available buffer-options check chunk-result io.close => close
-    close-result consume endpoint endpoint-check io.error => error error-code error-domain
+    close-result consume endpoint endpoint-check endpoint.busy endpoint.busy-> endpoint.close-result
+    endpoint.context endpoint.context-> endpoint.guard endpoint.guard-> endpoint.mode endpoint.name
+    endpoint.state reader.terminal io.error => error error-code error-domain
     error-message error-operation error-progress error-resource error-secondary error? finish
     io.flush => flush input-buffer join let-ok min native-error no-read no-write output-buffer
     peek peek-result peek-some peek-up-to pending position progress read-all read-chunk
@@ -36,10 +40,10 @@
       (if (and (> I 0) (<= I 1048576)) I (error "io: chunk size must be 1..1048576"))))
 
 (define options
-  E [] -> (<-address E 3)
+  E [] -> (endpoint.capacity E)
   E [[chunk-size N]] ->
     (let Cap (capacity N)
-      (if (<= Cap (<-address E 3)) Cap (error "io: chunk exceeds endpoint capacity")))
+      (if (<= Cap (endpoint.capacity E)) Cap (error "io: chunk exceeds endpoint capacity")))
   _ _ -> (error "io: unsupported buffer options"))
 
 (define transfer-options
@@ -86,36 +90,98 @@
   [io-error Op Domain Code Resource Message N Secondary] Other ->
     [io-error Op Domain Code Resource Message N (append Secondary [Other])])
 
-\\ Endpoint slots: tag, name, mode, capacity, read/write/close callbacks, state,
-\\ remembered close result, reader/writer leases, in-flight flag, optional native guard and backend context,
-\\ and the read chunks.
+\\ An endpoint: name, mode, capacity, read/write/close callbacks, state, remembered close result,
+\\ reader/writer leases, in-flight flag, optional native guard and backend context, and the read
+\\ chunks.
+(define show-endpoint
+  E -> (make-string "#<endpoint ~S ~A>" (endpoint.name E) (endpoint.state E)))
+
+(defstruct endpoint
+  (printer show-endpoint)
+  name
+  (mutable mode)
+  (mutable capacity)
+  read
+  (mutable write)
+  close
+  (mutable state)
+  (mutable close-result)
+  (mutable reader)
+  (mutable writer)
+  (mutable busy)
+  (mutable guard)
+  (mutable context)
+  (mutable scratch)
+  (mutable scratch-below))
+
+\\ A reader: its endpoint, bounded buffer, next/unfilled offsets, terminal result, position.
+(define show-reader
+  R -> (make-string "#<reader ~S at ~A>" (endpoint.name (reader.endpoint R)) (reader.position R)))
+
+(defstruct reader
+  (printer show-reader)
+  endpoint
+  buffer
+  (mutable start)
+  (mutable end)
+  (mutable terminal)
+  (mutable position))
+
+\\ A writer: its endpoint, bounded buffer, sent/unfilled offsets, last flush error.
+(define show-writer
+  W -> (make-string "#<writer ~S ~A pending>" (endpoint.name (writer.endpoint W))
+                    (- (writer.end W) (writer.start W))))
+
+(defstruct writer
+  (printer show-writer)
+  endpoint
+  buffer
+  (mutable start)
+  (mutable end)
+  (mutable failure))
+
 (define endpoint
   Name Mode Capacity Read Write Close ->
     (let Cap (capacity Capacity)
          _ (if (and (string? Name) (element? Mode [read write read-write]))
                true
                (error "io: invalid endpoint name or mode"))
-      (record [endpoint Name Mode Cap Read Write Close open [] [] [] false [] [] [] []])))
+      (struct.make endpoint
+        name <- Name;
+        mode <- Mode;
+        capacity <- Cap;
+        read <- Read;
+        write <- Write;
+        close <- Close;
+        state <- open;
+        close-result <- [];
+        reader <- [];
+        writer <- [];
+        busy <- false;
+        guard <- [];
+        context <- [];
+        scratch <- [];
+        scratch-below <- [];)))
 
 (define endpoint-check
-  E -> (if (tag? E endpoint) E (error "io: not an endpoint")))
+  E -> (if (endpoint? E) E (error "io: not an endpoint")))
 
 (define live?
   E ->
-    (let Guard (<-address E 12)
+    (let Guard (endpoint.guard E)
       (or (empty? Guard) (not (= (shen-jit.pointer-address Guard) 0)))))
 
 (define check
   E Direction Lease ->
     (let _ (endpoint-check E)
-         _ (if (and (= (<-address E 7) open) (live? E))
+         _ (if (and (= (endpoint.state E) open) (live? E))
                true
                (error "io: endpoint is closed or stale"))
-         _ (if (<-address E 11) (error "io: endpoint operation is already in flight") true)
-         _ (if (or (= (<-address E 2) read-write) (= (<-address E 2) Direction))
+         _ (if (endpoint.busy E) (error "io: endpoint operation is already in flight") true)
+         _ (if (or (= (endpoint.mode E) read-write) (= (endpoint.mode E) Direction))
                true
                (error "io: endpoint does not support ~A" Direction))
-         Existing (<-address E (if (= Direction read) 9 10))
+         Existing (if (= Direction read) (endpoint.reader E) (endpoint.writer E))
       (if (shen-jit.same? Existing Lease)
           E
           (error "io: endpoint is owned by a buffered reader or writer"))))
@@ -128,10 +194,10 @@
 
 (define invoke
   E F ->
-    (do (address-> E 11 true)
+    (do (endpoint.busy-> E true)
         (let Result (trap-error (thaw F)
-                       (/. X (do (address-> E 11 false) (simple-error (error-to-string X)))))
-          (do (address-> E 11 false) Result))))
+                       (/. X (do (endpoint.busy-> E false) (simple-error (error-to-string X)))))
+          (do (endpoint.busy-> E false) Result))))
 
 \\ Backend transfers use bounded scratch chunks. Validate the result before copying a read out.
 (define count
@@ -156,22 +222,20 @@
 \\ gets the largest chunk asked for, and less while it waits for more of a value, which gets the
 \\ largest power of two below, kept apart: a few chunks, each read at least half as large.
 (define scratch
-  E Size -> (let Full (<-address E 14)
-              (cases (or (= Full []) (> Size (shen-jit.bytes-length Full))) (keep E 14 (shen-jit.bytes Size))
+  E Size -> (let Full (endpoint.scratch E)
+              (cases (or (= Full []) (> Size (shen-jit.bytes-length Full)))
+                       (let B (shen-jit.bytes Size) (do (endpoint.scratch-> E B) B))
                      (= Size (shen-jit.bytes-length Full)) Full
                      true (scratch-below E (power-below Size 1)))))
 
 (define scratch-below
-  E Size -> (let Kept (<-address E 15)
+  E Size -> (let Kept (endpoint.scratch-below E)
               (if (and (not (= Kept [])) (= (shen-jit.bytes-length Kept) Size))
                   Kept
-                  (keep E 15 (shen-jit.bytes Size)))))
+                  (let B (shen-jit.bytes Size) (do (endpoint.scratch-below-> E B) B)))))
 
 (define power-below
   Size P -> (if (> (* 2 P) Size) P (power-below Size (* 2 P))))
-
-(define keep
-  E Slot B -> (do (address-> E Slot B) B))
 
 (define read-raw
   E V Lease ->
@@ -180,13 +244,13 @@
          N (buffer.length V)
       (if (= N 0)
           [read 0]
-          (let Chunk (scratch E (min N (<-address E 3)))
-               Read (<-address E 4)
+          (let Chunk (scratch E (min N (endpoint.capacity E)))
+               Read (endpoint.read E)
                Result (invoke E (freeze (Read Chunk)))
             (read-result E V Chunk Result)))))
 
 (define write-result
-  E _ [written 0] -> [error (io.error write (<-address E 1) "backend made no progress")]
+  E _ [written 0] -> [error (io.error write (endpoint.name E) "backend made no progress")]
   _ Limit [written N] -> [written (count N Limit)]
   _ _ [error Error] ->
     (if (error? Error) [error Error] (error "io: malformed backend error"))
@@ -198,10 +262,10 @@
          N (buffer.length V)
       (if (= N 0)
           [written 0]
-          (let Count (min N (<-address E 3))
+          (let Count (min N (endpoint.capacity E))
                Chunk (shen-jit.bytes Count)
                _ (shen-jit.copy-bytes Chunk 0 (buffer.owner V) (buffer.offset V) Count)
-               Write (<-address E 5)
+               Write (endpoint.write E)
                Result (invoke E (freeze (Write Chunk)))
             (write-result E Count Result)))))
 
@@ -241,79 +305,78 @@
   E V At End [written N] -> (all-loop E V (+ At N) End)
   _ _ At _ [error Error] -> [error (progress Error At) At])
 
-\\ Reader slots: tag, endpoint, bounded buffer, next/unfilled offsets, terminal result, position.
 (define reader
   E Options ->
     (let _ (check E read [])
          Cap (options E Options)
-         R (record [reader E (buffer.new Cap) 0 0 [] 0])
-      (do (address-> E 9 R) R)))
+         R (reader.make E (buffer.new Cap) 0 0 [] 0)
+      (do (endpoint.reader-> E R) R)))
 
 (define timeout-result?
   [retry-timeout _] -> true
   _ -> false)
 
 (define reader-terminal
-  R -> (terminal-result R (<-address R 5)))
+  R -> (terminal-result R (reader.terminal R)))
 
 (define terminal-result
   R [pending-timeout Error] ->
-    (do (address-> R 5 [retry-timeout Error]) [error Error])
+    (do (reader.terminal-> R [retry-timeout Error]) [error Error])
   _ Terminal -> Terminal)
 
 (define reader-check
-  R -> (if (tag? R reader)
-           (do (check (<-address R 1) read R)
-               (if (timeout-result? (<-address R 5)) (address-> R 5 []) true)
+  R -> (if (reader? R)
+           (do (check (reader.endpoint R) read R)
+               (if (timeout-result? (reader.terminal R)) (reader.terminal-> R []) true)
                R)
            (error "io: not a reader")))
 
 (define available
-  R -> (let _ (reader-check R) (- (<-address R 4) (<-address R 3))))
+  R -> (let _ (reader-check R) (- (reader.end R) (reader.start R))))
 
 (define position
-  R -> (<-address (reader-check R) 6))
+  R -> (reader.position (reader-check R)))
 
 (define fill-reader
   R Need ->
-    (if (or (>= (- (<-address R 4) (<-address R 3)) Need) (not (empty? (<-address R 5))))
+    (if (or (>= (- (reader.end R) (reader.start R)) Need) (not (empty? (reader.terminal R))))
         R
-        (let B (<-address R 2)
-             At (<-address R 3)
-             End (<-address R 4)
+        (let B (reader.buffer R)
+             At (reader.start R)
+             End (reader.end R)
              _ (if (> At 0)
                    (do (buffer.copy! B 0 B At (- End At))
-                       (address-> R 3 0)
-                       (address-> R 4 (- End At)))
+                       (reader.start-> R 0)
+                       (reader.end-> R (- End At)))
                    true)
-             Tail (buffer.slice B (<-address R 4) (- (buffer.length B) (<-address R 4)))
-             Result (read-raw (<-address R 1) Tail R)
+             Tail (buffer.slice B (reader.end R) (- (buffer.length B) (reader.end R)))
+             Result (read-raw (reader.endpoint R) Tail R)
           (fill-step R Need Result))))
 
 (define fill-step
-  R Need [read N] -> (do (address-> R 4 (+ (<-address R 4) N)) (fill-reader R Need))
+  R Need [read N] -> (do (reader.end-> R (+ (reader.end R) N)) (fill-reader R Need))
   R _ [error Error] ->
-    (do (address-> R 5 (if (= (error-domain Error) timeout)
+    (do (reader.terminal-> R (if (= (error-domain Error) timeout)
                            [pending-timeout Error]
                            [error Error]))
         R)
-  R _ Terminal -> (do (address-> R 5 Terminal) R))
+  R _ Terminal -> (do (reader.terminal-> R Terminal) R))
 
 (define peek
   R Count ->
     (let _ (reader-check R)
          N (buffer.index Count)
-         B (<-address R 2)
+         B (reader.buffer R)
          _ (buffer.range (buffer.length B) 0 N)
          _ (fill-reader R N)
-         Available (- (<-address R 4) (<-address R 3))
+         Available (- (reader.end R) (reader.start R))
       (if (or (> Available 0) (= N 0))
-          [ok (buffer.wrap (buffer.bytes (buffer.slice B (<-address R 3) (min N Available))))]
+          [ok (buffer.wrap (buffer.bytes (buffer.slice B (reader.start R) (min N Available))))]
           (reader-terminal R))))
 
 \\ Unlike peek Count, this waits only for some input, then exposes an owned available span.
 (define peek-some
-  R -> (do (reader-check R) (peek-up-to R (buffer.length (<-address R 2)))))
+  R -> (do (reader-check R) (peek-up-to R (buffer.length (reader.buffer R)))))
 
 \\ Wait for one byte, then copy no more than Count from the available span.
 \\ This bounds copying for a short delimiter without waiting to fill Count bytes.
@@ -322,9 +385,9 @@
     (let _ (reader-check R)
          Maximum (buffer.index Count)
          _ (fill-reader R (if (= Maximum 0) 0 1))
-         N (- (<-address R 4) (<-address R 3))
+         N (- (reader.end R) (reader.start R))
       (if (or (> N 0) (= Maximum 0))
-          [ok (buffer.wrap (buffer.bytes (buffer.slice (<-address R 2) (<-address R 3)
+          [ok (buffer.wrap (buffer.bytes (buffer.slice (reader.buffer R) (reader.start R)
                                                      (min N Maximum))))]
           (reader-terminal R))))
 
@@ -334,34 +397,34 @@
 \\ input and the buffer allow, and gives how many it holds, and io.window-size is its capacity.
 (define window
   R -> (let _ (reader-check R)
-            B (<-address R 2) At (<-address R 3) End (<-address R 4)
+            B (reader.buffer R) At (reader.start R) End (reader.end R)
             _ (if (> At 0)
-                  (do (buffer.copy! B 0 B At (- End At)) (address-> R 3 0) (address-> R 4 (- End At)))
+                  (do (buffer.copy! B 0 B At (- End At)) (reader.start-> R 0) (reader.end-> R (- End At)))
                   true)
          (buffer.owner B)))
 
 (define window-fill
-  R Need -> (do (fill-reader R (min Need (buffer.length (<-address R 2)))) (<-address R 4)))
+  R Need -> (do (fill-reader R (min Need (buffer.length (reader.buffer R)))) (reader.end R)))
 
 (define window-size
-  R -> (buffer.length (<-address R 2)))
+  R -> (buffer.length (reader.buffer R)))
 
 (define consume
   R Count ->
     (let _ (reader-check R)
          N (buffer.index Count)
-         _ (buffer.range (- (<-address R 4) (<-address R 3)) 0 N)
-      (do (address-> R 3 (+ (<-address R 3) N))
-          (address-> R 6 (+ (<-address R 6) N))
+         _ (buffer.range (- (reader.end R) (reader.start R)) 0 N)
+      (do (reader.start-> R (+ (reader.start R) N))
+          (reader.position-> R (+ (reader.position R) N))
           R)))
 
 (define read-chunk
   R ->
     (let _ (reader-check R)
          _ (fill-reader R 1)
-         N (- (<-address R 4) (<-address R 3))
+         N (- (reader.end R) (reader.start R))
       (if (> N 0)
-          (let Out (buffer.wrap (buffer.bytes (buffer.slice (<-address R 2) (<-address R 3) N)))
+          (let Out (buffer.wrap (buffer.bytes (buffer.slice (reader.buffer R) (reader.start R) N)))
             (do (consume R N) [chunk Out]))
           (reader-terminal R))))
 
@@ -373,9 +436,9 @@
       (if (= Count 0)
           [read 0]
           (let _ (fill-reader R 1)
-               N (min Count (- (<-address R 4) (<-address R 3)))
+               N (min Count (- (reader.end R) (reader.start R)))
             (if (> N 0)
-                (do (buffer.copy! V 0 (<-address R 2) (<-address R 3) N)
+                (do (buffer.copy! V 0 (reader.buffer R) (reader.start R) N)
                     (consume R N)
                     [read N])
                 (reader-terminal R))))))
@@ -404,7 +467,7 @@
     (if (= Total Limit)
         (collect-limit R Total Chunks (peek R 1))
         (collect-step R Limit Total Chunks
-          (peek R (min (- Limit Total) (buffer.length (<-address R 2)))))))
+          (peek R (min (- Limit Total) (buffer.length (reader.buffer R)))))))
 
 (define collect-step
   R Limit Total Chunks [ok V] ->
@@ -417,7 +480,7 @@
   _ Total Chunks [eof] -> [ok (join Total (reverse Chunks))]
   _ Total _ [error Error] -> [error (progress Error Total)]
   R Total _ [ok _] ->
-    [error (progress (io.error read (<-address (<-address R 1) 1) "input exceeds limit") Total)])
+    [error (progress (io.error read (endpoint.name (reader.endpoint R)) "input exceeds limit") Total)])
 
 (define join
   N Chunks -> (join-loop (buffer.new N) 0 Chunks))
@@ -428,69 +491,68 @@
     (do (buffer.copy! Out At V 0 (buffer.length V))
         (join-loop Out (+ At (buffer.length V)) Rest)))
 
-\\ Writer slots: tag, endpoint, bounded buffer, sent/unfilled offsets, last flush error.
 (define writer
   E Options ->
     (let _ (check E write [])
          Cap (options E Options)
-         W (record [writer E (buffer.new Cap) 0 0 []])
-      (do (address-> E 10 W) W)))
+         W (writer.make E (buffer.new Cap) 0 0 [])
+      (do (endpoint.writer-> E W) W)))
 
 (define writer-check
-  W -> (if (tag? W writer)
-           (do (check (<-address W 1) write W) W)
+  W -> (if (writer? W)
+           (do (check (writer.endpoint W) write W) W)
            (error "io: not a writer")))
 
 (define pending
-  W -> (let _ (writer-check W) (- (<-address W 4) (<-address W 3))))
+  W -> (let _ (writer-check W) (- (writer.end W) (writer.start W))))
 
 (define io.flush
   W -> (do (writer-check W) (flush-loop W 0)))
 
 (define flush-loop
   W Total ->
-    (let At (<-address W 3)
-         End (<-address W 4)
+    (let At (writer.start W)
+         End (writer.end W)
       (if (= At End)
-          (do (address-> W 3 0)
-              (address-> W 4 0)
-              (address-> W 5 [])
+          (do (writer.start-> W 0)
+              (writer.end-> W 0)
+              (writer.failure-> W [])
               [ok Total])
           (flush-step W Total
-            (write-raw (<-address W 1) (buffer.slice (<-address W 2) At (- End At)) W)))))
+            (write-raw (writer.endpoint W) (buffer.slice (writer.buffer W) At (- End At)) W)))))
 
 (define flush-step
   W Total [written N] ->
-    (do (address-> W 3 (+ (<-address W 3) N)) (flush-loop W (+ Total N)))
+    (do (writer.start-> W (+ (writer.start W) N)) (flush-loop W (+ Total N)))
   W Total [error Error] ->
     (let Saved (progress Error Total)
-      (do (address-> W 5 Saved) [error Saved Total])))
+      (do (writer.failure-> W Saved) [error Saved Total])))
 
 (define io.write
   W V ->
     (let _ (writer-check W)
          N (buffer.length V)
       (cond ((= N 0) [accepted 0])
-            ((not (empty? (<-address W 5))) [error (progress (<-address W 5) 0) 0])
+            ((not (empty? (writer.failure W))) [error (progress (writer.failure W) 0) 0])
             (true (buffer-write W V 0 N)))))
 
 (define buffer-write
   _ _ N N -> [accepted N]
   W V At End ->
-    (let B (<-address W 2)
-         Sent (<-address W 3)
-         Used (<-address W 4)
+    (let B (writer.buffer W)
+         Sent (writer.start W)
+         Used (writer.end W)
          _ (if (> Sent 0)
                (do (buffer.copy! B 0 B Sent (- Used Sent))
-                   (address-> W 3 0)
-                   (address-> W 4 (- Used Sent)))
+                   (writer.start-> W 0)
+                   (writer.end-> W (- Used Sent)))
                true)
-         Room (- (buffer.length B) (<-address W 4))
+         Room (- (buffer.length B) (writer.end W))
       (if (= Room 0)
           (buffer-write-step W V At End (io.flush W))
           (let N (min Room (- End At))
-            (do (buffer.copy! B (<-address W 4) V At N)
-                (address-> W 4 (+ (<-address W 4) N))
+            (do (buffer.copy! B (writer.end W) V At N)
+                (writer.end-> W (+ (writer.end W) N))
                 (buffer-write W V (+ At N) End))))))
 
 (define buffer-write-step
@@ -502,31 +564,31 @@
   _ [ok] -> [ok]
   _ [error Error] ->
     (if (error? Error) [error Error] (error "io: malformed close error"))
-  E _ -> [error (io.error close (<-address E 1) "invalid backend close result")])
+  E _ -> [error (io.error close (endpoint.name E) "invalid backend close result")])
 
 (define io.close
   E ->
     (let _ (endpoint-check E)
-      (cond ((= (<-address E 7) closed) (<-address E 8))
-            ((<-address E 11) (error "io: endpoint operation is already in flight"))
+      (cond ((= (endpoint.state E) closed) (endpoint.close-result E))
+            ((endpoint.busy E) (error "io: endpoint operation is already in flight"))
             ((not (live? E))
-              (let Result [error (io.error close (<-address E 1) "native endpoint is stale")]
-                (do (address-> E 7 closed)
-                    (address-> E 8 Result)
+              (let Result [error (io.error close (endpoint.name E) "native endpoint is stale")]
+                (do (endpoint.state-> E closed)
+                    (endpoint.close-result-> E Result)
                     Result)))
             (true
-              (let W (<-address E 10)
+              (let W (endpoint.writer E)
                    Flush (if (empty? W)
                              [ok 0]
                              (trap-error (io.flush W)
-                               (/. X [error (io.error flush (<-address E 1) (error-to-string X)) 0])))
-                   _ (address-> E 7 closed)
-                   _ (address-> E 8 [error (io.error close (<-address E 1) "close is in progress")])
-                   Close (<-address E 6)
+                               (/. X [error (io.error flush (endpoint.name E) (error-to-string X)) 0])))
+                   _ (endpoint.state-> E closed)
+                   _ (endpoint.close-result-> E [error (io.error close (endpoint.name E) "close is in progress")])
+                   Close (endpoint.close E)
                    Result (trap-error (close-result E (thaw Close))
-                            (/. X [error (io.error close (<-address E 1) (error-to-string X))]))
+                            (/. X [error (io.error close (endpoint.name E) (error-to-string X))]))
                    Final (close-combine Flush Result)
-                (do (address-> E 8 Final) Final))))))
+                (do (endpoint.close-result-> E Final) Final))))))
 
 (define close-combine
   [ok _] Result -> Result
@@ -543,17 +605,17 @@
   _ [ok Value] -> [ok Value]
   _ [error Error] ->
     (if (error? Error) [error Error] (error "io: malformed scope error"))
-  E _ -> [error (io.error callback (<-address E 1) "callback must return [ok Value] or [error Error]")])
+  E _ -> [error (io.error callback (endpoint.name E) "callback must return [ok Value] or [error Error]")])
 
 (define with-endpoint
   E F ->
     (let _ (endpoint-check E)
-         _ (if (and (= (<-address E 7) open) (live? E))
+         _ (if (and (= (endpoint.state E) open) (live? E))
                true
                (error "io: endpoint is closed or stale"))
-         _ (if (<-address E 11) (error "io: endpoint operation is already in flight") true)
+         _ (if (endpoint.busy E) (error "io: endpoint operation is already in flight") true)
          Result (trap-error (scope-result E (F E))
-                  (/. X [error (native-error callback shen 0 (<-address E 1) (error-to-string X))]))
+                  (/. X [error (native-error callback shen 0 (endpoint.name E) (error-to-string X))]))
       (finish Result (io.close E))))
 
 \\ Memory input owns a snapshot; memory output borrows a fixed writable range.

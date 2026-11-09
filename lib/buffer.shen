@@ -11,7 +11,7 @@
   (shadow index length)
   (export append! append-byte! builder builder-length bytes check copy! buffer.cursor => cursor
     end equal? finish from-string index length make new offset owner range slice storage
-    buffer.string => string u8 u8! view view? wrap)
+    buffer.string => string u8 u8! view view? view.end view.owner view.start wrap)
 
 (define index
   N -> (let I (shen-jit.bit-or N 0)
@@ -30,24 +30,28 @@
                  (error "buffer: storage is closed")
                  (shen-jit.bytes-length Storage)))
 
-(define view?
-  V -> (trap-error (and (absvector? V) (= (<-address V 0) view))
-                   (/. E false)))
+\\ A view: the original owner, start and exclusive end. Metadata is not mutated.
+(define show-view
+  V -> (make-string "#<view ~A..~A>" (view.start V) (view.end V)))
 
-\\ Private layout: tag, original owner, start, exclusive end. Metadata is not mutated.
+(defstruct view
+  (printer show-view)
+  owner
+  start
+  end)
+
 (define make
-  Storage Start End -> (address-> (address-> (address-> (address-> (absvector 4)
-                                  0 view) 1 Storage) 2 Start) 3 End))
+  Storage Start End -> (view.make Storage Start End))
 
 (define check
   V -> (if (view? V)
-           (if (<= (<-address V 3) (storage-length (<-address V 1)))
+           (if (<= (view.end V) (storage-length (view.owner V)))
                V
                (error "buffer: backing storage is shorter than the view"))
            (error "buffer: ~S is not a view" V)))
 
 (define wrap
-  Storage -> (make Storage 0 (storage-length Storage)))
+  Storage -> (view.make Storage 0 (storage-length Storage)))
 
 (define new
   N -> (wrap (shen-jit.bytes (index N))))
@@ -56,52 +60,52 @@
   Text -> (wrap (shen-jit.string->bytes Text)))
 
 (define owner
-  V -> (<-address (check V) 1))
+  V -> (view.owner (check V)))
 
 (define offset
-  V -> (<-address (check V) 2))
+  V -> (view.start (check V)))
 
 (define end
-  V -> (<-address (check V) 3))
+  V -> (view.end (check V)))
 
 (define length
-  V -> (let Checked (check V) (- (<-address Checked 3) (<-address Checked 2))))
+  V -> (let Checked (check V) (- (view.end Checked) (view.start Checked))))
 
 (define slice
   V Start Count ->
     (let Checked (check V)
-         Begin (<-address Checked 2)
-         I (range (- (<-address Checked 3) Begin) Start Count)
+         Begin (view.start Checked)
+         I (range (- (view.end Checked) Begin) Start Count)
          At (+ Begin I)
-      (make (<-address Checked 1) At (+ At Count))))
+      (view.make (view.owner Checked) At (+ At Count))))
 
 (define u8
-  V I -> (let Checked (check V) Start (<-address Checked 2)
-              At (range (- (<-address Checked 3) Start) I 1)
-           (shen-jit.u8 (<-address Checked 1) (+ Start At))))
+  V I -> (let Checked (check V) Start (view.start Checked)
+              At (range (- (view.end Checked) Start) I 1)
+           (shen-jit.u8 (view.owner Checked) (+ Start At))))
 
 (define u8!
-  V I Byte -> (let Checked (check V) Start (<-address Checked 2)
-                   At (range (- (<-address Checked 3) Start) I 1)
-                (do (shen-jit.u8! (<-address Checked 1) (+ Start At) Byte) V)))
+  V I Byte -> (let Checked (check V) Start (view.start Checked)
+                   At (range (- (view.end Checked) Start) I 1)
+                (do (shen-jit.u8! (view.owner Checked) (+ Start At) Byte) V)))
 
 (define bytes
-  V -> (let Checked (check V) Start (<-address Checked 2)
-            N (- (<-address Checked 3) Start) Out (shen-jit.bytes N)
-         (shen-jit.copy-bytes Out 0 (<-address Checked 1) Start N)))
+  V -> (let Checked (check V) Start (view.start Checked)
+            N (- (view.end Checked) Start) Out (shen-jit.bytes N)
+         (shen-jit.copy-bytes Out 0 (view.owner Checked) Start N)))
 
 (define buffer.string
-  V -> (let Checked (check V) Start (<-address Checked 2)
-         (shen-jit.bytes->string (<-address Checked 1) Start (- (<-address Checked 3) Start))))
+  V -> (let Checked (check V) Start (view.start Checked)
+         (shen-jit.bytes->string (view.owner Checked) Start (- (view.end Checked) Start))))
 
 (define copy!
   To I From J Count ->
     (let T (check To) F (check From)
-         TStart (<-address T 2) FStart (<-address F 2)
-         TI (range (- (<-address T 3) TStart) I Count)
-         FJ (range (- (<-address F 3) FStart) J Count)
-      (do (shen-jit.copy-bytes (<-address T 1) (+ TStart TI)
-                              (<-address F 1) (+ FStart FJ) Count)
+         TStart (view.start T) FStart (view.start F)
+         TI (range (- (view.end T) TStart) I Count)
+         FJ (range (- (view.end F) FStart) J Count)
+      (do (shen-jit.copy-bytes (view.owner T) (+ TStart TI)
+                              (view.owner F) (+ FStart FJ) Count)
           To)))
 
 \\ Flat inner loop: do not reload view records for every byte.
@@ -112,10 +116,10 @@
 
 (define equal?
   A B -> (let X (check A) Y (check B)
-              I (<-address X 2) J (<-address Y 2)
-              N (- (<-address X 3) I)
-           (and (= N (- (<-address Y 3) J))
-                (equal-range? (<-address X 1) I (<-address Y 1) J N))))
+              I (view.start X) J (view.start Y)
+              N (- (view.end X) I)
+           (and (= N (- (view.end Y) J))
+                (equal-range? (view.owner X) I (view.owner Y) J N))))
 
 \\ A single-owner builder grows geometrically under an explicit byte limit.
 \\ Finish transfers its managed storage to a view and seals the builder.

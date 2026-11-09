@@ -5,8 +5,20 @@
   (use buffer)
   (use io)
   (use shen-jit)
+  (import struct defstruct)
   (externals [deadline])
   (export after check expired? remaining slice within)
+
+\\ A budget: its clock, absolute end, the last clock reading, and a guard that an image reload clears.
+(define show
+  D -> (make-string "#<deadline end ~A>" (budget.end D)))
+
+(defstruct budget
+  (printer show)
+  clock
+  end
+  (mutable now)
+  guard)
 
 (define after
   Clock Milliseconds ->
@@ -14,12 +26,12 @@
          Now (buffer.index (thaw Clock))
          End (+ Now Duration)
          Guard (shen-jit.bytes->pointer (shen-jit.u32! (shen-jit.bytes 8) 0 1) 0 deadline)
-      (io.record [deadline Clock End Now Guard])))
+      (budget.make Clock End Now Guard)))
 
 (define check
   D ->
-    (let _ (if (io.tag? D deadline) true (error "deadline: not a deadline"))
-         _ (if (= (shen-jit.pointer-address (<-address D 4)) 0)
+    (let _ (if (budget? D) true (error "deadline: not a deadline"))
+         _ (if (= (shen-jit.pointer-address (budget.guard D)) 0)
                (error "deadline: saved budgets must be recreated")
                true)
       D))
@@ -29,23 +41,23 @@
   Parent Milliseconds ->
     (let _ (check Parent)
          Duration (buffer.index Milliseconds)
-         Clock (<-address Parent 1)
+         Clock (budget.clock Parent)
          Now (buffer.index (thaw Clock))
-         _ (if (< Now (<-address Parent 3)) (error "deadline: clock moved backwards") true)
-         _ (address-> Parent 3 Now)
-         Left (- (<-address Parent 2) Now)
+         _ (if (< Now (budget.now Parent)) (error "deadline: clock moved backwards") true)
+         _ (budget.now-> Parent Now)
+         Left (- (budget.end Parent) Now)
          Span (if (< Left 0) 0 (if (< Left Duration) Left Duration))
          Guard (shen-jit.bytes->pointer (shen-jit.u32! (shen-jit.bytes 8) 0 1) 0 deadline)
-      (io.record [deadline Clock (+ Now Span) Now Guard])))
+      (budget.make Clock (+ Now Span) Now Guard)))
 
 (define remaining
   D ->
     (let _ (check D)
-         Clock (<-address D 1)
+         Clock (budget.clock D)
          Now (buffer.index (thaw Clock))
-         _ (if (< Now (<-address D 3)) (error "deadline: clock moved backwards") true)
-         _ (address-> D 3 Now)
-         Left (- (<-address D 2) Now)
+         _ (if (< Now (budget.now D)) (error "deadline: clock moved backwards") true)
+         _ (budget.now-> D Now)
+         Left (- (budget.end D) Now)
       (if (> Left 0) Left 0)))
 
 (define expired?

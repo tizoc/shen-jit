@@ -134,8 +134,8 @@
      C (hd Pair)
      S (hd (tl Pair))
      Calls (io.record [0])
-     Original (<-address S 5)
-     _ (address-> S 5
+     Original (io.endpoint.write S)
+     _ (io.endpoint.write-> S
          (/. B (let Count (+ 1 (<-address Calls 0)) _ (address-> Calls 0 Count)
                  (if (= Count 1)
                      (Original (shen-jit.copy-bytes (shen-jit.bytes 1) 0 B 0 1))
