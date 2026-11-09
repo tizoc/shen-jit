@@ -14,7 +14,7 @@
 \\ The runtime's own primitives that are not yet values.
 (map (/. P (if (= (language) "Scheme") skip (eval-kl [shen-jit.primitive (hd P) (hd (tl P))])))
      [[shen-jit.integer? 1] [shen-jit.symbol? 1] [shen-jit.vector? 1] [shen-jit.pvar 1] [shen-jit.pvar? 1] [shen-jit.pvar-offset 1]
-      [shen-jit.hash 2] [shen-jit.filled-vector 2] [shen-jit.tagged? 2] [shen-jit.same? 2] [shen-jit.newpv 2] [shen-jit.append 2]
+      [shen-jit.hash 2] [shen-jit.filled-vector 2] [shen-jit.tagged? 2] [shen-jit.same? 2] [shen-jit.newpv 2] [shen-jit.gc 2] [shen-jit.append 2]
       [shen-jit.decimal 2] [shen-jit.deref 3]
       [shen-jit.pointer-kill 1] [shen-jit.pointer-owner 1] [shen-jit.pointer-kind 1] [shen-jit.pointer-address 1]
       [shen-jit.pointer-sized 2] [shen-jit.pointer-read-only 1] [shen-jit.pointer! 3] [shen-jit.bytes->pointer 3]])
@@ -794,7 +794,7 @@
          shen-jit.string->bytes shen-jit.bit-not shen-jit.bswap32 shen-jit.popcount shen-jit.clz shen-jit.ctz
          shen-jit.pvar shen-jit.pvar? shen-jit.pvar-offset shen-jit.pointer? simple-error
          shen-jit.pointer-kind shen-jit.pointer-address shen-jit.pointer-kill shen-jit.pointer-owner shen-jit.pointer-read-only]
-      [2 + - * / < > <= >= = cons cn pos <-address shen-jit.hash shen-jit.filled-vector shen-jit.tagged? shen-jit.same? shen-jit.newpv
+      [2 + - * / < > <= >= = cons cn pos <-address shen-jit.hash shen-jit.filled-vector shen-jit.tagged? shen-jit.same? shen-jit.newpv shen-jit.gc
          shen-jit.append shen-jit.bit-and shen-jit.bit-or shen-jit.bit-xor shen-jit.shift-left shen-jit.shift-right
          shen-jit.rotate32 shen-jit.decimal shen-jit.u8 shen-jit.u16 shen-jit.u32 shen-jit.s32 shen-jit.s64 shen-jit.f32 shen-jit.f64
          shen-jit.pointer-sized]

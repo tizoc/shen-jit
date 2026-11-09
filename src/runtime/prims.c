@@ -107,6 +107,7 @@ const Primitive primitive_table[] = {
     {"shen-jit.deref", 3, NULL},
     {"shen-jit.same?", 2, NULL},
     {"shen-jit.newpv", 2, NULL},
+    {"shen-jit.gc", 2, NULL},
     {"shen-jit.thread", 1, NULL},
     {"shen-jit.foreign", 2, NULL},
     {"shen-jit.pointer?", 1, NULL},
@@ -1797,6 +1798,16 @@ V sj_primitive(VM *vm, size_t index)
         ptr(a)[2] = fix(fixval(n) + 1);
         return (uint64_t)fixval(n) << 8 | PVAR_TAG;
     }
+    case P_GC:
+        /* b, the result of the code that used the last variable made in the
+           vector of bindings a; if it failed, the next offset moves back to
+           that variable's, as the kernel's shen.gc does. */
+        if (b != V_FALSE)
+            return b;
+        if (!is_type(a, T_VECTOR) || hdr_size(ptr(a)[0]) < 2 || !is_fix(ptr(a)[2]))
+            return sj_raise_value(vm, "shen-jit.gc: ~S is not a vector of bindings", a);
+        ptr(a)[2] = fix(fixval(ptr(a)[2]) - 1);
+        return V_FALSE;
     case P_THREAD: return thread_start(vm);
     case P_FOREIGN: case P_POINTERP: case P_POINTER_KIND: case P_POINTER_ADDRESS: case P_BYTES_POINTER:
     case P_POINTER_STRING: case P_POINTER_BYTES: case P_ERRNO: case P_C_ERRNO: case P_POINTER_KILL:

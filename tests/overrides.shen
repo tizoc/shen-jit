@@ -741,7 +741,7 @@ b" (n->string 0) (n->string 255)] (o.strings)))
 
 (define o.prolog-group
   -> [shen.make-prolog-variable shen.pvar? shen.lazyderef shen.deref shen.bindv shen.unwind shen.lzy= shen.lzy=!
-      shen.bind! shen.occurs-check? shen.newpv])
+      shen.bind! shen.occurs-check? shen.newpv shen.gc])
 
 (define o.pcall
   k F Args -> (o.apply (o.k F) Args)
@@ -889,6 +889,17 @@ b" (n->string 0) (n->string 255)] (o.strings)))
                (output "shen.pvar?~%")
                (o.for-each (/. V (o.world-call shen.pvar? V (/. W X (o.pcall W shen.pvar? [X])))) Others)
                (o.compare-worlds (/. W (o.pcall W shen.pvar? [(o.pcall W shen.make-prolog-variable [2])])) "shen.pvar? of a variable")
+               (output "shen.gc~%")
+               (o.for-each (/. C (o.compare-worlds (/. W (let B (o.bindings)
+                                                              _ (o.newpvs W 3 B)
+                                                              R (o.pcall W shen.gc [B C])
+                                                           [(o.show R) (<-address B 1)]))
+                                                   (make-string "shen.gc after a result ~S" C)))
+                           [false true 0 [] "s" [1 2] a])
+               (o.for-each (/. B (o.for-each (/. C (o.compare-worlds (/. W (o.show (o.pcall W shen.gc [(o.make B) C])))
+                                                                     (make-string "shen.gc of ~A and ~S" (hd B) C)))
+                                             [false true]))
+                           Bindings)
                (output "shen.lazyderef, shen.deref, shen.bindv, shen.unwind~%")
                (o.for-each (/. Case (o.deref-edge Case))
                            (o.cases2 (append [[var2 2] [var31 31] [var32 32] [var1000 1000]] (map (/. V [(hd V) (o.make V)]) Others)) Bindings)))))

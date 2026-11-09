@@ -223,7 +223,7 @@ enum Prim {
     P_ROTATE32, P_BSWAP32, P_POPCOUNT, P_CLZ, P_CTZ,
     P_DECIMAL, /* shen-jit.decimal: a literal past the fixnum range, for the reader */
     /* Prolog variables as immediate values (docs/bytecode.md). */
-    P_PVAR, P_PVARP, P_PVAR_OFFSET, P_DEREF, P_SAMEP, P_NEWPV,
+    P_PVAR, P_PVARP, P_PVAR_OFFSET, P_DEREF, P_SAMEP, P_NEWPV, P_GC,
     P_THREAD, /* shen-jit.thread: runs a procedure in a new thread (thread.c) */
     /* C functions and pointers (ffi.c), in this order. */
     P_FOREIGN, /* shen-jit.foreign: makes a name a C function */

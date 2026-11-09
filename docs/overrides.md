@@ -47,6 +47,7 @@ The functions that Shen/Scheme 0.54 replaces in its `src/overrides.shen`, with w
 | `shen.str->bytes` | Copies the string into one byte buffer and reads it backwards to build the list, avoiding repeated copies of the remaining string in `read-from-string` |
 | `shen.make-prolog-variable`, `shen.deref`, `shen.bindv`, `shen.unwind` | A variable is an immediate value holding its binding's offset, so these use `shen-jit.pvar` and `shen-jit.pvar-offset` |
 | `shen.newpv` | `shen-jit.newpv`, inline, where the kernel's calls `shen.ticket-number`, `shen.make-prolog-variable` and `shen.nextticket`: the same stores in the same order. Every clause variable is made through it, the typechecker's too |
+| `shen.gc` | `shen-jit.gc`, inline, where the kernel's is a call that compares with `false` and then calls `shen.ticket-number` and `shen.decrement-ticket`. One call wraps the code after each variable is made |
 | `shen.<-out`, `shen.hds=?` | Small enough to inline into their callers across the kernel, 59 and 35 functions, and into user `defcc` code |
 | `shen.<shortnatters>`, `shen.<whitespaces>`, `shen.<digits>`, `shen.<alphanums>` | Loops over a run of bytes, where the kernel's rules call a rule and build a parse result per byte. Same results, including where a comment ends at a tab |
 | `append` | `shen-jit.append` copies the first list in C, in one pass straight into the free space, and keeps the copy by moving the heap pointer once the list proves proper; the empty list stays inline. Same error for a list that does not end in `[]` |

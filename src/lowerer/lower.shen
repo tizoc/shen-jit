@@ -253,7 +253,7 @@
    [2 [+ - * / < > <= >= = cons cn pos <-address set open write-byte
        write-string shen-jit.hash shen-jit.filled-vector
        shen-jit.save-executable shen-jit.foreign
-       shen-jit.dict-find shen-jit.dict-remove shen-jit.tagged? shen-jit.same? shen-jit.newpv
+       shen-jit.dict-find shen-jit.dict-remove shen-jit.tagged? shen-jit.same? shen-jit.newpv shen-jit.gc
        shen-jit.read-file shen-jit.append shen-jit.arity?
        shen-jit.inlined? shen-jit.u8 shen-jit.u16 shen-jit.u32
        shen-jit.bit-and shen-jit.bit-or shen-jit.bit-xor

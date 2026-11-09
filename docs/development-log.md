@@ -805,6 +805,22 @@ that. Its readings decided nothing below.
   rounds on the Ryzen. With the override before it, `nreverse` 0.81 on both, `subset` 0.82 and 0.83, `hamilton` 0.92
   and 0.86. `tests/differential.shen` leaves it out of the ways that call twice on one object, as it moves the
   offset on.
+- **`shen.gc` as a primitive** (2026-11-09, Apple M3 Max and Ryzen VM, best of 5, alternating with the build before).
+  Compiled Prolog code wraps what follows each new variable in `shen.gc`, which takes the variable's number back
+  when that fails. A call each time: 5.5% of the JIT-compiled instructions of the kernel's test suite on x86-64,
+  more than any other Prolog function there. `shen-jit.gc`, inline, compares with `false` and on failure moves the
+  number back. M3: `subset` 0.89, `hamilton` 0.94, `tak` 0.95, `nreverse` 0.95, `queens-8` 0.96, `coloring` 0.99;
+  Ryzen 0.92, 0.94, 0.95, 0.89, 0.95, 1.00. Kernel suite 0.98 and 0.96, THORN 0.97 to 1.02. Einstein read 1.02 and
+  1.05, but run alone with 0 to 8 definitions compiled first, the build before takes 954 to 1,035 µs by where its
+  code lies and this one 957 to 960; it runs 2.4% fewer instructions.
+  - **Rejected first: the same override inlined** (same day). Its body is over the inliner's 15 nodes, and split so
+    that the failure path calls a helper, it inlines, but `subset` took 1.28 times as long: inlined code counts at
+    its size where the lowerer decides whether to copy a clause's head continuation into its uses (1,500 nodes),
+    and two continuations of `subset-sum` became closures again. A primitive counts as one call.
+- **Rejected: unifying two terms that are not pairs inline** (2026-11-09, Apple M3 Max). `is` and `is!` call the
+  unifier even for a variable and an atom. Done in the lowered code, with the unifier only for pairs: `nreverse`
+  9.2 to 9.1 µs, so the call was not the cost, while the larger code again turned two of `subset-sum`'s
+  continuations into closures (14.0 to 18.7 µs). As a primitive it would stay small, but there is little to gain.
 - **`get-time` without interning** (2026-11-05, Apple M5, load about 25, against the build before). THORN asks for the
   time at every predicate call, and each call interned `run` and `unix`, about 2% of samples on RCC problems. Comparing
   the name instead: 10^7 calls 0.28 to 0.155 s, THORN's thm13 28.05 to 26.42 G instructions and rcc10 20.48 to 19.40 G.

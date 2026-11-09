@@ -154,12 +154,16 @@ is!."
 
 (defun shen.make-prolog-variable (N) (shen-jit.pvar N))
 
-"Compiled Prolog code makes every variable of a clause before its first test, each
-through shen.newpv, which calls shen.ticket-number, shen.make-prolog-variable and
-shen.nextticket. Here it is one inline primitive, which tests the vector once and
-makes the same stores in the same order."
+"Compiled Prolog code makes each variable it needs through shen.newpv, which calls
+shen.ticket-number, shen.make-prolog-variable and shen.nextticket, and wraps what
+uses it in shen.gc, which takes its offset back if that fails. Each is one inline
+primitive here, which tests the vector once and makes the same stores in the same
+order. Inlined code counts at its size where the lowerer decides whether to copy a
+continuation into its uses, and a primitive as one call."
 
 (defun shen.newpv (Bindings) (shen-jit.newpv Bindings shen.-null-))
+
+(defun shen.gc (Bindings Computation) (shen-jit.gc Bindings Computation))
 
 (defun shen.pvar? (X) (shen-jit.pvar? X))
 
@@ -379,6 +383,7 @@ may use as values, as (fn shen-jit.u8)."
     (do (shen-jit.primitive shen-jit.deref 3)
     (do (shen-jit.primitive shen-jit.same? 2)
     (do (shen-jit.primitive shen-jit.newpv 2)
+    (do (shen-jit.primitive shen-jit.gc 2)
     (do (shen-jit.primitive shen-jit.thread 1)
     (do (shen-jit.primitive shen-jit.foreign 2)
     (do (shen-jit.primitive shen-jit.pointer? 1)
@@ -405,7 +410,7 @@ may use as values, as (fn shen-jit.u8)."
     (do (shen-jit.primitive shen-jit.pointers-dead 0)
     (do (shen-jit.primitive shen-jit.pointer-read-only 1)
     (do (shen-jit.primitive shen-jit.collect 0)
-    (do (shen-jit.primitive shen-jit.write-bytes 4) shen.skip)))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+    (do (shen-jit.primitive shen-jit.write-bytes 4) shen.skip))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
 
 "Stage 1 calls this after the kernel and extensions are initialised: it
 registers the port functions meant for Shen code. (shen-jit.exit N) ends

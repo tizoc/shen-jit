@@ -136,7 +136,9 @@ plus:
   bound to in a vector of bindings, given what marks no binding, along a chain of variables, inline. The port's `shen.lazyderef` uses
   it. `shen-jit.newpv` (arity 2) makes a new variable in a vector of bindings, whose element 1 is the next offset:
   that offset's binding becomes the second argument, which marks no binding, and element 1 moves on, inline, with
-  one test that the vector has room. The port's `shen.newpv` uses it. `shen-jit.same?` (arity 2) tells whether two values are one and the same. The port's `shen.make-prolog-variable`, `shen.pvar?`,
+  one test that the vector has room. The port's `shen.newpv` uses it. `shen-jit.gc` (arity 2) returns its second
+  argument, and if that is false, moves the next offset of the bindings back by one, inline; the port's `shen.gc`
+  uses it. `shen-jit.same?` (arity 2) tells whether two values are one and the same. The port's `shen.make-prolog-variable`, `shen.pvar?`,
   `shen.lazyderef`, `shen.deref`, `shen.bindv` and `shen.unwind` use them.
 - `shen-jit.thread`: arity 1, runs a procedure of no arguments in a new thread
   (`src/runtime/thread.c`). The port defines `thread` with it, after sealing ends, so
