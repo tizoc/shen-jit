@@ -128,7 +128,7 @@
 \\ nothing named F, and has no real literals (stage 0 and shen-jit may
 \\ read their last bits differently); otherwise []. A call to a sealed F
 \\ with as many arguments as F's parameters becomes the body, two levels
-\\ deep at most, or at any depth if it is one primitive over parameters and
+\\ deep at most, or at any depth if it is primitives alone over parameters and
 \\ constants. A closure in the body becomes one of the caller's.
 
 (define shen-jit.lower.inline-form
@@ -187,9 +187,19 @@
                [])))
 
 (define shen-jit.lower.leaf?
-  [Op | Args] -> (and (= (length Args) (shen-jit.lower.prim-arity Op))
+  [Op | Args] -> (and (shen-jit.lower.leaf-op? Op (length Args))
                       (shen-jit.lower.leaves? Args))
   _ -> false)
+
+\\ A primitive, or a sealed function whose own body is such a body, as the
+\\ typed helpers of struct.shen are.
+(define shen-jit.lower.leaf-op?
+  Op N -> true where (= N (shen-jit.lower.prim-arity Op))
+  Op N -> (let Inline (shen-jit.inline-body Op)
+            (and (cons? Inline) (= (length (hd Inline)) N)
+                 (shen-jit.lower.leaf? (hd (tl Inline)))))
+    where (and (shen-jit.symbol? Op) (shen-jit.sealed? Op))
+  _ _ -> false)
 
 (define shen-jit.lower.leaves?
   [] -> true

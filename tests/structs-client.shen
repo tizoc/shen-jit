@@ -2,6 +2,7 @@
 (defstruct struct-test.cell key (mutable value))
 (defstruct struct-test.other key (mutable value))
 (defstruct struct-test.empty)
+(defstruct struct-test.declared (name : string) (mutable count : number))
 (define struct-test.show R -> (make-string "#<shown ~A>" (struct-test.shown.key R)))
 (defstruct struct-test.shown (printer struct-test.show) key)
 (defstruct struct-test.inline key (printer (/. R (make-string "inline ~A" (struct-test.inline.key R)))))

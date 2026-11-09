@@ -19,8 +19,8 @@ Other references to that record see the update.
 
 This first version supports declarations in source files. A declaration expands to several top-level
 definitions, so entering one through the REPL or `eval -e`, which takes only the first expanded form,
-does not install the complete API. Load the file under `(tc -)`; automatic type declarations, pattern
-matching, defaults, inheritance and native/unboxed layouts are outside this version.
+does not install the complete API. Pattern matching, defaults, inheritance and native/unboxed layouts are
+outside this version.
 
 ## Generated operations
 
@@ -67,6 +67,29 @@ other reference does. Use it for records that hold closures, buffers or large va
 
 The printer is not part of the layout: a reload may change it, and records made before take the new one.
 A declaration has one printer at most.
+
+## Types
+
+Fields may have types, all of them or none:
+
+```shen
+(defstruct point
+  (x : number)
+  (mutable y : number))
+```
+
+Then the operations have types: `point.make` is `number --> number --> point`, `point.x` is
+`point --> number`, `point.y->` is `point --> number --> point` and `point?` is `A --> boolean`. `point`
+is a type of its own, whose only values are what `point.make` returns. Under `(tc +)` the declaration is
+typechecked as the definitions it makes; under `(tc -)` it declares the same types, so typed code can use
+a struct that untyped code declared. Labelled construction typechecks as the call it becomes.
+
+A field's type is any closed type, such as `(list number)` or another struct, and resolves in a namespace
+as a signature's does. Type variables are refused, and so is a declaration that types some fields and not
+others. Under `(tc +)`, a struct whose fields have no types is refused: give them types or load it under
+`(tc -)`. The types are part of the layout: reloading with another type is an incompatible redefinition.
+
+Typed and untyped structs make the same code, and cost the same.
 
 ## Labelled construction
 

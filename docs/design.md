@@ -81,7 +81,9 @@ frame.
 ## Managed struct source extension
 
 `src/port/struct.shen` registers `defstruct` with the kernel's source reader before ordinary macro
-expansion and arity discovery. It emits ordinary definitions over one tagged `absvector`: a positional
+expansion and arity discovery. With field types, under `(tc +)` it emits typed definitions over five
+private helpers, each one primitive with a type only generated code relies on, which the lowerer inlines
+as the primitive; under `(tc -)` it emits the plain definitions and `declare`s their types. It emits ordinary definitions over one tagged `absvector`: a positional
 `.make`, a predicate, field readers and `->` setters for mutable fields. The constructor allocates only
 the record; accessors contain direct constant-index address operations and the predicate calls the
 existing `shen-jit.tagged?` primitive. No C or JIT change is involved.

@@ -146,6 +146,40 @@
   (freeze (struct-test.refused?
     "(shen.x.namespace struct-test.private (use struct-test.model => m) (define f -> m.row.%struct-tag))")))
 
+(define struct-test.refused-typed?
+  Source -> (let _ (tc +) Refused (struct-test.refused? Source) _ (tc -) Refused))
+
+(define struct-test.type-of
+  F -> (trap-error (shen.get-type F) (/. E none)))
+
+(struct-test.check "typed construction, readers and setter" [7 1 6]
+  (freeze (let P (struct-test.tbump (struct-test.tbuild 5))
+            [(struct-test.tnorm P) (struct-test.tpoint.x P) (struct-test.tpoint.y P)])))
+(struct-test.check "typed printer" "#<struct-test.tpoint x: 1 y: 2>"
+  (freeze (make-string "~S" (struct-test.tbuild 2))))
+(struct-test.check "typed empty struct" true (freeze (struct-test.tempty? (struct-test.tempty.make))))
+(struct-test.check "typed predicate accepts anything" false (freeze (struct-test.tpoint? 3)))
+(struct-test.check "declared under (tc -) for typed clients" "n"
+  (freeze (struct-test.tuntyped-client (struct-test.declared.make "n" 0))))
+(struct-test.check "namespaced field types" 4
+  (freeze (struct-test.tns.unwrap (struct-test.tns.wrapper.make (struct-test.tns.cell.make 4 [])))))
+(struct-test.check "typed operations check their arguments" [number false false]
+  (freeze (map (/. S (shen.typecheck (hd (read-from-string S)) (protect A)))
+               ["(struct-test.tnorm (struct-test.tbuild 1))"
+                "(struct-test.tpoint.x 5)"
+                "(struct-test.tpoint.y-> (struct-test.tbuild 1) a)"])))
+(struct-test.check "under (tc +) fields need types" true
+  (freeze (struct-test.refused-typed? "(defstruct struct-test.untyped-tc x)")))
+(struct-test.check "every field typed, or none" true
+  (freeze (struct-test.refused? "(defstruct struct-test.mixed (x : number) y)")))
+(struct-test.check "no type variables" true
+  (freeze (struct-test.refused? "(defstruct struct-test.poly (x : A))")))
+(struct-test.check "a changed type is an incompatible layout" true
+  (freeze (struct-test.refused? "(defstruct struct-test.declared (name : symbol) (mutable count : number))")))
+(struct-test.check "an identical typed declaration reloads" "again"
+  (freeze (do (struct-test.install "(defstruct struct-test.declared (name : string) (mutable count : number))")
+              (struct-test.declared.name (struct-test.declared.make "again" 1)))))
+
 (shen-jit.collect)
 (struct-test.check "managed field survives collection" [saved 17]
   (freeze [(struct-test.cell.key (value struct-test.saved)) (struct-test.cell.value (value struct-test.saved))]))

@@ -2,9 +2,13 @@
 \\ The generated functions use one tagged absvector and constant slot numbers; no field registry
 \\ is consulted by a constructor, reader or setter at run time. The private tag is the record's
 \\ printer, which the kernel's writer calls: a default one, or (printer F) to call F on the record.
+\\ Fields may have types, all or none: (x : number) or (mutable y : number). Under (tc +) the
+\\ definitions are typed, over helpers with types only generated code may rely on; under (tc -)
+\\ they are the plain ones, followed by declarations for typed clients.
 
 (package shen-jit.struct
-  [defstruct mutable printer make %struct-tag struct struct.make shen-jit.tagged? shen.app shen.s]
+  [defstruct mutable printer make %struct-tag struct struct.make shen-jit.tagged? shen.app shen.s
+   { } --> string boolean number symbol]
 
 (define initialise
   -> (do (shen.register-source-form defstruct (fn expand))
@@ -14,7 +18,29 @@
          (shen.x.namespaces.register-definitions defstruct (fn introduced-names))
          (shen.x.namespaces.publish struct
            [[defstruct | defstruct]
-            [make | struct.make]])))
+            [make | struct.make]])
+         (shen.initialise-arity-table [slot 2 slot! 3 allocate 2 tagged 2 shown 2])
+         (declare slot [(protect A) --> [number --> (protect B)]])
+         (declare slot! [(protect A) --> [number --> [(protect B) --> (protect A)]]])
+         (declare allocate [number --> [symbol --> (protect A)]])
+         (declare tagged [(protect A) --> [symbol --> boolean]])
+         (declare shown [(protect A) --> [string --> string]])))
+
+\\ What typed definitions are made of. Each is one primitive, inlined wherever it is used.
+(define slot
+  Record I -> (<-address Record I))
+
+(define slot!
+  Record I Value -> (address-> Record I Value))
+
+(define allocate
+  N Tag -> (address-> (absvector N) 0 Tag))
+
+(define tagged
+  Record Tag -> (shen-jit.tagged? Record Tag))
+
+(define shown
+  X Rest -> (shen.app X Rest shen.s))
 
 (define shen-jit.struct.fail
   Name Message X -> (error "struct ~A: ~A: ~R" Name Message X))
@@ -41,13 +67,20 @@
   X -> (local-label X) where (name? X)
   _ -> [])
 
+(define colon?
+  X -> (= (syntax-value X) (intern ":")))
+
 (define fields
   _ [] _ -> []
-  Name [[Marker Field] | Rest] Seen -> (field Name Field true Rest Seen)
+  Name [[Marker Field Colon Type] | Rest] Seen -> (field Name Field true [Type] Rest Seen)
+    where (and (= (marker Marker) mutable) (colon? Colon))
+  Name [[Field Colon Type] | Rest] Seen -> (field Name Field false [Type] Rest Seen)
+    where (colon? Colon)
+  Name [[Marker Field] | Rest] Seen -> (field Name Field true [] Rest Seen)
     where (= (marker Marker) mutable)
   Name [[Marker _] | Rest] Seen -> (fields Name Rest Seen)
     where (= (marker Marker) printer)
-  Name [Field | Rest] Seen -> (field Name Field false Rest Seen))
+  Name [Field | Rest] Seen -> (field Name Field false [] Rest Seen))
 
 \\ [] for the default printer, or [F] for (printer F).
 (define printer-option
@@ -58,15 +91,37 @@
     where (= (marker Marker) printer)
   Name [_ | Rest] Found -> (printer-option Name Rest Found))
 
+\\ A field is [Label Mutable Type], with Type [] when the field has none and [T] when it has T.
 (define field
-  Name Raw Mutable Rest Seen
+  Name Raw Mutable Type Rest Seen
   -> (let Label (local-label Raw)
        (cond ((or (= Label make) (= (pos (str Label) 0) "%"))
               (shen-jit.struct.fail Name "reserved field name" Label))
              ((element? Label Seen)
               (shen-jit.struct.fail Name "duplicate field" Label))
+             ((and (cons? Type) (not (closed? (hd Type))))
+              (shen-jit.struct.fail Name "a field's type has no variables" (hd Type)))
              (true
-              [[Label Mutable] | (fields Name Rest [Label | Seen])]))))
+              [[Label Mutable Type] | (fields Name Rest [Label | Seen])]))))
+
+(define closed?
+  [X | Y] -> (and (closed? X) (closed? Y))
+  X -> (not (variable? X)))
+
+(define typed?
+  Fields -> (cons? Fields) where (every-typed? Fields)
+  Fields -> false where (none-typed? Fields)
+  Fields -> (shen-jit.struct.fail defstruct "every field needs a type, or none" Fields))
+
+(define every-typed?
+  [] -> true
+  [[_ _ [_]] | Fields] -> (every-typed? Fields)
+  _ -> false)
+
+(define none-typed?
+  [] -> true
+  [[_ _ []] | Fields] -> (none-typed? Fields)
+  _ -> false)
 
 (define member
   Name Field -> (intern (cn (str Name) (cn "." (str Field)))))
@@ -82,7 +137,7 @@
 
 (define field-operations
   _ [] -> []
-  Name [[Field Mutable] | Fields]
+  Name [[Field Mutable _] | Fields]
   -> (append (if Mutable
                  [(member Name Field) (setter-name Name Field)]
                  [(member Name Field)])
@@ -95,6 +150,7 @@
 (define describe
   Name Written
   -> (let Fields (fields Name (map (fn syntax-value) Written) [])
+          Typed (typed? Fields)
        (if (distinct? (operations Name Fields))
            Fields
            (shen-jit.struct.fail Name "generated operation names collide" Written)))
@@ -147,9 +203,18 @@
 
 (define generate
   Name Fields Printer
+  -> (cond ((and (tc?) (or (empty? Fields) (typed? Fields))) (typed-definitions Name Fields Printer))
+           ((tc?)
+            (shen-jit.struct.fail Name "under (tc +) every field needs a type; add them or load under (tc -)"
+                                  (map (fn hd) Fields)))
+           ((typed? Fields) (append (definitions Name Fields Printer) (declarations Name Fields)))
+           (true (definitions Name Fields Printer))))
+
+(define definitions
+  Name Fields Printer
   -> (let Tag (hd (schema Name))
           Args (arguments (length Fields) 1)
-       [(definition Tag [(protect Record)] (printer-body Name Fields Printer))
+       [(definition Tag [(protect Record)] (printer-body Name Fields Printer <-address))
         (definition
           (member Name make)
           Args
@@ -162,18 +227,23 @@
 
 \\ The default printer shows the type and each field: #<point x: 1 y: 2>.
 (define printer-body
-  _ _ [F] -> [F (protect Record)]
-  Name Fields [] -> [cn (cn "#<" (str Name)) (field-strings Fields 1)])
+  _ _ [F] _ -> [F (protect Record)]
+  Name Fields [] Read -> [cn (cn "#<" (str Name)) (field-strings Fields 1 Read)])
 
 (define field-strings
-  [] _ -> ">"
-  [[Field _] | Fields] I
+  [] _ _ -> ">"
+  [[Field | _] | Fields] I Read
   -> [cn (cn " " (cn (str Field) ": "))
-         [shen.app [<-address (protect Record) I] (field-strings Fields (+ I 1)) shen.s]])
+         (show Read [Read (protect Record) I] (field-strings Fields (+ I 1) Read))])
+
+\\ shen.app has no type; typed code reaches it through shown.
+(define show
+  <-address Value Rest -> [shen.app Value Rest shen.s]
+  _ Value Rest -> [shown Value Rest])
 
 (define accessors
   _ [] _ -> []
-  Name [[Field Mutable] | Fields] I
+  Name [[Field Mutable _] | Fields] I
   -> [(definition
         (member Name Field)
         [(protect Record)]
@@ -186,6 +256,77 @@
                  [address-> (protect Record) I (protect Value)])]
               [])
           (accessors Name Fields (+ I 1)))])
+
+\\ Typed definitions, for (tc +): the same code over the typed helpers.
+(define typed-definition
+  Name Signature Args Body -> [define Name { | (append Signature [} | (append Args [-> Body])])])
+
+(define typed-definitions
+  Name Fields Printer
+  -> (let Tag (hd (schema Name))
+          Args (arguments (length Fields) 1)
+          Types (map (/. F (hd (hd (tl (tl F))))) Fields)
+       [(typed-definition Tag [Name --> string] [(protect Record)]
+          (printer-body Name Fields Printer slot))
+        (typed-definition (member Name make) (signature Types Name) Args
+          (typed-stores [allocate (+ 1 (length Fields)) Tag] Args 1))
+        (typed-definition (predicate-name Name) [(protect A) --> boolean] [(protect Record)]
+          [tagged (protect Record) Tag])
+        | (typed-accessors Name Fields 1)]))
+
+(define signature
+  [] Result -> [--> Result]
+  Types Result -> (append (intersperse Types) [--> Result]))
+
+(define intersperse
+  [T] -> [T]
+  [T | Ts] -> [T --> | (intersperse Ts)])
+
+(define typed-stores
+  Vector [] _ -> Vector
+  Vector [Arg | Args] I -> (typed-stores [slot! Vector I Arg] Args (+ I 1)))
+
+(define typed-accessors
+  _ [] _ -> []
+  Name [[Field Mutable [Type]] | Fields] I
+  -> [(typed-definition (member Name Field) [Name --> Type] [(protect Record)]
+        [slot (protect Record) I])
+      | (append
+          (if Mutable
+              [(typed-definition (setter-name Name Field) [Name --> Type --> Name]
+                 [(protect Record) (protect Value)]
+                 [slot! (protect Record) I (protect Value)])]
+              [])
+          (typed-accessors Name Fields (+ I 1)))])
+
+\\ Under (tc -), declarations let typed clients use a typed struct.
+(define declarations
+  Name Fields
+  -> (let Types (map (/. F (hd (hd (tl (tl F))))) Fields)
+       [[declare (member Name make) (quoted (curried Types Name))]
+        [declare (predicate-name Name) (quoted [(protect A) --> boolean])]
+        | (field-declarations Name Fields)]))
+
+(define field-declarations
+  _ [] -> []
+  Name [[Field Mutable [Type]] | Fields]
+  -> (append [[declare (member Name Field) (quoted [Name --> Type])]]
+             (if Mutable
+                 [[declare (setter-name Name Field) (quoted [Name --> [Type --> Name]])]]
+                 [])
+             (field-declarations Name Fields)))
+
+(define curried
+  [] Result -> [--> Result]
+  [T] Result -> [T --> Result]
+  [T | Ts] Result -> [T --> (curried Ts Result)])
+
+\\ A type as an expression that builds it: a variable is a symbol there.
+(define quoted
+  [] -> []
+  [X | Y] -> [cons (quoted X) (quoted Y)]
+  X -> [protect X] where (variable? X)
+  X -> X)
 
 (define expand
   [defstruct Name | Written]
@@ -222,7 +363,7 @@
 
 (define ordered-values
   [] _ -> []
-  [[Field _] | Fields] Named
+  [[Field | _] | Fields] Named
   -> [(hd (tl (tl (assoc Field Named)))) | (ordered-values Fields Named)])
 
 (define bind-values
@@ -244,9 +385,12 @@
   [struct.make Name | Args] -> [struct.make Name | (protect-labels Args)]
   Form -> Form)
 
-\\ A printer's function resolves in the caller's scope like any other reference.
+\\ A printer's function and a field's type resolve in the caller's scope like any other reference.
 (define protect-field
   [Marker F] -> [[protect Marker] F] where (= (marker Marker) printer)
+  [Marker Field Colon Type] -> [[protect Marker] [protect Field] [protect Colon] Type]
+    where (and (= (marker Marker) mutable) (= Colon (intern ":")))
+  [Field Colon Type] -> [[protect Field] [protect Colon] Type] where (= Colon (intern ":"))
   Field -> [protect Field])
 
 (define protect-labels

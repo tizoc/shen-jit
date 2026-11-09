@@ -919,6 +919,18 @@ that. Its readings decided nothing below.
 
 ### Managed structs
 
+- **Field types** (2026-11-09, Apple M3 Max). `(x : number)` and `(mutable y : number)`, all fields or none,
+  closed types only. Under `(tc +)` a declaration emits typed definitions; their bodies cannot use
+  `<-address` or `absvector`, which have no types, so they call five private helpers declared with types
+  only generated code may rely on (`slot` is `A --> number --> B`). Under `(tc -)` the plain definitions
+  are followed by `declare`s, so typed clients can use a struct untyped code declared, as the libraries'
+  own `declare` lines allow. The lowerer counts a call to a sealed function whose body is primitives alone
+  as such a body, so the typed definitions inline as the plain ones do: 20M reads 38.1 against 38.2 ms
+  typed and untyped, 20M setter calls 19.3 against 19.3, 10M four-field constructions 50.0 against 49.0
+  (7 runs, load 2–3). The kernel's stage 0 output does not change. Rejected: generated `declare`s under
+  `(tc +)`, as `declare` has no type and cannot be typechecked; and turning the typechecker off around the
+  definitions, as `load` decides it once for the file.
+
 - **HTTP records as structs** (2026-11-09, Apple M3 Max, measured while other builds ran). Head readers,
   requests, body readers, chunk and output limits, buffered and streamed responses, a response's source,
   plan and output, the server's configuration and connection, and the listener's server, snapshot, registry
