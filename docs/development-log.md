@@ -699,6 +699,12 @@ cannot. The kernel suite is the kernel's `tests/runme.shen`; the stlib install l
   through a parameter the body bound again; thaw substitution went inside literal lists; and integer arguments were
   substituted as if a parameter named `lambda` were the binder. Each now falls back to the plain lowering, with an
   eval-kl case that failed before. The kernel's lowered code is byte-identical: only `lower.shen`'s own output moved.
+  - **Walkers that took a node's tail for a node** (2026-11-10, a review of emission). Twelve functions over
+    normalised code recursed into a list's tail as if it were a node, and a tail can look like one: that of
+    `[lambda apply Body]` is an `apply`, that of `[lambda var X]` a variable, and that of `[call var Args]` too.
+    So with a parameter or a function named like a node tag, a thaw was substituted into a lambda's parameter, a
+    capture was missed and a closure read a slot already overwritten. They visit a node's parts one by one now, and
+    `vars-of` and `reads?` stop at constants. The kernel's lowered code is byte-identical.
   - **Then two more** (2026-11-10). A query's vector went back to the pool while a `freeze` in it could outlive the
     query and read it. Refusing every `freeze` would have ended pooling for nearly every query, so one is allowed only
     where the Prolog compiler puts a continuation: the last argument of a call after the query's own B, L and K. Every

@@ -278,6 +278,18 @@
                               (shen-jit.lower.lets Params (map (/. X [var X]) Fresh)
                                                      [let shen-jit.lower.inlining [const F] Normal]))))
 
+\\ The walkers of normalised code below visit a node's parts one by one, each as a node, and
+\\ never a node's tail, which may look like one: the tail of [lambda apply Body] is [apply Body],
+\\ and that of [call var Args] is [var Args].
+(define shen-jit.lower.counts
+  \\ the uses counted in each part: their sum, or the first that is negative
+  [] -> 0
+  [N | Ns] -> (if (< N 0) N (let M (shen-jit.lower.counts Ns) (if (< M 0) M (+ N M)))))
+
+(define shen-jit.lower.union-all
+  [] -> []
+  [X | Xs] -> (union X (shen-jit.lower.union-all Xs)))
+
 (define shen-jit.lower.thaws-once
   X [apply [var X]] -> 1
   X [var X] -> -1000000
@@ -285,15 +297,13 @@
   X [let X _ _] -> -1000000
   X [lambda X _] -> -1000000
   X [trap _ X _] -> -1000000
-  X [Y | Ys] -> (let M (shen-jit.lower.thaws-once X Y)
-                     N (shen-jit.lower.thaws-once X Ys)
-                  (if (or (< M 0) (< N 0)) -1000000 (+ M N)))
+  X [Y | Ys] -> (shen-jit.lower.counts (map (/. Z (shen-jit.lower.thaws-once X Z)) [Y | Ys]))
   _ _ -> 0)
 
 (define shen-jit.lower.thaw-with
   X E [apply [var X]] -> E
   _ _ [const C] -> [const C]
-  X E [Y | Ys] -> [(shen-jit.lower.thaw-with X E Y) | (shen-jit.lower.thaw-with X E Ys)]
+  X E [Y | Ys] -> (map (/. Z (shen-jit.lower.thaw-with X E Z)) [Y | Ys])
   _ _ Y -> Y)
 
 (define shen-jit.lower.lets
@@ -572,7 +582,7 @@
 (define shen-jit.lower.frozen-binds?
   X [call shen.bind! [_ _ _ [var X]]] -> true
   _ [const _] -> false
-  X [Y | Ys] -> (or (shen-jit.lower.frozen-binds? X Y) (shen-jit.lower.frozen-binds? X Ys))
+  X [Y | Ys] -> (element? true (map (/. Z (shen-jit.lower.frozen-binds? X Z)) [Y | Ys]))
   _ _ -> false)
 
 (define shen-jit.lower.frozen-uses
@@ -582,16 +592,14 @@
   X [var X] -> -1000000
   _ [const _] -> 0
   X Y -> -1000000 where (shen-jit.lower.binds? X Y)
-  X [Y | Ys] -> (let M (shen-jit.lower.frozen-uses X Y)
-                     N (shen-jit.lower.frozen-uses X Ys)
-                  (if (or (< M 0) (< N 0)) -1000000 (+ M N)))
+  X [Y | Ys] -> (shen-jit.lower.counts (map (/. Z (shen-jit.lower.frozen-uses X Z)) [Y | Ys]))
   _ _ -> 0)
 
 (define shen-jit.lower.frozen-in
   X E [apply [var X]] -> E
   X E [call shen.bind! [A B C [var X]]] -> (shen-jit.lower.bound-now A B C E)
   _ _ [const C] -> [const C]
-  X E [Y | Ys] -> [(shen-jit.lower.frozen-in X E Y) | (shen-jit.lower.frozen-in X E Ys)]
+  X E [Y | Ys] -> (map (/. Z (shen-jit.lower.frozen-in X E Z)) [Y | Ys])
   _ _ Y -> Y)
 
 \\ (let X (lambda P1 ... (lambda Pn Inner)) Body), where Body uses X only
@@ -623,7 +631,7 @@
   [let X V Body] -> (union (shen-jit.lower.free V) (remove X (shen-jit.lower.free Body)))
   [lambda X Body] -> (remove X (shen-jit.lower.free Body))
   [trap X E H] -> (union (shen-jit.lower.free X) (remove E (shen-jit.lower.free H)))
-  [X | Xs] -> (union (shen-jit.lower.free X) (shen-jit.lower.free Xs))
+  [X | Xs] -> (shen-jit.lower.union-all (map (/. Y (shen-jit.lower.free Y)) [X | Xs]))
   _ -> [])
 
 (define shen-jit.lower.lambda-params
@@ -673,8 +681,7 @@
 
 (define shen-jit.lower.apply-in-all
   _ _ _ [const C] -> [const C]
-  X Params Inner [Y | Ys] -> [(shen-jit.lower.apply-in X Params Inner Y)
-                              | (shen-jit.lower.apply-in-all X Params Inner Ys)]
+  X Params Inner [Y | Ys] -> (map (/. Z (shen-jit.lower.apply-in X Params Inner Z)) [Y | Ys])
   _ _ _ Y -> Y)
 
 (define shen-jit.lower.literal?
@@ -1016,27 +1023,26 @@
   G [let G _ _] -> -1
   G [lambda G _] -> -1
   G [trap _ G _] -> -1
-  G [X | Xs] -> (let N (shen-jit.lower.thaw-count G X)
-                     M (shen-jit.lower.thaw-count G Xs)
-                  (if (or (< N 0) (< M 0)) -1 (+ N M)))
+  G [X | Xs] -> (shen-jit.lower.counts (map (/. Y (shen-jit.lower.thaw-count G Y)) [X | Xs]))
   _ _ -> 0)
 
 (define shen-jit.lower.thaw-in
   G E [apply [var G]] -> E
   _ _ [const C] -> [const C]
-  G E [X | Xs] -> [(shen-jit.lower.thaw-in G E X) | (shen-jit.lower.thaw-in G E Xs)]
+  G E [X | Xs] -> (map (/. Y (shen-jit.lower.thaw-in G E Y)) [X | Xs])
   _ _ X -> X)
 
 (define shen-jit.lower.vars-of
   [var X] -> [X]
-  [X | Xs] -> (union (shen-jit.lower.vars-of X) (shen-jit.lower.vars-of Xs))
+  [const _] -> []
+  [X | Xs] -> (shen-jit.lower.union-all (map (/. Y (shen-jit.lower.vars-of Y)) [X | Xs]))
   _ -> [])
 
 (define shen-jit.lower.binders
   [let X V Body] -> [X | (union (shen-jit.lower.binders V) (shen-jit.lower.binders Body))]
   [lambda X Body] -> [X | (shen-jit.lower.binders Body)]
   [trap X E H] -> [E | (union (shen-jit.lower.binders X) (shen-jit.lower.binders H))]
-  [X | Xs] -> (union (shen-jit.lower.binders X) (shen-jit.lower.binders Xs))
+  [X | Xs] -> (shen-jit.lower.union-all (map (/. Y (shen-jit.lower.binders Y)) [X | Xs]))
   _ -> [])
 
 (define shen-jit.lower.thaws-all
@@ -1124,7 +1130,8 @@
 \\ bound ones included, stopping at the first.
 (define shen-jit.lower.reads?
   Env [var V] S -> (= (shen-jit.lower.slot V Env) S)
-  Env [X | Xs] S -> (or (shen-jit.lower.reads? Env X S) (shen-jit.lower.reads? Env Xs S))
+  _ [const _] _ -> false
+  Env [X | Xs] S -> (element? true (map (/. Y (shen-jit.lower.reads? Env Y S)) [X | Xs]))
   _ _ _ -> false)
 
 (define shen-jit.lower.named-call

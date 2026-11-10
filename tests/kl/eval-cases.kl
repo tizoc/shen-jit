@@ -1203,3 +1203,11 @@ vectors/pairs; non-pair tails and byte payloads still use their own rules."
 (value 2 (t.lower-frozen (freeze 1)))
 (value (apply (var T)) (let T (freeze 7) (t.lower-literal)))
 (value (7 7) (t.lower-keyword (lambda A (lambda B (cons A (cons B ())))) 7))
+"The lowerer's tree walkers visit a node's parts, not its tail as if it were a node, so parameters named
+like the lowerer's own node tags (apply, var) are variables like any other."
+(value (const 7) (let F (let G (freeze (cons const (cons 7 ()))) (lambda apply G)) (thaw (F 0))))
+(value 7 (let X 7 (let G (freeze (lambda var X)) (let X 99 ((thaw G) 0)))))
+(value "boom" (let F (trap-error (simple-error "boom") (lambda E (lambda var E))) (error-to-string (F 0))))
+(value t.walk-capture (defun t.walk-capture (X) (do (cons X (cons X (cons X (cons X ())))) (t.walk-target 99 (lambda var X)))))
+(value t.walk-target (defun t.walk-target (A F) (F 0)))
+(value 7 (t.walk-capture 7))

@@ -77,6 +77,8 @@ All notable changes to this project are documented in this file. The format is b
   printed nothing at exit.
 - A stack overflow in Shen called from C, under a handler that ignores its error, ended the process once C read the
   error.
+- A variable or function named like one of the lowerer's own node tags, such as `apply` or `var`, could make it
+  compile code that computed the wrong value or read a variable after it was overwritten.
 
 ## [0.6] - 2026-11-08
 
