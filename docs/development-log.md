@@ -2158,6 +2158,14 @@ execution remains CI's responsibility; no new platform ABI or instruction was in
   includes these suites on every CI platform; managed cases run on static builds and unavailable
   native cases explicitly skip. HTTP framing and deadlines have separate pages linked from the guide.
 
+- **Four found by a review of the HTTP libraries (2026-11-10),** each with a check that failed before. A second
+  request that arrived in the same read as the first got past `HeadLimit`: `grammar.read-from` let a parse see all
+  the reader already held, and bounded only later fills, so the bound now caps what is already buffered too, for
+  every caller of `grammar.read-within`. A head already queued was parsed after its head budget expired, as only
+  the socket's deadline was set, and no read needed the socket; the budget is checked first, giving 408. A body
+  read stopped by an exception remembered progress 0, and keeps what it had read. And a deadline that expired
+  during a producer's callback took the place of the producer's error, which stays beside it now.
+
 ### Binary framing and socket endpoints (2026-11-07, M3 Max, macOS arm64)
 
 - Added `lib/frame.shen`: a two-byte tag and four-byte payload length, both big-endian, over the

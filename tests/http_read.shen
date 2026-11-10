@@ -80,4 +80,15 @@
   (freeze (read-test.summary (http.read-request (io.reader (read-test.feed (buffer.from-string
             (read-test.head (read-test.fields 101 ""))) 4096) []) 16384 0))))
 
+(read-test.check "pipelined head still obeys its byte limit" [0 431]
+  (freeze
+    (let First "GET / HTTP/1.1c#13;c#10;Host: xc#13;c#10;c#13;c#10;"
+         Second "GET /second HTTP/1.1c#13;c#10;Host: xc#13;c#10;X: 0123456789012345678901234567890123456789c#13;c#10;c#13;c#10;"
+         E (io.input-buffer (buffer.from-string (cn First Second)))
+         R (io.reader E [])
+         A (read-test.summary (http.read-request R 64 0))
+         B (read-test.summary (http.read-request R 64 0))
+         _ (io.close E)
+      [(hd A) (hd B)])))
+
 (output "~A passed, ~A failed~%" (value read-test.passed) (value read-test.failed))

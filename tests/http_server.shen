@@ -194,4 +194,25 @@
       (server-test.check "binary body larger than the reader is preserved" true
         (freeze (buffer.equal? Body (buffer.slice Reply (- (buffer.length Reply) 32768) 32768))))))
 
+(server-test.check "queued head honors expired budget" [error 0 408]
+  (freeze
+    (let Pair (server-test.pair)
+         C (hd Pair) E (hd (tl Pair))
+         V (buffer.from-string "GET / HTTP/1.1c#13;c#10;Host: xc#13;c#10;c#13;c#10;")
+         _ (io.write-all C V [])
+         R (io.reader E [])
+         _ (io.peek R (buffer.length V))
+         Calls (io.record [0])
+         Config (http.server-options [[head-timeout 0] [request-limit 1]])
+         Parent (deadline.after (freeze 0) 100000)
+         Session (http.session.make E R
+                   (/. Q (do (address-> Calls 0 (+ 1 (<-address Calls 0)))
+                             (http.response 200 [["Date" "Sun, 06 Nov 1994 08:49:37 GMT"]] (buffer.new 0))))
+                   Config (freeze false) Parent 0 0)
+         Result (http.connection-read Session)
+         _ (io.close E)
+         Reply (server-test.collect (io.reader C []) 0 [])
+         _ (io.close C)
+      [(hd Result) (<-address Calls 0) (server-test.status [Result Reply 0])])))
+
 (output "~A passed, ~A failed~%" (value server-test.passed) (value server-test.failed))

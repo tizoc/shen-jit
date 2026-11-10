@@ -200,4 +200,22 @@
       (stream-test.check "metadata rejected before producer call" 0 (freeze (<-address State 1)))
       (stream-test.check "invalid metadata still closes source" 1 (freeze (<-address State 2)))))
 
+(define stream-test.contains-cause?
+  X X -> true
+  X [H | T] -> (or (stream-test.contains-cause? X H) (stream-test.contains-cause? X T))
+  _ _ -> false)
+(stream-test.check "expiry retains simultaneous producer failure" [timeout true 1]
+  (freeze
+    (let Time (io.record [0])
+         Closed (io.record [0])
+         Cause (io.error read "producer" "producer broke")
+         S (http.source (/. Maximum D (do (address-> Time 0 10) [error Cause]))
+                        (freeze (do (address-> Closed 0 (+ 1 (<-address Closed 0))) [ok])))
+         E (io.output-buffer (buffer.new 256))
+         D (deadline.after (freeze (<-address Time 0)) 10)
+         Result (http.send-response E (stream-test.request "GET") (http.stream-response 200 [] [chunked] S) D [])
+         Error (hd (tl Result))
+         _ (io.close E)
+      [(io.error-domain Error) (stream-test.contains-cause? Cause Error) (<-address Closed 0)])))
+
 (output "~A passed, ~A failed~%" (value stream-test.passed) (value stream-test.failed))

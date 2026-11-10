@@ -88,6 +88,10 @@ All notable changes to this project are documented in this file. The format is b
 - I/O: a backend that raised during a flush let new writes through, and close then reported no progress; a
   framer stopped by an exception forgot what it had read of the current frame; and `io.window-fill` took a
   negative or real count, and a closed reader.
+- HTTP: a request head that arrived in the same read as the one before it was not held to `HeadLimit`, as
+  `grammar.read-within` did not count input already buffered; a head already buffered was parsed after its head
+  deadline; an aborted body read forgot what it had read; and a deadline that expired during a response
+  producer's callback dropped the producer's error.
 
 ## [0.6] - 2026-11-08
 

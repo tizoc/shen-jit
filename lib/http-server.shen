@@ -217,9 +217,11 @@
              Limit (server-config.head-limit Config)
              D (deadline.within (session.deadline C) (server-config.head-timeout Config))
              _ (io.socket-deadline (session.endpoint C) D)
-          (if (<= Limit (io.window-size R))
-              (connection-parsed C (read-request R Limit (server-config.body-limit Config)))
-              (connection-head C (read-head-until (head-reader R Limit) D))))))
+          (cases (> Limit (io.window-size R)) (connection-head C (read-head-until (head-reader R Limit) D))
+                 \\ Input already queued needs no read, which is where the socket's deadline applies.
+                 (deadline.expired? D)
+                   (connection-fail C (io.native-error read timeout 0 "HTTP head" "deadline expired"))
+                 true (connection-parsed C (read-request R Limit (server-config.body-limit Config)))))))
 
 (define connection-head
   C [eof] -> [ok (session.written C)]

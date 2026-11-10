@@ -749,7 +749,9 @@
          Storage (io.window R)
          Start (io.position R)
          Bound (io.min (buffer.index Limit) (io.window-size R))
-         E (address-> (address-> (address-> (address-> (absvector 4) 0 (io.window-fill R 0)) 1 R) 2 []) 3 Bound)
+         \\ What is already in the window counts against the bound too, as later fills do.
+         E (address-> (address-> (address-> (address-> (absvector 4) 0 (io.min (io.window-fill R 0) Bound)) 1 R) 2 [])
+                      3 Bound)
          S (state)
          P (apply (fn G) [Storage 0 E S | Args])
       (read-result P S E Start Fail)))

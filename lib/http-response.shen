@@ -276,7 +276,13 @@
              Result (trap-error (source-chunk (Next Maximum D) Maximum)
                       (/. X [error (output-error (error-to-string X))]))
              _ (source-state.busy-> S false)
-          (io.let-ok _ (output-budget D) Result)))))
+          (expired-after (output-budget D) Result)))))
+
+\\ The deadline as it is after a producer's callback; a failure of the callback stays, beside it.
+(define expired-after
+  [ok] Result -> Result
+  [error Expired] [error Error] -> [error (io.secondary Expired Error)]
+  Expired _ -> Expired)
 
 (define source-chunk
   [eof] _ -> [eof]

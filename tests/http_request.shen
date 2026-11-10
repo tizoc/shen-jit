@@ -255,4 +255,20 @@
 
 (request-test.splits (buffer.length (value request-test.wire)))
 
+(request-test.check "aborted body retains consumed progress" [true 1 1]
+  (freeze
+    (let Q (request-test.ok (request-test.parse "POST / HTTP/1.1c#13;c#10;Host: xc#13;c#10;Content-Length: 2c#13;c#10;c#13;c#10;" 2))
+         Sent (io.record [false])
+         E (io.endpoint "interrupted body" read 1
+             (/. Out (if (<-address Sent 0) (error "read interrupted")
+                         (do (address-> Sent 0 true) (shen-jit.u8! Out 0 97) [read 1])))
+             (function io.no-write) (freeze [ok]))
+         R (io.reader E [])
+         B (http.body-reader R Q)
+         Raised (trap-error (do (http.read-body B) false) (/. X true))
+         Again (http.read-body B)
+         Got [Raised (io.error-progress (hd (tl Again))) (io.position R)]
+         _ (io.close E)
+      Got)))
+
 (output "~A passed, ~A failed~%" (value request-test.passed) (value request-test.failed))

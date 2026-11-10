@@ -559,16 +559,23 @@
          Saved (body-state.result B)
       (if (not (empty? Saved))
           Saved
-          (do (body-state.busy-> B true)
-              (let Result (trap-error (io.let-ok _ (body-budget B D 0) (body-ready B D))
-                             (/. X (do (body-state.busy-> B false)
-                                       (body-state.builder-> B [])
-                                       (body-state.result-> B (http.problem 400 "body read aborted"))
-                                       (simple-error (error-to-string X)))))
-                (do (body-state.busy-> B false)
-                    (body-state.builder-> B [])
-                    (body-state.result-> B Result)
-                    Result))))))
+          (let Start (io.position (body-state.reader B))
+               _ (body-state.busy-> B true)
+               Result (trap-error (io.let-ok _ (body-budget B D 0) (body-ready B D))
+                        (/. X (do (body-state.busy-> B false)
+                                  (body-state.builder-> B [])
+                                  (body-state.result-> B
+                                    (aborted (http.problem 400 "body read aborted")
+                                             (trap-error (- (io.position (body-state.reader B)) Start) (/. E 0))))
+                                  (simple-error (error-to-string X)))))
+            (do (body-state.busy-> B false)
+                (body-state.builder-> B [])
+                (body-state.result-> B Result)
+                Result)))))
+
+\\ A read stopped by an exception: what it had read is its progress.
+(define aborted
+  [error Error] N -> [error (io.progress Error N)])
 
 (define body-ready
   B D ->

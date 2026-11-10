@@ -154,7 +154,7 @@ and goes on where it was.
 
 The parse reads in place, in the reader's buffer, and consumes nothing until the value is complete, so a
 value can be no larger than the reader's capacity: a larger one fails with `"input exceeds the limit"`.
-`(grammar.read-within <rule> Reader Limit Fail)` sets a smaller limit. Views made by `span` own their bytes
+`(grammar.read-within <rule> Reader Limit Fail)` sets a smaller limit, which counts what the reader already holds. Views made by `span` own their bytes
 here, as the reader's buffer is reused. The rule matches a prefix of the input, so a rule that should stop
 only at the end says so with `<end>`.
 
