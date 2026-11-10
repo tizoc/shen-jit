@@ -32,7 +32,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             assert self.server.sink_release.wait(15)
         if self.path.startswith('/bulk/') or self.path == '/backpressure':
             held = self.path == '/backpressure'
-            total = 67108864 if held else int(self.path.removeprefix('/bulk/'))
+            total = 67108864 if held else int(self.path[len('/bulk/'):])
             if held:
                 self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8192)
             self.send_response(200)
