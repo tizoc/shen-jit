@@ -108,12 +108,17 @@ enum {
    for the forwarding marker and its new address. */
 static inline size_t at_least_two(size_t words) { return words < 2 ? 2 : words; }
 
+static inline size_t byte_object_words(uint64_t bytes)
+{
+    return at_least_two(1 + (size_t)((bytes + 7) / 8));
+}
+
 static inline size_t obj_words(uint64_t h)
 {
     uint64_t n = hdr_size(h);
     switch (hdr_type(h)) {
     case T_STRING:
-    case T_BYTES: return at_least_two(1 + (size_t)((n + 7) / 8));
+    case T_BYTES: return byte_object_words(n);
     case T_SYMBOL: return SYM_WORDS;
     case T_REAL: return REAL_WORDS;
     case T_VECTOR: return at_least_two(1 + (size_t)n);

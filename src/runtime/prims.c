@@ -298,70 +298,83 @@ static int compare_fix_real(int64_t i, double d)
     return rest > 0 ? -1 : rest < 0 ? 1 : 0;
 }
 
+/* Equality needs no ordering result. Truncate only inside int64_t range,
+   then require both an exact integer match and no fractional remainder. */
+static bool equal_fix_real(int64_t i, double d)
+{
+    return d >= -0x1p63 && d < 0x1p63 && (int64_t)d == i && (double)(int64_t)d == d;
+}
+
 /* Heads and elements are compared by recursion up to a depth that the margin
    of a C stack can hold, and past it by equal_deep. */
 enum { EQUAL_DEPTH = 256 };
 
 static bool equal_deep(V a, V b);
-static int equal_depth; /* threads take turns, and = does not give up its turn */
 
-static bool equal_part(V a, V b)
+static bool equal_pairs(V a, V b, unsigned depth);
+
+static bool equal_part(V a, V b, unsigned depth)
 {
-    if (equal_depth >= EQUAL_DEPTH)
+    if (depth >= EQUAL_DEPTH)
         return equal_deep(a, b);
-    equal_depth++;
-    bool same = sj_equal(a, b);
-    equal_depth--;
-    return same;
+    return is_pair(a) ? is_pair(b) && equal_pairs(a, b, depth + 1) : sj_equal_at(a, b, depth + 1);
 }
 
 /* = (docs/semantics.md, section 6). Lists are walked along their tails, and a
    head identical to the other is not compared further, nor are two distinct
    atoms. Strings compare whole words: equal headers mean equal lengths, and
    the padding is always 0. */
-bool sj_equal(V a, V b)
+/* a and b are distinct pairs; tails stay in this loop, heads use equal_part. */
+static __attribute__((noinline)) bool equal_pairs(V a, V b, unsigned depth)
 {
     for (;;) {
+        V ha = ptr(a)[0], hb = ptr(b)[0];
+        if (ha != hb && (distinct_atoms(ha, hb) || !equal_part(ha, hb, depth)))
+            return false;
+        a = ptr(a)[1];
+        b = ptr(b)[1];
         if (a == b)
             return true;
-        if (is_pair(a)) {
-            if (!is_pair(b))
-                return false;
-            V ha = ptr(a)[0], hb = ptr(b)[0];
-            if (ha != hb && (distinct_atoms(ha, hb) || !equal_part(ha, hb)))
-                return false;
-            a = ptr(a)[1];
-            b = ptr(b)[1];
-            continue;
-        }
-        if (is_number(a) && is_number(b))
-            return is_fix(a) ? is_real(b) && compare_fix_real(fixval(a), real_value(b)) == 0
-                   : is_fix(b) ? compare_fix_real(fixval(b), real_value(a)) == 0
-                               : real_value(a) == real_value(b);
-        if ((is_type(a, T_STRING) && is_type(b, T_STRING)) || (is_type(a, T_BYTES) && is_type(b, T_BYTES))) {
-            if (ptr(a)[0] != ptr(b)[0])
-                return false;
-            for (size_t i = 1, n = obj_words(ptr(a)[0]); i < n; i++)
-                if (ptr(a)[i] != ptr(b)[i])
-                    return false;
-            return true;
-        }
-        if (is_type(a, T_VECTOR) && is_type(b, T_VECTOR)) {
-            size_t n = (size_t)hdr_size(ptr(a)[0]);
-            if (n != hdr_size(ptr(b)[0]))
-                return false;
-            for (size_t i = 0; i < n; i++) {
-                V x = ptr(a)[1 + i], y = ptr(b)[1 + i];
-                if (x != y && (distinct_atoms(x, y) || !equal_part(x, y)))
-                    return false;
-            }
-            return true;
-        }
-        if (is_type(a, T_POINTER) && is_type(b, T_POINTER))
-            return ptr(a)[0] == ptr(b)[0] && ptr(a)[POINTER_KIND] == ptr(b)[POINTER_KIND] &&
-                   ptr(a)[POINTER_ADDRESS] == ptr(b)[POINTER_ADDRESS];
-        return false;
+        if (!is_pair(a))
+            return sj_equal_at(a, b, depth);
+        if (!is_pair(b))
+            return false;
     }
+}
+
+bool sj_equal_at(V a, V b, unsigned depth)
+{
+    if (a == b)
+        return true;
+    if (is_pair(a))
+        return is_pair(b) && equal_pairs(a, b, depth);
+    if (is_number(a) && is_number(b))
+        return is_fix(a) ? is_real(b) && equal_fix_real(fixval(a), real_value(b))
+               : is_fix(b) ? equal_fix_real(fixval(b), real_value(a))
+                           : real_value(a) == real_value(b);
+    if ((is_type(a, T_STRING) && is_type(b, T_STRING)) || (is_type(a, T_BYTES) && is_type(b, T_BYTES))) {
+        if (ptr(a)[0] != ptr(b)[0])
+            return false;
+        for (size_t i = 1, n = byte_object_words(hdr_size(ptr(a)[0])); i < n; i++)
+            if (ptr(a)[i] != ptr(b)[i])
+                return false;
+        return true;
+    }
+    if (is_type(a, T_VECTOR) && is_type(b, T_VECTOR)) {
+        size_t n = (size_t)hdr_size(ptr(a)[0]);
+        if (n != hdr_size(ptr(b)[0]))
+            return false;
+        for (size_t i = 0; i < n; i++) {
+            V x = ptr(a)[1 + i], y = ptr(b)[1 + i];
+            if (x != y && (distinct_atoms(x, y) || !equal_part(x, y, depth)))
+                return false;
+        }
+        return true;
+    }
+    if (is_type(a, T_POINTER) && is_type(b, T_POINTER))
+        return ptr(a)[0] == ptr(b)[0] && ptr(a)[POINTER_KIND] == ptr(b)[POINTER_KIND] &&
+               ptr(a)[POINTER_ADDRESS] == ptr(b)[POINTER_ADDRESS];
+    return false;
 }
 
 /* = with the pairs still to compare in a list of its own, so no deeper on the C

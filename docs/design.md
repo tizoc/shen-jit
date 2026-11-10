@@ -243,6 +243,11 @@ hashing never depends on an address that moves. A symbol refers to its global ce
 live outside the heap, in root arrays that grow by adding chunks, so none ever moves, and emitted code embeds their addresses and never a
 heap address. Native code lives in SLJIT's executable memory, and a collection frees that of code objects it did not reach, except under a profiler, and what was compiled before everything compiled again, which frames may still be running.
 
+`=` walks pair tails in a loop of its own and enters it directly for a head that is a pair; other heads and
+vector elements go through the general comparator. The recursion depth is an argument, so no state is shared
+between calls or threads. A fixnum equals a real when the real, in range, truncates to it and converts back to
+itself. Strings and buffers compare whole words, as padding is always 0.
+
 ## Collection
 
 Allocation bumps a cursor that emitted code checks against a limit, and the slow path collects, after which the

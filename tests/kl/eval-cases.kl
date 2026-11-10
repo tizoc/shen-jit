@@ -1101,6 +1101,18 @@ goes through the stub, and a function that cannot be found raises as anything do
 (value false (= (n.nan) (n.nan)))
 (value true (let X (n.nan) (= X X)))
 (value true (let X (n.r53) (= (hash X 1000000) (hash 9007199254740992 1000000))))
+"Equality crosses its native recursion limit through pair heads and mixed
+vectors/pairs; non-pair tails and byte payloads still use their own rules."
+(value t.eq-heads (defun t.eq-heads (N X) (if (= N 0) X (cons (t.eq-heads (- N 1) X) ()))))
+(value t.eq-mixed (defun t.eq-mixed (N X) (if (= N 0) X (let H (cons (t.eq-mixed (- N 1) X) ()) (let V (absvector 1) (do (address-> V 0 H) V))))))
+(value true (= (t.eq-heads 320 8) (t.eq-heads 320 8)))
+(value false (= (t.eq-heads 320 8) (t.eq-heads 320 9)))
+(value true (= (t.eq-mixed 160 8) (t.eq-mixed 160 8)))
+(value false (= (t.eq-mixed 160 8) (t.eq-mixed 160 9)))
+(value true (= (cons a 1) (cons a (+ 0.5 0.5))))
+(value false (= (cons a 1) (cons a 1.5)))
+(value true (= (t.eq-heads 320 (shen-jit.bytes 33)) (t.eq-heads 320 (shen-jit.bytes 33))))
+(value false (let B (shen-jit.bytes 33) (do (shen-jit.u8! B 32 1) (= (t.eq-mixed 160 B) (t.eq-mixed 160 (shen-jit.bytes 33))))))
 (value ic-a (defun ic-a (A) (if (= a a) A wrong)))
 (value 1 (ic-a 1))
 (value ic-b (defun ic-b (A) (if (= a b) wrong A)))

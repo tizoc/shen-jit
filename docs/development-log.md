@@ -274,6 +274,17 @@ Lowering rules, the collector and the kernel port have their own sections.
   one reads 1.201 s, so on x86-64 this row says little below 20%. What the depth itself costs is as unclear, from before `equal_deep` to after it: 1.19 to 0.86 s
   on the M3, with 1.12 times the instructions, and on the Ryzen 1.05 to 1.22 s with gcc, 1.13 to 1.20 s at 64 and 0.91 to 0.95 s with clang. Independent workloads did not move on either.
 
+- **`=` with its depth as an argument, and pairs in a loop of their own** (2026-11-10, Apple M3 Max, load about 13,
+  median of 3 interleaved runs of `tests/bench/equality-structure.shen`, against the build before). The pair walk
+  became a function apart, entered directly for a head that is a pair; strings and buffers take their size from
+  their layout instead of the general size switch; a fixnum against a real tests equality instead of an ordering.
+  The depth became an argument, which a worker runtime per OS thread needs, and here costs nothing: small trees
+  53.7 to 41.8 ms, a fixnum against a real 37.1 to 20.5, mixed pairs and vectors 37.4 to 30.6, buffers 0.88 to
+  0.92, lists and strings the same. It came from the worker experiment ("Structured workers"), where adding a case to the size
+  switch had made trees 1.25 to 1.35 times as slow. **Rejected** there: moving byte comparison out of the
+  comparator (33-byte buffers 1.5 to 2 times as slow), outlining every case but pairs (numbers 1.13), and
+  calling the comparator from the JIT without its Boolean wrapper (1.72 at another placement).
+
 ### Allocation, lists, vectors and strings
 
 - **Inline fast paths** (2026-11-01, M3 Max, against Shen/Scheme 0.52). Type tests, `<-address`, `*`, `absvector`,

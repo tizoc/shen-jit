@@ -236,7 +236,10 @@ enum Prim {
 };
 #define PRIM_RAISE_COND P_COUNT
 
-bool sj_equal(V a, V b);
+bool sj_equal_at(V a, V b, unsigned depth);
+/* Keep the ordinary entry in the caller: no extra out-of-line wrapper before
+   the recursive comparator. Depth belongs to this call, not the OS thread. */
+static inline bool sj_equal(V a, V b) { return sj_equal_at(a, b, 0); }
 uint64_t sj_hash(V v);
 V sj_dict_find(VM *vm);
 V sj_dict_put(VM *vm);
