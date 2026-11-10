@@ -582,12 +582,14 @@ A real expression E is a real register; a word register, converted; a number, a 
 converted, and anything else raising; `(+ E1 E2)`, `(- E1 E2)`, `(* E1 E2)`, `(/ E1 E2)`; `(neg E)`, `(abs E)`, `(sqrt E)`;
 `(f64 M I)`, read and checked as `shen-jit.f64` is; or any word expression below that only words can be, converted. `(+ A B C)` is `(+ A (+ B C))`, as Shen's macro makes it.
 
-A word expression W is a word register; an integer, or `(const K)`; a slot, which must hold an integer; `(+ W1 W2)`, `(- W1 W2)`, `(* W1 W2)`, `(neg W)`;
+A word expression W is a word register; an integer, or `(const K)` holding one; a slot, which must hold an integer; `(+ W1 W2)`, `(- W1 W2)`, `(* W1 W2)`, `(neg W)`;
 `(bit-and W1 W2)`, `(bit-or W1 W2)`, `(bit-xor W1 W2)`, `(bit-not W)`; `(shift-left W N)`, `(shift-right W N)`, which fills with zeroes, `(shift-right-signed W N)`, `(rotate-left W N)`,
 `(rotate-right W N)`, whose counts are taken modulo 64; `(u8 M I)`, `(u16 M I)`, `(u32 M I)`, `(s32 M I)`, `(u64 M I)`; or `(truncate E)`, toward zero, of a real expression, which is the machine's own beyond 64 bits.
 Arithmetic wraps and raises nothing. A literal has to fit a fixnum, so a wider constant is built, once, before the loop.
 
-The index of `u8` to `u64` and their stores is a word expression. So is that of `f64` and `f64!` when it is an integer or mentions a word register, with no tag to check and only the bound; any other is integer arithmetic through `prim`, as `(+ I 8)` on slots. A word index is checked as an unsigned number, so a negative one fails the bound. Intermediate values take registers too, and more than the registers there are is refused.
+The index of `u8` to `u64` and their stores is a word expression. So is that of `f64` and `f64!` when it is an integer or mentions a word register, with no tag to check and only the bound; any other is integer arithmetic through `prim`, as `(+ I 8)` on slots. A word index is checked as an unsigned number, so a negative one fails the bound. Intermediate values take registers too, named `Real.0`, `Word.0` and on, so a register written by hand may not take
+such a name, and more than the registers there are is refused. A test that is `true` or `false` keeps only the branch
+that runs.
 
 - **Division is IEEE's:** dividing by zero gives an infinity or a NaN, where `/` raises.
 - **A register or slot keeps its value round a loop,** and what comes before a loop's head runs once. To leave a loop, jump

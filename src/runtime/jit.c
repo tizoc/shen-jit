@@ -980,6 +980,7 @@ static uint32_t home_count(const Emit *e, const uint32_t *words, size_t nwords)
         switch (p[0]) {
         case OP_CALL: case OP_CALL_SEALED: case OP_CALL_VALUE: case OP_TAIL_CALL_VALUE:
         case OP_PUSH_HANDLER: case OP_POP_HANDLER: case OP_EXCEPTION:
+        case OP_ENTRY: /* its own start does not load them; only code written by hand has both */
             return 0;
         case OP_TAIL_CALL: case OP_TAIL_CALL_SEALED:
             loop = loop || self_tail_call(e, p) != OTHER_CALLEE;

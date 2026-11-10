@@ -79,6 +79,10 @@ All notable changes to this project are documented in this file. The format is b
   error.
 - A variable or function named like one of the lowerer's own node tags, such as `apply` or `var`, could make it
   compile code that computed the wrong value or read a variable after it was overwritten.
+- Native code written by hand: an `entry` beside a self tail call read arguments it never loaded; an `f64!` or `f64`
+  index could overwrite a value still in use; a register named `Word.0` or `Real.0` clashed with a temporary and is
+  refused; a word constant that was not an integer became 0; a constant `if`, `when`, `unless` or `while` was refused;
+  extra operands of a raw instruction were dropped; and a misplaced `exception` was reported as the instruction before.
 
 ## [0.6] - 2026-11-08
 

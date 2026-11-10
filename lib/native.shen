@@ -88,7 +88,7 @@
 
 (define check.code
   Where [code Name Arity Frame Constants Instructions Codes | _] NCaptures Kind
-  -> (let Ctx [Where Arity Frame (length Constants) (length Codes) NCaptures]
+  -> (let Ctx [Where Arity Frame (length Constants) (length Codes) NCaptures Constants]
           Labels (check.labels Instructions)
           Handlers (mapcan (/. I (check.handler-target I)) Instructions)
        (do (check.header Where Name Arity Frame Kind)
@@ -210,7 +210,7 @@
   _ _ real A -> (check.below? A 48)
   _ _ real! A -> (check.below? A 48)
   _ _ word! A -> (check.below? A 16)
-  Ctx _ word [const K] -> (check.below? K (nth 4 Ctx))
+  Ctx _ word [const K] -> (and (check.below? K (nth 4 Ctx)) (integer? (nth (+ K 1) (nth 7 Ctx))))
   _ _ word A -> (check.below? A 16)
   _ Labels label A -> (element? A Labels)
   _ _ head A -> (integer? A)
@@ -274,7 +274,7 @@
   _ _ [] _ -> true
   Where Prev [[exception D] | Is] Handlers
   -> (do (check.assert (check.handler-label? Prev Handlers) Where
-                                  "exception not at a handler label" Prev)
+                                  "exception not at a handler label" [exception D])
          (check.handlers Where [exception D] Is Handlers))
   Where _ [I | Is] Handlers -> (check.handlers Where I Is Handlers))
 
@@ -654,7 +654,8 @@
   _ I -> (simple-error (make-string "native code: unknown instruction: ~R" I)))
 
 (define native.raw-args
-  _ [] _ -> []
+  _ [] As -> As
+  _ _ [] -> []
   C [tagged | Ks] [A | As] -> [(native.operand C A) | (native.raw-args C Ks As)]
   C [word | Ks] [A | As] -> [(native.operand C A) | (native.raw-args C Ks As)]
   C [K | Ks] [A | As] -> [(native.label C A) | (native.raw-args C Ks As)]
@@ -747,6 +748,16 @@
                             (structure.statements Ss Loops)))
 
 (define structure.statement
+  \\ A constant test keeps only what runs: the checker refuses code that cannot be reached.
+  [if true Then | _] Loops -> (structure.statement Then Loops)
+  [if false _] _ -> []
+  [if false _ Else] Loops -> (structure.statement Else Loops)
+  [when true | Body] Loops -> (structure.statements Body Loops)
+  [when false | _] _ -> []
+  [unless false | Body] Loops -> (structure.statements Body Loops)
+  [unless true | _] _ -> []
+  [while false | _] _ -> []
+  [while Name false | _] _ -> [] where (structure.name? Name)
   [if Test Then] Loops
   -> (let End (structure.label "end")
        (structure.close
@@ -904,7 +915,23 @@
 
 (define real.expand
   Body -> (let Regs [(real.names real Body) (real.names word Body)]
+               _ (map (/. Name (real.own Name)) (append (hd Regs) (hd (tl Regs))))
             (mapcan (/. I (real.statement Regs I)) Body)))
+
+\\ Real.N and Word.N are the temporaries' names, so no register written by hand may take one.
+(define real.own
+  Name -> (simple-error (make-string "native code: ~A is the name of a temporary" Name))
+      where (or (real.numbered? "Real." (str Name)) (real.numbered? "Word." (str Name)))
+  Name -> Name)
+
+(define real.numbered?
+  "" Digits -> (and (not (= Digits "")) (real.digits? Digits))
+  (@s C Prefix) (@s C Rest) -> (real.numbered? Prefix Rest)
+  _ _ -> false)
+
+(define real.digits?
+  "" -> true
+  (@s C Rest) -> (and (element? C ["0" "1" "2" "3" "4" "5" "6" "7" "8" "9"]) (real.digits? Rest)))
 
 (define real.names
   Head Body -> (native.add-names
@@ -921,10 +948,11 @@
   Regs [real X E] -> (real.into Regs 0 X E)
   Regs [word X E] -> (word.into Regs 0 X E)
   Regs [f64! M I E] -> (let Value (real.operand Regs 0 E)
+                             After (real.after Regs 0 E)
                          (if (word.index? Regs I)
-                             (let Index (word.operand Regs 0 I)
+                             (let Index (word.operand Regs After I)
                                (append (tl Value) (tl Index) [[real-store-at M (hd Index) (hd Value)]]))
-                             (let Index (real.index 0 I)
+                             (let Index (real.index After I)
                                (append (tl Value) (tl Index) [[real-store M (hd Index) (hd Value)]]))))
   Regs [real-box D E] -> (let Value (real.operand Regs 0 E)
                            (append (tl Value) [[real-box D (hd Value)]]))
@@ -999,10 +1027,10 @@
   Regs _ D E -> [[real-move D E]] where (real.real? Regs E)
   Regs _ D E -> [[real-from-word D E]] where (real.word? Regs E)
   _ _ D [const K] -> [[real-number D [const K]]]
-  Regs _ D [f64 M I] -> (if (word.index? Regs I)
-                            (let Index (word.operand Regs 0 I)
+  Regs N D [f64 M I] -> (if (word.index? Regs I)
+                            (let Index (word.operand Regs N I)
                               (append (tl Index) [[real-load-at D M (hd Index)]]))
-                            (let Index (real.index 0 I)
+                            (let Index (real.index N I)
                               (append (tl Index) [[real-load D M (hd Index)]])))
   Regs N D [neg A] -> (real.unary Regs N D real-neg A)
   Regs N D [abs A] -> (real.unary Regs N D real-abs A)

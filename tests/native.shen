@@ -1496,4 +1496,67 @@
   (freeze (shen-jit.install-code (shen-jit.assemble native-test.bad [(protect X)]
             [[word (protect V) (protect X)] [if [< (protect V) 1] [return-word 0]]]))))
 
+(shen-jit.install-code
+  [defun native-test.entry-loop
+    [code native-test.entry-loop 1 4 [0]
+      [[entry 2 0]
+       [prim 3 = 2 [const 0]]
+       [jump-if-false 3 1]
+       [return 2]
+       [label 1]
+       [const 2 0]
+       [tail-call 0 native-test.entry-loop 1]
+       [label 0]
+       [return 3]]
+      []]])
+(native-test.check "an entry beside a self tail call loads its arguments" true
+  (freeze (eval-kl [= [native-test.entry-loop 10 20] 20])))
+
+(define-native native-test.mixed-store (M)
+  (word I 8)
+  (f64! M (truncate (+ I 0.5)) (+ 1.5 2.5))
+  (return M))
+(native-test.check "a store index keeps the real value it stores" 4
+  (freeze (shen-jit.f64 (native-test.mixed-store (shen-jit.bytes 16)) 8)))
+(define-native native-test.mixed-load (M A)
+  (word I 7)
+  (return-word (+ (+ A 1) (truncate (f64 M (+ I 1))))))
+(native-test.check "a load index keeps the word operand around it" 43
+  (freeze (native-test.mixed-load (shen-jit.f64! (shen-jit.bytes 16) 8 2.5) 40)))
+
+(native-test.refused "a register may not take a temporary's name"
+  (freeze
+    (define-native native-test.temp-collision (A)
+      (word Word.0 10)
+      (return-word (+ (+ A 1) Word.0)))))
+
+(native-test.refused "a word constant is an integer"
+  (freeze
+    (define-native native-test.bad-word-constant ()
+      (word X (const "bad"))
+      (return-word X))))
+
+(native-test.check "a constant test keeps only the branch that runs" 2
+  (freeze
+    (do
+      (define-native native-test.constant-false ()
+        (if false (return 1) (return 2)))
+      (native-test.constant-false))))
+
+(native-test.refused "a raw instruction with extra operands"
+  (freeze
+    (define-native native-test.extra-word-operand ()
+      (word X 7)
+      (word-move X 9 10)
+      (return-word X))))
+
+(native-test.check "a misplaced exception is the one named"
+  [error "native code, native-test.bad-exception: exception not at a handler label: (exception 3)"]
+  (freeze
+    (shen-jit.install-code
+      [defun native-test.bad-exception
+        [code native-test.bad-exception 0 4 [7]
+          [[const 2 0] [exception 3] [return 2]]
+          []]])))
+
 (output "~A passed, ~A failed~%" (value native-test.*passed*) (value native-test.*failed*))

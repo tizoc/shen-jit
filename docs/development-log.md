@@ -980,6 +980,14 @@ that. Its readings decided nothing below.
   arms both return showed it. Done ahead of Datalog's native joins, whose generator would otherwise have been written
   against labels. Not done: typed parameters, which would repeat checks every access already makes; a definer of its own;
   source mapping, until errors in an expansion are hard to read.
+- **Seven found by a review of the checker and builder (2026-11-10),** each with a check in `tests/native.shen` that
+  failed before. Code with an `(entry N L)` and a self tail call read loop arguments from registers the entry never
+  loaded: such code keeps them in its frame now, and only code written by hand has both. An index computed for `f64!`,
+  and for an `f64` inside an expression, started its temporaries at 0 over values still in use. A register written by
+  hand could take a temporary's name, `Word.0`, and now cannot. A word constant that was not an integer passed and
+  became 0. `(if false A B)`, and `when`, `unless` and `while` on a constant, left a branch the checker refused as
+  unreachable. Extra operands of a raw instruction were dropped, and a misplaced `exception` was reported as the
+  instruction before it.
 
 ### Managed structs
 
