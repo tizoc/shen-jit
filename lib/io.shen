@@ -409,7 +409,9 @@
          (buffer.owner B)))
 
 (define window-fill
-  R Need -> (do (fill-reader R (min Need (buffer.length (reader.buffer R)))) (reader.end R)))
+  R Need -> (let _ (reader-check R)
+                 N (buffer.index Need)
+              (do (fill-reader R (min N (buffer.length (reader.buffer R)))) (reader.end R))))
 
 (define window-size
   R -> (buffer.length (reader.buffer R)))
@@ -511,8 +513,16 @@
 (define pending
   W -> (let _ (writer-check W) (- (writer.end W) (writer.start W))))
 
+\\ A backend that raises fails the flush as one that returns an error does: what it had taken
+\\ counts as progress, the rest stays, and new writes are refused until a flush succeeds.
 (define io.flush
-  W -> (do (writer-check W) (flush-loop W 0)))
+  W -> (let _ (writer-check W)
+            From (writer.start W)
+         (trap-error (flush-loop W 0)
+           (/. X (do (writer.failure-> W (progress (io.error flush (endpoint.name (writer.endpoint W))
+                                                             (error-to-string X))
+                                                   (- (writer.start W) From)))
+                     (simple-error (error-to-string X)))))))
 
 (define flush-loop
   W Total ->
@@ -586,7 +596,10 @@
                    Flush (if (empty? W)
                              [ok 0]
                              (trap-error (io.flush W)
-                               (/. X [error (io.error flush (endpoint.name E) (error-to-string X)) 0])))
+                               (/. X (let Failure (writer.failure W)
+                                       (if (empty? Failure)
+                                           [error (io.error flush (endpoint.name E) (error-to-string X)) 0]
+                                           [error Failure (io.error-progress Failure)])))))
                    _ (endpoint.state-> E closed)
                    _ (endpoint.close-result-> E [error (io.error close (endpoint.name E) "close is in progress")])
                    Close (endpoint.close E)

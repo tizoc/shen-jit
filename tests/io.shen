@@ -225,4 +225,43 @@
 (io-test.check "let-ok takes [ok] with _" [eof]
   (freeze (io.let-ok _ [ok] _ [ok 2] Z [eof] [ok Z])))
 
+(define io-test.throwing-sink
+  S -> (io.endpoint "throwing sink" write 4
+         (function io.no-read)
+         (/. B (if (= (<-address S 0) 0)
+                   (do (address-> S 0 1) [written 1])
+                   (error "write interrupted")))
+         (freeze [ok])))
+
+(io-test.check "a flush that raises refuses new writes until one succeeds"
+  [true error 3]
+  (freeze
+    (let E (io-test.throwing-sink (io.record [0]))
+         W (io.writer E [])
+         _ (io.write W (buffer.from-string "abcd"))
+         Raised (trap-error (do (io.flush W) false) (/. X true))
+         Result (io.write W (buffer.from-string "x"))
+         Pending (io.pending W)
+         _ (io.close E)
+      [Raised (hd Result) Pending])))
+
+(io-test.check "close keeps the progress of a flush that raised"
+  [1 1]
+  (freeze
+    (let S (io.record [0])
+         E (io-test.throwing-sink S)
+         W (io.writer E [])
+         _ (io.write W (buffer.from-string "abcd"))
+         Result (io.close E)
+      [(<-address S 0) (io.error-progress (hd (tl Result)))])))
+
+(let E (io.input-buffer (buffer.from-string "abcd"))
+     R (io.reader E [[chunk-size 4]])
+  (do
+    (io-test.raises "window-fill refuses a negative count" (freeze (io.window-fill R -1)))
+    (io-test.raises "window-fill refuses a real count" (freeze (io.window-fill R (+ 0.5 0.5))))
+    (io.peek R 4)
+    (io.close E)
+    (io-test.raises "window-fill refuses a closed reader" (freeze (io.window-fill R 1)))))
+
 (output "~A passed, ~A failed~%" (value io-test.passed) (value io-test.failed))

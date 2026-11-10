@@ -92,10 +92,14 @@
       (if (not (empty? Terminal))
           Terminal
           (let B (shen-jit.bytes 6)
+               Start (io.position (reader.input F))
                _ (reader.busy-> F true)
                Result (trap-error (read-header F B (io.reader-exact (reader.input F) (buffer.wrap B)))
                         (/. X (do (reader.busy-> F false)
-                                  (reader.terminal-> F (frame.error (error-to-string X) 0))
+                                  \\ The progress of this frame: what this next had read.
+                                  (reader.terminal-> F (frame.error (error-to-string X)
+                                                                    (trap-error (- (io.position (reader.input F)) Start)
+                                                                                (/. E 0))))
                                   (simple-error (error-to-string X)))))
             (do (reader.busy-> F false) (finish F Result))))))
 

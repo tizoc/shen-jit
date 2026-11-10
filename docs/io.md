@@ -133,7 +133,8 @@ the endpoint. `io.pending W` reports the unsent count.
 
 `io.flush W` returns `[ok Written]` or `[error Error Written]`, counting bytes delivered during this flush.
 Each short write advances the pending offset immediately. Failure keeps the unsent suffix; a later flush
-retries only that suffix. New nonempty writes are refused until an explicit successful flush clears the
+retries only that suffix. A backend that raises fails the flush the same way: what it had taken counts, and
+the raise goes on to the caller. New nonempty writes are refused until an explicit successful flush clears the
 failure. When a write fails during an implicit flush, resume its input at Accepted after clearing that
 failure; the buffered prefix must not be replayed. Empty writes accept zero.
 

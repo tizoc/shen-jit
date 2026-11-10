@@ -2483,6 +2483,13 @@ execution remains CI's responsibility; no new platform ABI or instruction was in
   The API has its own `docs/io.md` page linked from the guide. Guide rendering and its examples pass;
   CI and Linux source-tarball suites run `test-io`, including explicit FFI skips on static builds.
 
+- **Four found by a review of the I/O library (2026-11-10),** each with a check in `tests/io.shen` or
+  `tests/frame.shen` that failed before. A backend that raised during `io.flush` left no failure behind, so the
+  next `io.write` was taken; it fails the flush now, with what was taken as progress. `io.close` then reported 0 for
+  such a flush, and uses that progress. A framer stopped by an exception remembered 0 for the frame it was reading,
+  and keeps what that `next` had read. `io.window-fill` took a negative or real count, and a closed reader with
+  input still buffered; it checks both, as the other reader operations do.
+
 ### Buffer views and cursors (2026-11-07, macOS arm64)
 
 - The API reference lives on its own `docs/buffers.md` page, linked from the guide and rendered with it.

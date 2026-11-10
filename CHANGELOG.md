@@ -85,6 +85,9 @@ All notable changes to this project are documented in this file. The format is b
   extra operands of a raw instruction were dropped; and a misplaced `exception` was reported as the instruction before.
 - `mmap.create` given a size such as `1.0` emptied the file and left a descriptor open before raising, and
   `mmap.close` returned `true` when the system could not unmap.
+- I/O: a backend that raised during a flush let new writes through, and close then reported no progress; a
+  framer stopped by an exception forgot what it had read of the current frame; and `io.window-fill` took a
+  negative or real count, and a closed reader.
 
 ## [0.6] - 2026-11-08
 

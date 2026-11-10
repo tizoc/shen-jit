@@ -154,4 +154,22 @@
       (frame-test.raises "not an I/O reader" (freeze (frame.reader [] 8)))
       (io.close E)))
 
+(frame-test.check "an exception keeps the current frame's progress"
+  [true 2 8]
+  (freeze
+    (let At (io.record [0])
+         E (io.endpoint "throwing frame input" read 2
+             (/. B (if (< (<-address At 0) 8)
+                       (do (shen-jit.u8! B 0 0) (shen-jit.u8! B 1 0) (address-> At 0 (+ 2 (<-address At 0))) [read 2])
+                       (error "read interrupted")))
+             (function io.no-write)
+             (freeze [ok]))
+         F (frame.reader (io.reader E []) 8)
+         _ (frame.next F)
+         Raised (trap-error (do (frame.next F) false) (/. X true))
+         Again (frame.next F)
+         Position (frame.position F)
+         _ (io.close E)
+      [Raised (io.error-progress (hd (tl Again))) Position])))
+
 (output "~A passed, ~A failed~%" (value frame-test.passed) (value frame-test.failed))
