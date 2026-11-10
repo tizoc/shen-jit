@@ -64,6 +64,11 @@ All notable changes to this project are documented in this file. The format is b
   continuation names one of its own variables; a query that returns or keeps a `freeze` reading its bindings,
   which went back to the pool; and three cases of inlining a sealed function, through a parameter bound again, a
   literal list, or a parameter named `lambda`.
+- Structs: a declaration whose generated names repeat another's in the same file replaced its operations and
+  broke its patterns, and raises now; a value after a `(protect ...)` one could run first; a pattern of a
+  registered handler inside a struct pattern was refused; a declaration refused under `(tc +)` could not be
+  corrected without restarting; `key <- ...` left other fields out; and in a namespace, dotted field labels
+  lost their prefix.
 
 ## [0.6] - 2026-11-08
 

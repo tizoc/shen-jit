@@ -1114,6 +1114,21 @@ that. Its readings decided nothing below.
   pass the lowerer checker. A fresh source tarball builds with `BOOTSTRAP=false` and passes the struct and
   namespace clients in both executables and their restored images. The guide examples run. Source-file
   declarations only; typed declarations and pattern integration remain outside this pilot.
+- **Six found by a review** (2026-11-10), each with a check in `tests/structs.shen` that failed before:
+  - Declarations read together are all expanded before any is defined, so arity could not show that
+    `(defstruct a b?)` generates `a.b?`, the predicate of an earlier `(defstruct a.b x)`, which it then
+    replaced, and `a.b` patterns matched `a` records. A struct now reserves its operations when it
+    registers.
+  - `(protect E)` counted as having no effects, so a labelled value after it could run first.
+  - Binding values with effects to keep their order also bound a pattern a registered handler reads, which
+    the kernel then refused inside a struct pattern. Values are bound only when those with effects are not
+    already in declaration order.
+  - A declaration refused under `(tc +)` stayed registered, so the corrected one was an incompatible
+    redefinition. The rule is checked before registering.
+  - `key <- ...` counted its `...` both as the value and as the marker leaving the other fields out.
+  - In a namespace, a dotted label lost its prefix: `describe` took the annotator's protection off plain
+    fields, and the name enumerator saw them unprotected. Outside a namespace, a label still loses what
+    precedes its last dot, as the package form prefixes the labels in it.
 
 ### Kernel pins and reproducible stage 0
 

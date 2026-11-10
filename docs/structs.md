@@ -37,7 +37,8 @@ For the declaration above:
 These are ordinary functions, including the positional constructor, so they can be passed with `fn`.
 There is no `entry.key->`. Field names must be literal symbols and unique; `make` and names beginning with
 `%` are reserved. A declaration that would generate colliding operation names, or replace an existing
-function on its first definition, raises.
+function on its first definition, raises, and so does one whose names another declaration in the same file
+generates.
 
 The predicate distinguishes records from different declarations even when their fields agree. Readers
 and setters assume a record of the declared type; they do not validate its tag on each operation. Use
@@ -120,7 +121,8 @@ The same form is a pattern in `define`:
 ```
 
 A pattern tests that the value is a record of that struct, then matches each named field against its
-own pattern, which may be any pattern: a variable, `_`, a literal, a list, or another struct's. A final
+own pattern, which may be any pattern: a variable, `_`, a literal, a list, another struct's, or one a
+registered pattern handler reads. A final
 `...` leaves the other fields out; without it, every field must be named. A pattern reads only the fields
 it names: `key-of` compiles to `(entry? V)` and `(entry.key V)`. Nothing else is a struct pattern: the
 positional `entry.make` is not one.
@@ -180,7 +182,7 @@ patterns as they are.
 ## Namespaces and images
 
 A namespace qualifies the type and its generated operations. Field labels remain literal even when
-they have the same spelling as a system function or imported alias; initializer expressions resolve
+they have the same spelling as a system function or imported alias, or have dots; initializer expressions resolve
 in the caller's scope normally. Generated bodies cannot capture the caller's shadowed primitives.
 Import the declaration keyword from `struct`. `:` needs no import; `struct.make` is used through the
 `struct` prefix. Export the type name as well as the operations clients need: a construction or a
@@ -220,6 +222,8 @@ The struct expander consumes protection only in literal field positions, preserv
 `<-` is system punctuation and needs no protection.
 
 With the older `package` form, include `defstruct` and `struct.make` in its external-symbol list when used.
+Outside a namespace a label is what follows its last dot, as that form prefixes the labels in it: there,
+`left.x` and `right.x` are the same field.
 `:` needs nothing there.
 
 ## Cost
@@ -227,8 +231,9 @@ With the older `package` form, include `defstruct` and `struct.make` in its exte
 A constructor allocates one vector with one tag slot plus one slot per field. Its values are ordinary
 managed Shen values, and construction can trigger GC. Readers and setters use constant slot indices;
 they allocate nothing on success and consult no schema or field-name table. The predicate uses the
-runtime's tagged-vector primitive, with no handler. Labelled construction binds only the values that
-may have effects, to keep their order, and passes the rest straight to the constructor: it compiles to
+runtime's tagged-vector primitive, with no handler. Labelled construction binds the values that may
+have effects only when they are not already in declaration order, to keep their order, and passes the
+rest straight to the constructor: it compiles to
 what the positional call does, and builds no runtime field list.
 
 Readers, setters, the predicate and a constructor of up to nine fields are inlined, and then cost what

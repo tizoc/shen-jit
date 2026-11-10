@@ -276,5 +276,72 @@
 (shen-jit.collect)
 (struct-test.check "managed field survives collection" [saved 17]
   (freeze [(struct-test.cell.key (value struct-test.saved)) (struct-test.cell.value (value struct-test.saved))]))
+(struct-test.check "declarations read together reserve their operations" true
+  (freeze
+    (struct-test.refused?
+      "(defstruct struct-test.review-a.b x)
+       (defstruct struct-test.review-a b?)")))
+
+(struct-test.check "a protected initializer keeps its source order" [first second]
+  (freeze
+    (do
+      (struct-test.install
+        "(define struct-test.review-order
+           -> (:struct-test.cell
+                 key <- (protect (struct-test.mark first))
+                 value <- (struct-test.mark second)))")
+      (set struct-test.*order* [])
+      (struct-test.review-order)
+      (value struct-test.*order*))))
+
+(define struct-test.review-box-handler
+  Self AddTest Bind [struct-test.review-box X]
+  -> (do (AddTest [cons? Self])
+         (Bind X [hd Self]))
+  _ _ _ _ -> (fail))
+
+(shen.x.programmable-pattern-matching.register-handler
+  struct-test.review-box-handler)
+
+(struct-test.check "a registered pattern inside a field" 7
+  (freeze
+    (do
+      (struct-test.install
+        "(define struct-test.review-nested
+           (:struct-test.cell key <- (struct-test.review-box X) ...) -> X
+           _ -> no)")
+      (struct-test.review-nested (struct-test.cell.make [7] 0)))))
+
+(shen.x.programmable-pattern-matching.unregister-handler
+  struct-test.review-box-handler)
+
+(struct-test.check "a refused declaration can be corrected" 7
+  (freeze
+    (do
+      (struct-test.refused-typed?
+        "(defstruct struct-test.review-retry x)")
+      (struct-test.install
+        "(defstruct struct-test.review-retry (x : number))")
+      (struct-test.review-retry.x
+        (struct-test.review-retry.make 7)))))
+
+(struct-test.check "... as a value does not leave fields out" true
+  (freeze
+    (struct-test.refused?
+      "(define struct-test.review-dots
+         (:struct-test.cell key <- ...) -> yes
+         _ -> no)")))
+
+(struct-test.check "dotted labels in a namespace stay as written" [1 2]
+  (freeze
+    (do
+      (struct-test.install
+        "(shen.x.namespace struct-test.review-dotted
+           (import struct defstruct)
+           (defstruct row left.x right.x))")
+      (let R (struct-test.review-dotted.row.make 1 2)
+        [(struct-test.review-dotted.row.left.x R)
+         (struct-test.review-dotted.row.right.x R)]))))
+
 (output "~A passed, ~A failed (structs)~%" (value struct-test.*passed*) (value struct-test.*failed*))
 (if (= (value struct-test.*failed*) 0) true (simple-error "struct checks failed"))

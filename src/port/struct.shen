@@ -59,8 +59,16 @@
   [protect X] -> (syntax-value X)
   X -> X)
 
+\\ A field as written, with any protection around a whole descriptor taken off: a protected label
+\\ stays protected, and so as written.
+(define field-syntax
+  [protect X] -> (field-syntax X) where (cons? X)
+  X -> X)
+
+\\ A label the namespace annotator protected is as written; any other loses what precedes its last
+\\ dot, as the package form prefixes the labels in it.
 (define local-label
-  [protect X] -> (local-label X)
+  [protect X] -> X where (name? X)
   X -> (intern (local-text (str X) "")) where (name? X)
   X -> (shen-jit.struct.fail defstruct "expected a field name" X))
 
@@ -141,7 +149,7 @@
 
 (define describe
   Name Written
-  -> (let Fields (fields Name (map (fn syntax-value) Written) [])
+  -> (let Fields (fields Name (map (fn field-syntax) Written) [])
           Typed (typed? Fields)
        (if (distinct? (operations Name Fields))
            Fields
@@ -155,9 +163,14 @@
 (define check-operations
   _ [] -> true
   Name [F | Fs]
-  -> (if (= (arity F) -1)
+  -> (if (and (= (arity F) -1) (= (operation-of F Name) Name))
          (check-operations Name Fs)
          (shen-jit.struct.fail Name "operation is already defined" F)))
+
+\\ The struct whose declaration generates F: declarations read together are all expanded before
+\\ any is defined, so arity does not yet show another's.
+(define operation-of
+  F Name -> (trap-error (get F shen-jit.struct.operation-of) (/. E Name)))
 
 (define register
   Name Fields
@@ -167,11 +180,13 @@
              ((cons? Old)
               (shen-jit.struct.fail Name "incompatible layout redefinition" Fields))
              (true
-              (let _ (check-operations Name (operations Name Fields))
+              (let Operations (operations Name Fields)
+                   _ (check-operations Name Operations)
                    Tag (fresh-tag Name)
                    Description [Tag Fields]
                 (do (put Name shen-jit.struct.schema Description)
                     (put (member Name %make) shen-jit.struct.of Name)
+                    (map (/. F (put F shen-jit.struct.operation-of Name)) Operations)
                     Description))))))
 
 \\ Each layout gets a fresh tag of its own, bound only to its printer. Re-reading it reuses the
@@ -256,10 +271,7 @@
   Name Fields Printer
   -> (let Typed (typed? Fields)
           Functions (functions Name Fields Printer (hd (schema Name)))
-       (cond ((and (tc?) Typed) (append (map (fn typed) Functions) [(pattern-rule Name Fields)]))
-             ((tc?)
-              (shen-jit.struct.fail Name "under (tc +) every field needs a type; add them or load under (tc -)"
-                                    (map (fn hd) Fields)))
+       (cond ((tc?) (append (map (fn typed) Functions) [(pattern-rule Name Fields)]))
              (Typed (append (map (fn plain) Functions) (map (fn declaration) (tl Functions))
                             [(pattern-rule Name Fields)]))
              (true (map (fn plain) Functions)))))
@@ -317,14 +329,19 @@
   [defstruct Name | Written]
   -> (let Fields (describe Name Written)
           Printer (printer-option Name (map (fn syntax-value) Written) [])
+          _ (if (and (tc?) (not (typed? Fields)))
+                (shen-jit.struct.fail Name "under (tc +) every field needs a type; add them or load under (tc -)"
+                                      (map (fn hd) Fields))
+                skip)
           _ (register Name Fields)
        (generate Name Fields Printer))
   Form -> (shen-jit.struct.fail defstruct "invalid declaration" Form))
 
 \\ (:T f <- V ...) and (struct.make T f <- V ...) become (T.%make V1 ... Vn), in declaration
-\\ order: a pattern for the handler below, or a construction. When a value may have effects, each
-\\ is bound first, in source order. With a final ..., the fields left out are fresh variables:
-\\ wildcards in a pattern, and free variables, so an error, in an expression.
+\\ order: a pattern for the handler below, or a construction. Values that may have effects and are
+\\ not already in declaration order are each bound first, in source order. With a final ..., the
+\\ fields left out are fresh variables: wildcards in a pattern, and free variables, so an error, in an
+\\ expression.
 (define dots?
   X -> (= (syntax-value X) (intern "...")))
 
@@ -352,17 +369,27 @@
   Name Args _ _ -> (shen-jit.struct.fail Name "expected Field <- Value" Args))
 
 (define partial?
-  [] -> false
   [Dots] -> true where (dots? Dots)
-  [_ | Rest] -> (partial? Rest))
+  [_ _ _ | Rest] -> (partial? Rest)
+  _ -> false)
 
 (define named-code
   Name Args Fields
   -> (let Named (named-fields Name Args Fields [])
           Partial (partial? Args)
           Make (member Name %make)
-       (bind-values (impure Named)
-         [Make | (values Name Fields (map (fn written-or-bound) Named) Partial)])))
+          Impure (impure Named)
+       (if (in-order? (map (fn hd) Impure) (map (fn hd) Fields))
+           [Make | (values Name Fields (map (fn written) Named) Partial)]
+           (bind-values Impure [Make | (values Name Fields (map (fn written-or-bound) Named) Partial)]))))
+
+\\ Whether Labels come in the order of Order, so that the call evaluates them as written. Then
+\\ nothing is bound, and a pattern of another kind, which looks like a call, stays a pattern.
+(define in-order?
+  [] _ -> true
+  [L | Ls] [L | Os] -> (in-order? Ls Os)
+  Ls [_ | Os] -> (in-order? Ls Os)
+  _ _ -> false)
 
 \\ A value that may have effects is bound to its variable first, in source order; any other stays
 \\ where it is, so a pattern, whose values are all pure, becomes the call itself.
@@ -373,6 +400,9 @@
 
 (define written-or-bound
   [Label Value Variable] -> [Label (if (pure? Value) Value Variable)])
+
+(define written
+  [Label Value _] -> [Label Value])
 
 (define values
   _ [] _ _ -> []
@@ -396,7 +426,7 @@
 
 \\ What cannot have effects, so its order does not matter: what patterns are made of.
 (define pure?
-  [protect _] -> true
+  [protect X] -> (pure? X)
   [vector 0] -> true
   [C A B] -> (and (pure? A) (pure? B)) where (element? C [cons @p @s @v])
   [Make | Args] -> (all? (fn pure?) Args)
@@ -472,9 +502,11 @@
 
 \\ A printer's function and a field's type resolve in the caller's scope like any other reference.
 (define protect-field
+  [protect X] -> [protect X]
   [Marker F] -> [[protect Marker] F] where (= (marker Marker) printer)
   [Marker Field Colon Type] -> [[protect Marker] [protect Field] [protect Colon] Type]
     where (and (= (marker Marker) mutable) (= Colon (intern ":")))
+  [Marker Field] -> [[protect Marker] [protect Field]] where (= (marker Marker) mutable)
   [Field Colon Type] -> [[protect Field] [protect Colon] Type] where (= Colon (intern ":"))
   Field -> [protect Field])
 
@@ -485,10 +517,11 @@
   -> [[protect Field] Arrow Value | (protect-labels Rest)] where (arrow? Arrow)
   Args -> (shen-jit.struct.fail struct.make "expected Field <- Value" Args))
 
-\\ Enumerate bindings without expanding the declaration or installing its schema.
+\\ Enumerate bindings without expanding the declaration or installing its schema. Only a namespace
+\\ asks, so the labels are protected, as written, whether or not the annotator has done it yet.
 (define introduced-names
   [defstruct Name | Written]
-  -> [Name | (operations Name (describe Name Written))]
+  -> [Name | (operations Name (describe Name (map (fn protect-field) Written)))]
   Form -> (shen-jit.struct.fail defstruct "invalid declaration" Form))
 
 )
