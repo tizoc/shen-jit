@@ -957,14 +957,18 @@ b" (n->string 0) (n->string 255)] (o.strings)))
 \\ ---------------------------------------------------------------------------
 \\ Definitions
 
+\\ Also with functions named as the port once named the lambda's parameters, which captured them,
+\\ and as it names them now, after the function.
 (define o.lambdatable
   -> (do (output "shen.update-lambdatable~%")
-         (o.for-each (/. N (o.lambdatable-case N)) [1 2 3 4])))
+         (o.for-each (/. N (o.lambdatable-case (concat o.lt N) N)) [1 2 3 4])
+         (o.lambdatable-case shen-jit.lambda-form1 1)
+         (o.lambdatable-case shen-jit.lambda-form2 2)
+         (o.lambdatable-case o.lt/1 2)))
 
 (define o.lambdatable-side
-  Update N
-  -> (let F (concat o.lt N)
-          _ (eval-kl [defun F (o.take N [a b c d]) [cons 7 (o.list-form (o.take N [a b c d]))]])
+  Update F N
+  -> (let _ (eval-kl [defun F (o.take N [a b c d]) [cons 7 (o.list-form (o.take N [a b c d]))]])
           _ (put F arity N (value *property-vector*))
           G (value shen.*gensym*)
           R (Update F N)
@@ -982,10 +986,10 @@ b" (n->string 0) (n->string 255)] (o.strings)))
   [X | Xs] -> [cons X (o.list-form Xs)])
 
 (define o.lambdatable-case
-  N -> (let K (o.lambdatable-side (o.k shen.update-lambdatable) N)
-            P (o.lambdatable-side (o.p shen.update-lambdatable) N)
-         (do (o.check)
-             (if (= K P) skip (o.fail (make-string "shen.update-lambdatable ~A: kernel ~A, port ~A" N K P))))))
+  F N -> (let K (o.lambdatable-side (o.k shen.update-lambdatable) F N)
+              P (o.lambdatable-side (o.p shen.update-lambdatable) F N)
+           (do (o.check)
+               (if (= K P) skip (o.fail (make-string "shen.update-lambdatable ~A: kernel ~A, port ~A" F K P))))))
 
 \\ What recording leaves: what it returned, the list of definitions, and the definition.
 (define o.record-side

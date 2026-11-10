@@ -113,6 +113,8 @@ All notable changes to this project are documented in this file. The format is b
   holding a NUL byte came back cut at it, and could not be bound.
 - `socket.readable?` took a negative wait, which could wait for ever, and a real one.
 - A curl transfer whose response fields did not parse reported no body progress.
+- `fn`, given through a variable a function named `shen-jit.lambda-form1` or the like, gave a function that applied
+  its argument to itself.
 - Types that let typed code go wrong: any JSON value passed for a string, a number or a list, and an HTTP server or
   listener option for a response or chunk option; a foreign function defined again kept its earlier type; and a
   typed grammar took a byte bound with a parameter's name for the parameter, left the arguments it gave a rule

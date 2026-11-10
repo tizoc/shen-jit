@@ -82,7 +82,8 @@ a file of definitions, for a closure that fn rarely needs. The port stores
 [shen-jit.lazy-form N] instead, and fn replaces it with the real form the
 first time. The kernel's shen.lambda-function calls gensym once per
 argument, so the counter still moves by N, and later gensyms are the same;
-the lambda made later names its parameters without gensym."
+the lambda made later names its parameters without gensym, after F, as F/1
+and so on: a fixed name would be captured by a function of that name."
 
 (defun shen.update-lambdatable (F N)
   (do (set shen.*gensym* (+ (value shen.*gensym*) N))
@@ -98,7 +99,7 @@ the lambda made later names its parameters without gensym."
 (defun shen-jit.curried (Call N)
   (if (= N 0)
       Call
-      (let X (intern (cn "shen-jit.lambda-form" (str N)))
+      (let X (intern (cn (str (hd Call)) (cn "/" (str N))))
         (cons lambda (cons X (cons (shen-jit.curried (append Call (cons X ())) (- N 1)) ()))))))
 
 "Native dictionaries (src/runtime/dict.c). A dictionary is an absvector

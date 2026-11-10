@@ -816,6 +816,10 @@ all that Shen/Scheme and the earlier prototype replace.
   needs. A placeholder holding the arity now waits for `fn`, and `shen.*gensym*` still moves by the arity, so later
   gensyms are unchanged. Reading the property directly shows the placeholder. With `eval-kl` returning a non-list
   uncompiled, 3,000 definitions compile 208 code objects, not 6,217.
+- **Its parameters named after the function** (2026-11-10, found by a review of the port). The form named them
+  `shen-jit.lambda-form1` and so on, without gensym so that the counter moved as the kernel's does, and a function of
+  one of those names was captured: `(fn F)` of `shen-jit.lambda-form1` applied the argument to itself. They are
+  `F/1` and so on now, never F. `tests/overrides.shen` compares such names with the kernel's.
 
 ### Prolog
 
