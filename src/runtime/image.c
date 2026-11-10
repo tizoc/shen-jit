@@ -145,7 +145,9 @@ static bool write_image(VM *vm, const char *path, const char *mode)
 {
     /* An image holds what the cells, constants and symbol table reach. Drop
        the transient roots, which it does not save, so that a reloaded image
-       dumps unchanged. */
+       dumps unchanged. Guards, the values of dead pointers, pointers' owners
+       and roots held by C stay: what only they reach is written but cannot be
+       reached in the image, so the next image leaves it out. */
     for (size_t i = 0; i < sizeof vm->args / sizeof vm->args[0]; i++)
         vm->args[i] = V_NIL;
     vm->exception = V_NIL;

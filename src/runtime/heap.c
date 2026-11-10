@@ -574,7 +574,9 @@ static bool in_from(const Copy *c, V v)
    and the others give their cells back. The new table is built the same way
    from any layout of the same symbols, and the symbols it alone keeps are
    copied in its order, so that collecting a heap twice lays it out the same
-   way: an image written from a loaded image is identical to it. */
+   way: an image written from a loaded image is identical to it, unless what
+   was written held objects that only guards, pointers' owners or roots held
+   by C reached (image.c). */
 static void sweep_symbols(VM *vm, Copy *c)
 {
     uint64_t *old = ptr(vm->intern);

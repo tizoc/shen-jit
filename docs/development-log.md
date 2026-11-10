@@ -577,6 +577,11 @@ Nothing in the runtime changes for it alone.
 - **Byte-identical round trip.** An image written from a loaded image must match it. This found 28 words from transient roots
   (2026-11-01), and made the weak table rebuild the same way from any layout of the same symbols (2026-11-02). Large objects
   are copied into the heap first, so the format stayed.
+  - **Not for the FFI's roots** (2026-11-10, found by a review). What only guards, the values of dead pointers, pointers'
+    owners or roots held by C reach is written, but nothing in the image reaches it, so a second image leaves it out: 34
+    words for a 257-byte buffer kept by a guard. **Rejected:** clearing the guards, the dead values and every owner before
+    writing, about 8 lines, safe only because every save ends the process, and C's roots would stay, as exit handlers may
+    still use them. The claim was narrowed instead; the kernel image holds none of these.
 - **Size.** Dictionaries ignore the requested size, so the property vector has 256 buckets instead of 20,000: image 1.27 to
   1.12 MB (2026-11-01). Bytecode as variable-length integers: 699 to 181 KB, image 1.22 to 0.70 MB, live heap at startup 1.1
   to 0.6 MB, with startup and collections unchanged (2026-11-02, M3 Max). 16-bit operands, considered first, would have
