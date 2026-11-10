@@ -175,8 +175,8 @@
                Code (shen-jit.c-errno)
             (if (< Fd 0)
                 [error (file-error open Resolved Code)]
-                (trap-error [ok (file-make Resolved Mode Fd)]
-                  (/. X (do (file-c-close Fd) (simple-error (error-to-string X))))))))
+                (shen-jit.on-error (freeze [ok (file-make Resolved Mode Fd)])
+                                   (freeze (file-c-close Fd))))))
         (/. X [error (native-error open foreign 0 Resolved (error-to-string X))]))))
 
 \\ File scopes share the core's result and cleanup policy.

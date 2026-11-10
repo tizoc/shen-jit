@@ -99,9 +99,7 @@
 \\ The descriptor is closed either way: a mapping does not need it.
 (define map
   Path Fd _ -> (fail Path) where (< Fd 0)
-  Path Fd Write -> (let M (trap-error (map-open Path Fd Write)
-                                      (/. E (do (c-close Fd) (simple-error (error-to-string E)))))
-                     (do (c-close Fd) M)))
+  Path Fd Write -> (shen-jit.finally (freeze (map-open Path Fd Write)) (freeze (c-close Fd))))
 
 (define map-open
   Path Fd Write -> (let Length (c-lseek Fd 0 2)

@@ -1,24 +1,10 @@
 \\ A small persistent counter API. Load the public HTTP listener, grammar and SQLite libraries first.
 \\ Each database connection belongs to the request worker that opens it.
 
-(define counter-app.with-db
-  Path F ->
-    (let Db (sqlite.open Path)
-         Result (trap-error [ok (F Db)] (/. X [error (error-to-string X)]))
-         Closed (trap-error (do (sqlite.close Db) [ok]) (/. X [error (error-to-string X)]))
-      (counter-app.db-result Result Closed)))
-
-(define counter-app.db-result
-  [ok Value] [ok] -> Value
-  [error Message] [ok] -> (simple-error Message)
-  [ok _] [error Message] -> (simple-error Message)
-  [error Message] [error Cleanup] ->
-    (simple-error (make-string "~A; closing database: ~A" Message Cleanup)))
-
 (define counter-app.initialize
   Path ->
     (do (if (or (= Path "") (= Path ":memory:")) (error "counter app needs a database file") true)
-        (counter-app.with-db Path
+        (sqlite.with-database Path
           (/. Db (sqlite.exec Db
             "CREATE TABLE IF NOT EXISTS counters (
                name TEXT PRIMARY KEY,
@@ -60,16 +46,15 @@
 (define counter-app.export
   Path ->
     (let Db (sqlite.open Path)
-         Stmt (trap-error (sqlite.prepare Db "SELECT name, value FROM counters ORDER BY name LIMIT 100")
-                (/. X (counter-app.db-result [error (error-to-string X)]
-                         (trap-error (do (sqlite.close Db) [ok])
-                           (/. Y [error (error-to-string Y)])))))
+         Stmt (shen-jit.on-error
+                (freeze (sqlite.prepare Db "SELECT name, value FROM counters ORDER BY name LIMIT 100"))
+                (freeze (sqlite.close Db)))
          State (io.record [Stmt [] 0 false])
-      (trap-error
-        (http.stream-response 200 [["Content-Type" "application/x-ndjson"]] [chunked]
-          (http.source (/. Maximum D (counter-app.export-next State Maximum D))
-                       (freeze (counter-app.export-close Db Stmt))))
-        (/. X (do (counter-app.export-close Db Stmt) (simple-error (error-to-string X)))))))
+      (shen-jit.on-error
+        (freeze (http.stream-response 200 [["Content-Type" "application/x-ndjson"]] [chunked]
+                  (http.source (/. Maximum D (counter-app.export-next State Maximum D))
+                               (freeze (counter-app.export-close Db Stmt)))))
+        (freeze (counter-app.export-close Db Stmt)))))
 
 (define counter-app.export-close
   Db Stmt ->
@@ -144,11 +129,11 @@
 (define counter-app.serve
   Path "HEAD" Resource -> (counter-app.serve Path "GET" Resource)
   _ "GET" [health] -> (counter-app.json 200 [object ["status" "ok"]])
-  Path "GET" [counters] -> (counter-app.with-db Path (function counter-app.list))
+  Path "GET" [counters] -> (sqlite.with-database Path (function counter-app.list))
   Path "GET" [export] -> (counter-app.export Path)
-  Path "GET" [counter Name] -> (counter-app.with-db Path (/. Db (counter-app.value Db Name)))
-  Path "POST" [counter Name] -> (counter-app.with-db Path (/. Db (counter-app.increment Db Name)))
-  Path "DELETE" [counter Name] -> (counter-app.with-db Path (/. Db (counter-app.delete Db Name)))
+  Path "GET" [counter Name] -> (sqlite.with-database Path (/. Db (counter-app.value Db Name)))
+  Path "POST" [counter Name] -> (sqlite.with-database Path (/. Db (counter-app.increment Db Name)))
+  Path "DELETE" [counter Name] -> (sqlite.with-database Path (/. Db (counter-app.delete Db Name)))
   _ _ [counter _] -> (counter-app.not-allowed "GET, HEAD, POST, PUT, DELETE")
   _ _ [_] -> (counter-app.not-allowed "GET, HEAD")
   _ _ [] -> (counter-app.error 404 "route not found"))
@@ -207,7 +192,7 @@
 (define counter-app.set-input
   _ _ [invalid] -> (counter-app.error 400 "expected an object with one decimal integer value in 0..1000000000000")
   Path Name [ok N] ->
-    (counter-app.with-db Path
+    (sqlite.with-database Path
       (/. Db (sqlite.transaction Db
                (freeze
                  (do (sqlite.run Db "INSERT OR IGNORE INTO counters (name, value) VALUES (?, 0)" [Name])

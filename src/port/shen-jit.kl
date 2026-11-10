@@ -445,11 +445,31 @@ may use as values, as (fn shen-jit.u8)."
     (do (shen-jit.primitive shen-jit.collect 0)
     (do (shen-jit.primitive shen-jit.write-bytes 4) shen.skip)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
 
+"Cleanup, as a library that holds something outside the heap needs it.
+(shen-jit.finally Body Cleanup) thaws Body, then Cleanup however Body ended,
+and gives Body's value. (shen-jit.on-error Body Cleanup) thaws Cleanup only if
+Body raised, for something its caller owns once Body returns. Either way the
+error raised is Body's, after Cleanup: one Cleanup raises too is added to its
+message, so that it is neither lost nor put in its place."
+
+(defun shen-jit.finally (Body Cleanup)
+  (let Result (trap-error (thaw Body) (lambda E (shen-jit.failed E Cleanup)))
+    (do (thaw Cleanup) Result)))
+
+(defun shen-jit.on-error (Body Cleanup)
+  (trap-error (thaw Body) (lambda E (shen-jit.failed E Cleanup))))
+
+(defun shen-jit.failed (E Cleanup)
+  (let Message (error-to-string E)
+    (simple-error (trap-error (do (thaw Cleanup) Message)
+                    (lambda C (cn Message (cn "; cleanup: " (error-to-string C))))))))
+
 "Stage 1 calls this after the kernel and extensions are initialised: it
 registers the port functions meant for Shen code. (shen-jit.exit N) ends
 the process with status N; it is not named exit, since port definitions are
 sealed and programs may define their own exit. (shen-jit.save-executable Path
-Entry) writes a binary and ends the process. The others are for native.shen,
+Entry) writes a binary and ends the process. shen-jit.finally and
+shen-jit.on-error are typed, and can be given one argument. The others are for native.shen,
 which would otherwise compile its calls to them as look-ups with fn.
 
 (thread Frozen) runs Frozen in a new thread, as Shen/Scheme's does, with one
@@ -470,13 +490,20 @@ ended, since programs may define their own thread."
                     (cons shen-jit.lower.bind (cons 2 (cons shen-jit.lower.reserve (cons 2
                       (cons shen-jit.lower.constant (cons 2 (cons shen-jit.lower.add-code (cons 2
                         (cons shen-jit.lower.code-form (cons 1 (cons shen-jit.lower.prim-arity (cons 1
-                          (cons shen-jit.lower.fixed? (cons 1 ())))))))))))))))))))))))))))))))))))))
+                          (cons shen-jit.lower.fixed? (cons 1
+                            (cons shen-jit.finally (cons 2 (cons shen-jit.on-error (cons 2 ())))))))))))))))))))))))))))))))))))))))))
+      (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.finally))
+      (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.on-error))
+      (do (declare shen-jit.finally (cons (cons lazy (cons A ()))
+                                      (cons --> (cons (cons (cons lazy (cons B ())) (cons --> (cons A ()))) ()))))
+      (do (declare shen-jit.on-error (cons (cons lazy (cons A ()))
+                                       (cons --> (cons (cons (cons lazy (cons B ())) (cons --> (cons A ()))) ()))))
       (do (shen.set-lambda-form-entry (shen.lambda-entry thread))
       (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.seal))
           (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.exit))
               (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.code))
                   (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.save-executable))
-                      (set shen-jit.defined ())))))))))))
+                      (set shen-jit.defined ())))))))))))))))
 
 "Definitions are factorised as they are evaluated, as Shen/Scheme's compiler
 does: the kernel's shen.factor binds each selector once and shares the tests

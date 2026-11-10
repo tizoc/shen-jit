@@ -126,8 +126,7 @@
 
 \\ Runs a frozen expression, closing S if it raises.
 (define closing-on-error
-  S F -> (trap-error (thaw F)
-                     (/. E (do (c-close S) (simple-error (error-to-string E))))))
+  S F -> (shen-jit.on-error F (freeze (c-close S))))
 
 \\ ---------------------------------------------------------------------------
 \\ Waiting.
@@ -166,8 +165,14 @@
                            (<= Left Slice) false
                            true (wait-for S Event (- Left Slice)))))
 
+\\ A wait that poll would take as forever, or one it cannot take, is refused before polling.
 (define readable?
-  S Milliseconds -> (wait-for S (readable-event) Milliseconds))
+  S Milliseconds -> (if (milliseconds? Milliseconds)
+                        (wait-for S (readable-event) Milliseconds)
+                        (error "socket: a wait must be a whole number of milliseconds, 0 or more")))
+
+(define milliseconds?
+  X -> (and (number? X) (>= X 0) (trap-error (= X (shen-jit.bit-or X 0)) (/. E false))))
 
 (define min
   X Y -> (if (< X Y) X Y))

@@ -2805,6 +2805,26 @@ First libraries, to test whether declarations cover real use: 128 and 206 lines 
 - **`bytes` passes a buffer's start, so `socket.send` copies through a 64 KB chunk.** 100 MB on loopback ran at about
   3 GB/s, so the copy is not the limit. An offset type waits for a profile.
 - **A SQLite connection belongs to one thread.** Apple's build is in multi-thread mode and `sqlite.step` gives up the lock.
+- **2026-11-10, five found by a review of the libraries over C,** each with a check that failed before. SQLite's
+  `transaction` ran COMMIT outside its handler, so a deferred foreign key left the transaction open, and rolled back
+  unconditionally, so after `INSERT OR ROLLBACK` "cannot rollback - no transaction is active" took the place of the
+  constraint's error: COMMIT is inside now, and a rollback only while `sqlite3_get_autocommit` says one is open.
+  TEXT came back through a NUL-terminated string, cut at a NUL: it is read with its length now, as a blob is, and
+  bound with it. `socket.readable?` passed its wait to `poll`, where -1 waits for ever, and a real one reached its
+  `int32`. curl parsed the response fields inside the handler that wraps the whole transfer, so a malformed one
+  reported progress 0; it keeps the accepted count now.
+- **2026-11-10, a cleanup helper, kept.** Thirteen places in `lib/` cleaned up by hand: `trap-error`, the cleanup,
+  `(simple-error (error-to-string E))`, and often the cleanup again after success, which is where the rollback above
+  replaced its error. The libraries that return errors as values already had scopes, `io.with-endpoint` and
+  `curl.with-client`, with `io.finish` keeping the first error; the SQLite example had written its own. So the port
+  has `shen-jit.finally` and `shen-jit.on-error`, about 10 lines, typed: the body's error is raised after the
+  cleanup, with a cleanup's own error added to its message, as dropping it hides a leak and raising it hides the
+  cause. In the port, as user code needs it as much as the libraries, which load no common library. The pure
+  resource sites use it: a statement and a transaction in SQLite, `mmap.map`, the socket, file and temporary-file
+  openers, and `io-socket`'s; `sqlite.with-database` is built on it, and the example's `with-db` is gone. Left:
+  `io`'s busy flag, on every endpoint call, whose closure the helper would add to a hot path, and the readers that
+  record different state on each path (frames, HTTP heads and bodies, `io.flush`). Of this review's bugs it would
+  have prevented the rollback one; most were checks made after acquiring, or progress counts.
 
 ### Bugs found while building it
 

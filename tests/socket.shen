@@ -167,4 +167,23 @@
 (socket-test.raises "nothing listening" "socket: connect"
   (freeze (socket.connect "127.0.0.1" (value closed-port))))
 
+(let L (socket.listen "127.0.0.1" 0)
+     C (socket.connect "127.0.0.1" (socket.port L))
+     S (socket.accept L)
+     _ (socket.send C "x")
+  (do
+    (socket-test.check "negative wait refused" true
+      (freeze
+        (trap-error
+          (do (socket.readable? S -1) false)
+          (/. E true))))
+    (socket-test.check "fractional wait refused" true
+      (freeze
+        (trap-error
+          (do (socket.readable? S 100.5) false)
+          (/. E true))))
+    (socket.close S)
+    (socket.close C)
+    (socket.close L)))
+
 (output "~A passed, ~A failed~%" (value socket-test.*passed*) (value socket-test.*failed*))

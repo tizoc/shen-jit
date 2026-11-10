@@ -144,4 +144,11 @@
 (curl-test.check "scoped client cleans up on exception" error
   (freeze (hd (curl.with-client (/. C (error "scope failed"))))))
 
+(curl-test.check "field parse failure preserves body progress" 3
+  (freeze
+    (let C (curl.open)
+         E (curl-test.error (curl-test.get C "/bad-field" []))
+         _ (curl.close C)
+      (io.error-progress E))))
+
 (output "~A passed, ~A failed~%" (value curl-test.passed) (value curl-test.failed))

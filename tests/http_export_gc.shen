@@ -1,6 +1,6 @@
 \\ Application and libraries are already in the image; every allocation here collects.
 (counter-app.initialize (value export-gc.path))
-(counter-app.with-db (value export-gc.path)
+(sqlite.with-database (value export-gc.path)
   (/. Db (do (sqlite.run Db "INSERT INTO counters VALUES (?, ?)" ["a" 1])
              (sqlite.run Db "INSERT INTO counters VALUES (?, ?)" ["é😀" 2]))))
 (let Response (counter-app.export (value export-gc.path))

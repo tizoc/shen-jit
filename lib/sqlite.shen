@@ -3,14 +3,15 @@
 \\
 \\   shen-jit eval -l lib/ffi.shen -l lib/sqlite.shen -l program.shen
 \\
-\\ (let Db (sqlite.open "people.db")
-\\   (do (sqlite.exec Db "CREATE TABLE IF NOT EXISTS people (name TEXT, age INTEGER)")
-\\       (sqlite.run Db "INSERT INTO people VALUES (?, ?)" ["Ann" 30])
-\\       (output "~S~%" (sqlite.query Db "SELECT name, age FROM people WHERE age > ?" [20]))
-\\       (sqlite.close Db)))
+\\ (sqlite.with-database "people.db"
+\\   (/. Db
+\\     (do (sqlite.exec Db "CREATE TABLE IF NOT EXISTS people (name TEXT, age INTEGER)")
+\\         (sqlite.run Db "INSERT INTO people VALUES (?, ?)" ["Ann" 30])
+\\         (output "~S~%" (sqlite.query Db "SELECT name, age FROM people WHERE age > ?" [20])))))
 \\
 \\ sqlite.open            (sqlite.open Path), ":memory:" for a database in memory
 \\ sqlite.close           raises if a prepared statement is still open
+\\ sqlite.with-database   (sqlite.with-database Path F) gives F the database, closed however F ends
 \\ sqlite.exec            (sqlite.exec Db Sql) runs statements with no parameters or results
 \\ sqlite.run             (sqlite.run Db Sql Params) runs one, and gives the rows it changed
 \\ sqlite.query           (sqlite.query Db Sql Params) gives its rows, each a list
@@ -36,7 +37,7 @@
     sqlite3-statement])
   (shadow bind close fail open run step value version)
   (export bind close each exec finalize last-insert-id open prepare query reset sqlite.row => row
-    run step transaction version)
+    run step transaction version with-database)
 
 (shen-jit.library lib ["libsqlite3.so.0" "libsqlite3.dylib" "libsqlite3-0.dll" "sqlite3.dll" "winsqlite3.dll"])
 
@@ -57,17 +58,18 @@
 (define-foreign c-bind-double lib "sqlite3_bind_double" (pointer int32 double) --> int32)
 (define-foreign c-bind-null lib "sqlite3_bind_null" (pointer int32) --> int32)
 \\ The last argument of these two is SQLITE_TRANSIENT, the pointer value -1: SQLite takes a copy.
-(define-foreign c-bind-text lib "sqlite3_bind_text" (pointer int32 string int32 int64) --> int32)
+(define-foreign c-bind-text lib "sqlite3_bind_text" (pointer int32 bytes int32 int64) --> int32)
 (define-foreign c-bind-blob lib "sqlite3_bind_blob" (pointer int32 bytes int32 int64) --> int32)
 (define-foreign c-column-count lib "sqlite3_column_count" (pointer) --> int32)
 (define-foreign c-column-type lib "sqlite3_column_type" (pointer int32) --> int32)
 (define-foreign c-column-int64 lib "sqlite3_column_int64" (pointer int32) --> int64)
 (define-foreign c-column-double lib "sqlite3_column_double" (pointer int32) --> double)
-(define-foreign c-column-text lib "sqlite3_column_text" (pointer int32) --> string)
+(define-foreign c-column-text lib "sqlite3_column_text" (pointer int32) --> pointer)
 (define-foreign c-column-blob lib "sqlite3_column_blob" (pointer int32) --> pointer)
 (define-foreign c-column-bytes lib "sqlite3_column_bytes" (pointer int32) --> int32)
 (define-foreign c-changes lib "sqlite3_changes" (pointer) --> int32)
 (define-foreign c-last-insert-rowid lib "sqlite3_last_insert_rowid" (pointer) --> int64)
+(define-foreign c-autocommit lib "sqlite3_get_autocommit" (pointer) --> int32)
 
 (define fail
   Db -> (error "sqlite: ~A" (c-errmsg Db)))
@@ -90,6 +92,9 @@
   Db -> (if (= (c-close Db) 0)
             (do (shen-jit.pointer-kill Db) true)
             (fail Db)))
+
+(define with-database
+  Path F -> (let Db (open Path) (shen-jit.finally (freeze (F Db)) (freeze (close Db)))))
 
 (define exec
   Db Sql -> (if (= (c-exec Db Sql [] [] []) 0) true (fail Db)))
@@ -130,7 +135,8 @@
   Stmt I [] -> (c-bind-null Stmt I)
   Stmt I true -> (c-bind-int64 Stmt I 1)
   Stmt I false -> (c-bind-int64 Stmt I 0)
-  Stmt I V -> (c-bind-text Stmt I V -1 -1) where (string? V)
+  Stmt I V -> (let B (shen-jit.string->bytes V) (c-bind-text Stmt I B (shen-jit.bytes-length B) -1))
+    where (string? V)
   Stmt I V -> (c-bind-blob Stmt I V (shen-jit.bytes-length V) -1) where (shen-jit.bytes? V)
   Stmt I V -> (c-bind-int64 Stmt I V) where (fixnum? V)
   Stmt I V -> (c-bind-double Stmt I V) where (number? V)
@@ -153,27 +159,26 @@
   _ -1 Row -> Row
   Stmt I Row -> (columns Stmt (- I 1) [(value Stmt I (c-column-type Stmt I)) | Row]))
 
-\\ By SQLite's codes for INTEGER, FLOAT, TEXT and BLOB; 5 is NULL.
+\\ By SQLite's codes for INTEGER, FLOAT, TEXT and BLOB; 5 is NULL. Text has its length, as it
+\\ can hold NUL bytes.
 (define value
   Stmt I 1 -> (c-column-int64 Stmt I)
   Stmt I 2 -> (c-column-double Stmt I)
-  Stmt I 3 -> (c-column-text Stmt I)
-  Stmt I 4 -> (blob Stmt I)
+  Stmt I 3 -> (let B (column-bytes Stmt I (c-column-text Stmt I))
+                (shen-jit.bytes->string B 0 (shen-jit.bytes-length B)))
+  Stmt I 4 -> (column-bytes Stmt I (c-column-blob Stmt I))
   _ _ _ -> [])
 
-\\ In this order, as SQLite asks. An empty blob's pointer is NULL.
-(define blob
-  Stmt I -> (let P (c-column-blob Stmt I)
-                 N (c-column-bytes Stmt I)
-              (if (= P []) (shen-jit.bytes 0) (shen-jit.pointer->bytes P 0 N))))
+\\ The pointer first, then the length, as SQLite asks. An empty blob's pointer is NULL.
+(define column-bytes
+  Stmt I P -> (let N (c-column-bytes Stmt I)
+                (if (= P []) (shen-jit.bytes 0) (shen-jit.pointer->bytes P 0 N))))
 
 \\ One statement, finalized however F ends.
 (define with-statement
   Db Sql Params F
   -> (let Stmt (prepare Db Sql)
-          Result (trap-error (do (bind Stmt Params) (F Stmt))
-                             (/. E (do (finalize Stmt) (simple-error (error-to-string E)))))
-       (do (finalize Stmt) Result)))
+       (shen-jit.finally (freeze (do (bind Stmt Params) (F Stmt))) (freeze (finalize Stmt)))))
 
 (define query
   Db Sql Params -> (with-statement Db Sql Params (/. Stmt (rows Stmt []))))
@@ -195,11 +200,11 @@
   Db Sql Params -> (with-statement Db Sql Params
                      (/. Stmt (do (each-row Stmt (/. Row skip)) (c-changes Db)))))
 
+\\ A COMMIT that fails, as one a deferred constraint stops does, leaves the transaction open, and
+\\ some errors end it in SQLite already, as INSERT OR ROLLBACK does: only an open one is rolled back.
 (define transaction
   Db F -> (do (exec Db "BEGIN")
-              (let Result (trap-error (thaw F)
-                                      (/. E (do (exec Db "ROLLBACK")
-                                                (simple-error (error-to-string E)))))
-                (do (exec Db "COMMIT") Result))))
+              (shen-jit.on-error (freeze (let Result (thaw F) _ (exec Db "COMMIT") Result))
+                                 (freeze (if (= (c-autocommit Db) 0) (exec Db "ROLLBACK") skip)))))
 
 )

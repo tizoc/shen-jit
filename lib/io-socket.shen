@@ -121,8 +121,7 @@
                     (if (socket.windows?) (< N 2305843009213693951) (<= N 2147483647)))
                true
                (error "io: invalid socket or name"))
-      (trap-error (socket-make N Name)
-        (/. X (do (socket.c-close N) (simple-error (error-to-string X)))))))
+      (shen-jit.on-error (freeze (socket-make N Name)) (freeze (socket.c-close N)))))
 
 (define socket-check
   E ->

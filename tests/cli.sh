@@ -316,6 +316,40 @@ cat "$bin/runtime" "$dir/app3.img" > "$dir/app" && chmod +x "$dir/app"
 "$dir/app" eval -e '(triple 14)' > "$dir/app.out" 2>&1
 check application "$dir/app.out" "42"
 
+# shen-jit.finally cleans up however its body ends, and shen-jit.on-error
+# only if it raised; the body's error wins, with a cleanup's error added.
+cat > "$dir/cleanup.shen" <<'EOF'
+(define cleanup.try F -> (trap-error (thaw F) (/. E [raised (error-to-string E)])))
+(define cleanup.note X -> (do (set cleanup.notes [X | (value cleanup.notes)]) skip))
+(set cleanup.notes [])
+(output "finally ~S~%" (cleanup.try (freeze (shen-jit.finally (freeze 1) (freeze (cleanup.note a))))))
+(output "finally raised ~S~%"
+  (cleanup.try (freeze (shen-jit.finally (freeze (simple-error "body")) (freeze (cleanup.note b))))))
+(output "finally both ~S~%"
+  (cleanup.try (freeze (shen-jit.finally (freeze (simple-error "body")) (freeze (simple-error "close"))))))
+(output "finally cleanup ~S~%"
+  (cleanup.try (freeze (shen-jit.finally (freeze 1) (freeze (simple-error "close"))))))
+(output "on-error ~S~%" (cleanup.try (freeze (shen-jit.on-error (freeze 2) (freeze (cleanup.note c))))))
+(output "on-error raised ~S~%"
+  (cleanup.try (freeze (shen-jit.on-error (freeze (hd [])) (freeze (cleanup.note d))))))
+(output "partial ~S~%" ((shen-jit.finally (freeze 3)) (freeze skip)))
+(output "notes ~S~%" (value cleanup.notes))
+EOF
+"$SHEN" script "$dir/cleanup.shen" > "$dir/cleanup.out" 2>&1
+check finally-value "$dir/cleanup.out" 'finally 1'
+check finally-raised "$dir/cleanup.out" 'finally raised [raised "body"]'
+check finally-both "$dir/cleanup.out" 'finally both [raised "body; cleanup: close"]'
+check finally-cleanup "$dir/cleanup.out" 'finally cleanup [raised "close"]'
+check on-error-value "$dir/cleanup.out" 'on-error 2'
+check on-error-raised "$dir/cleanup.out" 'on-error raised [raised "hd: [] is not a pair"]'
+check finally-partial "$dir/cleanup.out" 'partial 3'
+check cleanup-runs "$dir/cleanup.out" 'notes [d b a]'
+printf '(tc +)\n(shen-jit.finally (freeze 1) (freeze "x"))\n(+ 1 (shen-jit.on-error (freeze "a") (freeze 1)))\n' \
+    > "$dir/cleanup-tc.in"
+"$SHEN" < "$dir/cleanup-tc.in" > "$dir/cleanup-tc.out" 2>&1
+check finally-typed "$dir/cleanup-tc.out" '(1+) 1 : number'
+check on-error-typed "$dir/cleanup-tc.out" '(2+) type error'
+
 # (shen-jit.exit N) ends the process with status N; a script whose first
 # line is #! runs directly, and loads with load.
 "$SHEN" eval -e '(shen-jit.exit 3)' > /dev/null 2>&1

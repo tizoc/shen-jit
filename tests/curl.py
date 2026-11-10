@@ -47,6 +47,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             except (BrokenPipeError, ConnectionResetError):
                 pass
             return
+        if self.path == '/bad-field':
+            self.wfile.write(
+                b'HTTP/1.1 200 OK\r\n'
+                b'Content-Length: 3\r\n'
+                b'Bad Name: a\r\n'
+                b'Connection: close\r\n\r\nabc')
+            self.wfile.flush()
+            self.close_connection = True
+            return
         if self.path == '/hold':
             self.server.hold_started.set()
             assert self.server.hold_release.wait(15)

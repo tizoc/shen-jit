@@ -509,11 +509,8 @@
            Code (shen-jit.c-errno)
         (if (< Fd 0)
             [error (io.file-error temp-file Path Code)]
-            (trap-error [ok (@p Path (io.file-make Path read-write Fd))]
-              (/. X
-                (do (io.file-c-close Fd)
-                    (c-unlink Native)
-                    (simple-error (error-to-string X)))))))))
+            (shen-jit.on-error (freeze [ok (@p Path (io.file-make Path read-write Fd))])
+                               (freeze (do (io.file-c-close Fd) (c-unlink Native))))))))
 
 (define temp-created
   _ _ _ [ok Value] -> [ok Value]

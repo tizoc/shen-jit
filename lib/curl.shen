@@ -225,9 +225,15 @@
   Client Input ->
     (let P (live Client)
          URL (<-address Input 1)
-      (trap-error (result URL (c-request P (<-address Input 0) URL
-                                    (<-address Input 2) (<-address Input 3) (<-address Input 4)))
+      (trap-error (completed URL (c-request P (<-address Input 0) URL
+                                       (<-address Input 2) (<-address Input 3) (<-address Input 4)))
         (/. X [error (io.error request URL (error-to-string X))]))))
+
+\\ A transfer whose fields do not parse still counts the body bytes it accepted.
+(define completed
+  URL Native ->
+    (trap-error (result URL Native)
+      (/. X [error (io.progress (io.error request URL (error-to-string X)) (<-address Native 3))])))
 
 (define curl.request
   Client Method URL Fields Body Options ->

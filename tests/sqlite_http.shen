@@ -43,7 +43,7 @@
   (freeze (counter-test.raises? (freeze (counter-app.port-number "65536")))))
 (counter-test.check "nondecimal CLI port" true
   (freeze (counter-test.raises? (freeze (counter-app.port-number "80junk")))))
-(counter-app.with-db (value counter-test.path)
+(sqlite.with-database (value counter-test.path)
   (/. Db
     (do (sqlite.run Db "INSERT INTO counters VALUES (?, ?)" ["limit" 1000000000000])
         (counter-test.check "constraint failure propagates" true

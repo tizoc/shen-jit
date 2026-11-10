@@ -60,8 +60,8 @@
   (do (export-test.check "empty export" "" (freeze (export-test.body Sent)))
       (export-test.check "empty export source closed" [ok] (freeze (hd (tl (tl Sent)))))))
 
-(counter-app.with-db (value export-test.path) (/. Db (export-test.seed Db 0)))
-(let Expected (counter-app.with-db (value export-test.path)
+(sqlite.with-database (value export-test.path) (/. Db (export-test.seed Db 0)))
+(let Expected (sqlite.with-database (value export-test.path)
                  (/. Db (export-test.lines
                           (sqlite.query Db "SELECT name, value FROM counters ORDER BY name LIMIT 100" []))))
   (map (/. Maximum
@@ -73,7 +73,7 @@
     [1 7 31 4096 16384 65536]))
 
 \\ An invalid later row must fail the first batch before any response output, then release the query.
-(counter-app.with-db (value export-test.path)
+(sqlite.with-database (value export-test.path)
   (/. Db (do (sqlite.exec Db "DELETE FROM counters")
              (sqlite.run Db "INSERT INTO counters VALUES (?, ?)" ["a" 1])
              (sqlite.run Db "INSERT INTO counters VALUES (?, ?)" [(export-test.long-name) 2]))))
@@ -86,7 +86,7 @@
       (export-test.check "row failure still closes database and statement" [ok]
         (freeze (hd (tl (tl Sent)))))))
 
-(counter-app.with-db (value export-test.path)
+(sqlite.with-database (value export-test.path)
   (/. Db (do (sqlite.exec Db "DELETE FROM counters") (export-test.seed Db 0))))
 (let Time (io.record [0])
      D (deadline.after (freeze (let N (<-address Time 0) _ (address-> Time 0 (+ N 1)) N)) 8)

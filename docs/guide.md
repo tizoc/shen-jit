@@ -303,6 +303,23 @@ waits or runs beside the main program, and no speed-up from more cores.
   one that starts the first thread and then spins on it in the same call waits for ever. Start a thread before
   such a loop, or spin in a function called after, as `wait` above.
 
+### Cleaning up
+
+`(shen-jit.finally Body Cleanup)` thaws Body, then Cleanup however Body ended, and gives Body's value.
+`(shen-jit.on-error Body Cleanup)` thaws Cleanup only if Body raised, for something its caller keeps once Body
+returns, as a function that opens one does. Either way the error raised is Body's, after Cleanup, and one that
+Cleanup raises too is added to its message, as in `"body; cleanup: close"`, so that it is neither lost nor put in
+Body's place.
+
+```shen
+(define first-byte
+  Path -> (let S (open Path in)
+            (shen-jit.finally (freeze (read-byte S)) (freeze (close S)))))
+```
+
+Their type is `(lazy A) --> (lazy B) --> A`. The libraries' scopes, such as `sqlite.with-database`, are built on
+them.
+
 ### Sealing
 
 Kernel and port functions are sealed: calls to them are direct, and redefining one raises an error:
@@ -511,11 +528,12 @@ only what bears on it.
 Windows 10 have, and most Linux systems do.
 
 ```shen
-(let Db (sqlite.open "people.db")
-  (do (sqlite.exec Db "CREATE TABLE IF NOT EXISTS people (name TEXT, age INTEGER)")
-      (sqlite.run Db "INSERT INTO people VALUES (?, ?)" ["Ann" 30])
-      (output "~S~%" (sqlite.query Db "SELECT name, age FROM people WHERE age > ?" [20]))
-      (sqlite.close Db)))    \\ [["Ann" 30]]
+(sqlite.with-database "people.db"
+  (/. Db
+    (do (sqlite.exec Db "CREATE TABLE IF NOT EXISTS people (name TEXT, age INTEGER)")
+        (sqlite.run Db "INSERT INTO people VALUES (?, ?)" ["Ann" 30])
+        (output "~S~%" (sqlite.query Db "SELECT name, age FROM people WHERE age > ?" [20])))))
+    \\ [["Ann" 30]]
 ```
 
 ```sh
@@ -524,6 +542,7 @@ shen-jit eval -l lib/ffi.shen -l lib/sqlite.shen -l people.shen
 
 | Function | What it does |
 | --- | --- |
+| `(sqlite.with-database Path F)` | Opens a database, gives it to F, and closes it however F ends, with [shen-jit.finally](#cleaning-up) |
 | `(sqlite.open Path)`, `(sqlite.close Db)` | `":memory:"` is a database in memory. Closing raises if a statement is still open |
 | `(sqlite.exec Db Sql)` | Runs statements with no parameters or results |
 | `(sqlite.run Db Sql Params)` | Runs one, and gives the rows it changed |

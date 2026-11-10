@@ -179,4 +179,59 @@
                Rows (sqlite.query Db "SELECT count(*) FROM n" [])
             (do (sqlite.close Db) Rows))))
 
+(sqlite-test.check "failed COMMIT rolls back" [[0]]
+  (freeze
+    (let D (sqlite.open ":memory:")
+         _ (sqlite.exec D
+             "PRAGMA foreign_keys=ON;
+              CREATE TABLE p(x PRIMARY KEY);
+              CREATE TABLE c(
+                x REFERENCES p(x) DEFERRABLE INITIALLY DEFERRED)")
+         _ (sqlite-test.result
+             (freeze
+               (sqlite.transaction D
+                 (freeze
+                   (sqlite.run D "INSERT INTO c VALUES(1)" [])))))
+         Rows (sqlite.query D "SELECT count(*) FROM c" [])
+         _ (sqlite-test.result (freeze (sqlite.exec D "ROLLBACK")))
+         _ (sqlite.close D)
+      Rows)))
+
+(sqlite-test.check "TEXT preserves embedded NUL" [["ac#0;b"]]
+  (freeze
+    (let D (sqlite.open ":memory:")
+         Rows (sqlite.query D "SELECT CAST(X'610062' AS TEXT)" [])
+         _ (sqlite.close D)
+      Rows)))
+
+(sqlite-test.message-starts
+  "automatic rollback preserves constraint error"
+  "sqlite: UNIQUE constraint failed: audit_u.x"
+  (freeze
+    (let D (sqlite.open ":memory:")
+         _ (sqlite.exec D
+             "CREATE TABLE audit_u(x UNIQUE);
+              INSERT INTO audit_u VALUES(1)")
+         R (sqlite-test.result
+             (freeze
+               (sqlite.transaction D
+                 (freeze
+                   (sqlite.run D
+                     "INSERT OR ROLLBACK INTO audit_u VALUES(1)" [])))))
+         _ (sqlite.close D)
+      (simple-error (hd (tl R))))))
+
+(sqlite-test.check "TEXT with NUL round-trips" [["ac#0;b"]]
+  (freeze (sqlite.with-database ":memory:" (/. D (sqlite.query D "SELECT ?" ["ac#0;b"])))))
+
+(sqlite-test.check "with-database gives F's value" [[1]]
+  (freeze (sqlite.with-database ":memory:" (/. D (sqlite.query D "SELECT 1" [])))))
+
+(set sqlite-test.kept [])
+(sqlite-test.check "with-database closes and keeps F's error" [[error "inside"] true]
+  (freeze
+    [(sqlite-test.result
+       (freeze (sqlite.with-database ":memory:" (/. D (do (set sqlite-test.kept D) (error "inside"))))))
+     (trap-error (do (sqlite.exec (value sqlite-test.kept) "SELECT 1") false) (/. E true))]))
+
 (output "~A passed, ~A failed~%" (value sqlite-test.*passed*) (value sqlite-test.*failed*))

@@ -13,6 +13,10 @@ All notable changes to this project are documented in this file. The format is b
   support and stable image/reload metadata. Records print with their type and fields, or through a declaration's
   `(printer F)`. Fields may have types, `(x : number)`: the operations are then typed, under `(tc +)` and
   for typed clients of a struct declared under `(tc -)`.
+- `(shen-jit.finally Body Cleanup)` and `(shen-jit.on-error Body Cleanup)`, which clean up after a frozen body,
+  however it ends or only if it raised. The body's error is the one raised, with any error of the cleanup added
+  to its message.
+- `(sqlite.with-database Path F)`, which closes the database however F ends.
 
 ### Changed
 
@@ -102,6 +106,11 @@ All notable changes to this project are documented in this file. The format is b
   past the end of the input reported where it began instead of the end.
 - JSON: `json.read` waited for more input after a string's closing quote, and reported a surrogate error in a
   string at the string's offset in its copy instead of in the stream.
+- SQLite: a transaction whose COMMIT failed, as a deferred foreign key makes it, stayed open; one that SQLite had
+  rolled back itself, as `INSERT OR ROLLBACK` does, raised "cannot rollback" in place of its error; and TEXT
+  holding a NUL byte came back cut at it, and could not be bound.
+- `socket.readable?` took a negative wait, which could wait for ever, and a real one.
+- A curl transfer whose response fields did not parse reported no body progress.
 
 ## [0.6] - 2026-11-08
 
