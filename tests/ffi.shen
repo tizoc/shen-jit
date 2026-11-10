@@ -354,4 +354,11 @@
 (ffi-test.check "another thread's code" 6 (freeze (ffi-test.wait ffi-test.other-error)))
 (ffi-test.check "this thread's code" 5 (freeze (shen-jit.c-errno)))
 
+\\ With threads, one buffer given twice is one copy, so what C writes through one it reads through the other.
+(define-foreign alias-bytes t "alias_bytes" (bytes bytes) --> int32 blocking)
+(ffi-test.check "one buffer given twice" [42 42]
+                (freeze (let B (shen-jit.bytes 1)
+                             R (alias-bytes B B)
+                          [R (shen-jit.u8 B 0)])))
+
 (ffi-test.report)

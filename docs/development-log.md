@@ -2692,6 +2692,13 @@ First libraries, to test whether declarations cover real use: 128 and 206 lines 
 - **2026-11-05, release archives left out `lib/` and `include/`,** so a binary could not have loaded `lib/ffi.shen`.
 - **Whether the tests can fail, 2026-11-05.** Not resetting roots on return, not scanning `shen_root_new`'s roots and not
   rooting arguments each end the run under stress.
+- **2026-11-10, three found by a review of `ffi.c`,** each with a test that failed before:
+  - `shen_intern`, `shen_make_pointer`, `shen_raise` and `shen_raise_value` read their text after allocating, so text
+    in a byte buffer in the heap read stale; under stress, the poison. They copy it first, as `shen_make_string` did.
+  - `vm->exception` was not a thread's own, so C that raised and then gave up the lock could return another thread's
+    error, or `[]`, which made the handler's `error-to-string` raise. A thread keeps it now, as it keeps its roots.
+  - A `blocking` call gave each `bytes` argument its own copy, so one buffer given twice lost what C wrote through the
+    first, and only once a thread had started. A buffer given twice is one copy now.
 
 ### Not tried yet
 

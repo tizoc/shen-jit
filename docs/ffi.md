@@ -45,7 +45,7 @@ type called `int` or `long`, since `long` is 32 bits on Windows and 64 elsewhere
 **Flags** follow the result:
 
 - **`blocking`** gives up the lock around the call, so other threads run. A `bytes` argument is then copied to memory of its own and back, since
-  another thread's collection may move the buffer. With no other thread it is an ordinary call.
+  another thread's collection may move the buffer, and one buffer given twice is one copy. With no other thread it is an ordinary call.
 - **`(varargs N)`** marks a variadic function with N fixed arguments, from 1 to 3, all integers. It is needed: Apple's arm64 passes variable arguments
   differently from fixed ones. `fcntl` is one.
 

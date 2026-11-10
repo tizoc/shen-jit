@@ -31,6 +31,8 @@
 (define-foreign-procedure vector-set-out-of-range t "vector_set_out_of_range" 1)
 (define-foreign-procedure huge-vector t "huge_vector" 0)
 (define-foreign-procedure huge-bytes t "huge_bytes" 0)
+(define-foreign-procedure heap-text t "heap_text" 1)
+(define-foreign-procedure raise-and-wait t "raise_and_wait" 1)
 (define-foreign-procedure global-named t "global_named" 1)
 (define-foreign-procedure call-named t "call_named" 2)
 (define-foreign-procedure raises t "raises" 0)
@@ -117,6 +119,10 @@
 (c-test.check "a store out of range" false (freeze (vector-set-out-of-range (c-test.vector567))))
 (c-test.check "a vector longer than a header holds" [error "out of memory"] (freeze (huge-vector)))
 (c-test.check "and bytes" [error "out of memory"] (freeze (huge-bytes)))
+(c-test.check "interned from bytes in the heap" "ffi-heap-intern-93817" (freeze (str (heap-text 0))))
+(c-test.check "a pointer's kind from bytes in the heap" "ffi-heap-kind-93817"
+              (freeze (str (shen-jit.pointer-kind (heap-text 1)))))
+(c-test.check "an error from bytes in the heap" [error "ffi-heap-message-93817"] (freeze (heap-text 2)))
 
 \\ ---------------------------------------------------------------------------
 \\ Globals and functions, by name.
@@ -227,5 +233,17 @@
 (set other waiting)
 (thread (freeze (set other (trap-error (call-in-c (/. X (hd X)) 1) (/. E (error-to-string E))))))
 (c-test.check "in another thread" "hd: 1 is not a pair" (freeze (c-test.wait-for other)))
+
+\\ An error raised in C stays that thread's while C gives up the lock and another thread raises its own.
+(define c-test.wait-flag
+  V I -> (if (<-address V I) true (c-test.wait-flag V I)))
+(set pending waiting)
+(set flags (address-> (address-> (absvector 2) 0 false) 1 false))
+(thread (freeze (set pending (trap-error (raise-and-wait (value flags)) (/. E E)))))
+(c-test.wait-flag (value flags) 0)
+(trap-error (simple-error "main error") (/. E (error-to-string E)))
+(address-> (value flags) 1 true)
+(c-test.check "an error kept while the lock is given up" "worker error"
+              (freeze (error-to-string (c-test.wait-for pending))))
 
 (output "~A passed, ~A failed~%" (value c-test.*passed*) (value c-test.*failed*))

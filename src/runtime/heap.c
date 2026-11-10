@@ -663,6 +663,7 @@ static void collect_into(VM *vm, uint64_t *to)
     for (Thread *t = vm->threads; t; t = t->next) {
         copy_slot(&c, &t->thunk);
         if (t != vm->thread) {
+            copy_slot(&c, &t->exception);
             for (V *p = t->stack; p < t->top; p++)
                 copy_slot(&c, p);
             for (size_t i = 0; i < t->ncroots; i++)

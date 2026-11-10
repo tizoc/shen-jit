@@ -319,6 +319,12 @@ static V convert(VM *vm, Converted *c, unsigned type, V v, int i)
             return sj_raise_value(vm, "foreign: ~S is not a byte buffer", v);
         char *to = string_bytes(v);
         if (c->copy_buffers) {
+            /* A buffer given twice is one copy, which goes back once. */
+            for (unsigned k = 0; k < c->nblocks; k++)
+                if (c->argument[k] >= 0 && vm->fp[2 + c->argument[k]] == v) {
+                    put_word(&c->call, (W)(uintptr_t)c->block[k]);
+                    return V_NIL;
+                }
             if (!(to = new_block(c, string_length(v), i)))
                 return sj_raise(vm, "out of memory");
             memcpy(to, string_bytes(v), string_length(v));
@@ -812,6 +818,20 @@ static shen_value api_make_vector(shen_vm *sv, int64_t length, shen_value fill)
     return made(vm, make_vector(vm, (size_t)length, fill));
 }
 
+/* Text from a buffer in the heap would move in an allocation, so it is copied first, into *copy,
+   which the caller frees. False if it cannot be. */
+static bool outside_heap(VM *vm, const char **text, char **copy)
+{
+    *copy = NULL;
+    if (!*text || !vm_in_heap(vm, *text))
+        return true;
+    size_t n = strlen(*text) + 1;
+    if (!(*copy = malloc(n)))
+        return false;
+    *text = memcpy(*copy, *text, n);
+    return true;
+}
+
 /* As intern does in Shen: these two are not symbols. */
 static shen_value api_intern(shen_vm *sv, const char *name)
 {
@@ -820,7 +840,12 @@ static shen_value api_intern(shen_vm *sv, const char *name)
         return V_TRUE;
     if (strcmp(name, "false") == 0)
         return V_FALSE;
-    return made(vm, intern_cstr(vm, name));
+    char *copy;
+    if (!outside_heap(vm, &name, &copy))
+        return sj_raise(vm, "out of memory");
+    V symbol = intern_cstr(vm, name);
+    free(copy);
+    return made(vm, symbol);
 }
 
 static shen_value api_make_pointer(shen_vm *sv, void *address, const char *kind)
@@ -828,7 +853,11 @@ static shen_value api_make_pointer(shen_vm *sv, void *address, const char *kind)
     VM *vm = vm_of(sv);
     if (!address)
         return V_NIL;
+    char *copy;
+    if (!outside_heap(vm, &kind, &copy))
+        return sj_raise(vm, "out of memory");
     V symbol = intern_cstr(vm, kind);
+    free(copy);
     if (symbol == V_CLEARED)
         return sj_raise(vm, "out of memory");
     return made(vm, make_pointer(vm, (uint64_t)(uintptr_t)address, symbol));
@@ -933,12 +962,23 @@ static shen_value api_call(shen_vm *sv, shen_value f, size_t n, const shen_value
     return jit_call_nested(vm, f, n, args);
 }
 
-static shen_value api_raise(shen_vm *sv, const char *message) { return sj_raise_text(vm_of(sv), message); }
+/* v is V_CLEARED for none. */
+static V raise_text(VM *vm, const char *message, V v)
+{
+    char *copy;
+    if (!outside_heap(vm, &message, &copy))
+        return sj_raise(vm, "out of memory");
+    V e = sj_raise_text_value(vm, message, v);
+    free(copy);
+    return e;
+}
+
+static shen_value api_raise(shen_vm *sv, const char *message) { return raise_text(vm_of(sv), message, V_CLEARED); }
 
 static shen_value api_raise_value(shen_vm *sv, const char *message, shen_value v)
 {
     VM *vm = vm_of(sv);
-    return sj_raise_text_value(vm, message, checked(vm, v, "shen_raise_value was given"));
+    return raise_text(vm, message, checked(vm, v, "shen_raise_value was given"));
 }
 
 static shen_value api_exception(shen_vm *sv)

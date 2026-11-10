@@ -53,6 +53,11 @@ All notable changes to this project are documented in this file. The format is b
 - Compiled code calling `shen-jit.newpv` on an absvector of one element wrote past it, over the next object. It
   raises, as the call through C did.
 - On Windows, a `save-executable` that failed to write removed the previous executable too.
+- `shen_intern`, `shen_make_pointer`, `shen_raise` and `shen_raise_value` given text in a byte buffer could read it
+  after a collection moved the buffer. They copy it first, as `shen_make_string` does.
+- C that raised an error and then gave up the lock with `shen_release` could return another thread's error, or none.
+- A `blocking` foreign call given the same byte buffer twice lost what C wrote through the first, once a thread had
+  started.
 
 ## [0.6] - 2026-11-08
 

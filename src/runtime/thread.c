@@ -104,6 +104,7 @@ Thread *thread_leave(VM *vm)
     t->croots_cap = vm->croots_cap;
     t->foreign_error = vm->foreign_error;
     t->foreign_c_error = vm->foreign_c_error;
+    t->exception = vm->exception; /* C may raise, give up the lock and then return the error */
     release();
     return t;
 }
@@ -128,6 +129,7 @@ void thread_enter(Thread *t)
     vm->croots_cap = t->croots_cap;
     vm->foreign_error = t->foreign_error;
     vm->foreign_c_error = t->foreign_c_error;
+    vm->exception = t->exception;
     vm_set_limit(vm, t->stack_limit);
 }
 
@@ -231,7 +233,7 @@ static bool first_thread(VM *vm)
     ticker_started = true;
     main->vm = vm;
     main->main = true;
-    main->thunk = V_NIL;
+    main->thunk = main->exception = V_NIL;
     main->c_stack_limit = vm->c_stack_limit;
     vm->threads = vm->thread = main;
     pthread_mutex_lock(&lock);
@@ -261,6 +263,7 @@ V thread_start(VM *vm)
     }
     t->vm = vm;
     t->thunk = vm->args[0]; /* first_thread may have collected */
+    t->exception = V_NIL;
     t->stack = t->fp = t->top = t->stack_limit = stack;
     t->stack_words = THREAD_STACK_WORDS;
     t->trace_floor = SIZE_MAX;

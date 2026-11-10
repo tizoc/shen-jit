@@ -39,6 +39,7 @@ typedef struct Thread {
     struct VM *vm;
     bool main;
     V thunk; /* what it will run, until it starts */
+    V exception; /* its vm->exception while another thread runs */
     V *stack, *fp, *top, *stack_limit;
     size_t stack_words;
     struct Handler *handlers;

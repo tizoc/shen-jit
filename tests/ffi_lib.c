@@ -198,6 +198,13 @@ int64_t slow_fill(unsigned char *to, int64_t n, int32_t byte, int32_t ms)
     return before;
 }
 
+/* Given one buffer twice, what it writes through the first it reads through the second. */
+int32_t alias_bytes(unsigned char *a, unsigned char *b)
+{
+    a[0] = 42;
+    return b[0];
+}
+
 /* ---------------------------------------------------------------------------
    C written for Shen (include/shen.h). */
 
@@ -332,6 +339,25 @@ shen_value make_all(shen_vm *vm, shen_value *args)
     list = shen_cons(vm, v, list);
     v = shen_make_real(vm, 1.5);
     return shen_cons(vm, v, list);
+}
+
+/* A name, a kind or a message in a buffer in the heap, which interning, making a pointer or
+   raising may move before reading it. */
+shen_value heap_text(shen_vm *vm, shen_value *args)
+{
+    static int object;
+    int64_t mode = shen_fixnum(args[0]);
+    const char *text = mode == 0 ? "ffi-heap-intern-93817" : mode == 1 ? "ffi-heap-kind-93817" : "ffi-heap-message-93817";
+    shen_value b = shen_make_bytes(vm, text, strlen(text) + 1);
+    if (b == SHEN_ERROR)
+        return b;
+    shen_root(vm, &b);
+    const char *s = (const char *)shen_bytes_data(vm, b, NULL);
+    if (mode == 0)
+        return shen_intern(vm, s);
+    if (mode == 1)
+        return shen_make_pointer(vm, &object, s);
+    return shen_raise(vm, s);
 }
 
 /* From bytes in the heap, which the allocation may move. */
@@ -509,6 +535,20 @@ shen_value released_wait(shen_vm *vm, shen_value *args)
     wait_ms(ms);
     shen_acquire(vm, token);
     return args[0];
+}
+
+/* An error raised, then the lock given up until another thread has raised its own: element 0
+   says this one has raised, and element 1 that the other has. */
+shen_value raise_and_wait(shen_vm *vm, shen_value *args)
+{
+    shen_value error = shen_raise(vm, "worker error");
+    shen_vector_set(vm, args[0], 0, SHEN_TRUE);
+    while (shen_vector_ref(vm, args[0], 1) != SHEN_TRUE) {
+        void *token = shen_release(vm);
+        wait_ms(1);
+        shen_acquire(vm, token);
+    }
+    return error;
 }
 
 /* A root deleted with the lock given up, and with no shen_vm: the next one made has its place. */
