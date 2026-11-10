@@ -2887,8 +2887,8 @@ static void emit_prim(Emit *e, const uint32_t *p)
            source word and the first byte of the next. Unless m is a positive
            multiple of 8, a last word takes the rest of the last source word,
            whose zero padding becomes its own. Every read is inside the
-           source. A string that is empty, or no room in the semispace, goes
-           to C. */
+           source. A string that is empty, a result that is a large object, or
+           no room in the semispace, goes to C. */
         sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, arg[0]));
         slow = slow_path(e, SLOW_PRIM, tag_cmp(c, SLJIT_NOT_EQUAL, R1, R0, TAG_OBJECT));
         sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), -TAG_OBJECT);
@@ -2904,6 +2904,7 @@ static void emit_prim(Emit *e, const uint32_t *p)
         sljit_emit_op1(c, SLJIT_MOV, R3, IMM(1));
         sljit_set_label(nonempty, sljit_emit_label(c));
         sljit_emit_op2(c, SLJIT_SHL, R3, R3, IMM(3));
+        slow->from[4] = sljit_emit_cmp(c, SLJIT_GREATER_EQUAL, R3, IMM((LARGE_WORDS - 1) * sizeof(V)));
         sljit_emit_op1(c, SLJIT_MOV, R4, HP);
         sljit_emit_op2(c, SLJIT_ADD, R1, R4, R3);
         sljit_emit_op2(c, SLJIT_ADD, R1, R1, IMM(sizeof(V)));

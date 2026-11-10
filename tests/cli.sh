@@ -448,6 +448,17 @@ EOF
 SHEN_JIT_GC_STRESS= SHEN_JIT_MAX_HEAP=64M "$SHEN" script "$dir/made.shen" > "$dir/made.out" 2>&1
 check limit-real "$dir/made.out" "reals: out of memory"
 check limit-string "$dir/made.out" "strings: out of memory"
+# A large string from compiled tlstr is a large object, which the limit refuses when the heap is full,
+# though the reserve a caught "out of memory" leaves the area has room for it.
+cat > "$dir/tail.shen" <<'EOF'
+(define tail.fill X -> (do (set tail.held X) (tail.fill [0 | X])))
+(define tail.try S -> (let Why (trap-error (tail.fill []) (/. E (error-to-string E)))
+                           R (trap-error (do (tlstr S) allocated) (/. E (error-to-string E)))
+                        (do (set tail.held []) (output "~A, then ~A~%" Why R))))
+(tail.try (shen-jit.bytes->string (shen-jit.bytes 524288) 0 524288))
+EOF
+SHEN_JIT_GC_STRESS= SHEN_JIT_MAX_HEAP=64M "$SHEN" script "$dir/tail.shen" > "$dir/tail.out" 2>&1
+check limit-large-tlstr "$dir/tail.out" "out of memory, then out of memory"
 # A write that fails raises, from write-byte once the buffer fills and from close for what is left.
 # Only Linux has it: MSYS2's shell shows one on Windows, which a native program cannot open.
 if [ "$(uname -s)" = Linux ] && [ -w /dev/full ]; then

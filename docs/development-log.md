@@ -300,6 +300,11 @@ Lowering rules, the collector and the kernel port have their own sections.
   allocation. One area does better with none.
 - **Rejected: clearing chunks ahead of the heap pointer** (2026-11-05, the same model). `memset` or `rep stosq` over 4 KB to 1 MB: 32 bytes
   1.79 to 2.24 ns at best, as the lines are still read. `clzero`, which would not read them, is hidden in the VM.
+- **Inline `tlstr` made large strings in the semispace** (2026-11-10). Inline `cn` sends a result of 32K words or more to
+  C, which makes it a large object; inline `tlstr` did not, so such a string was copied by every collection, and at
+  `SHEN_JIT_MAX_HEAP`, in the reserve a caught "out of memory" opens, it could take what C refuses. One comparison.
+  The test of it in `tests/cli.sh` failed only about one run in 15 before, as whether the reserve is open when `tlstr`
+  runs varied from run to run.
 
 ### Errors and handlers
 
