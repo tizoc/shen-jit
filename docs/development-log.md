@@ -1152,6 +1152,14 @@ that. Its readings decided nothing below.
   after it. Stage 0 output changes in those files. `make test-core test-libs` passes, with 154 kernel and
   239 extension checks.
 
+- **A port helper named like a standard library function** (2026-11-10, Apple M3 Max). `src/port/struct.shen`
+  defined a helper `every?`. Shen/Scheme 0.54 loads the standard library, where `every?` is a system function,
+  so the kernel's `package` left the name unqualified there, and `port/struct.kl` defined and called a global
+  `every?`; under the default host, which has no standard library, it was `shen-jit.struct.every?`. CI's
+  `shen-scheme-host` job failed `check-generated` from the commit that added it. The helper is now `all?`, which
+  neither host knows, and both make the same 54 files again. A function in a `package` of the port or the
+  lowerer must not share its name with a system function of either host.
+
 ### Not tried yet
 
 - **Correctly rounded fractions and negative exponents.** They do not overflow, so they read as the kernel reads them, as under Shen/Scheme: `0.3` as `0.30000000000000004`, and `1e-300` as `1.0000000000000022e-300`. Measured on 2026-11-05, 59% of random fractions land on the nearest double, the worst 1 unit

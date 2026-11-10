@@ -119,7 +119,7 @@
 (define typed?
   Fields -> (let Types (map (/. F (hd (tl (tl F)))) Fields)
               (cond ((not (element? [] Types)) true)
-                    ((every? (fn empty?) Types) false)
+                    ((all? (fn empty?) Types) false)
                     (true (shen-jit.struct.fail defstruct "every field needs a type, or none" Fields)))))
 
 (define member
@@ -388,16 +388,18 @@
   Field -> (let Variable (gensym (intern (cn "Missing-" (str Field))))
              (do (put Variable shen-jit.struct.left-out true) Variable)))
 
-(define every?
+\\ Not every?, which a host with the standard library, as Shen/Scheme, knows as a system function:
+\\ the package would leave that name unqualified there, and the generated files would differ.
+(define all?
   _ [] -> true
-  F [X | Xs] -> (and (F X) (every? F Xs)))
+  F [X | Xs] -> (and (F X) (all? F Xs)))
 
 \\ What cannot have effects, so its order does not matter: what patterns are made of.
 (define pure?
   [protect _] -> true
   [vector 0] -> true
   [C A B] -> (and (pure? A) (pure? B)) where (element? C [cons @p @s @v])
-  [Make | Args] -> (every? (fn pure?) Args)
+  [Make | Args] -> (all? (fn pure?) Args)
     where (constructor? Make)
   [_ | _] -> false
   _ -> true)
