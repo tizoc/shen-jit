@@ -920,8 +920,8 @@ flat profile at exit, and `SHEN_JIT_STATS=1` prints the collector's work and the
 | --- | --- |
 | `SHEN_JIT_IMAGE` | An image to load instead of the executable's own |
 | `SHEN_JIT_SEAL=1` | The same as `--seal` |
-| `SHEN_JIT_SEMISPACE=SIZE` | Starts the heap at SIZE bytes (with K, M or G) instead of 32 MB, or at what the image needs if that is more: what a collection keeps and the room for new objects add up to this. It still grows with live data, up to 64 GiB, or stays at SIZE if that is more. Less collects more often and uses less memory |
-| `SHEN_JIT_MAX_HEAP=SIZE` | Limits the heap to SIZE bytes (with K, M or G; at least the initial semispace). What the heap holds stays below SIZE, and an allocation past that raises `out of memory`. The collector copies, so the process can use two to three times SIZE: vectors and strings of 256 KB or more stay apart, uncopied, and count once |
+| `SHEN_JIT_SEMISPACE=SIZE` | Starts the heap at SIZE bytes (with K, M or G; anything that is not a size is refused) instead of 32 MB, or at what the image needs if that is more: what a collection keeps and the room for new objects add up to this. It still grows with live data, up to 64 GiB, or stays at SIZE if that is more. Less collects more often and uses less memory |
+| `SHEN_JIT_MAX_HEAP=SIZE` | Limits the heap to SIZE bytes (with K, M or G; at least the initial semispace; anything that is not a size is refused). What the heap holds stays below SIZE, and an allocation past that raises `out of memory`. The collector copies, so the process can use two to three times SIZE: vectors and strings of 256 KB or more stay apart, uncopied, and count once |
 | `SHEN_JIT_PROFILE=1` | Samples the program and prints a flat profile to stderr at exit, naming both Shen and C functions. Not on Windows |
 | `SHEN_JIT_STATS=1` | Prints collection statistics, the live heap and its roots, and the native code compiled and freed, at exit |
 | `SHEN_JIT_PERF_MAP=1` | Writes `/tmp/perf-PID.map`, so external profilers can name compiled code |

@@ -360,8 +360,11 @@ static V build_code(Loader *l, V form)
     l->stats->codes++;
 done:
     vm_unroot(vm, 1);
-    if (result == V_CLEARED)
+    if (result == V_CLEARED) {
+        if (allocated)
+            vm_consts_release(vm, cbase, nconst + ncode);
         fail(l, "cannot build code object");
+    }
     return result;
 }
 

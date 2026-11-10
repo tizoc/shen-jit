@@ -459,6 +459,28 @@ cat > "$dir/tail.shen" <<'EOF'
 EOF
 SHEN_JIT_GC_STRESS= SHEN_JIT_MAX_HEAP=64M "$SHEN" script "$dir/tail.shen" > "$dir/tail.out" 2>&1
 check limit-large-tlstr "$dir/tail.out" "out of memory, then out of memory"
+# A failed shen-jit.install gives back the constant slots it took, so that what they held can go: 100
+# failures with a 400 KB constant each fit under 8 MB.
+cat > "$dir/failed-load.shen" <<'EOF'
+(define failed-load
+  -> (trap-error (shen-jit.install [code broken 0 2 [(absvector 50000)] [[not-an-op]] []])
+                 (/. E (error-to-string E))))
+(define retry-load
+  0 -> done
+  N -> (let R (failed-load) (if (= R "unknown instruction") (retry-load (- N 1)) R)))
+(output "~A~%" (retry-load 100))
+EOF
+SHEN_JIT_GC_STRESS= SHEN_JIT_MAX_HEAP=8M "$SHEN" script "$dir/failed-load.shen" > "$dir/failed-load.out" 2>&1
+check failed-install-gives-back-constants "$dir/failed-load.out" "done"
+# Size settings: less than a word is a word, not no limit, and what is not a size is refused.
+SHEN_JIT_GC_STRESS= SHEN_JIT_MAX_HEAP=1 "$SHEN" eval -e '(trap-error (do (absvector 100000) allocated) (/. E (error-to-string E)))' \
+    > "$dir/size.out" 2>&1
+check size-below-a-word "$dir/size.out" "out of memory"
+for setting in garbage -1 8MBogus 17179869184G; do
+    SHEN_JIT_MAX_HEAP="$setting" "$SHEN" eval -e '1' > "$dir/size.out" 2>&1
+    echo "status $?" >> "$dir/size.out"
+    check "size-refused-$setting" "$dir/size.out" "status 1"
+done
 # A write that fails raises, from write-byte once the buffer fills and from close for what is left.
 # Only Linux has it: MSYS2's shell shows one on Windows, which a native program cannot open.
 if [ "$(uname -s)" = Linux ] && [ -w /dev/full ]; then
@@ -1151,6 +1173,33 @@ EOF
         check interrupt-socket-recv "$dir/sock.out" "(5-) interrupted"
         check interrupt-socket-continues "$dir/sock.out" "(6-) 17"
     fi
+fi
+
+# Each thread keeps its own backtrace, and the reports at exit still come once a thread has started.
+cat > "$dir/thread-traces.shen" <<'EOF'
+(define trace-wait Key -> (if (value Key) done (trace-wait Key)))
+(define trace-first X -> (do (set first-done true) (hd X)))
+(define trace-second X -> (do (set second-done true) (tl X)))
+(set first-done false)
+(set second-done false)
+(thread (freeze (eval-kl [trace-first 0])))
+(trace-wait first-done)
+(thread (freeze (eval-kl [trace-second 0])))
+(trace-wait second-done)
+EOF
+"$SHEN" script "$dir/thread-traces.shen" > "$dir/thread-traces.out" 2>&1
+check thread-own-backtrace "$dir/thread-traces.out" "  in trace-second"
+SHEN_JIT_STATS=1 "$SHEN" eval -e '(thread (freeze 1))' > "$dir/thread-stats.out" 2>&1
+contains thread-statistics "$dir/thread-stats.out" "shen-jit: live heap"
+if [ "$posix" = yes ]; then
+    SHEN_JIT_PROFILE=1 "$SHEN" eval -e '(thread (freeze 1))' > "$dir/thread-profile.out" 2>&1
+    contains thread-profile "$dir/thread-profile.out" "shen-jit: profile of"
+    # A directory named shen-jit on PATH before the executable is not the executable.
+    mkdir -p "$dir/path-a/shen-jit" "$dir/path-b"
+    exe="$(cd "$(dirname "$SHEN")" && pwd)/$(basename "$SHEN")"
+    ln -s "$exe" "$dir/path-b/shen-jit"
+    PATH="$dir/path-a:$dir/path-b:$PATH" sh -c 'shen-jit eval -e 42' > "$dir/path.out" 2>&1
+    check path-skips-directories "$dir/path.out" "42"
 fi
 
 # = on terms deeper than the C stack: heads, absvector elements, and a difference at the bottom. Too slow when

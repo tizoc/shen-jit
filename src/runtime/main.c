@@ -29,10 +29,12 @@
 #include "jit.h"
 #include "ops.h"
 #include "reader.h"
+#include <errno.h>
 #include <signal.h>
 
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -209,24 +211,31 @@ static const char *executable_file(const char *name, char *path, size_t size)
     while (dirs && *dirs) {
         int n = (int)strcspn(dirs, ":");
         snprintf(path, size, "%.*s/%s", n ? n : 1, n ? dirs : ".", name);
-        if (access(path, X_OK) == 0)
+        struct stat s; /* the shell passes over a directory of that name */
+        if (access(path, X_OK) == 0 && stat(path, &s) == 0 && S_ISREG(s.st_mode))
             return path;
         dirs += n + (dirs[n] == ':');
     }
     return name;
 }
 
-/* A size setting in words: bytes, or with K, M or G. 0 when it is not set. */
+/* A size setting in words: bytes, or with K, M or G, rounded up to a word. 0 when it is not set or
+   empty. Anything else ends the process, as it would otherwise mean another size or none. */
 static size_t size_setting(const char *name)
 {
     const char *text = getenv(name);
-    if (!text)
+    if (!text || !*text)
         return 0;
     char *unit;
+    errno = 0;
     unsigned long long bytes = strtoull(text, &unit, 10);
     int shift = *unit == 'K' || *unit == 'k' ? 10 : *unit == 'M' || *unit == 'm' ? 20
               : *unit == 'G' || *unit == 'g' ? 30 : 0;
-    return (size_t)((bytes << shift) / sizeof(uint64_t));
+    if (text[0] < '0' || text[0] > '9' || errno || unit[shift != 0] || bytes > (SIZE_MAX - 7) >> shift) {
+        fprintf(stderr, "shen-jit: %s is not a size: %s\n", name, text);
+        exit(1);
+    }
+    return (size_t)(((bytes << shift) + 7) / sizeof(uint64_t));
 }
 
 static int run(int argc, char **argv)
@@ -275,7 +284,7 @@ static int run(int argc, char **argv)
     vm->seal_user = (seal && *seal && strcmp(seal, "0") != 0) || seal_flag;
     if (getenv("SHEN_JIT_STATS")) {
         stats_vm = vm;
-        atexit(print_stats);
+        thread_at_exit(print_stats);
     }
     if (getenv("SHEN_JIT_PROFILE") && !profile_start())
         fprintf(stderr, "shen-jit: cannot start the profiler\n");

@@ -271,6 +271,15 @@ size_t vm_consts_alloc(VM *vm, size_t n, bool *ok)
    range, and REACHED while a collection has copied that code object. */
 enum { OWNED = 1, REACHED = 2 };
 
+/* Slots that code which could not be built took: cleared, so that what they held can go, and free. */
+void vm_consts_release(VM *vm, size_t start, size_t n)
+{
+    for (size_t i = 0; i < n; i++)
+        *ra_at(&vm->consts, start + i) = V_CLEARED;
+    if (n)
+        add_free_consts(vm, start, n);
+}
+
 /* A loaded code object takes over its range. If this fails, the slots stay
    roots, as before there was any of this. */
 bool vm_track_code(VM *vm, V code)
@@ -664,6 +673,7 @@ static void collect_into(VM *vm, uint64_t *to)
         copy_slot(&c, &t->thunk);
         if (t != vm->thread) {
             copy_slot(&c, &t->exception);
+            copy_slot(&c, &t->trace);
             for (V *p = t->stack; p < t->top; p++)
                 copy_slot(&c, p);
             for (size_t i = 0; i < t->ncroots; i++)

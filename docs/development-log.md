@@ -1252,6 +1252,9 @@ machine on a Ryzen 5 5600X with Ubuntu 20.04, gcc 9.4 and glibc 2.31. A bare rat
   is a broken stdout was left out: `| head` now prints one error and exits with status 1, as Python does, and that
   would take a special case at the top level. The flags in `lib/socket.shen` are now redundant, and stay until someone
   changes that file.
+- **A backtrace shared by every thread (2026-11-10).** A thread kept its handlers, roots and, since that morning, its
+  exception, but `vm->trace` was one for all, and a trace is not captured over another: once one thread's error had
+  one, every later thread's error showed it. A thread keeps its own now, as it keeps its exception.
 
 ### x86-64 and Linux (2026-11-03)
 
@@ -1412,6 +1415,17 @@ A renamed definition calls the port's everything else, so a difference belongs t
 - **Line editing (2026-11-01):** documented `rlwrap`. `isocline` and `replxx` were rejected as more than this needs.
 - **`(shen-jit.exit N)`, no plain `exit` (2026-11-02):** a sealed `exit` would refuse programs that define their own.
 - **`track`, `spy` and `step` checked (2026-11-02), nothing to change.** `track` is refused on sealed definitions.
+- **Found by a review of the rest of the runtime (2026-11-10),** each with a check in `tests/cli.sh` that failed before:
+  - A size setting took what `strtoull` gave: `1` to `7` bytes and `garbage` meant no limit, `-1` a huge one,
+    `8MBogus` 8 MB, and a large G value wrapped to 0. Sizes are now digits and at most one K, M or G, rounded up to a
+    word; anything else ends the process with a message, and an empty value is unset.
+  - Looking up the executable on PATH took a directory named `shen-jit` before the binary, which the shell had passed
+    over, and failed to load an image from it. It takes regular files only.
+  - A failed `shen-jit.install` kept the constant slots it had filled as roots: 100 failures with a 400 KB constant
+    ran out of an 8 MB heap. They are cleared and freed.
+  - **Left as they are:** the C reader, which reads only the stage 0 files the build makes, has no nesting limit, reads
+    number tokens of 64 bytes or more as symbols, rounds `2305843009213693951.0` through a double, keeps `8e0` a real
+    and reads `+1.5` as a symbol. None of these occurs in what it reads; Shen source goes through the kernel's reader.
 
 ### Ctrl-C and standard input
 
@@ -1453,6 +1467,8 @@ Built from a table of call sites the JIT records when it compiles, so nothing is
 - **`SHEN_JIT_STATS`** prints collections and pauses (2026-11-01), then the live heap by type after a final collection (2026-11-02).
   That showed two thirds of the live heap at startup was kernel bytecode (707 of 1,113 KB); packed bytecode followed the same day,
   699 to 181 KB, and the image 1.22 to 0.70 MB.
+- **Neither report came once a thread had started (2026-11-10),** as the process then ends with `_exit`, which skips
+  `atexit`. They register through `thread_at_exit`, which `thread_exit` runs first.
 
 ### Saving programs
 

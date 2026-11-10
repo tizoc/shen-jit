@@ -39,7 +39,7 @@ typedef struct Thread {
     struct VM *vm;
     bool main;
     V thunk; /* what it will run, until it starts */
-    V exception; /* its vm->exception while another thread runs */
+    V exception, trace; /* its vm->exception and vm->trace while another thread runs */
     V *stack, *fp, *top, *stack_limit;
     size_t stack_words;
     struct Handler *handlers;
@@ -220,6 +220,7 @@ void thread_enter(Thread *t);
 void thread_yield(VM *vm);
 void thread_preempted(VM *vm);
 void thread_exit(VM *vm, int status);
+void thread_at_exit(void (*report)(void));
 void thread_forget_others(VM *vm);
 bool thread_is_only(const VM *vm);
 void thread_free_all(VM *vm);
@@ -251,6 +252,7 @@ void vm_census(VM *vm, size_t count[T_LIMIT], size_t words[T_LIMIT]);
 bool vm_stack_grow(VM *vm, size_t need_words);
 bool vm_stack_reserve(VM *vm, size_t need_words);
 size_t vm_consts_alloc(VM *vm, size_t n, bool *ok);
+void vm_consts_release(VM *vm, size_t start, size_t n);
 bool vm_track_code(VM *vm, V code);
 void vm_find_free_consts(VM *vm);
 void vm_set_limit(VM *vm, V *mark);

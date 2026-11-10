@@ -105,6 +105,7 @@ Thread *thread_leave(VM *vm)
     t->foreign_error = vm->foreign_error;
     t->foreign_c_error = vm->foreign_c_error;
     t->exception = vm->exception; /* C may raise, give up the lock and then return the error */
+    t->trace = vm->trace;
     release();
     return t;
 }
@@ -130,6 +131,7 @@ void thread_enter(Thread *t)
     vm->foreign_error = t->foreign_error;
     vm->foreign_c_error = t->foreign_c_error;
     vm->exception = t->exception;
+    vm->trace = t->trace;
     vm_set_limit(vm, t->stack_limit);
 }
 
@@ -233,7 +235,7 @@ static bool first_thread(VM *vm)
     ticker_started = true;
     main->vm = vm;
     main->main = true;
-    main->thunk = main->exception = V_NIL;
+    main->thunk = main->exception = main->trace = V_NIL;
     main->c_stack_limit = vm->c_stack_limit;
     vm->threads = vm->thread = main;
     pthread_mutex_lock(&lock);
@@ -263,7 +265,7 @@ V thread_start(VM *vm)
     }
     t->vm = vm;
     t->thunk = vm->args[0]; /* first_thread may have collected */
-    t->exception = V_NIL;
+    t->exception = t->trace = V_NIL;
     t->stack = t->fp = t->top = t->stack_limit = stack;
     t->stack_words = THREAD_STACK_WORDS;
     t->trace_floor = SIZE_MAX;
@@ -278,11 +280,32 @@ V thread_start(VM *vm)
     return V_TRUE;
 }
 
+/* Reports for the end of the process, SHEN_JIT_STATS's and the profiler's: at exit, and from
+   thread_exit, whose _exit skips what atexit registers. */
+static void (*reports[4])(void);
+static size_t nreports;
+
+static void run_reports(void)
+{
+    while (nreports)
+        reports[--nreports]();
+}
+
+void thread_at_exit(void (*report)(void))
+{
+    if (nreports == sizeof reports / sizeof reports[0])
+        return;
+    if (!nreports)
+        atexit(run_reports);
+    reports[nreports++] = report;
+}
+
 /* Ends the process with threads about. exit would flush every stream, waiting
    on any that another thread is blocked reading, so flush what was written and
    go. */
 void thread_exit(VM *vm, int status)
 {
+    run_reports();
     fflush(stdout);
     fflush(stderr);
     for (size_t i = 0; i < vm->nfiles; i++) {

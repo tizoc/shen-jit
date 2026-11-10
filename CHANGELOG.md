@@ -69,6 +69,12 @@ All notable changes to this project are documented in this file. The format is b
   registered handler inside a struct pattern was refused; a declaration refused under `(tc +)` could not be
   corrected without restarting; `key <- ...` left other fields out; and in a namespace, dotted field labels
   lost their prefix.
+- `SHEN_JIT_MAX_HEAP` and `SHEN_JIT_SEMISPACE` took any text: `garbage` or a limit under a word meant no limit,
+  `8MBogus` meant 8 MB, and a large value wrapped. Anything but digits with one K, M or G is now refused.
+- A directory named `shen-jit` on `PATH` before the executable made it fail to start.
+- A `shen-jit.install` that failed kept its constants alive for good.
+- With threads, a thread's error could show another thread's backtrace, and `SHEN_JIT_STATS` and `SHEN_JIT_PROFILE`
+  printed nothing at exit.
 
 ## [0.6] - 2026-11-08
 
