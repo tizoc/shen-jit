@@ -26,6 +26,7 @@ typedef struct ForeignRoot {
     const struct shen_api *api;
     V value;
     struct ForeignRoot *next;
+    struct VM *owner;
 } ForeignRoot;
 
 typedef struct Guard {
@@ -107,6 +108,7 @@ typedef struct VM {
     ForeignRoot **foreign_roots; /* chunks of FOREIGN_ROOT_CHUNK */
     size_t nforeign_roots;       /* in use or free */
     ForeignRoot *free_foreign_roots;
+    ForeignRoot *deleted_foreign_roots; /* deleted from any thread; this VM drains them */
     V exception; /* the exception being raised or handled */
     V intern;    /* intern table: an open-addressing vector of symbols, held weakly
                     (vm_collect drops symbols nothing else needs) */

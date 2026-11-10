@@ -8,6 +8,7 @@
 #include "vm.h"
 
 #include <errno.h>
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #if !defined(_WIN32) && !defined(SHEN_JIT_STATIC)
@@ -170,8 +171,9 @@ typedef struct {
 
 static Library *libraries;
 static size_t nlibraries;
+static pthread_mutex_t library_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static void *open_library(V files)
+static void *open_library_locked(V files)
 {
     char key[2048];
     size_t length = 0;
@@ -201,6 +203,14 @@ static void *open_library(V files)
     } else {
         free(copy);
     }
+    return library;
+}
+
+static void *open_library(V files)
+{
+    pthread_mutex_lock(&library_lock);
+    void *library = open_library_locked(files);
+    pthread_mutex_unlock(&library_lock);
     return library;
 }
 
@@ -888,15 +898,14 @@ static void api_unroot(shen_vm *sv, size_t how_many)
     vm->ncroots -= how_many;
 }
 
-/* Roots deleted from anywhere wait here, in one list for the process, for whoever holds the lock
-   to find at the next shen_root_new or collection. Until then they stay alive. */
-static ForeignRoot *deleted_roots;
+/* Deletes can arrive from another OS thread, but only the owning VM drains its
+   queue. The adapter must delete its boxes before that VM is destroyed. */
 
 void ffi_drain_roots(VM *vm)
 {
-    if (!__atomic_load_n(&deleted_roots, __ATOMIC_RELAXED))
+    if (!__atomic_load_n(&vm->deleted_foreign_roots, __ATOMIC_RELAXED))
         return;
-    ForeignRoot *r = __atomic_exchange_n(&deleted_roots, NULL, __ATOMIC_ACQUIRE);
+    ForeignRoot *r = __atomic_exchange_n(&vm->deleted_foreign_roots, NULL, __ATOMIC_ACQUIRE);
     while (r) {
         ForeignRoot *next = r->next;
         r->value = V_NIL;
@@ -930,6 +939,7 @@ static shen_root_box *api_root_new(shen_vm *sv, shen_value v)
         vm->nforeign_roots = i + 1;
     }
     r->api = vm->api;
+    r->owner = vm;
     r->value = v;
     r->next = NULL;
     return (shen_root_box *)r;
@@ -947,10 +957,11 @@ static void api_root_set(shen_root_box *box, shen_value v)
 static void api_root_delete(shen_root_box *box)
 {
     ForeignRoot *r = (ForeignRoot *)box;
-    ForeignRoot *head = __atomic_load_n(&deleted_roots, __ATOMIC_RELAXED);
+    ForeignRoot **queue = &r->owner->deleted_foreign_roots;
+    ForeignRoot *head = __atomic_load_n(queue, __ATOMIC_RELAXED);
     do
         r->next = head;
-    while (!__atomic_compare_exchange_n(&deleted_roots, &head, r, true, __ATOMIC_RELEASE, __ATOMIC_RELAXED));
+    while (!__atomic_compare_exchange_n(queue, &head, r, true, __ATOMIC_RELEASE, __ATOMIC_RELAXED));
 }
 
 static shen_value api_call(shen_vm *sv, shen_value f, size_t n, const shen_value *args)

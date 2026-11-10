@@ -277,7 +277,7 @@ in real registers, and 64-bit integers in word registers, which the collector ne
 
 The roots are the scanned extent of each thread's guest stack, the global cells and constants, what C holds, and a few VM
 fields. C holds values in explicitly registered locals, per thread, and in the roots that outlive a call (`shen_root_new`), which a
-thread with no lock may delete, so a collection first drains the list of those deleted.
+thread with no lock may delete, so a collection first drains its VM's list of those deleted.
 
 The stack is scanned linearly, from its base to the published top, which three rules make sound:
 

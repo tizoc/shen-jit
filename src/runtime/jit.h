@@ -15,6 +15,7 @@ void jit_attach(VM *vm, Jit *jit);
 /* Both, for a fresh VM. */
 bool jit_init(VM *vm);
 void jit_destroy(VM *vm);
+void jit_dispose(Jit *jit); /* unattached stubs, e.g. after an image-load failure */
 /* For SHEN_JIT_STATS: code objects compiled, and those freed since. */
 void jit_stats(VM *vm, size_t *compiled, size_t *freed);
 /* Compile everything again on its next call, for a change in what code must

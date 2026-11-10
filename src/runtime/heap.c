@@ -141,6 +141,7 @@ void vm_destroy(VM *vm)
 {
     if (!vm)
         return;
+    ffi_drain_roots(vm);
     thread_free_all(vm);
     if (vm->space) {
 #ifdef _WIN32

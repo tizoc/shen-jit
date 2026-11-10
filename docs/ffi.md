@@ -206,8 +206,8 @@ C for Shen is given the address of `vm->api`, whose first word is the table, and
 `shen_call` wraps `jit_call_nested`, which pushes a handler with no catch address. `h_unwind` pops it and returns NULL, so the adapter returns `V_CLEARED`, and an error never jumps across C frames. The handler is not quiet, so the message is built for C to read.
 Handlers, C roots, the native stack bound and error codes are per thread, swapped with the lock.
 
-A root that outlives a call is three words that never move: its table, its value and a link. `shen_root_delete` takes no `shen_vm`, so the wrapper finds the table in the root itself. It pushes the root on a lock-free list, which whoever holds the lock drains at the next
-`shen_root_new` or collection. The link is apart from the value because a collection may be writing the value while another thread deletes it.
+A root that outlives a call is four words that never move: its table, its value, a link and the VM that made it. `shen_root_delete` takes no `shen_vm`, so the wrapper finds the table in the root itself. It pushes the root on its VM's lock-free list, which that VM drains at the next
+`shen_root_new`, collection or its end. The link is apart from the value because a collection may be writing the value while another thread deletes it.
 
 **A later collector.** C reads through calls, allocates through calls, and writes only through `shen_vector_set` and `shen_root_set`, which is where a write barrier would go, and holds nothing across an allocation except in roots. The header names no tag, header bit or layout but
 the fixnum encoding and a few constants. The one assumption left is that the heap does not move while a thread holds the lock and makes no API call, which `shen_bytes_data` and `shen_string_bytes` need and any stop-the-world collector gives.
