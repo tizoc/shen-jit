@@ -133,10 +133,10 @@
   Limit ->
     (let N (index Limit)
       (struct.make builder-state
-        limit <- N;
-        storage <- (new 0);
-        length <- 0;
-        sealed <- false;)))
+        limit <- N
+        storage <- (new 0)
+        length <- 0
+        sealed <- false)))
 
 (define builder-check
   B ->

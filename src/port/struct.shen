@@ -5,9 +5,11 @@
 \\ Fields may have types, all or none: (x : number) or (mutable y : number). Under (tc +) the
 \\ definitions are typed, over helpers with types only generated code may rely on; under (tc -)
 \\ they are the plain ones, followed by declarations for typed clients.
+\\ (:T f <- E ...) constructs and matches: the macro rewrites it to the positional internal
+\\ constructor T.%make, which is never written by hand, and a pattern handler matches that.
 
 (package shen-jit.struct
-  [defstruct mutable printer make %struct-tag struct struct.make shen-jit.tagged? shen.app shen.s
+  [defstruct mutable printer make %make %match %struct-tag struct struct.make shen-jit.tagged? shen.app shen.s
    { } --> string boolean number symbol]
 
 (define initialise
@@ -15,11 +17,14 @@
          (shen.record-macro shen-jit.struct.make-macro (fn make-macro))
          (shen.x.namespaces.register-syntax defstruct (fn namespace-syntax))
          (shen.x.namespaces.register-syntax struct.make (fn namespace-syntax))
+         (shen.x.namespaces.register-syntax (intern ":") (fn namespace-syntax))
          (shen.x.namespaces.register-definitions defstruct (fn introduced-names))
          (shen.x.namespaces.publish struct
            [[defstruct | defstruct]
             [make | struct.make]])
-         (shen.initialise-arity-table [slot 2 slot! 3 allocate 2 tagged 2 shown 2])
+         (shen.initialise-arity-table [slot 2 slot! 3 allocate 2 tagged 2 shown 2 pattern 4])
+         (shen.set-lambda-form-entry (shen.lambda-entry pattern))
+         (shen.x.programmable-pattern-matching.register-handler pattern)
          (declare slot [(protect A) --> [number --> (protect B)]])
          (declare slot! [(protect A) --> [number --> [(protect B) --> (protect A)]]])
          (declare allocate [number --> [symbol --> (protect A)]])
@@ -108,20 +113,12 @@
   [X | Y] -> (and (closed? X) (closed? Y))
   X -> (not (variable? X)))
 
+\\ Whether the fields have types: all of them, or none. A struct with no fields has them all.
 (define typed?
-  Fields -> (cons? Fields) where (every-typed? Fields)
-  Fields -> false where (none-typed? Fields)
-  Fields -> (shen-jit.struct.fail defstruct "every field needs a type, or none" Fields))
-
-(define every-typed?
-  [] -> true
-  [[_ _ [_]] | Fields] -> (every-typed? Fields)
-  _ -> false)
-
-(define none-typed?
-  [] -> true
-  [[_ _ []] | Fields] -> (none-typed? Fields)
-  _ -> false)
+  Fields -> (let Types (map (/. F (hd (tl (tl F)))) Fields)
+              (cond ((not (element? [] Types)) true)
+                    ((every? (fn empty?) Types) false)
+                    (true (shen-jit.struct.fail defstruct "every field needs a type, or none" Fields)))))
 
 (define member
   Name Field -> (intern (cn (str Name) (cn "." (str Field)))))
@@ -132,16 +129,9 @@
 (define setter-name
   Name Field -> (intern (cn (str (member Name Field)) "->")))
 
+\\ The public functions a declaration defines: all but the private tag's printer.
 (define operations
-  Name Fields -> [(member Name make) (predicate-name Name) | (field-operations Name Fields)])
-
-(define field-operations
-  _ [] -> []
-  Name [[Field Mutable _] | Fields]
-  -> (append (if Mutable
-                 [(member Name Field) (setter-name Name Field)]
-                 [(member Name Field)])
-             (field-operations Name Fields)))
+  Name Fields -> (map (fn hd) (tl (functions Name Fields [] []))))
 
 (define distinct?
   [] -> true
@@ -179,6 +169,7 @@
                    Tag (fresh-tag Name)
                    Description [Tag Fields]
                 (do (put Name shen-jit.struct.schema Description)
+                    (put (member Name %make) shen-jit.struct.of Name)
                     Description))))))
 
 \\ Each layout gets a fresh tag of its own, bound only to its printer. Re-reading it reuses the
@@ -193,128 +184,97 @@
   0 _ -> []
   N I -> [(intern (cn "StructField" (str I))) | (arguments (- N 1) (+ I 1))])
 
-\\ Each store returns the vector, so the constructor is one nested expression of primitives.
+\\ Each generated function is [F Type Args Body], with Body over the typed helpers. Under (tc +) it
+\\ is defined with its type; otherwise each helper is replaced by its primitive, and a typed struct
+\\ declares the types for typed clients.
+(define functions
+  Name Fields Printer Tag
+  -> (let Args (arguments (length Fields) 1)
+          Type (curried (map (fn field-type) Fields) Name)
+          Make (stores [allocate (+ 1 (length Fields)) Tag] Args 1)
+       [[Tag [Name --> string] [(protect Record)] (printer-body Name Fields Printer)]
+        [(member Name make) Type Args Make]
+        [(member Name %make) Type Args Make]
+        [(predicate-name Name) [(protect A) --> boolean] [(protect Record)] [tagged (protect Record) Tag]]
+        | (accessors Name Fields 1)]))
+
+(define field-type
+  [_ _ [Type]] -> Type
+  _ -> [])
+
+\\ Each store returns the vector, so the constructor is one nested expression.
 (define stores
   Vector [] _ -> Vector
-  Vector [Arg | Args] I -> (stores [address-> Vector I Arg] Args (+ I 1)))
-
-(define definition
-  Name Args Body -> [define Name | (append Args [-> Body])])
-
-(define generate
-  Name Fields Printer
-  -> (cond ((and (tc?) (or (empty? Fields) (typed? Fields))) (typed-definitions Name Fields Printer))
-           ((tc?)
-            (shen-jit.struct.fail Name "under (tc +) every field needs a type; add them or load under (tc -)"
-                                  (map (fn hd) Fields)))
-           ((typed? Fields) (append (definitions Name Fields Printer) (declarations Name Fields)))
-           (true (definitions Name Fields Printer))))
-
-(define definitions
-  Name Fields Printer
-  -> (let Tag (hd (schema Name))
-          Args (arguments (length Fields) 1)
-       [(definition Tag [(protect Record)] (printer-body Name Fields Printer <-address))
-        (definition
-          (member Name make)
-          Args
-          (stores [address-> [absvector (+ 1 (length Fields))] 0 Tag] Args 1))
-        (definition
-          (predicate-name Name)
-          [(protect Record)]
-          [shen-jit.tagged? (protect Record) Tag])
-        | (accessors Name Fields 1)]))
+  Vector [Arg | Args] I -> (stores [slot! Vector I Arg] Args (+ I 1)))
 
 \\ The default printer shows the type and each field: #<point x: 1 y: 2>.
 (define printer-body
-  _ _ [F] _ -> [F (protect Record)]
-  Name Fields [] Read -> [cn (cn "#<" (str Name)) (field-strings Fields 1 Read)])
+  _ _ [F] -> [F (protect Record)]
+  Name Fields [] -> [cn (cn "#<" (str Name)) (field-strings Fields 1)])
 
 (define field-strings
-  [] _ _ -> ">"
-  [[Field | _] | Fields] I Read
+  [] _ -> ">"
+  [[Field | _] | Fields] I
   -> [cn (cn " " (cn (str Field) ": "))
-         (show Read [Read (protect Record) I] (field-strings Fields (+ I 1) Read))])
-
-\\ shen.app has no type; typed code reaches it through shown.
-(define show
-  <-address Value Rest -> [shen.app Value Rest shen.s]
-  _ Value Rest -> [shown Value Rest])
+         [shown [slot (protect Record) I] (field-strings Fields (+ I 1))]])
 
 (define accessors
   _ [] _ -> []
-  Name [[Field Mutable _] | Fields] I
-  -> [(definition
-        (member Name Field)
-        [(protect Record)]
-        [<-address (protect Record) I])
-      | (append
-          (if Mutable
-              [(definition
-                 (setter-name Name Field)
-                 [(protect Record) (protect Value)]
-                 [address-> (protect Record) I (protect Value)])]
-              [])
-          (accessors Name Fields (+ I 1)))])
+  Name [Field | Fields] I
+  -> (let Label (hd Field)
+          Type (field-type Field)
+          Rest (accessors Name Fields (+ I 1))
+          Read [(member Name Label) [Name --> Type] [(protect Record)] [slot (protect Record) I]]
+       (if (hd (tl Field))
+           [Read [(setter-name Name Label) [Name --> [Type --> Name]] [(protect Record) (protect Value)]
+                  [slot! (protect Record) I (protect Value)]]
+            | Rest]
+           [Read | Rest])))
 
-\\ Typed definitions, for (tc +): the same code over the typed helpers.
-(define typed-definition
-  Name Signature Args Body -> [define Name { | (append Signature [} | (append Args [-> Body])])])
+(define typed
+  [F Type Args Body] -> [define F { | (append Type [} | (append Args [-> Body])])])
 
-(define typed-definitions
+(define plain
+  [F _ Args Body] -> [define F | (append Args [-> (primitive Body)])])
+
+(define declaration
+  [F Type | _] -> [declare F (quoted Type)])
+
+\\ shen.app has no type: typed code reaches it through shown.
+(define primitive
+  [allocate N Tag] -> [address-> [absvector N] 0 Tag]
+  [shown X Rest] -> [shen.app (primitive X) (primitive Rest) shen.s]
+  [X | Y] -> (map (fn primitive) [X | Y])
+  slot -> <-address
+  slot! -> address->
+  tagged -> shen-jit.tagged?
+  X -> X)
+
+(define generate
   Name Fields Printer
-  -> (let Tag (hd (schema Name))
-          Args (arguments (length Fields) 1)
-          Types (map (/. F (hd (hd (tl (tl F))))) Fields)
-       [(typed-definition Tag [Name --> string] [(protect Record)]
-          (printer-body Name Fields Printer slot))
-        (typed-definition (member Name make) (signature Types Name) Args
-          (typed-stores [allocate (+ 1 (length Fields)) Tag] Args 1))
-        (typed-definition (predicate-name Name) [(protect A) --> boolean] [(protect Record)]
-          [tagged (protect Record) Tag])
-        | (typed-accessors Name Fields 1)]))
+  -> (let Typed (typed? Fields)
+          Functions (functions Name Fields Printer (hd (schema Name)))
+       (cond ((and (tc?) Typed) (append (map (fn typed) Functions) [(pattern-rule Name Fields)]))
+             ((tc?)
+              (shen-jit.struct.fail Name "under (tc +) every field needs a type; add them or load under (tc -)"
+                                    (map (fn hd) Fields)))
+             (Typed (append (map (fn plain) Functions) (map (fn declaration) (tl Functions))
+                            [(pattern-rule Name Fields)]))
+             (true (map (fn plain) Functions)))))
 
-(define signature
-  [] Result -> [--> Result]
-  Types Result -> (append (intersperse Types) [--> Result]))
-
-(define intersperse
-  [T] -> [T]
-  [T | Ts] -> [T --> | (intersperse Ts)])
-
-(define typed-stores
-  Vector [] _ -> Vector
-  Vector [Arg | Args] I -> (typed-stores [slot! Vector I Arg] Args (+ I 1)))
-
-(define typed-accessors
-  _ [] _ -> []
-  Name [[Field Mutable [Type]] | Fields] I
-  -> [(typed-definition (member Name Field) [Name --> Type] [(protect Record)]
-        [slot (protect Record) I])
-      | (append
-          (if Mutable
-              [(typed-definition (setter-name Name Field) [Name --> Type --> Name]
-                 [(protect Record) (protect Value)]
-                 [slot! (protect Record) I (protect Value)])]
-              [])
-          (typed-accessors Name Fields (+ I 1)))])
-
-\\ Under (tc -), declarations let typed clients use a typed struct.
-(define declarations
+\\ How the typechecker reads a pattern: (T.%make X Y) : T when X and Y have the fields' types.
+(define pattern-rule
   Name Fields
-  -> (let Types (map (/. F (hd (hd (tl (tl F))))) Fields)
-       [[declare (member Name make) (quoted (curried Types Name))]
-        [declare (predicate-name Name) (quoted [(protect A) --> boolean])]
-        | (field-declarations Name Fields)]))
+  -> (let Vars (arguments (length Fields) 1)
+       [datatype (member Name %match)
+        | (append (premises Vars Fields)
+                  [(if (empty? Fields) (intern "_____") (intern "====="))
+                   [(member Name %make) | Vars] (intern ":") Name (intern ";")])]))
 
-(define field-declarations
-  _ [] -> []
-  Name [[Field Mutable [Type]] | Fields]
-  -> (append [[declare (member Name Field) (quoted [Name --> Type])]]
-             (if Mutable
-                 [[declare (setter-name Name Field) (quoted [Name --> [Type --> Name]])]]
-                 [])
-             (field-declarations Name Fields)))
+(define premises
+  [] [] -> []
+  [Var | Vars] [Field | Fields]
+  -> [Var (intern ":") (field-type Field) (intern ";") | (premises Vars Fields)])
 
 (define curried
   [] Result -> [--> Result]
@@ -336,15 +296,27 @@
        (generate Name Fields Printer))
   Form -> (shen-jit.struct.fail defstruct "invalid declaration" Form))
 
-\\ Labelled construction preserves source evaluation order, then calls the ordinary .make.
+\\ (:T f <- V ...) and (struct.make T f <- V ...) become (T.%make V1 ... Vn), in declaration
+\\ order: a pattern for the handler below, or a construction. When a value may have effects, each
+\\ is bound first, in source order. With a final ..., the fields left out are fresh variables:
+\\ wildcards in a pattern, and free variables, so an error, in an expression.
+(define dots?
+  X -> (= (syntax-value X) (intern "...")))
+
 (define named-fields
   _ [] _ _ -> []
-  Name [Raw Arrow Value End | Rest] Fields Seen
-  -> (let Label (local-label Raw)
-       (cond ((not (= Arrow (intern "<-")))
+  _ [Dots] _ _ -> [] where (dots? Dots)
+  Name [Raw Arrow Value | Rest] Fields Seen
+  -> (let Args [Raw Arrow Value | Rest]
+          Label (if (name? (syntax-value Raw)) (local-label Raw) Raw)
+       (cond ((dots? Raw)
+              (shen-jit.struct.fail Name "... comes after the last field" Raw))
+             ((= (syntax-value Raw) (intern ";"))
+              (shen-jit.struct.fail Name "fields are not separated by ;" Args))
+             ((not (name? (syntax-value Raw)))
+              (shen-jit.struct.fail Name "expected a field name" Raw))
+             ((not (arrow? Arrow))
               (shen-jit.struct.fail Name "expected <- before a field value" Arrow))
-             ((not (= End (intern ";")))
-              (shen-jit.struct.fail Name "expected ; after a field value" End))
              ((empty? (assoc Label Fields))
               (shen-jit.struct.fail Name "unknown field" Raw))
              ((element? Label Seen)
@@ -352,37 +324,123 @@
              (true
               [[Label Value (gensym (protect StructValue))]
                | (named-fields Name Rest Fields [Label | Seen])])))
-  Name Args _ _ -> (shen-jit.struct.fail Name "expected Field <- Expression;" Args))
+  Name Args _ _ -> (shen-jit.struct.fail Name "expected Field <- Value" Args))
+
+(define partial?
+  [] -> false
+  [Dots] -> true where (dots? Dots)
+  [_ | Rest] -> (partial? Rest))
 
 (define named-code
   Name Args Fields
   -> (let Named (named-fields Name Args Fields [])
-       (if (= (length Named) (length Fields))
-           (bind-values Named [(member Name make) | (ordered-values Fields Named)])
-           (shen-jit.struct.fail Name "missing fields" Args))))
+          Partial (partial? Args)
+          Make (member Name %make)
+       (bind-values (impure Named)
+         [Make | (values Name Fields (map (fn written-or-bound) Named) Partial)])))
 
-(define ordered-values
-  [] _ -> []
-  [[Field | _] | Fields] Named
-  -> [(hd (tl (tl (assoc Field Named)))) | (ordered-values Fields Named)])
+\\ A value that may have effects is bound to its variable first, in source order; any other stays
+\\ where it is, so a pattern, whose values are all pure, becomes the call itself.
+(define impure
+  [] -> []
+  [N | Named] -> (impure Named) where (pure? (hd (tl N)))
+  [N | Named] -> [N | (impure Named)])
+
+(define written-or-bound
+  [Label Value Variable] -> [Label (if (pure? Value) Value Variable)])
+
+(define values
+  _ [] _ _ -> []
+  Name [[Field | _] | Fields] Named Partial
+  -> [(let Entry (assoc Field Named)
+        (cond ((cons? Entry) (hd (tl Entry)))
+              (Partial (left-out Field))
+              (true (shen-jit.struct.fail Name "missing field" Field))))
+      | (values Name Fields Named Partial)])
+
+\\ A fresh variable for a field ... leaves out, marked so the handler knows it from one written.
+(define left-out
+  Field -> (let Variable (gensym (intern (cn "Missing-" (str Field))))
+             (do (put Variable shen-jit.struct.left-out true) Variable)))
+
+(define every?
+  _ [] -> true
+  F [X | Xs] -> (and (F X) (every? F Xs)))
+
+\\ What cannot have effects, so its order does not matter: what patterns are made of.
+(define pure?
+  [protect _] -> true
+  [vector 0] -> true
+  [C A B] -> (and (pure? A) (pure? B)) where (element? C [cons @p @s @v])
+  [Make | Args] -> (every? (fn pure?) Args)
+    where (constructor? Make)
+  [_ | _] -> false
+  _ -> true)
+
+\\ The struct whose internal constructor T.%make is, or [].
+(define struct-of
+  Make -> (trap-error (get Make shen-jit.struct.of) (/. E [])))
+
+(define constructor?
+  Make -> (symbol? (struct-of Make)))
+
+(define arrow?
+  X -> (= X (intern "<-")))
+
+(define struct-syntax?
+  X -> (or (= X struct.make) (= X (intern ":"))))
+
 
 (define bind-values
   [] Call -> Call
   [[_ Value Variable] | Named] Call -> [let Variable Value (bind-values Named Call)])
 
 (define make-macro
-  [struct.make Name | Args]
-  -> (let Schema (if (name? Name) (schema Name) [])
-       (if (cons? Schema)
-           (named-code Name Args (hd (tl Schema)))
-           (shen-jit.struct.fail struct.make "unknown struct type" Name)))
+  [Head Name | Args]
+  -> (let Schema (schema Name)
+       (cond ((cons? Schema) (named-code Name Args (hd (tl Schema))))
+             ((or (= Head struct.make) (labels? Args))
+              (shen-jit.struct.fail struct.make "unknown struct type" Name))
+             (true [Head Name | Args])))
+    where (struct-syntax? Head)
   [struct.make | Args] -> (shen-jit.struct.fail struct.make "expected a struct type" Args)
   Form -> Form)
+
+\\ Whether a (: ...) form is written as struct syntax: other uses of : are left alone.
+(define labels?
+  [] -> true
+  [Dots] -> true where (dots? Dots)
+  [_ Arrow _ | Rest] -> (labels? Rest) where (arrow? Arrow)
+  _ -> false)
+
+\\ The pattern handler: (T.%make P1 ... Pn) tests T? and binds each Pi to its field. A fresh
+\\ variable for a field left out by ... is not read.
+(define pattern
+  Self AddTest Bind [Make | Ps]
+  -> (let Name (struct-of Make)
+          Fields (hd (tl (schema Name)))
+       (if (= (length Ps) (length Fields))
+           (do (AddTest [(predicate-name Name) Self])
+               (bind-fields Self Bind Name Fields Ps))
+           (fail)))
+    where (constructor? Make)
+  _ _ _ _ -> (fail))
+
+(define bind-fields
+  _ _ _ [] [] -> handled
+  Self Bind Name [[Field | _] | Fields] [P | Ps]
+  -> (do (if (missing? P) skip (Bind P [(member Name Field) Self]))
+         (bind-fields Self Bind Name Fields Ps)))
+
+(define missing?
+  X -> (and (variable? X) (trap-error (get X shen-jit.struct.left-out) (/. E false))))
 
 \\ One annotation per syntax head, independent of any particular struct's schema.
 (define namespace-syntax
   [defstruct Name | Written] -> [defstruct Name | (map (fn protect-field) Written)]
   [struct.make Name | Args] -> [struct.make Name | (protect-labels Args)]
+  [Colon Name | Args] -> [Colon Name | (protect-labels Args)]
+    where (and (= Colon (intern ":")) (labels? Args))
   Form -> Form)
 
 \\ A printer's function and a field's type resolve in the caller's scope like any other reference.
@@ -395,10 +453,10 @@
 
 (define protect-labels
   [] -> []
-  [Field Arrow Expression End | Rest]
-  -> [[protect Field] Arrow Expression End | (protect-labels Rest)]
-    where (and (= Arrow (intern "<-")) (= End (intern ";")))
-  Args -> (shen-jit.struct.fail struct.make "expected Field <- Expression;" Args))
+  [Dots] -> [[protect Dots]] where (= Dots (intern "..."))
+  [Field Arrow Value | Rest]
+  -> [[protect Field] Arrow Value | (protect-labels Rest)] where (arrow? Arrow)
+  Args -> (shen-jit.struct.fail struct.make "expected Field <- Value" Args))
 
 \\ Enumerate bindings without expanding the declaration or installing its schema.
 (define introduced-names

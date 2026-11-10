@@ -919,6 +919,32 @@ that. Its readings decided nothing below.
 
 ### Managed structs
 
+- **Construction and pattern matching with `:`** (2026-11-09, Apple M3 Max). `(:point x <- X ...)`
+  constructs and matches: the reader splits `:` into its own token, so it is `(: point x <- X ...)`.
+  Fields follow one another with no separator, as each value is one form. A macro rewrites the form, in
+  both positions, to `(point.%make X Missing-y41)`, a positional call of an internal constructor; a
+  handler of the kernel's pattern-matching extension compiles that as a pattern, to `(point? V)` and one
+  reader per named field, and a generated datatype rule, `X : number; Y : T; ===== (point.%make X Y) :
+  point;`, types it. A final `...` fills the other fields with fresh variables, marked by a property:
+  wildcards in a pattern, and free variables, an error at define time, in an expression; a missing field
+  without it raises when read. A construction binds only the values that may have effects, in source
+  order, so it compiles to what the positional call does. A pattern costs what the test and reads
+  written by hand do: 30M calls, 83.8 against 83.3 ms (7 runs, load 7). The generator was rewritten as
+  one table, each function described once as name, type, arguments and a body over the typed helpers,
+  from which come the typed definitions, the plain ones (each helper replaced by its primitive) and the
+  `declare`s; for untyped, typed, mutable, empty and custom-printer structs it makes the same code and
+  types as before, in 459 lines instead of 531. Rejected on the way: positional `(point.make X Y)`
+  patterns, as reordering two fields of a type would silently swap them; a pattern-only head handled
+  raw, without a macro, which works untyped but leaves the typechecker no fixed shape for a datatype
+  rule, and so needed a kernel hook to rewrite patterns before handlers; missing fields as a marker
+  raising at run time, which neither failed typechecking nor survived the reader's currying of undefined
+  calls; and a `;` after each field, from the first `struct.make`, after `defcc` and datatype rules, where
+  a rule spans a variable number of tokens. A review of the first version found that two fields with
+  the same impure expression got one value, as each field's variable was found by comparing expressions;
+  that left-out fields known by a `Missing-` prefix left a user's variable of that name unbound; and that
+  a bad label was reported as a `defstruct` error. Kernel 43.6 fixed list sub-patterns inside custom
+  patterns for this.
+
 - **Field types** (2026-11-09, Apple M3 Max). `(x : number)` and `(mutable y : number)`, all fields or none,
   closed types only. Under `(tc +)` a declaration emits typed definitions; their bodies cannot use
   `<-address` or `absvector`, which have no types, so they call five private helpers declared with types

@@ -19,7 +19,7 @@ Other references to that record see the update.
 
 This first version supports declarations in source files. A declaration expands to several top-level
 definitions, so entering one through the REPL or `eval -e`, which takes only the first expanded form,
-does not install the complete API. Pattern matching, defaults, inheritance and native/unboxed layouts are
+does not install the complete API. Defaults, inheritance and native/unboxed layouts are
 outside this version.
 
 ## Generated operations
@@ -82,7 +82,9 @@ Then the operations have types: `point.make` is `number --> number --> point`, `
 `point --> number`, `point.y->` is `point --> number --> point` and `point?` is `A --> boolean`. `point`
 is a type of its own, whose only values are what `point.make` returns. Under `(tc +)` the declaration is
 typechecked as the definitions it makes; under `(tc -)` it declares the same types, so typed code can use
-a struct that untyped code declared. Labelled construction typechecks as the call it becomes.
+a struct that untyped code declared. Labelled construction typechecks as the call it becomes, and
+a pattern as the record it matches: in `{point --> number}`, `(:point x <- X ...) -> X` checks, and
+a pattern of another struct, or a field pattern of the wrong type, is a type error.
 
 A field's type is any closed type, such as `(list number)` or another struct, and resolves in a namespace
 as a signature's does. Type variables are refused, and so is a declaration that types some fields and not
@@ -91,30 +93,53 @@ others. Under `(tc +)`, a struct whose fields have no types is refused: give the
 
 Typed and untyped structs make the same code, and cost the same.
 
-## Labelled construction
+## Labelled construction and matching
 
-The shared `struct.make` macro accepts a literal struct type followed by labelled fields, in any order:
+`:` followed by a struct type and labelled fields, in any order, constructs a record:
 
 ```shen
-(struct.make entry
-  value <- 42;
-  key <- "answer";)
+(:entry value <- 42 key <- "answer")
 ```
 
-Every field must appear exactly once, with `;` after each expression. Unknown, duplicate and missing
-fields raise while reading. Each expression is evaluated once, in the order written, before the
-constructor is called with the values in declaration order. The declaration must precede construction
-in source order. Unknown types and positional arguments to `struct.make` raise while reading.
-The generated `entry.make` remains an ordinary positional function, including when passed with `fn`.
+Every field must appear exactly once. Each value is one form, so fields need no separator: they
+follow one another, on one line or several. Unknown, duplicate and missing fields
+raise while reading. Each value is evaluated once, in the order written, before the record is made with
+the values in declaration order. The declaration must precede its use in source order. `struct.make`
+is a longer name for the same thing: `(struct.make entry value <- 42 key <- "answer")`. The reader
+reads `:entry` as `:` and `entry`, so `(: entry ...)` is the same form.
+
+The same form is a pattern in `define`:
+
+```shen
+(define describe
+  (:entry key <- K value <- V) -> (make-string "~A is ~A" K V)
+  _ -> "not an entry")
+
+(define key-of
+  (:entry key <- K ...) -> K)
+```
+
+A pattern tests that the value is a record of that struct, then matches each named field against its
+own pattern, which may be any pattern: a variable, `_`, a literal, a list, or another struct's. A final
+`...` leaves the other fields out; without it, every field must be named. A pattern reads only the fields
+it names: `key-of` compiles to `(entry? V)` and `(entry.key V)`. Nothing else is a struct pattern: the
+positional `entry.make` is not one.
+
+`...` has no meaning in a construction: there, the fields it leaves out are free variables, an error
+when the definition is compiled.
+
+Both expand to a call of `entry.%make`, an internal constructor that is never written by hand: as a
+construction it makes the record, and as a pattern a handler of the kernel's pattern-matching extension
+compiles it.
 
 ## Namespaces and images
 
 A namespace qualifies the type and its generated operations. Field labels remain literal even when
 they have the same spelling as a system function or imported alias; initializer expressions resolve
 in the caller's scope normally. Generated bodies cannot capture the caller's shadowed primitives.
-Import the declaration keyword from `struct` and use its prefix for labelled construction.
-Export the type name as well as the operations clients need: `struct.make` resolves its type through
-the same imports and export checks as ordinary references.
+Import the declaration keyword from `struct`. `:` needs no import; `struct.make` is used through the
+`struct` prefix. Export the type name as well as the operations clients need: a construction or a
+pattern resolves its type through the same imports and export checks as ordinary references.
 
 ```shen
 (shen.x.namespace catalog
@@ -124,32 +149,33 @@ the same imports and export checks as ordinary references.
   (defstruct entry key (mutable value)))
 
 (shen.x.namespace application
-  (use struct)
   (use catalog => c)
   (export answer)
 
   (define answer
-    -> (let E (struct.make c.entry
-                value <- 42;
-                key <- "answer";)
-         (c.entry.value E))))
+    -> (let E (:c.entry value <- 42 key <- "answer")
+         (value-of E)))
+
+  (define value-of
+    (:c.entry value <- V ...) -> V))
 
 (application.answer)    \\ 42
 ```
 
 Identical declarations can be reloaded. They reuse the original private tag, so existing records remain
 valid. Changing field order, field names or mutability raises before any generated function is replaced;
-start a fresh process to experiment with a different layout. Schemas, syntax registrations and
-records survive saved images. A tag is a fresh symbol, separate from every public operation, bound
+start a fresh process to experiment with a different layout. Schemas, syntax registrations, the
+pattern handler and records survive saved images. A tag is a fresh symbol, separate from every public operation, bound
 only to the record's printer.
 
 The kernel's namespace annotator protects field descriptors and construction labels before name
 resolution. A separate declaration callback checks generated names against imports. Both are registered
 once for the syntax, independently of individual schemas; Shen/JIT does not replace the namespace walker.
 The struct expander consumes protection only in literal field positions, preserving initializer expressions.
-`<-` and `;` are system punctuation and need no protection.
+`<-` is system punctuation and needs no protection.
 
 With the older `package` form, include `defstruct` and `struct.make` in its external-symbol list when used.
+`:` needs nothing there.
 
 ## Cost
 

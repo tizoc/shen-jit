@@ -58,7 +58,7 @@
 
 (struct-test.check "label order and source evaluation order" [first second [second first]]
   (freeze (let _ (set struct-test.*order* [])
-               R (struct.make struct-test.cell value <- (struct-test.mark second); key <- (struct-test.mark first);)
+               R (struct.make struct-test.cell value <- (struct-test.mark second) key <- (struct-test.mark first))
             [(struct-test.cell.key R) (struct-test.cell.value R) (value struct-test.*order*)])))
 (struct-test.check "namespace field labels and initializer references" [true 3 2 11]
   (freeze (let R (struct-test.model.sample)
@@ -72,9 +72,9 @@
 (struct-test.check "shared constructor handles empty structs" true
   (freeze (struct-test.empty? (struct.make struct-test.empty))))
 (struct-test.check "unknown struct type" true
-  (freeze (struct-test.refused? "(struct.make struct-test.missing key <- a;)")))
+  (freeze (struct-test.refused? "(struct.make struct-test.missing key <- a)")))
 (struct-test.check "shared constructor requires a literal type" true
-  (freeze (struct-test.refused? "(struct.make Type key <- a;)")))
+  (freeze (struct-test.refused? "(struct.make Type key <- a)")))
 (struct-test.check "shared constructor requires a type" true
   (freeze (struct-test.refused? "(struct.make)")))
 (struct-test.check "shared constructor requires labelled initializers" true
@@ -87,10 +87,10 @@
   (freeze (struct-test.ordinary.sample)))
 (struct-test.check "construction requires a preceding declaration" true
   (freeze (struct-test.refused?
-    "(shen.x.namespace struct-test.forward (use struct) (import struct defstruct) (define sample -> (struct.make row key <- a;)) (defstruct row key))")))
+    "(shen.x.namespace struct-test.forward (use struct) (import struct defstruct) (define sample -> (struct.make row key <- a)) (defstruct row key))")))
 (struct-test.check "initializer protection survives macro expansion" (intern "Y")
   (freeze (do (struct-test.install
-                "(shen.x.namespace struct-test.protected (use struct) (use struct-test) (define sample -> (struct-test.cell.value (struct.make struct-test.cell key <- a; value <- (protect Y);))))")
+                "(shen.x.namespace struct-test.protected (use struct) (use struct-test) (define sample -> (struct-test.cell.value (struct.make struct-test.cell key <- a value <- (protect Y)))))")
               (struct-test.protected.sample))))
 (struct-test.check "legacy package declaration" [1 2]
   (freeze (let R (struct-test.legacy.sample)
@@ -130,15 +130,16 @@
   (freeze [(struct-test.cell.key (value struct-test.saved)) (struct-test.cell.value (value struct-test.saved))]))
 
 (struct-test.check "missing labelled field" true
-  (freeze (struct-test.refused? "(struct.make struct-test.cell key <- a;)")))
+  (freeze (struct-test.refused? "(struct.make struct-test.cell key <- a)")))
 (struct-test.check "unknown labelled field" true
-  (freeze (struct-test.refused? "(struct.make struct-test.cell unknown <- a; value <- b;)")))
+  (freeze (struct-test.refused? "(struct.make struct-test.cell unknown <- a value <- b)")))
 (struct-test.check "duplicate labelled field" true
-  (freeze (struct-test.refused? "(struct.make struct-test.cell key <- a; key <- b;)")))
-(struct-test.check "missing field terminator" true
-  (freeze (struct-test.refused? "(struct.make struct-test.cell key <- a; value <- b)")))
+  (freeze (struct-test.refused? "(struct.make struct-test.cell key <- a key <- b)")))
+(struct-test.check "fields are not separated by ;" [true true]
+  (freeze [(struct-test.refused? "(struct.make struct-test.cell key <- a; value <- b)")
+           (struct-test.refused? "(define struct-test.bad (:struct-test.pt x <- X; ...) -> X)")]))
 (struct-test.check "mixed positional and labelled fields" true
-  (freeze (struct-test.refused? "(struct.make struct-test.cell key <- a; b)")))
+  (freeze (struct-test.refused? "(struct.make struct-test.cell key <- a b)")))
 (struct-test.check "generated operation cannot replace an imported name" true
   (freeze (struct-test.refused?
     "(shen.x.namespace struct-test.collision (import struct defstruct) (import struct-test.tools length => row.key) (defstruct row key))")))
@@ -179,6 +180,80 @@
 (struct-test.check "an identical typed declaration reloads" "again"
   (freeze (do (struct-test.install "(defstruct struct-test.declared (name : string) (mutable count : number))")
               (struct-test.declared.name (struct-test.declared.make "again" 1)))))
+
+(struct-test.check "colon construction in source order" [[3 [2]] [first second]]
+  (freeze (let _ (set struct-test.*order* [])
+               R (:struct-test.pt y <- (struct-test.mark first) x <- (struct-test.mark second))
+               P (struct-test.colon-build 2)
+            [[(struct-test.pt.x P) (struct-test.pt.y P)] (value struct-test.*order*)])))
+(struct-test.check "struct.make is the same construction" true
+  (freeze (= (struct.make struct-test.pt x <- 1 y <- 2) (:struct-test.pt y <- 2 x <- 1))))
+(struct-test.check "partial match and fallthrough" [2 none none]
+  (freeze [(struct-test.x-of (struct-test.pt.make 2 3)) (struct-test.x-of 5)
+           (struct-test.x-of (struct-test.seg.make 1 2))]))
+(struct-test.check "list pattern in a field" [7 none]
+  (freeze [(struct-test.first-y (struct-test.pt.make 0 [7 8])) (struct-test.first-y (struct-test.pt.make 0 []))]))
+(struct-test.check "repeated variable" [true false]
+  (freeze [(struct-test.diagonal? (struct-test.pt.make 3 3)) (struct-test.diagonal? (struct-test.pt.make 3 4))]))
+(struct-test.check "literal fields" [true false]
+  (freeze [(struct-test.origin? (struct-test.pt.make 0 0)) (struct-test.origin? (struct-test.pt.make 0 1))]))
+(struct-test.check "nested patterns" [true false]
+  (freeze [(struct-test.vertical? (struct-test.seg.make (struct-test.pt.make 1 0) (struct-test.pt.make 1 9)))
+           (struct-test.vertical? (struct-test.seg.make (struct-test.pt.make 1 0) (struct-test.pt.make 2 9)))]))
+(struct-test.check "guards and wildcards" [big small none]
+  (freeze [(struct-test.size (struct-test.pt.make 20 0)) (struct-test.size (struct-test.pt.make 1 0))
+           (struct-test.size 1)]))
+(struct-test.check "one clause per struct" [segment point other]
+  (freeze [(struct-test.kind (struct-test.seg.make 1 2)) (struct-test.kind (struct-test.pt.make 1 2))
+           (struct-test.kind (@p 1 2))]))
+(struct-test.check "patterns read only the fields they name" true
+  (freeze (let Code (ps struct-test.x-of) (= 0 (occurrences struct-test.pt.y Code)))))
+(struct-test.check "colon through a namespace alias" [7 [3 2]]
+  (freeze (let P (struct-test.geo-client.gmake 3)
+            [(struct-test.geo-client.gx (struct-test.geo.pt.make 7 8))
+             [(struct-test.geo.pt.x P) (struct-test.geo.pt.y P)]])))
+(struct-test.check "a pattern compiles after an image reload" 4
+  (freeze (do (struct-test.install "(define struct-test.late (:struct-test.pt y <- Y ...) -> Y)")
+              (struct-test.late (struct-test.pt.make 3 4)))))
+(struct-test.check "missing field" true
+  (freeze (struct-test.refused? "(define struct-test.bad (:struct-test.pt x <- X) -> X)")))
+(struct-test.check "unknown field in a pattern" true
+  (freeze (struct-test.refused? "(define struct-test.bad (:struct-test.pt z <- X ...) -> X)")))
+(struct-test.check "duplicate field in a pattern" true
+  (freeze (struct-test.refused? "(define struct-test.bad (:struct-test.pt x <- X x <- Y) -> X)")))
+(struct-test.check "... comes last" true
+  (freeze (struct-test.refused? "(define struct-test.bad (:struct-test.pt ... x <- X) -> X)")))
+(struct-test.check "... in a construction" true
+  (freeze (trap-error (do (struct-test.install "(define struct-test.bad -> (:struct-test.pt x <- 1 ...))") false)
+                      (/. E true))))
+(struct-test.check "unknown struct after :" true
+  (freeze (struct-test.refused? "(define struct-test.bad (:struct-test.nothing x <- X) -> X)")))
+(struct-test.check "typed colon construction and matching" [6 true]
+  (freeze [(struct-test.tmatch-x (struct-test.tcolon 5))
+           (struct-test.tvertical? (struct-test.tseg.make (struct-test.tcolon 1) (struct-test.tcolon 1)))]))
+(struct-test.check "typed match on a struct declared under (tc -)" "n"
+  (freeze (struct-test.tdeclared-name (struct-test.declared.make "n" 0))))
+(struct-test.check "typed patterns check their fields" [false false false]
+  (freeze (map (/. S (shen.typecheck (hd (read-from-string S)) (protect A)))
+               ["(/. P (struct-test.tmatch-x (:struct-test.tpoint x <- a y <- 1)))"
+                "(:struct-test.tpoint x <- 1 y <- b)"
+                "(struct-test.tmatch-x (:struct-test.tseg from <- (struct-test.tcolon 1) to <- (struct-test.tcolon 2)))"])))
+
+(struct-test.check "fields without separators" [[1 2] 1 [1 2] 5]
+  (freeze (let P (struct-test.unterminated)
+            [[(struct-test.pt.x P) (struct-test.pt.y P)] (struct-test.unterminated-x P)
+             (struct-test.unterminated-both P)
+             (struct-test.unterminated-nested (struct-test.seg.make (struct-test.pt.make 5 0) 0))])))
+(struct-test.check "struct.make without separators" true
+  (freeze (= (struct.make struct-test.pt x <- 1 y <- 2) (struct-test.unterminated))))
+
+(struct-test.check "the same expression in two fields" [1 2]
+  (freeze (let _ (set struct-test.*counter* 0) P (struct-test.twice)
+            [(struct-test.pt.x P) (struct-test.pt.y P)])))
+(struct-test.check "a pattern variable may be named Missing-" [1 2]
+  (freeze (struct-test.named-missing (struct-test.pt.make 1 2))))
+(struct-test.check "a bad label names the struct" "struct struct-test.pt: expected a field name: 3"
+  (freeze (trap-error (do (read-from-string "(:struct-test.pt 3 <- 1 y <- 2)") ok) (/. E (error-to-string E)))))
 
 (shen-jit.collect)
 (struct-test.check "managed field survives collection" [saved 17]

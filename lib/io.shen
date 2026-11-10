@@ -147,21 +147,21 @@
                true
                (error "io: invalid endpoint name or mode"))
       (struct.make endpoint
-        name <- Name;
-        mode <- Mode;
-        capacity <- Cap;
-        read <- Read;
-        write <- Write;
-        close <- Close;
-        state <- open;
-        close-result <- [];
-        reader <- [];
-        writer <- [];
-        busy <- false;
-        guard <- [];
-        context <- [];
-        scratch <- [];
-        scratch-below <- [];)))
+        name <- Name
+        mode <- Mode
+        capacity <- Cap
+        read <- Read
+        write <- Write
+        close <- Close
+        state <- open
+        close-result <- []
+        reader <- []
+        writer <- []
+        busy <- false
+        guard <- []
+        context <- []
+        scratch <- []
+        scratch-below <- [])))
 
 (define endpoint-check
   E -> (if (endpoint? E) E (error "io: not an endpoint")))

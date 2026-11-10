@@ -81,7 +81,10 @@ frame.
 ## Managed struct source extension
 
 `src/port/struct.shen` registers `defstruct` with the kernel's source reader before ordinary macro
-expansion and arity discovery. With field types, under `(tc +)` it emits typed definitions over five
+expansion and arity discovery. `(:T f <- V ...)`, or `struct.make`, is a macro that rewrites itself,
+in an expression or a pattern alike, to a positional call of the internal constructor `T.%make`; a
+handler of the kernel's pattern-matching extension compiles that call, as a pattern, to `T?` and a reader
+per named field, and a generated datatype rule types it for typed structs. With field types, under `(tc +)` it emits typed definitions over five
 private helpers, each one primitive with a type only generated code relies on, which the lowerer inlines
 as the primitive; under `(tc -)` it emits the plain definitions and `declare`s their types. It emits ordinary definitions over one tagged `absvector`: a positional
 `.make`, a predicate, field readers and `->` setters for mutable fields. The constructor allocates only

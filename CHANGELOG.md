@@ -8,8 +8,8 @@ All notable changes to this project are documented in this file. The format is b
 ### Added
 
 - `defstruct`, available at startup: fixed managed records with read-only fields by default, optional mutable
-  fields and `->` setters, positional constructors and shared labelled `struct.make` syntax, namespace support
-  and stable image/reload metadata. Records print with their type and fields, or through a declaration's
+  fields and `->` setters, positional constructors, labelled construction and pattern matching with
+  `(:entry key <- K ...)`, namespace support and stable image/reload metadata. Records print with their type and fields, or through a declaration's
   `(printer F)`. Fields may have types, `(x : number)`: the operations are then typed, under `(tc +)` and
   for typed clients of a struct declared under `(tc -)`.
 

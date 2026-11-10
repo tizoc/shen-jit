@@ -9,7 +9,7 @@ for shen in "$@"; do
     "$shen" --save "$image" eval -q -l tests/structs-client.shen -e '(tc +)' -l tests/structs-typed.shen -e '(tc -)' -l tests/structs.shen > "$work/checks.log" 2>&1
     grep '^[0-9]* passed, 0 failed (structs)' "$work/checks.log"
     SHEN_JIT_IMAGE="$image" "$shen" eval -q -l tests/structs.shen \
-      -e '(output "restored constructor: ~A~%" (struct-test.cell.value (struct.make struct-test.cell value <- 42; key <- restored;)))' \
+      -e '(output "restored constructor: ~A~%" (struct-test.cell.value (struct.make struct-test.cell value <- 42 key <- restored)))' \
       > "$work/restored.log" 2>&1
     grep '^[0-9]* passed, 0 failed (structs)' "$work/restored.log"
     grep -qxF 'restored constructor: 42' "$work/restored.log"

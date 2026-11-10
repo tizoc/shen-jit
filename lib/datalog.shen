@@ -2901,18 +2901,18 @@
 
 (define new-classes
   -> (struct.make classes
-       cells <- (shen.dict 64);
-       changed <- [];
-       holes <- 0;
-       layout <- (shen-jit.bytes 0);
-       table <- (shen-jit.bytes (* 16 8));
-       mask <- 15;
-       positions <- 0;
-       changed-from <- 0;
-       pairs <- 0;
-       laid-out <- false;
-       class-size <- -1;
-       chains <- (shen-jit.bytes 0);))
+       cells <- (shen.dict 64)
+       changed <- []
+       holes <- 0
+       layout <- (shen-jit.bytes 0)
+       table <- (shen-jit.bytes (* 16 8))
+       mask <- 15
+       positions <- 0
+       changed-from <- 0
+       pairs <- 0
+       laid-out <- false
+       class-size <- -1
+       chains <- (shen-jit.bytes 0)))
 
 (define has-classes?
   Rec -> (classes? (<-address Rec 8)))
@@ -3295,11 +3295,11 @@
 (define new-index
   N Keys Count
   -> (struct.make index
-       table <- (shen-jit.bytes (* 16 8));
-       next <- (shen-jit.bytes (* 4 (if (> Count 8) Count 8)));
-       mask <- 15;
-       indexer <- (index-function N Keys);
-       keys <- 0;))
+       table <- (shen-jit.bytes (* 16 8))
+       next <- (shen-jit.bytes (* 4 (if (> Count 8) Count 8)))
+       mask <- 15
+       indexer <- (index-function N Keys)
+       keys <- 0))
 
 (define use-index
   Rel Keys [Name Relations Constants S]
