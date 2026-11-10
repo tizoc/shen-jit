@@ -285,8 +285,9 @@ the shifts. The others are calls to C.
   `((((lambda B (lambda L (lambda K (lambda C Body)))) (shen.prolog-vector)) Lock) Key) Cont)`, where every `lambda`
   in Body is a goal as the Prolog compiler passes one to `findall` or `call`: its vector of bindings is given back
   when Body returns (`shen-jit.prolog-done`), for the next query's `shen.prolog-vector` to take. A query that makes
-  any other `lambda` keeps its vector, which that closure may read later.
-- `(= (shen.deref X B) (shen.deref Y B))`, with B a variable, a number or `[]`, which the Prolog compiler makes of
+  any other `lambda` keeps its vector, which that closure may read later, and so does one whose Lock, Key or Cont
+  names B, L or K, as they are evaluated inside those bindings.
+- `(= (shen.deref X B) (shen.deref Y B))`, with B and Y each a variable, a number or `[]`, which the Prolog compiler makes of
   `(when (= X Y))`: `(shen-jit.deref= X Y B)`, which dereferences as it compares and copies neither term.
 - `(let G (freeze E) Body)`, where Body uses G only in `(thaw G)` and as the last argument
   of `shen.bind!`: each use takes a copy of E, within a limit of 100 nodes for the copies.
@@ -335,7 +336,7 @@ the shifts. The others are calls to C.
   once gets one `call-value` (or `tail-call-value`) with N arguments, and
   anything else is applied one argument at a time, reading the same slots
   again.
-- `(lambda X1 ... (lambda Xn Body))`, n >= 2, lowered at runtime (not at
+- `(lambda X1 ... (lambda Xn Body))`, n >= 2, with X1..Xn distinct, lowered at runtime (not at
   stage 0) with Body at most 400 nodes, starts with `(entry n L)`: its usual
   one-argument code follows, and at L a second copy of Body, with X1..Xn in
   slots 2..n+1 and the outer lambda's captures. The inner lambdas take one
@@ -360,7 +361,7 @@ the shifts. The others are calls to C.
   is at most 15 nodes, has no handlers and no `eval-kl`, does not call its own
   name and has no real literals. A closure it makes becomes one of the caller's own
   lambdas, capturing the parameter's variable. An integer argument replaces its parameter
-  in the body, so that `(vector 1)` lowers to `(absvector 2)` and a constant
+  in the body, unless a parameter is named `let` or `lambda`, so that `(vector 1)` lowers to `(absvector 2)` and a constant
   length. The other arguments are bound to fresh variables, then the
   parameters to those, and the body follows, normalised in its own scope. A
   fresh variable bound to a variable, and each parameter, share a slot with

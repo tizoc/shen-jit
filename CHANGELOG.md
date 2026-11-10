@@ -58,6 +58,11 @@ All notable changes to this project are documented in this file. The format is b
 - C that raised an error and then gave up the lock with `shen_release` could return another thread's error, or none.
 - A `blocking` foreign call given the same byte buffer twice lost what C wrote through the first, once a thread had
   started.
+- Code in shapes the kernel does not produce could compute the wrong value: a lambda nested in one that binds the
+  same name, called with both arguments at once; a condition that binds a name the then branch also uses; a
+  comparison of two dereferenced Prolog terms whose second changes the bindings; a query whose lock, key or
+  continuation names one of its own variables; and three cases of inlining a sealed function, through a parameter
+  bound again, a literal list, or a parameter named `lambda`.
 
 ## [0.6] - 2026-11-08
 

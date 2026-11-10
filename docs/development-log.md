@@ -680,6 +680,19 @@ cannot. The kernel suite is the kernel's `tests/runme.shen`; the stlib install l
   its variable's scope passed the structural and dataflow checks and failed only a unit's expected output, and here; an
   unbound variable and a wrong primitive arity were already failing as a stray `capture` and a bad `prim`. A misshapen
   node makes the emitter loop, so the check cannot report it before stage 0 hangs.
+- **Seven rewrites that lost scope or order, found by a review** (2026-11-10). Each turned valid KLambda into code
+  that ran and gave another value, in shapes the kernel never makes, so neither the structure checks nor the suites
+  could see them: the combined entry of `(lambda X (lambda X X))` bound the outer X last; sharing the factoriser's
+  selectors moved a then branch inside a condition's `let` of a name it used; `deref=` dereferenced the first term
+  after evaluating the second; a query's Lock, Key and Cont moved inside its B, L and K; a frozen argument went in
+  through a parameter the body bound again; thaw substitution went inside literal lists; and integer arguments were
+  substituted as if a parameter named `lambda` were the binder. Each now falls back to the plain lowering, with an
+  eval-kl case that failed before. The kernel's lowered code is byte-identical: only `lower.shen`'s own output moved.
+  - **Not changed:** pooling a query's vector while a `freeze` in it may outlive it. Refusing every `freeze` would
+    end pooling for nearly every query; allowing one only where the Prolog compiler puts a continuation needs its
+    own measurement. `((fn F) A1 ... An)` with n other than F's arity evaluates every argument before applying, where
+    a closure applies F to A1 before evaluating A2; which order is right is open. And a variable named like the
+    lowerer's own, `shen-jit.lower.arg1`, can be captured: those names are the lowerer's.
 
 ### Sealing and inlining
 

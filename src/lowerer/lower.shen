@@ -40,7 +40,9 @@
 \\ it would take the same parts again with hd and tl.
 (define shen-jit.lower.share
   [if C X Y] -> (let Spine (shen-jit.lower.spine C [])
-                     Then (if (empty? Spine) X (shen-jit.lower.reuse X Spine []))
+                     Then (if (or (empty? Spine) (shen-jit.lower.captures? Spine X))
+                              X
+                              (shen-jit.lower.reuse X Spine []))
                   (if (= Then X)
                       [if C (shen-jit.lower.share X) (shen-jit.lower.share Y)]
                       (let G (shen-jit.lower.fresh shen-jit.lower.else)
@@ -58,6 +60,12 @@
                         []
                         (shen-jit.lower.spine S [[X | (shen-jit.lower.canon E Bs)] | Bs]))
   _ Bs -> Bs)
+
+\\ Whether X names a variable the chain binds, which X, once inside those
+\\ bindings, would then mean instead of what it meant outside.
+(define shen-jit.lower.captures?
+  [[V | _] | Bs] X -> (or (shen-jit.lower.occurs? V X) (shen-jit.lower.captures? Bs X))
+  _ _ -> false)
 
 (define shen-jit.lower.canon
   [Op A] Bs -> [Op (shen-jit.lower.canon A Bs)] where (element? Op [hd tl])
@@ -210,6 +218,8 @@
 \\ capture a variable an argument uses; the body is normalized in its own
 \\ scope, so it cannot capture the caller's variables either.
 (define shen-jit.lower.inline
+  F Params Body Args -> (shen-jit.lower.inline-args F Params Body Args)
+      where (or (element? let Params) (element? lambda Params)) \\ then calls, not binders, in Body
   F Params Body Args -> (shen-jit.lower.inline-numbers F Params Body Args [] []))
 
 \\ An integer argument goes into the body itself, so that what the body
@@ -257,6 +267,9 @@
   X [apply [var X]] -> 1
   X [var X] -> -1000000
   _ [const _] -> 0
+  X [let X _ _] -> -1000000
+  X [lambda X _] -> -1000000
+  X [trap _ X _] -> -1000000
   X [Y | Ys] -> (let M (shen-jit.lower.thaws-once X Y)
                      N (shen-jit.lower.thaws-once X Ys)
                   (if (or (< M 0) (< N 0)) -1000000 (+ M N)))
@@ -370,7 +383,10 @@
   -> (shen-jit.lower.norm Scope [let B [shen.prolog-vector]
                                   [shen-jit.prolog-done B [let L Lock [let K Key [let C Cont Body]]]]])
       where (and (shen-jit.lower.only-goals? Body) (shen-jit.sealed? shen-jit.prolog-done)
-                 (empty? (intersection [let lambda shen.prolog-vector shen-jit.prolog-done] Scope)))
+                 (empty? (intersection [let lambda shen.prolog-vector shen-jit.prolog-done] Scope))
+                 \\ Lock, Key and Cont end up inside B, L and K, so none may name them.
+                 (not (or (shen-jit.lower.occurs? B [Lock Key Cont])
+                          (shen-jit.lower.occurs? L [Key Cont]) (shen-jit.lower.occurs? K Cont))))
   \\ ((fn F) X1 ... Xn) for a sealed F of arity n >= 1 is (F X1 ... Xn): F's
   \\ lambda form applies F to its n arguments, and F cannot be redefined.
   Scope [[fn F] | Args] -> [call F (shen-jit.lower.norm-list Scope Args)]
@@ -419,11 +435,13 @@
                  (shen-jit.sealed? shen.cut) (shen-jit.sealed? when)
                  (empty? (difference [B L K B2 L2 K2 C] Scope)))
   \\ (= (shen.deref X B) (shen.deref Y B)), the Prolog compiler's (when (= X Y)),
-  \\ compares without copying either term.
+  \\ compares without copying either term. Both dereference after Y is evaluated,
+  \\ so Y must not change the bindings.
   Scope [= [shen.deref X B] [shen.deref Y B]]
   -> (shen-jit.lower.norm Scope [shen-jit.deref= X Y B])
       where (and (not (element? = Scope)) (not (element? shen.deref Scope))
-                 (shen-jit.sealed? shen.deref) (shen-jit.lower.pure? B Scope))
+                 (shen-jit.sealed? shen.deref) (shen-jit.lower.pure? B Scope)
+                 (shen-jit.lower.pure? Y Scope))
   Scope [if C X Y] -> [if (shen-jit.lower.norm Scope C) (shen-jit.lower.norm Scope X)
                           (shen-jit.lower.norm Scope Y)]
   Scope [and X Y] -> [and (shen-jit.lower.norm Scope X) (shen-jit.lower.norm Scope Y)]
@@ -977,6 +995,7 @@
 (define shen-jit.lower.thaw-count
   G [apply [var G]] -> 1
   G [var G] -> -1
+  _ [const _] -> 0
   G [let G _ _] -> -1
   G [lambda G _] -> -1
   G [trap _ G _] -> -1
@@ -987,6 +1006,7 @@
 
 (define shen-jit.lower.thaw-in
   G E [apply [var G]] -> E
+  _ _ [const C] -> [const C]
   G E [X | Xs] -> [(shen-jit.lower.thaw-in G E X) | (shen-jit.lower.thaw-in G E Xs)]
   _ _ X -> X)
 
@@ -1205,8 +1225,14 @@
   -> (/. B (if (empty? (<-address B 2))
                (shen-jit.lower.finish-entry B Params [lambda X Body])
                (shen-jit.lower.finish-plain B Params [lambda X Body])))
-      where (<= (shen-jit.lower.size (shen-jit.lower.lambda-body Body)) 400)
+      where (and (<= (shen-jit.lower.size (shen-jit.lower.lambda-body Body)) 400)
+                 \\ The entry binds every name at once, so each must be bound once.
+                 (shen-jit.lower.distinct? (append Params (shen-jit.lower.lambda-params [lambda X Body]))))
   Params Body -> (/. B (shen-jit.lower.finish-plain B Params Body)))
+
+(define shen-jit.lower.distinct?
+  [] -> true
+  [X | Xs] -> (and (not (element? X Xs)) (shen-jit.lower.distinct? Xs)))
 
 (define shen-jit.lower.finish-entry
   B Params Inner

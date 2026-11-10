@@ -1169,3 +1169,23 @@ goes through the stub, and a function that cannot be found raises as anything do
 (value true (shen-jit.lower.fixed? cons))
 (value false (shen-jit.lower.fixed? fixed-nothing))
 (value false (shen-jit.lower.fixed? 5))
+"Rewrites in the lowerer keep scope and order when the code is not the kernel's usual shape."
+"Nested lambdas that bind one name twice: the inner binding wins, called with both arguments at once."
+(value 2 (let F (if true (lambda X (lambda X X)) 0) (F 1 2)))
+"A condition that binds a name the then branch uses for something else: sharing its selectors would capture it."
+(value t.lower-share (defun t.lower-share (X P) (if (let X (hd P) true) (cons X (cons (hd P) ())) 0)))
+(value (99 1) (t.lower-share 99 (cons 1 ())))
+"Dereferences compared at once only when the second argument cannot change the bindings."
+(value 100 (set shen.*prolog-memory* 100))
+(value false (let B (shen.prolog-vector) (let X (shen.newpv B) (do (shen.bindv X 1 B) (= (shen.deref X B) (shen.deref (do (shen.bindv X 2 B) 2) B))))))
+"A query's lock, key and continuation are evaluated outside its own variables."
+(value true (let B 7 (((((lambda B (lambda L (lambda K (lambda C (number? L))))) (shen.prolog-vector)) B) 0) 0)))
+"Inlined sealed bodies: a parameter bound again, a literal shaped like lowered code, and a parameter named lambda."
+(value true (shen-jit.sealing true))
+(value t.lower-frozen (defun t.lower-frozen (P) (let P (freeze 2) (thaw P))))
+(value t.lower-literal (defun t.lower-literal () (cons apply (cons (cons var (cons T ())) ()))))
+(value t.lower-keyword (defun t.lower-keyword (lambda X) (lambda X X)))
+(value false (shen-jit.sealing false))
+(value 2 (t.lower-frozen (freeze 1)))
+(value (apply (var T)) (let T (freeze 7) (t.lower-literal)))
+(value (7 7) (t.lower-keyword (lambda A (lambda B (cons A (cons B ())))) 7))
