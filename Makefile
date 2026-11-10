@@ -117,7 +117,10 @@ $(BUILD)/shen-jit.img: $(BUILD)/runtime $(BUILD)/stage0/.done
 # end of its own file. On macOS the
 # linker's ad-hoc signature still runs, though strict verification
 # (codesign --verify) rejects the appended data.
+# A new file, not the old one rewritten: macOS caches a signature by file, and kills a
+# binary whose contents changed under it.
 $(BUILD)/shen-jit: $(BUILD)/runtime $(BUILD)/shen-jit.img
+	rm -f $@
 	cat $^ > $@
 	chmod +x $@
 	$(call AS_EXE,$@)
@@ -129,6 +132,7 @@ $(BUILD)/shen-jit: $(BUILD)/runtime $(BUILD)/shen-jit.img
 release: $(BUILD)/runtime $(BUILD)/shen-jit.img
 	cp $(BUILD)/runtime$(EXE) $(BUILD)/runtime-stripped$(EXE)
 	strip $(BUILD)/runtime-stripped$(EXE)
+	rm -f $(BUILD)/shen-jit
 	cat $(BUILD)/runtime-stripped$(EXE) $(BUILD)/shen-jit.img > $(BUILD)/shen-jit
 	chmod +x $(BUILD)/shen-jit
 	$(call AS_EXE,$(BUILD)/shen-jit)
