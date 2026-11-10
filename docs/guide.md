@@ -299,6 +299,9 @@ waits or runs beside the main program, and no speed-up from more cores.
   wait.
 - **Cost:** nothing until the first thread starts. All code then compiles again on its next call, with a test at
   each loop's turn. The time is shared with the threads that are running.
+- **A loop running when the first thread starts** keeps the code it had, with no such test, so it never gives way:
+  one that starts the first thread and then spins on it in the same call waits for ever. Start a thread before
+  such a loop, or spin in a function called after, as `wait` above.
 
 ### Sealing
 

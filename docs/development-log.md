@@ -1252,6 +1252,11 @@ machine on a Ryzen 5 5600X with Ubuntu 20.04, gcc 9.4 and glibc 2.31. A bare rat
   is a broken stdout was left out: `| head` now prints one error and exits with status 1, as Python does, and that
   would take a special case at the top level. The flags in `lib/socket.shen` are now redundant, and stay until someone
   changes that file.
+- **Not changed: a loop already running when the first thread starts (2026-11-10).** It keeps the code compiled
+  without loop checks, so a call that starts the first thread and then spins on it never gives way, and hangs, where
+  Shen/Scheme finishes. Compiling the checks in from the start would cost every program without threads what they
+  cost with them, as above; patching the jumps of running code would mean recording every loop's back edge. The
+  guide says to start a thread before such a loop, or to spin in a function called after.
 - **A backtrace shared by every thread (2026-11-10).** A thread kept its handlers, roots and, since that morning, its
   exception, but `vm->trace` was one for all, and a trace is not captured over another: once one thread's error had
   one, every later thread's error showed it. A thread keeps its own now, as it keeps its exception.
@@ -2748,6 +2753,9 @@ First libraries, to test whether declarations cover real use: 128 and 206 lines 
     error, or `[]`, which made the handler's `error-to-string` raise. A thread keeps it now, as it keeps its roots.
   - A `blocking` call gave each `bytes` argument its own copy, so one buffer given twice lost what C wrote through the
     first, and only once a thread had started. A buffer given twice is one copy now.
+- **2026-11-10, found by a review of the JIT:** `jit_call_nested` checked the C stack before pushing its boundary, so
+  "stack overflow" was raised to the guest's handler: under one that ignores its error, quietly, with no exception for
+  C to read, and C's `shen_exception` gave `SHEN_NONE`, which ends the process. The boundary goes first now.
 
 ### Not tried yet
 

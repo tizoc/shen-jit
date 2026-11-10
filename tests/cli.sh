@@ -1090,6 +1090,23 @@ EOF
     check nested-stack-overflow-thread "$dir/nest.out" "thread: stack overflow"
     check nested-goes-on "$dir/nest.out" "goes on: [1 | 2]"
     check nested-stack-moved "$dir/nest.out" 'stack moved: ["ab" 1 | 300000]'
+    # The same under a handler that ignores its error: C still gets the error to read, and goes on.
+    cat > "$dir/nest-quiet.shen" <<EOF
+(shen-jit.library q.lib ["$ffi_test"])
+(define-foreign-procedure q.capture q.lib "caught_exception" 2)
+(set q.message missing)
+(define q.recur N ->
+  (trap-error (let R (q.capture (/. X (q.recur (+ X 1))) N)
+                (if (= R no-error) done (do (set q.message (error-to-string R)) done)))
+              (/. E ignored)))
+(output "result: ~A~%" (q.recur 0))
+(output "message: ~A~%" (value q.message))
+(output "continues: ~A~%" (+ 20 22))
+EOF
+    "$SHEN" eval -l lib/ffi.shen -l "$dir/nest-quiet.shen" > "$dir/nest-quiet.out" 2>&1 < /dev/null
+    check nested-quiet-result "$dir/nest-quiet.out" "result: done"
+    check nested-quiet-message "$dir/nest-quiet.out" "message: stack overflow"
+    check nested-quiet-continues "$dir/nest-quiet.out" "continues: 42"
 
     # A nested call near the end of the guest stack must leave room for a callee that does
     # not check its frame. An overrun usually goes unseen, so where Guard Malloc exists, which

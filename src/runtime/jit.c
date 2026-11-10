@@ -4156,12 +4156,11 @@ V jit_call(VM *vm, V proc, size_t n, const V *args)
 V jit_call_nested(VM *vm, V proc, size_t n, const V *args)
 {
     char here;
-    if ((uintptr_t)&here < vm->c_stack_limit)
-        return sj_raise(vm, "stack overflow");
     size_t handlers = vm->nhandlers;
     if (h_push_handler(vm, NULL, 0) == V_CLEARED)
         return V_CLEARED;
-    V result = jit_call(vm, proc, n, args);
+    /* Raised past the handler just pushed, so not quietly, whatever handler the guest has. */
+    V result = (uintptr_t)&here < vm->c_stack_limit ? sj_raise(vm, "stack overflow") : jit_call(vm, proc, n, args);
     vm->nhandlers = handlers;
     return result;
 }
