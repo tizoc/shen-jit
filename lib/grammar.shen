@@ -139,6 +139,7 @@
                                                     R [At 0]))
                                 Rules))])
          _ (put Name code Def)
+         _ (restream Name)
          Checked (if (empty? Sig) [] (typed Name Params Sig Rules))
       (if (tc?) (do (stub Name Def) (if (empty? Sig) Name Checked)) Def)))
 
@@ -427,9 +428,16 @@
   _ 0 Acc -> Acc
   B N Acc -> (byte-list B (- N 1) [(shen-jit.u8 B (- N 1)) | Acc]))
 
-\\ One bounds check for a run of literal bytes, then a test of each.
+\\ One bounds check for a run of literal bytes, then a test of each. In a require, each byte is
+\\ checked in turn, so that a run cut short by the end of the input reports the end.
 (define terminals
   C (@p [] Items) Pos Fail Done -> (seq C Items Pos Fail Done)
+  C (@p [Byte | Bytes] Items) Pos Fail Done ->
+    (byte C Pos Fail
+      [if [= [shen-jit.u8 (buf C) (pos Pos)] Byte]
+          (terminals C (@p Bytes Items) (next Pos) Fail Done)
+          Fail])
+    where (cons? Fail)
   C (@p Bytes Items) [Var Off] Fail Done ->
     (let N (length Bytes)
       [if (conj [[< (pos [Var (+ Off (- N 1))]) (end C)]
@@ -447,7 +455,13 @@
   [X | Xs] -> [and X (conj Xs)])
 
 (define byte
-  C Pos Fail Rest -> [if [< (pos Pos) (end C)] Rest Fail])
+  C Pos Fail Rest -> [if [< (pos Pos) (end C)] Rest (ended C Fail)])
+
+\\ A require whose items ran past the end of the input reports the end. A read from a reader never
+\\ uses it: the reason its fill stopped decides the result there.
+(define ended
+  C [grammar.error S _ Message] -> [grammar.error S (end C) Message]
+  _ Fail -> Fail)
 
 (define next
   [Var Off] -> [Var (+ Off 1)])
@@ -504,6 +518,7 @@
                  Bind (and (cons? Found) (not (inner? C)))
                  Defer (and Bind Capture (defer C Name (tl Found) (Value P)))
                  Now (and Bind (not Defer))
+                 _ (if Now (forget C (tl Found)) skip)
                  Rest (seq (if Now (bind C (tl Found)) C) Items [P 0] Fail Done)
               (if Now [let (tl Found) (Value P) Rest] Rest)))))
 
@@ -515,6 +530,14 @@
       (if (and (captures? Cell) (not (element? Name (captures.used Cell))))
           (do (captures.deferred-> Cell [[Var | Code] | (captures.deferred Cell)]) true)
           false)))
+
+\\ A later match of a rule replaces its value, so a capture of it left for the end is dropped.
+(define forget
+  C Var -> (let Cell (cell C)
+             (if (captures? Cell)
+                 (captures.deferred-> Cell (mapcan (/. D (if (= (hd D) Var) [] [D]))
+                                                   (captures.deferred Cell)))
+                 skip)))
 
 (define subst-values
   [_ _ _ _ _ Values | _] -> Values)
@@ -568,7 +591,8 @@
           (let P (gensym (protect P))
             [let P [if (class-test C X Pos) Loop (pos Pos)]
               (seq C Items [P 0] Fail Done)])))
-  C [+ X] Items Pos Fail Done -> (seq C [X [* X] | Items] Pos Fail Done)
+  C [+ X] Items Pos Fail Done ->
+    (seq (inner C) [X] Pos Fail (/. P (seq C [[* X] | Items] P Fail Done)))
   C [? X] Items Pos Fail Done ->
     (let R (gensym (protect R))
          Inner (seq (inner C) [X] Pos -1 (function pos))
@@ -591,7 +615,7 @@
         (/. P (seq C Items P Fail Done))))
     where (cons? Rest)
   C [where G] Items Pos Fail Done -> [if (subst C G) (seq C Items Pos Fail Done) Fail]
-  C [at V] Items Pos Fail Done -> [let V (pos Pos) (seq (bind C V) Items Pos Fail Done)]
+  C [at V] Items Pos Fail Done -> [let V [at-position (pos Pos)] (seq (bind C V) Items Pos Fail Done)]
     where (variable? V)
   C [u16-be V] Items Pos Fail Done -> (fixed C V 2 Items Pos Fail Done) where (variable? V)
   C [u32-be V] Items Pos Fail Done -> (fixed C V 4 Items Pos Fail Done) where (variable? V)
@@ -605,7 +629,7 @@
     [if [< (pos [Var (+ Off (- N 1))]) (end C)]
         [let V (big-endian C Var Off N 0)
           (seq (bind C V) Items [Var (+ Off N)] Fail Done)]
-        Fail])
+        (ended C Fail)])
 
 (define big-endian
   _ _ _ 0 Acc -> Acc
@@ -663,6 +687,7 @@
     where (and (nonterminal? Name) (every? (function variable?) Params))
   [defgrammar | Form] -> (error "defgrammar: expected <name> or (<name> Parameters...), and rules, in ~R" Form)
   [in-class _ _ Guard] -> Guard
+  [at-position X] -> X
   [parse Rule View Fail] -> (client Rule ".parse" [View Fail] (parse-form Rule View Fail))
     where (rule-form? Rule)
   [match? Rule View] -> (client Rule ".match?" [View] (match-form Rule View))
@@ -757,14 +782,16 @@
       (read-result P S E Start Fail)))
 
 \\ A parse that read into the end of the input could have matched with more: at EOF, that is
-\\ "input ended", whichever rule failed. One that did not is the grammar's own failure.
+\\ "input ended", whichever rule failed. One that did not is the grammar's own failure. A parse
+\\ that met the limit or a reader's failure decides nothing, even if it matched: a repetition or
+\\ an option stops there as at the end, and more input could have made the match longer.
 (define read-result
   P S E Start Fail ->
     (let R (<-address E 1) Why (<-address E 2) End (<-address E 0)
-      (cases (>= P 0) (do (io.consume R P) [ok (<-address S 0)])
-             (= Why limit) (Fail (+ Start End) "input exceeds the limit")
-             (and (= End 0) (= Why [eof])) [eof]
+      (cases (= Why limit) (Fail (+ Start End) "input exceeds the limit")
              (and (cons? Why) (not (= Why [eof]))) (io.reader-terminal R)
+             (>= P 0) (do (io.consume R P) [ok (<-address S 0)])
+             (and (= End 0) (= Why [eof])) [eof]
              (= Why [eof]) (Fail (+ Start End) "input ended")
              (= P -2) (Fail (+ Start (<-address S 1)) (<-address S 2))
              true (Fail Start "no match"))))
@@ -798,6 +825,12 @@
                        _ (put G stream-of F)
                     (eval (append [define G | Params] [-> [compile-stream G F (list Params)]]))))
          G))
+
+\\ A rule redefined after a streaming read: its variant, which its callers' variants call by
+\\ name, becomes a stub again, compiled from the new definition at its next call.
+(define restream
+  F -> (let G (intern (cn (str F) "/stream"))
+         (if (cons? (trap-error (get G made-from) (/. E []))) (stream F) skip)))
 
 \\ Compiles F's streaming variant and every one it calls now, rather than at their first calls, so
 \\ that the compiling happens before a parse, and outside any deadline. A variant compiled for
@@ -840,6 +873,7 @@
 (define rewrite
   Buf End [< X End] -> (let Y (rewrite Buf End X) [or [< Y [<-address End 0]] [refill End Y]])
   Buf End [buffer.make Buf A Z] -> [copy-span Buf (rewrite Buf End A) (rewrite Buf End Z)]
+  Buf End [at-position X] -> [+ (rewrite Buf End X) [io.position [<-address End 1]]]
   Buf End [F Buf A End S | Rest] ->
     [(stream F) Buf (rewrite Buf End A) End S | (map (/. X (rewrite Buf End X)) Rest)]
     where (and (symbol? F) (cons? (source F)))

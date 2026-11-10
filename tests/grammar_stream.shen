@@ -90,4 +90,45 @@
                _ (eval (hd (read-from-string "(defgrammar <s.changing> c#34;ac#34; := two;)")))
             [Before (grammar.read <s.changing> (stream-test.reader "a" 1) (function stream-test.fail))])))
 
+(defgrammar <s.number> (text <s.digits>) := <s.digits>;)
+
+(stream-test.check "lookahead errors cannot terminate a token" [error 0]
+  (freeze
+    (let E (stream-test.feed (buffer.from-string "12") 1
+              [error (io.error read "chunks" "broken")])
+         R (io.reader E [])
+         Got (grammar.read <s.number> R (function stream-test.fail))
+      [(hd Got) (io.position R)])))
+
+(stream-test.check "a full window cannot terminate a token"
+  [[fail 2 "input exceeds the limit"] 0]
+  (freeze
+    (let R (stream-test.reader "123" 1)
+         Got (grammar.read-within <s.number> R 2
+               (function stream-test.fail))
+      [Got (io.position R)])))
+
+(defgrammar <s.callee>
+  "a" "b" "c" "d" "e" "f" "g" "h" "i" "j" "k" "l" "m" := one;)
+(defgrammar <s.parent> <s.callee> := <s.callee>;)
+
+(stream-test.check "streaming refreshes a redefined callee"
+  [[ok one] [ok two] two]
+  (freeze
+    (let Before
+           (grammar.read <s.parent>
+             (stream-test.reader "abcdefghijklm" 1)
+             (function stream-test.fail))
+         _ (eval (hd (read-from-string
+             "(defgrammar <s.callee> c#34;abcdefghijklmc#34; := two;)")))
+         After
+           (grammar.read <s.parent>
+             (stream-test.reader "abcdefghijklm" 1)
+             (function stream-test.fail))
+         Plain
+           (grammar.parse <s.parent>
+             (buffer.from-string "abcdefghijklm")
+             (function stream-test.fail))
+      [Before After Plain])))
+
 (output "~A passed, ~A failed~%" (value stream-test.passed) (value stream-test.failed))

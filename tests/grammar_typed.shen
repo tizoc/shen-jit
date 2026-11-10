@@ -82,8 +82,11 @@
       (@p "an argument that does not match" (not (grammar.match? (<gt.keyword> "let") (gt.view "lot"))))
       (@p "rules within rules" (= (grammar.parse <gt.let> (gt.view "let x=5") (function gt.raise)) (@p "x" 5)))
       (@p "a read" (= (grammar.read <gt.numbers> (gt.reader "1 22 333") (function gt.reject)) [ok [1 22 333]]))
-      (@p "a read within a limit" (= (grammar.read-within <gt.numbers> (gt.reader "1 22 333") 4 (function gt.reject))
-                                     [ok [1 22]]))
+      (@p "a read within a limit" (= (grammar.read-within <gt.numbers> (gt.reader "1 22 333") 9 (function gt.reject))
+                                     [ok [1 22 333]]))
+      (@p "a read that meets its limit"
+          (= (gt.message (grammar.read-within <gt.numbers> (gt.reader "1 22 333") 4 (function gt.reject)))
+             "input exceeds the limit at 4"))
       (@p "a read that fails" (= (gt.message (grammar.read <gt.field> (gt.reader "ab=x") (function gt.reject)))
                                  "expected a number at 3"))
       (@p "a read at the end" (= (grammar.read <gt.field> (gt.reader "") (function gt.reject)) [eof]))

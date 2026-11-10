@@ -223,4 +223,27 @@
 (grammar-test.refused "a message naming what it requires"
   "(defgrammar <g.bad> (require <g.digit> (make-string c#34;~Ac#34; <g.digit>));)")
 
+(defgrammar <g.any> B := B;)
+(defgrammar <g.last> (text <g.any>) <g.any> := <g.any>;)
+
+(grammar-test.check "later match replaces a deferred capture" 98
+  (freeze
+    (grammar.parse <g.last> (buffer.from-string "ab")
+      (function grammar-test.fail))))
+
+(defgrammar <g.plus> <g.digit> (+ <g.digit>) := <g.digit>;)
+
+(grammar-test.check "plus does not replace an outside value" 1
+  (freeze
+    (grammar.parse <g.plus> (buffer.from-string "123")
+      (function grammar-test.fail))))
+
+(defgrammar <g.cut-short> "a" (require "bc" "want bc") := yes;)
+
+(grammar-test.check "truncated require reports the input end"
+  [error 2 "want bc"]
+  (freeze
+    (grammar.parse <g.cut-short> (buffer.from-string "ab")
+      (function grammar-test.fail))))
+
 (output "~A passed, ~A failed~%" (value grammar-test.passed) (value grammar-test.failed))

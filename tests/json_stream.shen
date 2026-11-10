@@ -70,4 +70,27 @@
   (json-stream.check "what follows a value stays unread" [[ok [object ["a" [number "1"]]]] "c#10;rest"]
     (freeze [First (buffer.string (hd (tl (io.read-all R 100))))])))
 
+(json-stream.check "closing quote needs no further read" [[ok "x"] 1]
+  (freeze
+    (let Calls (io.record [0])
+         Wire (buffer.from-string "c#34;xc#34;")
+         E (io.endpoint "complete string" read 16
+             (/. B
+               (let N (<-address Calls 0)
+                    _ (address-> Calls 0 (+ N 1))
+                 (if (= N 0)
+                     (do (shen-jit.copy-bytes B 0 (buffer.owner Wire) 0 3)
+                         [read 3])
+                     [error (io.error read "complete string"
+                                      "unnecessary read")])))
+             (function io.no-write) (freeze [ok]))
+         Got (json.read (io.reader E []) [])
+         _ (io.close E)
+      [Got (<-address Calls 0)])))
+
+(json-stream.check "surrogate errors use the stream offset"
+  [[[number "0"]] [raised "json: byte 3: missing low surrogate"]]
+  (freeze
+    (json-stream.read "0 c#34;c#92;ud800c#34;" 1)))
+
 (output "~A passed, ~A failed~%" (value json-stream.passed) (value json-stream.failed))

@@ -6,7 +6,7 @@
   (use grammar)
   (use io)
   (use shen-jit)
-  (externals [? byte-limit defgrammar depth-limit eof json-options json-values object ok require
+  (externals [? at byte-limit defgrammar depth-limit eof json-options json-values object ok require
     span text])
   (shadow <e> read value)
   (export decode encode integer json.number => number option parse read stringify value object
@@ -71,7 +71,7 @@
                 (shen-jit.u8! Out (+ K 3) (+ 128 (shen-jit.bit-and N 63))) (+ K 4)))))
 
 (define scan-unicode
-  Data I Stop Out K ->
+  Data I Stop Out K Shift ->
     (let N (scan-hex4 Data (+ I 2) Stop 4 0)
       (cond ((and (>= N 55296) (<= N 56319))
               (if (and (< (+ I 7) Stop) (= (shen-jit.u8 Data (+ I 6)) 92)
@@ -79,39 +79,41 @@
                   (let Low (scan-hex4 Data (+ I 8) Stop 4 0)
                     (if (and (>= Low 56320) (<= Low 57343))
                         (scan-decode Data (+ I 12) Stop Out
-                          (scan-scalar Out K (+ 65536 (+ (* (- N 55296) 1024) (- Low 56320)))))
-                        (scan-fail I "invalid low surrogate")))
-                  (scan-fail I "missing low surrogate")))
-            ((and (>= N 56320) (<= N 57343)) (scan-fail I "unpaired low surrogate"))
-            (true (scan-decode Data (+ I 6) Stop Out (scan-scalar Out K N))))))
+                          (scan-scalar Out K (+ 65536 (+ (* (- N 55296) 1024) (- Low 56320)))) Shift)
+                        (scan-fail (+ I Shift) "invalid low surrogate")))
+                  (scan-fail (+ I Shift) "missing low surrogate")))
+            ((and (>= N 56320) (<= N 57343)) (scan-fail (+ I Shift) "unpaired low surrogate"))
+            (true (scan-decode Data (+ I 6) Stop Out (scan-scalar Out K N) Shift)))))
 
 (define scan-decode
-  _ I I _ K -> K
-  Data I Stop Out K ->
+  _ I I _ K _ -> K
+  Data I Stop Out K Shift ->
     (let B (shen-jit.u8 Data I)
       (if (= B 92)
           (let E (scan-byte Data (+ I 1) Stop)
             (if (= E 117)
-                (scan-unicode Data I Stop Out K)
+                (scan-unicode Data I Stop Out K Shift)
                 (let Byte (cond ((element? E [34 47 92]) E)
                                  ((= E 98) 8) ((= E 102) 12) ((= E 110) 10)
                                  ((= E 114) 13) ((= E 116) 9)
-                                 (true (scan-fail I "invalid escape")))
+                                 (true (scan-fail (+ I Shift) "invalid escape")))
                   (do (shen-jit.u8! Out K Byte)
-                      (scan-decode Data (+ I 2) Stop Out (+ K 1))))))
+                      (scan-decode Data (+ I 2) Stop Out (+ K 1) Shift)))))
           (let Run (- (scan-run Data I Stop) I)
             (do (shen-jit.copy-bytes Out K Data I Run)
-                (scan-decode Data (+ I Run) Stop Out (+ K Run)))))))
+                (scan-decode Data (+ I Run) Stop Out (+ K Run) Shift))))))
 
 \\ The grammar has checked the text, so what runs to the next escape is copied as it is.
 (define scan-run
   _ I I -> I
   Data I Stop -> (if (= (shen-jit.u8 Data I) 92) I (scan-run Data (+ I 1) Stop)))
 
-\\ V is the span the grammar made.
+\\ V is the span the grammar made, and At its position, which errors count from: read from a
+\\ reader, the span is a copy, and At is its position in the stream.
 (define unescape
-  V -> (let Start (buffer.view.start V) Stop (buffer.view.end V) Out (shen-jit.bytes (- Stop Start))
-         (shen-jit.bytes->string Out 0 (scan-decode (buffer.view.owner V) Start Stop Out 0))))
+  V At -> (let Start (buffer.view.start V) Stop (buffer.view.end V) Out (shen-jit.bytes (- Stop Start))
+            (shen-jit.bytes->string Out 0
+              (scan-decode (buffer.view.owner V) Start Stop Out 0 (- At Start)))))
 
 (define new-key?
   Seen Key -> (if (trap-error (shen.<-dict Seen Key) (/. E false))
@@ -134,12 +136,15 @@
 \\ A string's bytes are its text unless it has escapes, which the decoder above turns into bytes.
 (defgrammar <plain> B where (and (>= B 32) (< B 128) (not (= B 34)) (not (= B 92)));)
 (defgrammar <tail> B where (scan-continuation? B);)
-(defgrammar <utf8>
-  B <tail> where (and (>= B 194) (<= B 223));
-  B C <tail> where (and (>= B 224) (<= B 239) (scan-continuation? C)
-                             (or (not (= B 224)) (>= C 160)) (or (not (= B 237)) (< C 160)));
-  B C <tail> <tail> where (and (>= B 240) (<= B 244) (scan-continuation? C)
-                                         (or (not (= B 240)) (>= C 144)) (or (not (= B 244)) (< C 144)));)
+\\ The first byte is checked before any byte after it is read, so that the closing quote ends a
+\\ string read from a reader without waiting for more input.
+(defgrammar <utf8> B (where (and (>= B 194) (<= B 244))) (<sequence> B);)
+(defgrammar (<sequence> B)
+  <tail> where (<= B 223);
+  C <tail> where (and (>= B 224) (<= B 239) (scan-continuation? C)
+                      (or (not (= B 224)) (>= C 160)) (or (not (= B 237)) (< C 160)));
+  C <tail> <tail> where (and (>= B 240) (scan-continuation? C)
+                             (or (not (= B 240)) (>= C 144)) (or (not (= B 244)) (< C 144)));)
 (defgrammar <char> (+ <plain>); <utf8>;)
 (defgrammar <raw> (* <char>);)
 (defgrammar <hex> B where (or (and (>= B 48) (<= B 57)) (and (>= B 65) (<= B 70)) (and (>= B 97) (<= B 102)));)
@@ -150,7 +155,7 @@
 (defgrammar <escaped> (* <part>);)
 (defgrammar <string>
   34 (text <raw>) 34 := <raw>;
-  34 (span <escaped>) (require 34 "unterminated string") := (unescape <escaped>);)
+  34 (at P) (span <escaped>) (require 34 "unterminated string") := (unescape <escaped> P);)
 
 \\ Depth counts the containers around a value; a container at the limit is refused.
 (defgrammar (<value> Depth Limit)

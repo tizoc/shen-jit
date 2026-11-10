@@ -1787,6 +1787,27 @@ parsing again from the start, and `json.read` reads JSON values that way.
 - **Same answers:** 44 heads from the request tests, at chunks of 1, 3 and 1,000 bytes, give `http.parse-request`'s
   status and request and leave the same bytes unread; with eof, a cut head, the head limit, a 414 and a 431, 137 checks
   in `tests/http_read.shen`. Messages for malformed line endings may differ, all 400. The macro is 509 lines.
+- **2026-11-10, seven found by a review of the grammar and JSON libraries,** each with a check that failed before:
+  - A read that met the limit or a reader's failure where a repetition or an option would have gone on returned the
+    shorter match, as the result looked at the parse before at why the fill stopped: `123` within a limit of 2 gave
+    `12`. The reason now comes first. So the limit counts the bytes a parse looks at: a number of exactly the limit
+    needs one more, and `tests/grammar_typed.shen` had expected `[1 22]` from `1 22 333` within 4.
+  - JSON's `<utf8>` read a sequence's bytes before checking its first, so the closing quote of a string asked for a
+    byte after it, and a read of `"x"` from an open connection waited. The first byte is now checked in a `(where)`
+    item, and the rest in a rule of its own, so both stay small enough to compile in place. Decoding 2,000 strings,
+    three alternating runs each against the commit before under a load of 2.5, M3 Max: ASCII 236 µs to 214, with
+    escapes 271 to 245, two-letter strings 92 to 72, mixed UTF-8 331 to 300 and CJK 432 to 384, as the closing quote
+    fails one guard where it went through the three alternatives.
+  - A capture left for the end of an alternative was bound around it, so it hid a later plain match of the same rule;
+    such a match now drops it. `(+ X)` became `X (* X)`, whose first `X` bound a value named before it; it now
+    binds nothing, as the loop does.
+  - `grammar.prepare` stops at a variant compiled for its rule's current definition, so a callee defined again kept
+    its old variant, which the caller's calls by name. `defgrammar` now turns a rule's variant back into a stub.
+  - A `require` checks its literal bytes one at a time, and a bounds check in it that fails reports the end, as the
+    guide says; JSON's `tr` now says "unexpected end" rather than "invalid literal".
+  - In a read, a span is a copy, so the decoder reported a bad surrogate at its offset in the copy. `(at P)` now
+    gives the position in the stream when reading, which costs plain parsing nothing, as a macro takes the stream
+    part away, and the JSON string passes it to the decoder.
 
 ### Read chunks kept by the endpoint (2026-11-08, M3 Max, macOS arm64, against a fresh chunk per read)
 

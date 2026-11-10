@@ -50,7 +50,7 @@ and a value, then perhaps `where` and a guard:
 | `(text <rule>)`, `(span <rule>)` | The rule, whose name then stands for the string, or the view, of the bytes it matched |
 | `(require Items... Message)` | The items, or the parse stops with Message |
 | `(where Guard)` | Nothing, when Guard is true |
-| `(at P)` | Nothing, binding P to the position, so that a guard can bound a length |
+| `(at P)` | Nothing, binding P to the position, so that a guard can bound a length; [read from a reader](#reading-as-input-arrives), its position in the stream |
 | `(u16-be N)`, `(u32-be N)` | Two or four bytes, bound to N as an unsigned big-endian number |
 
 Alternatives are tried in order, and the first that matches wins: a later failure never comes back to
@@ -83,7 +83,8 @@ names the byte it matched:
 
 `<decimal>` gives `["12" 3]` for `12.3`.
 
-A rule matched twice in one alternative is named for the later match. A rule without `:=` has no value:
+A rule matched twice in one alternative is named for the later match, and a match inside a repetition,
+the first of a `(+` included, does not replace a value named before it. A rule without `:=` has no value:
 naming it is refused when the grammar is defined, and so is naming a rule matched only inside a
 repetition. Repetitions build no lists: a list is a recursive rule, as `<names>` is above.
 
@@ -149,17 +150,20 @@ and goes on where it was.
 | --- | --- |
 | `[ok Value]` | The rule matched; its bytes are consumed, and what follows stays in the reader |
 | `[eof]` | The input ended before a value began |
-| `[error Error]` | The reader failed or timed out; nothing is consumed, so a later read can try again |
+| `[error Error]` | The reader failed or timed out, even after the rule had matched what came before; nothing is consumed, so a later read can try again |
 | `(Fail Position Message)` | A syntax error, at its position in the stream; `"input ended"` if the input ended inside a value |
 
 The parse reads in place, in the reader's buffer, and consumes nothing until the value is complete, so a
-value can be no larger than the reader's capacity: a larger one fails with `"input exceeds the limit"`.
+value can be no larger than the reader's capacity: a larger one fails with `"input exceeds the limit"`. The
+limit counts every byte the parse looks at, so a value whose end only the byte after it shows, as a number's
+does, needs room for that byte too.
 `(grammar.read-within <rule> Reader Limit Fail)` sets a smaller limit, which counts what the reader already holds. Views made by `span` own their bytes
 here, as the reader's buffer is reused. The rule matches a prefix of the input, so a rule that should stop
 only at the end says so with `<end>`.
 
 The first `grammar.read` of a rule compiles a second version of it, and of the rules it calls, whose bounds
-checks wait for input; parsing a complete view is unchanged by it. `(grammar.prepare <rule>)` compiles them
+checks wait for input; parsing a complete view is unchanged by it. A rule defined again has its version
+compiled again at its next read, though not where an earlier definition was compiled in place. `(grammar.prepare <rule>)` compiles them
 ahead, outside any deadline, as a server does when it starts listening. A task blocks while its parse
 waits, as it does for any read, so each connection reads in a task of its own.
 

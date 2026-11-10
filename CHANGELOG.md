@@ -95,6 +95,13 @@ All notable changes to this project are documented in this file. The format is b
 - `process.run`, `process.run-to` and the pipelines started a child before calling the `cancel` option, so a
   value that was not a frozen boolean, or a cancellation already requested, still started one.
 - `fs.walk` walked into a linked root named with a trailing slash, such as `tree/loop/`.
+- Grammars: `grammar.read` returned a shorter match, such as `12` for `123`, when the reader failed, timed out or
+  reached the limit where a repetition or an option would have gone on; a `(text <r>)` that nothing named until the
+  end replaced a later match of `<r>`; the first match of `(+ <r>)` replaced a value of `<r>` named before it; a
+  rule defined again after a streaming read kept its old definition there; and a `require` whose literal bytes ran
+  past the end of the input reported where it began instead of the end.
+- JSON: `json.read` waited for more input after a string's closing quote, and reported a surrogate error in a
+  string at the string's offset in its copy instead of in the stream.
 
 ## [0.6] - 2026-11-08
 

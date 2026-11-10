@@ -103,4 +103,8 @@
 (json-test.check "empty builder with huge declared bound" 0
   (freeze (buffer.length (buffer.finish (buffer.builder 2305843009213693951)))))
 
+(json-test.check "a literal cut short is the end of the input"
+  [[raised "json: byte 2: unexpected end"] [raised "json: byte 1: invalid literal"]]
+  (freeze (map (/. T (trap-error (json.parse T []) (/. X [raised (error-to-string X)]))) ["tr" "tx"])))
+
 (output "~A passed, ~A failed~%" (value json-test.passed) (value json-test.failed))
