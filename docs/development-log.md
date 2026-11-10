@@ -919,6 +919,16 @@ that. Its readings decided nothing below.
 
 ### Managed structs
 
+- **Typed unions** (2026-11-09). Records of several structs can be matched by one function, but a typed
+  `{shape --> number}` over `shape` rules written as usual, `X : circle; ______ X : shape;`, did not
+  typecheck: a pattern is typed through the hypothesis that it is a `shape`, and those rules only build a
+  `shape`, so the body never learned a field's type. Double-line rules typechecked but were unsound, as
+  they also let `(circle.radius S)` read any `shape`; rules on the pattern itself, `R : number; =====
+  (circle.%make R) : shape;`, were sound but made users write the internal constructor. `(struct.union
+  shape circle rect)` generates both, per member, from its field types. The union stays open: a later
+  declaration adds to it. Rejected cases: a circle's reader on a `shape`, a pattern of a struct outside
+  the union, a member without field types.
+
 - **Libraries construct and match with `:`** (2026-11-09). The 38 positional constructor calls with four
   or more arguments, up to the thirteen of a subprocess configuration, are labelled, and so are the four
   `struct.make` uses; an HTTP response's readers match `(:stream-description status <- S ...)` and

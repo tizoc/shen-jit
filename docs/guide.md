@@ -323,7 +323,8 @@ It is available at startup. In a source file:
 ```
 
 `(:entry f <- V ...)` constructs a record with labelled fields in any order, and as a pattern matches
-one, with `...` leaving out the fields it does not name.
+one, with `...` leaving out the fields it does not name. One function can match records of several
+structs, a clause each, and `(struct.union shape circle rect)` makes such a set a type for typed code.
 
 Fields are read-only by default; mutable fields get `->` setters that return the record. Fields may have
 types, `(x : number)`, which typed code then checks. A record prints

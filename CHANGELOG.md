@@ -9,7 +9,8 @@ All notable changes to this project are documented in this file. The format is b
 
 - `defstruct`, available at startup: fixed managed records with read-only fields by default, optional mutable
   fields and `->` setters, positional constructors, labelled construction and pattern matching with
-  `(:entry key <- K ...)`, namespace support and stable image/reload metadata. Records print with their type and fields, or through a declaration's
+  `(:entry key <- K ...)`, open unions of typed structs with `(struct.union shape circle rect)`, namespace
+  support and stable image/reload metadata. Records print with their type and fields, or through a declaration's
   `(printer F)`. Fields may have types, `(x : number)`: the operations are then typed, under `(tc +)` and
   for typed clients of a struct declared under `(tc -)`.
 

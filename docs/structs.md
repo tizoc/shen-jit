@@ -132,6 +132,51 @@ Both expand to a call of `entry.%make`, an internal constructor that is never wr
 construction it makes the record, and as a pattern a handler of the kernel's pattern-matching extension
 compiles it.
 
+## Several structs as one type
+
+Every record carries its struct's tag, so a function can match several structs, one clause each:
+
+```shen
+(defstruct circle radius)
+(defstruct rect width height)
+
+(define area
+  (:circle radius <- R) -> (* 3.14159 (* R R))
+  (:rect width <- W height <- H) -> (* W H))
+```
+
+The set stays open: a struct declared later needs no change to the others, and functions read after
+its declaration can match it too. A value that matches no clause falls through to Shen's partial
+function error, as with any `define`; nothing checks that every struct is covered. Tags are nominal:
+two declarations with the same fields are two types, and their predicates tell them apart.
+
+In typed code, `struct.union` makes the set a type. Each struct named must have field types:
+
+```shen
+(defstruct circle (radius : number))
+(defstruct rect (width : number) (height : number))
+(struct.union shape circle rect)
+
+(define area
+  {shape --> number}
+  (:circle radius <- R) -> (* 3.14159 (* R R))
+  (:rect width <- W height <- H) -> (* W H))
+```
+
+A circle is then a `shape`, and a `shape` matched by a circle's pattern gives that circle's fields their
+types. A `shape` is not a circle otherwise: `(circle.radius S)` on a `shape` is a type error. The union
+stays open as well: a later declaration, in this file or another, adds to it.
+
+```shen
+(defstruct square (side : number))
+(struct.union shape square)
+```
+
+In a namespace, `struct.union` is the `struct` namespace's `union`, used through its prefix or imported.
+
+With `...`, a pattern names only the fields it uses, so adding a field to a struct leaves such
+patterns as they are.
+
 ## Namespaces and images
 
 A namespace qualifies the type and its generated operations. Field labels remain literal even when

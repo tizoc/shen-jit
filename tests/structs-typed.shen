@@ -38,3 +38,34 @@
 
 (define struct-test.tdeclared-name {struct-test.declared --> string}
   (:struct-test.declared name <- N ...) -> N)
+
+\\ Several structs as one type.
+(defstruct struct-test.circle (radius : number))
+(defstruct struct-test.rect (width : number) (height : number))
+(struct.union struct-test.shape struct-test.circle struct-test.rect)
+
+(define struct-test.area {struct-test.shape --> number}
+  (:struct-test.circle radius <- R) -> (* 3 (* R R))
+  (:struct-test.rect width <- W height <- H) -> (* W H))
+
+(define struct-test.shapes {number --> (list struct-test.shape)}
+  N -> [(:struct-test.circle radius <- N) (:struct-test.rect width <- N height <- 2)])
+
+\\ The union stays open: a struct declared later joins it, and a later function matches it.
+(defstruct struct-test.square (side : number))
+(struct.union struct-test.shape struct-test.square)
+
+(define struct-test.area2 {struct-test.shape --> number}
+  (:struct-test.square side <- S) -> (* S S)
+  Shape -> (struct-test.area Shape))
+
+(shen.x.namespace struct-test.geometry
+  (use struct)
+  (import struct defstruct)
+  (export dot line figure length-of)
+  (defstruct dot (x : number))
+  (defstruct line (from : number) (to : number))
+  (struct.union figure dot line)
+  (define length-of {figure --> number}
+    (:dot ...) -> 0
+    (:line from <- F to <- T) -> (- T F)))

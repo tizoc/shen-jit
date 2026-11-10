@@ -255,6 +255,24 @@
 (struct-test.check "a bad label names the struct" "struct struct-test.pt: expected a field name: 3"
   (freeze (trap-error (do (read-from-string "(:struct-test.pt 3 <- 1 y <- 2)") ok) (/. E (error-to-string E)))))
 
+(struct-test.check "a typed union matches each member" [3 6 [12 4]]
+  (freeze [(struct-test.area (struct-test.circle.make 1)) (struct-test.area (struct-test.rect.make 2 3))
+           (map (fn struct-test.area) (struct-test.shapes 2))]))
+(struct-test.check "a union stays open" [16 3]
+  (freeze [(struct-test.area2 (struct-test.square.make 4)) (struct-test.area2 (struct-test.circle.make 1))]))
+(struct-test.check "a union in a namespace" [0 5]
+  (freeze [(struct-test.geometry.length-of (struct-test.geometry.dot.make 1))
+           (struct-test.geometry.length-of (struct-test.geometry.line.make 2 7))]))
+(struct-test.check "a union does not make a member of any other" [false false false]
+  (freeze (map (/. S (shen.typecheck (hd (read-from-string S)) (protect A)))
+               ["(struct-test.circle.radius (head (struct-test.shapes 1)))"
+                "(struct-test.area (struct-test.tcolon 1))"
+                "(struct-test.circle.radius (struct-test.rect.make 1 2))"])))
+(struct-test.check "union members need field types" true
+  (freeze (struct-test.refused? "(struct.union struct-test.loose struct-test.pt)")))
+(struct-test.check "union members are structs" true
+  (freeze (struct-test.refused? "(struct.union struct-test.loose struct-test.nothing)")))
+
 (shen-jit.collect)
 (struct-test.check "managed field survives collection" [saved 17]
   (freeze [(struct-test.cell.key (value struct-test.saved)) (struct-test.cell.value (value struct-test.saved))]))

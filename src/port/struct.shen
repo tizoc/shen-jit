@@ -9,11 +9,12 @@
 \\ constructor T.%make, which is never written by hand, and a pattern handler matches that.
 
 (package shen-jit.struct
-  [defstruct mutable printer make %make %match %struct-tag struct struct.make shen-jit.tagged? shen.app shen.s
+  [defstruct mutable printer make %make %match %struct-tag struct struct.make struct.union shen-jit.tagged? shen.app shen.s
    { } --> string boolean number symbol]
 
 (define initialise
   -> (do (shen.register-source-form defstruct (fn expand))
+         (shen.register-source-form struct.union (fn expand-union))
          (shen.record-macro shen-jit.struct.make-macro (fn make-macro))
          (shen.x.namespaces.register-syntax defstruct (fn namespace-syntax))
          (shen.x.namespaces.register-syntax struct.make (fn namespace-syntax))
@@ -21,7 +22,8 @@
          (shen.x.namespaces.register-definitions defstruct (fn introduced-names))
          (shen.x.namespaces.publish struct
            [[defstruct | defstruct]
-            [make | struct.make]])
+            [make | struct.make]
+            [union | struct.union]])
          (shen.initialise-arity-table [slot 2 slot! 3 allocate 2 tagged 2 shown 2 pattern 4])
          (shen.set-lambda-form-entry (shen.lambda-entry pattern))
          (shen.x.programmable-pattern-matching.register-handler pattern)
@@ -264,12 +266,15 @@
 
 \\ How the typechecker reads a pattern: (T.%make X Y) : T when X and Y have the fields' types.
 (define pattern-rule
-  Name Fields
+  Name Fields -> [datatype (member Name %match) | (pattern-premises Name Fields Name)])
+
+\\ The rule that (T.%make X Y) is a Type, and, read the other way, what its fields are when it is.
+(define pattern-premises
+  Name Fields Type
   -> (let Vars (arguments (length Fields) 1)
-       [datatype (member Name %match)
-        | (append (premises Vars Fields)
-                  [(if (empty? Fields) (intern "_____") (intern "====="))
-                   [(member Name %make) | Vars] (intern ":") Name (intern ";")])]))
+       (append (premises Vars Fields)
+               [(if (empty? Fields) (intern "_____") (intern "====="))
+                [(member Name %make) | Vars] (intern ":") Type (intern ";")])))
 
 (define premises
   [] [] -> []
@@ -287,6 +292,26 @@
   [X | Y] -> [cons (quoted X) (quoted Y)]
   X -> [protect X] where (variable? X)
   X -> X)
+
+\\ (struct.union Type S1 ... Sn): each typed struct Si is a Type, and its pattern matches a Type. A
+\\ union stays open: another declaration can add structs to the same type later.
+(define expand-union
+  [struct.union Type | Members]
+  -> (mapcan (/. Member [(union-rules Type Member)]) Members) where (name? Type)
+  [struct.union | Args] -> (shen-jit.struct.fail struct.union "expected a type name" Args)
+  Form -> (shen-jit.struct.fail struct.union "invalid declaration" Form))
+
+(define union-rules
+  Type Member
+  -> (let Schema (schema Member)
+          Fields (if (cons? Schema)
+                     (hd (tl Schema))
+                     (shen-jit.struct.fail Type "not a struct" Member))
+          _ (if (typed? Fields) skip (shen-jit.struct.fail Type "a member needs field types" Member))
+          Value (intern "Value")
+       [datatype (intern (cn (str Type) (cn ".%" (str Member))))
+        Value (intern ":") Member (intern ";") (intern "_____") Value (intern ":") Type (intern ";")
+        | (pattern-premises Member Fields Type)]))
 
 (define expand
   [defstruct Name | Written]
