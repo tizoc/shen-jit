@@ -1242,6 +1242,13 @@ the Ryzen VM, in 214 s. macOS had hidden everything below. Timing is in the JIT 
   removed the old one before writing the new one, so a write that failed, on a full disk say, left neither. The new
   file is now written whole and then moved over the old one with `MoveFileExA`. Untested: it needs Windows and a
   full disk.
+- **A pipe read only at the end stops a child there** (2026-11-10, Windows 10, MSYS2 UCRT64, Ryzen 5 5600X). The
+  curl fixture's back-pressure check started its client with `stdout=PIPE` and read it only after the sink was
+  reached. A Windows pipe holds 4 KB, and a child printing more without a reader blocks: loading ffi, buffer, io
+  and curl printed 5,531 bytes before the libraries became namespaces and structs and 8,425 after, and only the
+  second stopped before its first request, so `make test-curl` failed on Windows from that push on. Linux and macOS
+  pipes hold 64 KB. The fixture now gives that child files. A test that waits on a child must read its pipes as it
+  goes, or not use them.
 - **What it found:**
   - `select` works only on sockets, so the read of stdin waits by itself, without the lock.
   - Ctrl-C runs on a thread of its own and ends the main thread's read with `CancelSynchronousIo`, only during a read:

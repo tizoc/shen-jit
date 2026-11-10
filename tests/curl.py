@@ -185,17 +185,23 @@ def main():
                 typed = '(do (output "~A~%" (if (curl-typed.run '+shen_string(base)+') "3 passed, 0 failed" "0 passed, 1 failed")) true)'
                 check_lines(run(args+['-e','(tc +)','-l','tests/curl_typed.shen','-e',typed]),1)
                 # A blocked sink cannot cause the server's entire response to be drained/queued.
-                pressure = subprocess.Popen(args+base_args+['-l','tests/curl_stream_pressure.shen'],
-                    cwd=ROOT,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,
-                    env={**os.environ,'SHEN_JIT_SEMISPACE':'4M','SHEN_JIT_MAX_HEAP':'16M','SHEN_JIT_STATS':'1'})
+                # Its output goes to files, which nothing reads until it ends: a pipe would fill with
+                # what loading prints, on Windows after about 8 KB, and stop it before its request.
+                out_path,err_path = directory/'pressure.out',directory/'pressure.err'
+                with open(out_path,'w') as out_file,open(err_path,'w') as err_file:
+                    pressure = subprocess.Popen(args+base_args+['-l','tests/curl_stream_pressure.shen'],
+                        cwd=ROOT,stdout=out_file,stderr=err_file,
+                        env={**os.environ,'SHEN_JIT_SEMISPACE':'4M','SHEN_JIT_MAX_HEAP':'16M','SHEN_JIT_STATS':'1'})
                 try:
-                    assert server.sink_blocked.wait(10), 'stream never reached the sink'
+                    reached = server.sink_blocked.wait(10)
                     time.sleep(.2)
                     produced = server.produced
-                    assert produced < 67108864//4, f'slow sink allowed {produced} bytes to be produced'
                 finally:
                     server.sink_release.set()
-                    out,err = pressure.communicate(timeout=40)
+                    pressure.wait(timeout=40)
+                out,err = out_path.read_text(),err_path.read_text()
+                assert reached,('stream never reached the sink',out[-1000:],err)
+                assert produced < 67108864//4, f'slow sink allowed {produced} bytes to be produced'
                 assert pressure.returncode == 0 and 'stream pressure ok' in out and 'uncaught error' not in err,(out[-1000:],err)
                 assert 'C roots still registered' not in err,err
                 print(f'curl backpressure: {produced} of 67108864 bytes produced while the sink was blocked',flush=True)
