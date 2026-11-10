@@ -106,8 +106,30 @@
 (define listener-start
   L Handler Config ->
     (let Guard (shen-jit.bytes->pointer (shen-jit.u32! (shen-jit.bytes 8) 0 1) 0 server)
-         S (server.make Guard (socket.port L) false (snapshot.make listening 0 0 0 0 0 0) [])
-         O (registry.make (io.socket-token L) [] 0 0 0 0 0 [] [] listening)
+         S (:server
+             guard <- Guard
+             port <- (socket.port L)
+             stopping <- false
+             snapshot <- (:snapshot
+                           phase <- listening
+                           live <- 0
+                           accepted <- 0
+                           completed <- 0
+                           failed <- 0
+                           cancelled <- 0
+                           peak <- 0)
+             result <- [])
+         O (:registry
+             token <- (io.socket-token L)
+             workers <- []
+             accepted <- 0
+             completed <- 0
+             failed <- 0
+             cancelled <- 0
+             peak <- 0
+             error <- []
+             grace <- []
+             phase <- listening)
          _ (thread (freeze (supervisor S O Handler Config)))
       S))
 
@@ -146,9 +168,14 @@
 
 (define publish
   S O ->
-    (server.snapshot-> S (snapshot.make (registry.phase O) (length (registry.workers O))
-                           (registry.accepted O) (registry.completed O) (registry.failed O)
-                           (registry.cancelled O) (registry.peak O))))
+    (server.snapshot-> S (:snapshot
+                           phase <- (registry.phase O)
+                           live <- (length (registry.workers O))
+                           accepted <- (registry.accepted O)
+                           completed <- (registry.completed O)
+                           failed <- (registry.failed O)
+                           cancelled <- (registry.cancelled O)
+                           peak <- (registry.peak O))))
 
 (define note-error
   O Error ->

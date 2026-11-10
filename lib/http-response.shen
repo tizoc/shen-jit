@@ -42,7 +42,7 @@
          _ (if (and (>= Code 200) (<= Code 599)) true
                (error "http: final response status must be 200..599"))
          _ (buffer.check Body)
-      (buffered-response.make Code Fields Body false)))
+      (:buffered-response status <- Code fields <- Fields body <- Body close <- false)))
 
 (define response-check
   Response ->
@@ -50,36 +50,35 @@
         Response (error "http: not a response")))
 
 (define response-source
-  Response -> (if (stream-description? Response) (stream-description.source Response) []))
+  (:stream-description source <- Source ...) -> Source
+  _ -> [])
 
 (define response-status
-  Response -> (if (stream-description? Response)
-                  (stream-description.status Response)
-                  (buffered-response.status Response)))
+  (:stream-description status <- Status ...) -> Status
+  (:buffered-response status <- Status ...) -> Status
+  _ -> (error "http: not a response"))
 
 (define response-field-list
-  Response -> (if (stream-description? Response)
-                  (stream-description.fields Response)
-                  (buffered-response.fields Response)))
+  (:stream-description fields <- Fields ...) -> Fields
+  (:buffered-response fields <- Fields ...) -> Fields
+  _ -> (error "http: not a response"))
 
 (define response-closes?
-  Response ->
-    (let _ (response-check Response)
-      (if (stream-description? Response)
-          (stream-description.close Response)
-          (buffered-response.close Response))))
+  (:stream-description close <- Close ...) -> Close
+  (:buffered-response close <- Close ...) -> Close
+  _ -> (error "http: not a response"))
 
 (define close-after
   Response ->
     (response-copy-fields Response (response-field-list (response-check Response)) true))
 
 (define response-copy-fields
-  Response Fields Close ->
-    (if (stream-description? Response)
-        (stream-description.make (stream-description.status Response) Fields
-          (stream-description.framing Response) (stream-description.source Response) Close)
-        (buffered-response.make (buffered-response.status Response) Fields
-          (buffered-response.body Response) Close)))
+  (:stream-description status <- Status framing <- Framing source <- Source ...) Fields Close
+  -> (:stream-description
+       status <- Status fields <- Fields framing <- Framing source <- Source close <- Close)
+  (:buffered-response status <- Status body <- Body ...) Fields Close
+  -> (:buffered-response status <- Status fields <- Fields body <- Body close <- Close)
+  _ _ _ -> (error "http: not a response"))
 
 (define reason
   200 -> "OK"
@@ -218,7 +217,13 @@
 (define source
   Next Close ->
     (let Guard (shen-jit.bytes->pointer (shen-jit.u32! (shen-jit.bytes 8) 0 1) 0 source)
-      (source-state.make Next Close fresh false [] Guard)))
+      (:source-state
+        next <- Next
+        close <- Close
+        lifecycle <- fresh
+        busy <- false
+        close-result <- []
+        guard <- Guard)))
 
 (define source-check
   S ->
@@ -297,7 +302,12 @@
                (error "http: final response status must be 200..599"))
          _ (source-check Source)
          _ (framing-check Framing)
-      (stream-description.make Code Fields Framing Source false)))
+      (:stream-description
+        status <- Code
+        fields <- Fields
+        framing <- Framing
+        source <- Source
+        close <- false)))
 
 (defstruct output-limits
   head-limit
@@ -308,10 +318,11 @@
 (define output-options
   Options ->
     (let Set (output-config Options [])
-      (output-limits.make (option-value response-head-limit Set 16384)
-                          (option-value response-body-limit Set 1048576)
-                          (option-value response-chunk-size Set 16384)
-                          (option-value response-chunk-count-limit Set 4096))))
+      (:output-limits
+        head-limit <- (option-value response-head-limit Set 16384)
+        body-limit <- (option-value response-body-limit Set 1048576)
+        chunk-size <- (option-value response-chunk-size Set 16384)
+        chunk-count-limit <- (option-value response-chunk-count-limit Set 4096))))
 
 (define output-index
   response-head-limit -> 0
@@ -386,16 +397,27 @@
     (let _ (response-check Response)
          S (response-source Response)
       (if (empty? S)
-          (plan.make (encode-mode Method Response (output-limits.head-limit Limits)
+          (:plan
+            wire <- (encode-mode Method Response (output-limits.head-limit Limits)
                                   (output-limits.body-limit Limits) Close)
-                     [] [] [suppressed] Limits false)
+            source <- []
+            framing <- []
+            first <- [suppressed]
+            limits <- Limits
+            sent <- false)
           (let _ (source-claim S)
                Framing (stream-description.framing Response)
                _ (length-limit Framing (output-limits.body-limit Limits))
                Head (encode-head Method Response Framing Close (output-limits.head-limit Limits))
                First (if (suppressed? Method (stream-description.status Response)) [suppressed]
                          (pull S Framing Limits 0 0 D))
-            (plan.make Head S Framing First Limits false)))))
+            (:plan
+              wire <- Head
+              source <- S
+              framing <- Framing
+              first <- First
+              limits <- Limits
+              sent <- false)))))
 
 (define length-limit
   [length N] Maximum -> (if (<= N Maximum) true (error "http: response body exceeds limit"))
@@ -439,7 +461,7 @@
   E D Plan ->
     (let _ (if (plan.sent Plan) (error "http: response plan already sent") true)
          _ (plan.sent-> Plan true)
-         State (sending.make E D Plan 0 0 0)
+         State (:sending endpoint <- E deadline <- D plan <- Plan written <- 0 used <- 0 count <- 0)
          Result (trap-error (output-start State)
                   (/. X [error (io.progress (output-error (error-to-string X))
                                             (sending.written State))]))

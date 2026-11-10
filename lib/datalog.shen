@@ -53,7 +53,6 @@
 
 (shen.x.namespace datalog
   (use shen-jit)
-  (use struct)
   (import struct defstruct)
   (externals [!= % a absent again aggregate all any assign b band bit-and bit-or bit-xor block
     bor bshl bshr bxor c cat check choice compare count csv d db defdatalog define-native demand
@@ -2900,7 +2899,7 @@
   C -> (make-string "#<classes ~A values, ~A pairs>" (shen.dict-count (classes.cells C)) (classes.pairs C)))
 
 (define new-classes
-  -> (struct.make classes
+  -> (:classes
        cells <- (shen.dict 64)
        changed <- []
        holes <- 0
@@ -3294,7 +3293,7 @@
 
 (define new-index
   N Keys Count
-  -> (struct.make index
+  -> (:index
        table <- (shen-jit.bytes (* 16 8))
        next <- (shen-jit.bytes (* 4 (if (> Count 8) Count 8)))
        mask <- 15

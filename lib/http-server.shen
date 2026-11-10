@@ -119,25 +119,27 @@
 (define server-options
   Options ->
     (let Set (configure Options [])
-      (server-config.make
-        (option-value head-limit Set 16384)
-        (option-value body-limit Set 1048576)
-        (output-limits.make (option-value response-head-limit Set 16384)
-                            (option-value response-body-limit Set 1048576)
-                            (option-value response-chunk-size Set 16384)
-                            (option-value response-chunk-count-limit Set 4096))
-        (option-value head-timeout Set 5000)
-        (option-value body-timeout Set 5000)
-        (option-value write-timeout Set 5000)
-        (chunk-limits.make (option-value chunk-line-limit Set 8192)
-                           (option-value chunk-metadata-limit Set 65536)
-                           (option-value trailer-limit Set 16384)
-                           (option-value trailer-fields-limit Set 100)
-                           (option-value chunk-count-limit Set 4096))
-        (option-value request-limit Set 100)
-        (option-value idle-timeout Set 5000)
-        (option-value connection-timeout Set 60000)
-        (option-value read-buffer-size Set 16384))))
+      (:server-config
+        head-limit <- (option-value head-limit Set 16384)
+        body-limit <- (option-value body-limit Set 1048576)
+        output <- (:output-limits
+                    head-limit <- (option-value response-head-limit Set 16384)
+                    body-limit <- (option-value response-body-limit Set 1048576)
+                    chunk-size <- (option-value response-chunk-size Set 16384)
+                    chunk-count-limit <- (option-value response-chunk-count-limit Set 4096))
+        head-timeout <- (option-value head-timeout Set 5000)
+        body-timeout <- (option-value body-timeout Set 5000)
+        write-timeout <- (option-value write-timeout Set 5000)
+        chunk <- (:chunk-limits
+                   line-limit <- (option-value chunk-line-limit Set 8192)
+                   metadata-limit <- (option-value chunk-metadata-limit Set 65536)
+                   trailer-limit <- (option-value trailer-limit Set 16384)
+                   trailer-fields-limit <- (option-value trailer-fields-limit Set 100)
+                   count-limit <- (option-value chunk-count-limit Set 4096))
+        request-limit <- (option-value request-limit Set 100)
+        idle-timeout <- (option-value idle-timeout Set 5000)
+        connection-timeout <- (option-value connection-timeout Set 60000)
+        read-buffer-size <- (option-value read-buffer-size Set 16384))))
 
 (define configure
   [] Set -> Set
@@ -194,8 +196,15 @@
         (grammar.prepare <head>)
         (io.with-endpoint E
           (/. Peer (let R (io.reader Peer [[chunk-size (server-config.read-buffer-size Config)]])
-                       C (session.make Peer R Handler Config Stop
-                           (clock.deadline (server-config.connection-timeout Config)) 0 0)
+                       C (:session
+                           endpoint <- Peer
+                           reader <- R
+                           handler <- Handler
+                           config <- Config
+                           stop <- Stop
+                           deadline <- (clock.deadline (server-config.connection-timeout Config))
+                           requests <- 0
+                           written <- 0)
                     (connection-read C))))))
 
 \\ A head that fits the reader is read in place as it arrives; a larger limit frames it first.

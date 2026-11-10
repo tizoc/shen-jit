@@ -182,8 +182,9 @@ With the older `package` form, include `defstruct` and `struct.make` in its exte
 A constructor allocates one vector with one tag slot plus one slot per field. Its values are ordinary
 managed Shen values, and construction can trigger GC. Readers and setters use constant slot indices;
 they allocate nothing on success and consult no schema or field-name table. The predicate uses the
-runtime's tagged-vector primitive, with no handler. Labelled syntax adds local bindings to preserve
-evaluation order and builds no runtime field list.
+runtime's tagged-vector primitive, with no handler. Labelled construction binds only the values that
+may have effects, to keep their order, and passes the rest straight to the constructor: it compiles to
+what the positional call does, and builds no runtime field list.
 
 Readers, setters, the predicate and a constructor of up to nine fields are inlined, and then cost what
 the `<-address`, `address->` and `absvector` they replace do. Two things differ from a vector written by

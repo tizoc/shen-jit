@@ -6,7 +6,6 @@
 
 (shen.x.namespace buffer
   (use shen-jit)
-  (use struct)
   (import struct defstruct)
   (shadow index length)
   (export append! append-byte! builder builder-length bytes check copy! buffer.cursor => cursor
@@ -132,7 +131,7 @@
 (define builder
   Limit ->
     (let N (index Limit)
-      (struct.make builder-state
+      (:builder-state
         limit <- N
         storage <- (new 0)
         length <- 0

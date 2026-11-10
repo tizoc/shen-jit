@@ -138,8 +138,20 @@
          Streams (io.record [(stream-option 0 Mode)
                              (stream-option 1 Mode)
                              (stream-option 2 Mode)])
-         Config (config.make "." [] false Streams Run true 30000 1000 1048576 1048576 16384
-                             (freeze false) 100)
+         Config (:config
+                  cwd <- "."
+                  environment <- []
+                  clear-environment <- false
+                  streams <- Streams
+                  group <- Run
+                  search-path <- true
+                  timeout <- 30000
+                  cleanup-timeout <- 1000
+                  stdout-limit <- 1048576
+                  stderr-limit <- 1048576
+                  chunk-size <- 16384
+                  cancel <- (freeze false)
+                  terminate-grace <- 100)
       (configure Config Options [] Run)))
 
 (define configure
@@ -313,7 +325,15 @@
     (let Pipes (io.record [(pipe-new (<-address Raw 1) write)
                           (pipe-new (<-address Raw 2) read)
                           (pipe-new (<-address Raw 3) read)])
-      (subprocess.make Raw Program Pipes false [] false [running] Group)))
+      (:subprocess
+        raw <- Raw
+        program <- Program
+        pipes <- Pipes
+        closed <- false
+        close-result <- []
+        busy <- false
+        status <- [running]
+        group <- Group)))
 
 (define check
   Child -> (if (subprocess? Child) Child (error "process: not a child handle")))

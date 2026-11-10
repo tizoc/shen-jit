@@ -256,11 +256,17 @@
     (if (= (<-address Native 0) 0)
         (let Head (buffer.wrap (<-address Native 7))
              Trailers (buffer.wrap (<-address Native 8))
-          [ok (response.make (<-address Native 4) (<-address Native 5)
-                             (buffer.wrap (<-address Native 6)) (parse-fields Head true)
-                             (parse-fields Trailers false) Head Trailers
-                             (<-address Native 9) (<-address Native 10)
-                             (shen-jit.bytes-length (<-address Native 6)))])
+          [ok (:response
+                status <- (<-address Native 4)
+                url <- (<-address Native 5)
+                body <- (buffer.wrap (<-address Native 6))
+                headers <- (parse-fields Head true)
+                trailers <- (parse-fields Trailers false)
+                raw-headers <- Head
+                raw-trailers <- Trailers
+                elapsed <- (<-address Native 9)
+                redirects <- (<-address Native 10)
+                body-length <- (shen-jit.bytes-length (<-address Native 6)))])
         [error (io.progress (io.native-error request
                              (cond ((element? (<-address Native 1) [2 3]) limit)
                                    ((= (<-address Native 0) 28) timeout)

@@ -157,7 +157,7 @@
          Root (root-end B (shen-jit.bytes-length B))
          End (trim-end B Root (shen-jit.bytes-length B))
          Slash (last-separator B -1 End)
-      (split.make B Root End Slash)))
+      (:split bytes <- B root <- Root end <- End slash <- Slash)))
 
 (define parent
   Path ->
@@ -232,9 +232,12 @@
 (define stat-path
   Path Follow ->
     (io.let-ok Raw (native (if Follow stat lstat) Path (freeze (c-stat Path Follow)))
-      [ok (info.make Path (kind-number (<-address Raw 0)) (<-address Raw 1)
-                     (@p (<-address Raw 2) (<-address Raw 3))
-                     (@p (<-address Raw 4) (<-address Raw 5)))]))
+      [ok (:info
+            path <- Path
+            kind <- (kind-number (<-address Raw 0))
+            size <- (<-address Raw 1)
+            modified <- (@p (<-address Raw 2) (<-address Raw 3))
+            accessed <- (@p (<-address Raw 4) (<-address Raw 5)))]))
 
 (define fs.stat
   Path -> (io.let-ok Resolved (fs.resolve Path) (stat-path Resolved true)))
@@ -360,7 +363,7 @@
   Path Options Visit ->
     (let Config (configure (limits.make 10000 16777216 64) Options [] true)
          _ (if (> (limits.entries Config) 0) true (error "fs: walk entry-limit must include the root"))
-         State (walk-state.make 0 1 0 false)
+         State (:walk-state visited <- 0 scheduled <- 1 name-bytes <- 0 stopped <- false)
       (io.let-ok Root (fs.resolve Path)
         (walk-result State (walk-node Root 0 Config State Visit)))))
 

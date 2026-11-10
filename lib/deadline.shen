@@ -26,7 +26,7 @@
          Now (buffer.index (thaw Clock))
          End (+ Now Duration)
          Guard (shen-jit.bytes->pointer (shen-jit.u32! (shen-jit.bytes 8) 0 1) 0 deadline)
-      (budget.make Clock End Now Guard)))
+      (:budget clock <- Clock end <- End now <- Now guard <- Guard)))
 
 (define check
   D ->
@@ -48,7 +48,7 @@
          Left (- (budget.end Parent) Now)
          Span (if (< Left 0) 0 (if (< Left Duration) Left Duration))
          Guard (shen-jit.bytes->pointer (shen-jit.u32! (shen-jit.bytes 8) 0 1) 0 deadline)
-      (budget.make Clock (+ Now Span) Now Guard)))
+      (:budget clock <- Clock end <- (+ Now Span) now <- Now guard <- Guard)))
 
 (define remaining
   D ->

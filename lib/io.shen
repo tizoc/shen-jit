@@ -5,7 +5,6 @@
 (shen.x.namespace io
   (use buffer)
   (use shen-jit)
-  (use struct)
   (import struct defstruct)
   (externals [accepted callback chunk chunk-size closed eof flush io-error io-results library ok
     pending-timeout read-write retry-timeout shen timeout write written])
@@ -146,7 +145,7 @@
          _ (if (and (string? Name) (element? Mode [read write read-write]))
                true
                (error "io: invalid endpoint name or mode"))
-      (struct.make endpoint
+      (:endpoint
         name <- Name
         mode <- Mode
         capacity <- Cap
@@ -309,7 +308,13 @@
   E Options ->
     (let _ (check E read [])
          Cap (options E Options)
-         R (reader.make E (buffer.new Cap) 0 0 [] 0)
+         R (:reader
+             endpoint <- E
+             buffer <- (buffer.new Cap)
+             start <- 0
+             end <- 0
+             terminal <- []
+             position <- 0)
       (do (endpoint.reader-> E R) R)))
 
 (define timeout-result?
@@ -495,7 +500,7 @@
   E Options ->
     (let _ (check E write [])
          Cap (options E Options)
-         W (writer.make E (buffer.new Cap) 0 0 [])
+         W (:writer endpoint <- E buffer <- (buffer.new Cap) start <- 0 end <- 0 failure <- [])
       (do (endpoint.writer-> E W) W)))
 
 (define writer-check

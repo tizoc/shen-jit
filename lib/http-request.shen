@@ -370,10 +370,28 @@
                 (cond ((= Framing unsupported) (http.problem 501 "transfer coding is unsupported"))
                       ((= N too-large) (http.problem 413 "request body exceeds limit"))
                       ((= Framing chunked)
-                        [ok (request.make Method Target Version Fields N unread Limit [] chunked)])
+                        [ok (:request
+                              method <- Method
+                              target <- Target
+                              version <- Version
+                              headers <- Fields
+                              length <- N
+                              body <- unread
+                              limit <- Limit
+                              trailers <- []
+                              framing <- chunked)])
                       ((and (= Method "TRACE") (> N 0)) (http.problem 400 "TRACE cannot have a body"))
                       (true
-                        [ok (request.make Method Target Version Fields N unread Limit [] fixed)])))))))
+                        [ok (:request
+                              method <- Method
+                              target <- Target
+                              version <- Version
+                              headers <- Fields
+                              length <- N
+                              body <- unread
+                              limit <- Limit
+                              trailers <- []
+                              framing <- fixed)])))))))
 
 (define syntax-error
   X ->
@@ -461,8 +479,16 @@
 
 (define completed-request
   Request Body Trailers ->
-    (request.make (method Request) (target Request) (version Request) (headers Request)
-                  (buffer.length Body) Body (request.limit Request) Trailers (request.framing Request)))
+    (:request
+      method <- (method Request)
+      target <- (target Request)
+      version <- (version Request)
+      headers <- (headers Request)
+      length <- (buffer.length Body)
+      body <- Body
+      limit <- (request.limit Request)
+      trailers <- Trailers
+      framing <- (request.framing Request)))
 
 (define body-reader
   R Request -> (body-reader-with R Request []))
@@ -495,7 +521,17 @@
          _ (request-check Request)
          N (request.length Request)
          _ (if (= (request.body Request) unread) true (error "http: request already has a body"))
-      (body-state.make R Request N [] false [] 0 0 0 Limits)))
+      (:body-state
+        reader <- R
+        request <- Request
+        length <- N
+        result <- []
+        busy <- false
+        builder <- []
+        total <- 0
+        metadata <- 0
+        chunks <- 0
+        limits <- Limits)))
 
 (define body-check
   B ->
@@ -583,11 +619,12 @@
 (define chunk-options
   Options ->
     (let Set (chunk-configure Options [])
-      (chunk-limits.make (option-value chunk-line-limit Set 8192)
-                         (option-value chunk-metadata-limit Set 65536)
-                         (option-value trailer-limit Set 16384)
-                         (option-value trailer-fields-limit Set 100)
-                         (option-value chunk-count-limit Set 4096))))
+      (:chunk-limits
+        line-limit <- (option-value chunk-line-limit Set 8192)
+        metadata-limit <- (option-value chunk-metadata-limit Set 65536)
+        trailer-limit <- (option-value trailer-limit Set 16384)
+        trailer-fields-limit <- (option-value trailer-fields-limit Set 100)
+        count-limit <- (option-value chunk-count-limit Set 4096))))
 
 \\ Options checked: [[Name N] ...], each name once; the value given for Name, or Default.
 (define option-value

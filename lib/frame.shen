@@ -65,7 +65,7 @@
   R Limit ->
     (let Max (limit Limit)
          _ (io.reader-check R)
-      (reader.make R Max [] false)))
+      (:reader input <- R limit <- Max terminal <- [] busy <- false)))
 
 (define check
   F ->

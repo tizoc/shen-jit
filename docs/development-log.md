@@ -919,6 +919,15 @@ that. Its readings decided nothing below.
 
 ### Managed structs
 
+- **Libraries construct and match with `:`** (2026-11-09). The 38 positional constructor calls with four
+  or more arguments, up to the thirteen of a subprocess configuration, are labelled, and so are the four
+  `struct.make` uses; an HTTP response's readers match `(:stream-description status <- S ...)` and
+  `(:buffered-response status <- S ...)` instead of testing one predicate and reading the other struct
+  unchecked, and raise "http: not a response" for anything else. A report's declaration moved before its
+  first use, so its constructor is known there. The labelled constructions compile to what the positional
+  calls did: `io.reader` to `(let V (buffer.new Cap) (io.reader.%make E V 0 0 [] 0))`. Library suites
+  pass unchanged.
+
 - **Construction and pattern matching with `:`** (2026-11-09, Apple M3 Max). `(:point x <- X ...)`
   constructs and matches: the reader splits `:` into its own token, so it is `(: point x <- X ...)`.
   Fields follow one another with no separator, as each value is one form. A macro rewrites the form, in

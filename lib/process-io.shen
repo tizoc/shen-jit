@@ -98,7 +98,15 @@
     (let E (<-address (subprocess.pipes Child) Index)
       (if (or (= E []) (= (io.endpoint.state E) closed))
           []
-          (collector.make E Sink Limit 0 [] false Child Index))))
+          (:collector
+            endpoint <- E
+            sink <- Sink
+            limit <- Limit
+            count <- 0
+            chunks <- []
+            eof <- false
+            child <- Child
+            index <- Index))))
 
 (define outputs
   Children OutSink ErrSink Config ->
@@ -361,17 +369,39 @@
         (io.join (collector.count Output) (reverse (collector.chunks Output)))
         (buffer.new 0)))
 
+\\ An execution report. Its child handle stays valid after the report is made.
+(define show-report
+  R -> (make-string "#<report ~A>" (status-text (report.status R))))
+
+(defstruct report
+  (printer show-report)
+  child
+  status
+  input-count
+  output-count
+  error-count
+  output-bytes
+  error-bytes
+  pending-input
+  output-observed
+  error-observed)
+
 (define reports
   [] _ _ -> []
   [Child | Rest] State First ->
     (let Out (output-for (session.outputs State) Child 1)
          Err (output-for (session.outputs State) Child 2)
-         Report (report.make Child (subprocess.status Child)
-                  (if First (feed-state.written (session.feed State)) 0)
-                  (collected-count Out) (collected-count Err)
-                  (collected-bytes Out) (collected-bytes Err)
-                  (if First (feed-pending (session.feed State)) (buffer.new 0))
-                  (not (= Out [])) (not (= Err [])))
+         Report (:report
+                  child <- Child
+                  status <- (subprocess.status Child)
+                  input-count <- (if First (feed-state.written (session.feed State)) 0)
+                  output-count <- (collected-count Out)
+                  error-count <- (collected-count Err)
+                  output-bytes <- (collected-bytes Out)
+                  error-bytes <- (collected-bytes Err)
+                  pending-input <- (if First (feed-pending (session.feed State)) (buffer.new 0))
+                  output-observed <- (not (= Out []))
+                  error-observed <- (not (= Err [])))
       [Report | (reports Rest State false)]))
 
 (define exchange
@@ -387,10 +417,22 @@
          _ (if (= ErrSink []) true (io.check ErrSink write []))
          _ (if (or (shen-jit.same? Source OutSink) (shen-jit.same? Source ErrSink))
                (error "process: input source and output sinks must differ") true)
-         Feed (feed-state.make Source (buffer.new (config.chunk-size Config)) 0 0 false 0)
+         Feed (:feed-state
+                source <- Source
+                buffer <- (buffer.new (config.chunk-size Config))
+                at <- 0
+                end <- 0
+                eof <- false
+                written <- 0)
          Outputs (outputs Children OutSink ErrSink Config)
          Chunk (buffer.new (config.chunk-size Config))
-         State (session.make false Budget Children Feed Outputs Config)
+         State (:session
+                 progress <- false
+                 budget <- Budget
+                 children <- Children
+                 feed <- Feed
+                 outputs <- Outputs
+                 config <- Config)
          _ (lock-pipes Pipes true)
          _ (busy-children Children true)
          Result (trap-error (pump State Chunk)
@@ -448,23 +490,6 @@
          Budget (clock.deadline (config.timeout Config))
       (io.let-ok Child (spawn-config Program Args Config)
         (single-result (owned-exchange [Child] Source OutSink ErrSink Config Budget)))))
-
-\\ An execution report. Its child handle stays valid after the report is made.
-(define show-report
-  R -> (make-string "#<report ~A>" (status-text (report.status R))))
-
-(defstruct report
-  (printer show-report)
-  child
-  status
-  input-count
-  output-count
-  error-count
-  output-bytes
-  error-bytes
-  pending-input
-  output-observed
-  error-observed)
 
 (define report-check
   Report -> (if (report? Report) Report (error "process: not an execution report")))
@@ -541,14 +566,29 @@
 (define abort-reports
   [] -> []
   [Child | Rest] ->
-    [(report.make Child (subprocess.status Child) 0 0 0
-                  (buffer.new 0) (buffer.new 0) (buffer.new 0) false false)
+    [(:report
+       child <- Child
+       status <- (subprocess.status Child)
+       input-count <- 0
+       output-count <- 0
+       error-count <- 0
+       output-bytes <- (buffer.new 0)
+       error-bytes <- (buffer.new 0)
+       pending-input <- (buffer.new 0)
+       output-observed <- false
+       error-observed <- false)
      | (abort-reports Rest)])
 
 (define abort
   [] Error _ -> [error Error []]
   Children Error Config ->
-    (let State (session.make false [] Children [] [] Config)
+    (let State (:session
+                 progress <- false
+                 budget <- []
+                 children <- Children
+                 feed <- []
+                 outputs <- []
+                 config <- Config)
          _ (busy-children Children true)
          Result (cleanup-error State Error)
          _ (busy-children Children false)

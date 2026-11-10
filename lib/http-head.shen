@@ -32,7 +32,14 @@
          _ (if (and (>= N 4) (<= N 1048576)) true
                (error "http: head limit must be 4..1048576 bytes"))
          _ (io.reader-check R)
-      (head-state.make R N (buffer.new N) 0 0 [] false)))
+      (:head-state
+        reader <- R
+        limit <- N
+        storage <- (buffer.new N)
+        used <- 0
+        crlf <- 0
+        result <- []
+        busy <- false)))
 
 (define head-check
   F ->
