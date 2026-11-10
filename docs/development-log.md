@@ -2778,6 +2778,11 @@ First libraries, to test whether declarations cover real use: 128 and 206 lines 
     error, or `[]`, which made the handler's `error-to-string` raise. A thread keeps it now, as it keeps its roots.
   - A `blocking` call gave each `bytes` argument its own copy, so one buffer given twice lost what C wrote through the
     first, and only once a thread had started. A buffer given twice is one copy now.
+- **2026-11-10, two in `lib/mmap.shen`, found by a review of the libraries over bytes:** `mmap.create` checked its size
+  with `integer?`, which holds for `1.0` too, so `creat` emptied the file before the call refused the real and left
+  the descriptor open; it wants a fixnum first now. `mmap.close` ignored what `munmap` or `UnmapViewOfFile` gave, so
+  a failed unmap killed the pointer and returned `true` with the mapping still there; it raises now, and the pointer
+  stays.
 - **2026-11-10, found by a review of the JIT:** `jit_call_nested` checked the C stack before pushing its boundary, so
   "stack overflow" was raised to the guest's handler: under one that ignores its error, quietly, with no exception for
   C to read, and C's `shen_exception` gave `SHEN_NONE`, which ends the process. The boundary goes first now.

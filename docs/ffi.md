@@ -104,7 +104,8 @@ what works on a byte buffer works on the pointer, checked against that length: `
   memory itself is not saved: a byte buffer is what lasts in an image.
 
 `lib/mmap.shen` maps files the same way, on each system: `(mmap.read Path)`, `(mmap.read-write Path)`, `(mmap.create Path N)` and `(mmap.close M)`, over `mmap` and `lseek`, or `CreateFileMappingA` and
-`MapViewOfFile`. What `mmap.read` gives is read only, so a store raises instead of ending the process; an access past the end of a file that something has since made shorter does end it, as no check can catch that. C can still write through a read-only pointer given to it, which ends the process too.
+`MapViewOfFile`. `mmap.create` takes a positive integer size, and refuses anything else before it touches the file; `mmap.close`
+raises if the system cannot unmap, and the pointer then stays as it was. What `mmap.read` gives is read only, so a store raises instead of ending the process; an access past the end of a file that something has since made shorter does end it, as no check can catch that. C can still write through a read-only pointer given to it, which ends the process too.
 
 **Guarded pointers** let Shen release such memory once nothing uses it. `(shen-jit.pointer-guard P V)` makes a copy of P, the guarded pointer, and holds V strongly. Once nothing else reaches the guarded pointer, a
 collection puts V on the list that `(shen-jit.pointers-dead)` gives, and Shen does the rest: nothing runs during a collection, and whatever releases the memory can be any Shen function.

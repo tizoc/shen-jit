@@ -74,14 +74,20 @@
 (define read-write
   Path -> (map Path (open Path 2) true))
 
-\\ creat gives a descriptor that cannot read, which a mapping needs, so it is opened again.
+\\ creat gives a descriptor that cannot read, which a mapping needs, so it is opened again. The size
+\\ is checked first, as a fixnum: integer? holds for 1.0 too, which the call refuses after creat has
+\\ emptied the file.
 (define create
-  Path N -> (error "mmap: ~A: cannot make a file of ~A bytes" Path N) where (not (and (integer? N) (> N 0)))
+  Path N -> (error "mmap: ~A: cannot make a file of ~A bytes" Path N) where (not (and (fixnum? N) (> N 0)))
   Path N -> (let Fd (c-creat Path (if (windows?) 384 420))
               (if (< Fd 0)
                   (fail Path)
                   (do (c-close Fd)
                       (map-sized Path (open Path 2) N)))))
+
+\\ Bit operations take only fixnums, and a real may have no fraction.
+(define fixnum?
+  V -> (trap-error (= V (shen-jit.bit-or V 0)) (/. E false)))
 
 (define map-sized
   Path Fd _ -> (fail Path) where (< Fd 0)
@@ -138,11 +144,17 @@
 \\ ---------------------------------------------------------------------------
 \\ Closing.
 
+\\ The pointer dies only once its memory has gone back; otherwise this raises, and it stays.
 (define close
-  M -> (do (if (windows?)
-               (c-unmap-view M)
-               (c-munmap M (shen-jit.bytes-length M)))
-           (shen-jit.pointer-kill M)
-           true))
+  M -> (if (= 0 (c-unmap-view M))
+           (error "mmap: cannot unmap: error ~A" (shen-jit.errno))
+           (closed M))
+      where (windows?)
+  M -> (if (= 0 (c-munmap M (shen-jit.bytes-length M)))
+           (closed M)
+           (error "mmap: cannot unmap: ~A" (c-strerror (shen-jit.c-errno)))))
+
+(define closed
+  M -> (do (shen-jit.pointer-kill M) true))
 
 )

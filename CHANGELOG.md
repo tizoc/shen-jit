@@ -83,6 +83,8 @@ All notable changes to this project are documented in this file. The format is b
   index could overwrite a value still in use; a register named `Word.0` or `Real.0` clashed with a temporary and is
   refused; a word constant that was not an integer became 0; a constant `if`, `when`, `unless` or `while` was refused;
   extra operands of a raw instruction were dropped; and a misplaced `exception` was reported as the instruction before.
+- `mmap.create` given a size such as `1.0` emptied the file and left a descriptor open before raising, and
+  `mmap.close` returned `true` when the system could not unmap.
 
 ## [0.6] - 2026-11-08
 
