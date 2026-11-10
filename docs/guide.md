@@ -963,6 +963,9 @@ flat profile at exit, and `SHEN_JIT_STATS=1` prints the collector's work and the
 - **Sealing.** Internal kernel functions cannot be redefined, where Shen/Scheme accepts such definitions.
 - **Numbers hash by value.** A real and an integer that are `=` have the same `hash`, where Shen/Scheme's tells them apart.
 - **Threads run one at a time,** where Shen/Scheme's run in parallel.
+- **Definitions are factorised,** as with `(factorise +)`: a guard that consecutive clauses share runs once, so
+  guards should have no effects, and a vector pattern may read its first element before a clause that does not
+  need it, which raises if that element was never set.
 - **On Windows,** a few things differ: see [On Windows](#on-windows).
 
 [docs/semantics.md](https://github.com/tizoc/shen-jit/blob/main/docs/semantics.md) defines the behaviour in full, and

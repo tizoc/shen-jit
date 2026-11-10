@@ -769,6 +769,17 @@ cannot. The kernel suite is the kernel's `tests/runme.shen`; the stlib install l
   `realistic-pipeline` 1.15-1.22 times as slow, caught by a campaign rerun and fixed that day.
 - **That rule made clause chains cubic** (2026-11-04, Apple M3 Max). One `defprolog` of 400 facts loaded in 23.3 s,
   now 0.23 s (Shen/Scheme 0.30). 5000 facts take 43 s against 24; the rest is the kernel's compiler, left alone.
+- **Documented, not fixed: what the factoriser changes** (2026-11-10, found by a review of the port). Factorising
+  every definition is `(factorise +)` always on, and Shen/Scheme 0.53 with it gives the same answers as here in
+  three cases where the kernel as written, and Shen/Scheme by default, do not. A guard that consecutive clauses
+  share runs once, as `define` puts a guard's tests in the same `and` chain as the patterns'; a guard that changes
+  the vector matched leaves later clauses a read made before it; and `factor-selectors` reads `(hdv V)` before a
+  clause that ignores the first element, so a vector whose first element was never set raises. The first two are
+  effects in guards, which should have none. The third is a bug in the kernel's factoriser, the same in
+  S43/Sources/core.shen. Rejected: marking each guard so that none is shared, and here, a port override
+  of `factor-selectors` that moves `tlv` but not `hdv`, costing a read of the first element for each clause tried
+  that uses it. Upstream, `factor-selectors` would give `factor-selectors-h` `[[tlv X]]` for `@v`. `semantics.md`
+  had said this factorises as Shen/Scheme's compiler does, which these cases disprove.
 - **Rejected: testing shared clause tests once before the chain** (2026-11-03, Apple M3 Max, trial build). A
   12-element pattern went from 22 compares to 12, and `match list (multiple clauses, matching)` stayed at 5.1 ns
   (earlier prototype 4), as the compares are predicted.

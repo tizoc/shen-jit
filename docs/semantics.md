@@ -254,6 +254,19 @@ error; a non-symbol raises an error.
   system function is rejected by the kernel in both.
 - **`defun`** is valid only as the whole form given to `eval-kl`. Nested, it raises
   an error.
+- **`define` is factorised.** What it produces is evaluated through the kernel's
+  `shen.factor`, which tests a condition that consecutive clauses share once, and
+  reads a part of the argument that several clauses use once, before them. Guards
+  should therefore have no effects, including on the value being matched.
+  *Deviation:* the kernel, and Shen/Scheme, evaluate a definition as written,
+  unless `(factorise +)` is set. So a guard that two consecutive clauses share runs
+  once, not once a clause: with `X -> a where (and (tick) (= X 1))` and
+  `X -> b where (and (tick) (= X 2))`, `tick` runs once. A guard that changes the
+  vector being matched leaves later clauses the element read before it. And a vector
+  pattern can read its first element before a clause that does not need it: with
+  `(@v _ (@v 0 <>)) -> ok` before `(@v 1 _) -> one`, a vector whose first element
+  was never set raises `hdv needs a non-empty vector as an argument`, where the
+  kernel gives `ok`. The kernel's factoriser does the same with `(factorise +)`.
 
 ## 11. `eval-kl`
 
@@ -318,8 +331,8 @@ functions and defines `thread`; write the image, in which file streams are close
 
 This follows Shen/Scheme's build. The factorise-defun, expand-dynamic and
 type-annotations extensions are not initialized. As built, what `define`
-produces is evaluated factorised by the kernel's `shen.factor`, as Shen/Scheme's
-compiler factorises definitions; `ps`
+produces is evaluated factorised by the kernel's `shen.factor`, as with
+`(factorise +)` (section 10); `ps`
 shows the definition as `define` produced it, and `shen.*factorise?*` stays
 false, as in Shen/Scheme. The command line is the
 kernel's launcher extension: `main` passes the process arguments to

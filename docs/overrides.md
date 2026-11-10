@@ -56,7 +56,7 @@ The kernel's `shen.prolog-vector` makes an absvector of `(prolog-memory N)` word
 | `shen-jit.eval-kl` | Returns anything but a list as itself, without lowering it: `load` evaluates what each `define` returns, `(fn F)`'s printer, which compiled a throwaway expression per definition |
 | `shen.<atom>` | Tries the number rules only when the first byte is a digit, `-`, `+` or `.`, the only bytes any of them can start with |
 | `shen.record-kl` | Puts a name without a `shen.source` property straight on `shen.*userdefs*`, instead of an `adjoin` over every definition |
-| `shen.shendef->kldef-h`, `shen.record-and-evaluate` | Evaluate what `define` produced factorised, keeping `ps` as written |
+| `shen.shendef->kldef-h`, `shen.record-and-evaluate` | Evaluate what `define` produced factorised, keeping `ps` as written: as with `(factorise +)`, a shared guard runs once and a vector's first element may be read early ([semantics.md](semantics.md), section 10) |
 | `shen.compute-integer`, `shen.compute-fraction-h`, `shen.compute-E` | Number reading as Shen/Scheme reads numbers: `8.0` reads as the integer 8, and literals beyond the fixnum range become the nearest real instead of overflowing ([semantics.md](semantics.md), section 3) |
 | `shen.read-evaluate-print`, `shen-jit.repl-read` | Backtraces, and ending the process at end of input |
 | `shen.x.launcher.main` | Exit status 1 after an error or an unknown argument |
