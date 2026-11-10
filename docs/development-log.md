@@ -2237,6 +2237,12 @@ execution remains CI's responsibility; no new platform ABI or instruction was in
   one reading decides both, so it forces before it gives up: none of 900 failed, under the same
   load. A test with a clock that advances at each reading puts the expiry between each pair in turn;
   without the fix it fails for two of its six budgets.
+- **2026-11-10, found by a review of the process and filesystem libraries:** run and pipeline first
+  called the cancel option in the pump, after the child had started, so a value that was not a frozen
+  boolean, such as `1`, started a child, which cleanup then terminated, and returned `[error Error
+  Partial]`. Now they ask it once before starting anything: such a value raises, as other bad
+  arguments do, and a cancellation already requested returns `[error Error]` without a child.
+  Three checks in `tests/process.shen` failed before.
 
 ### Windows command-line encoding (2026-11-08, macOS checks and Windows CI)
 
@@ -2463,6 +2469,11 @@ execution remains CI's responsibility; no new platform ABI or instruction was in
 - The fast tier and ASan/UBSan pass on macOS, with the new adapter instrumented. The copy application
   and adapter build work from an extracted release package. API documentation has its own page,
   linked from the guide and included in source and binary archives.
+- **2026-11-10, found by the same review:** `fs.walk` passed its root to `lstat` as given, and POSIX
+  follows a link to resolve a trailing slash, so `tree/loop/` walked the linked directory, 6 entries,
+  where `tree/loop` visits the link alone. The walk now drops the root's trailing separators, as
+  `fs.name` does; a root such as `/` keeps its own. A check in `tests/fs.shen` failed before.
+  `fs.lstat` of `link/` still reports the directory, which is what POSIX means by the slash.
 
 ### Independent bounded chunk I/O (2026-11-07, M3 Max, macOS arm64)
 

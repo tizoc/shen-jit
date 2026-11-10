@@ -359,13 +359,17 @@
   State [ok _] -> [ok (@p (walk-state.visited State) (walk-state.stopped State))]
   State [error Error] -> [error (io.progress Error (walk-state.visited State))])
 
+\\ The root without trailing separators, which would make lstat follow a linked root.
+(define untrailed
+  Path -> (let P (parts Path) (shen-jit.bytes->string (split.bytes P) 0 (split.end P))))
+
 (define fs.walk
   Path Options Visit ->
     (let Config (configure (limits.make 10000 16777216 64) Options [] true)
          _ (if (> (limits.entries Config) 0) true (error "fs: walk entry-limit must include the root"))
          State (:walk-state visited <- 0 scheduled <- 1 name-bytes <- 0 stopped <- false)
       (io.let-ok Root (fs.resolve Path)
-        (walk-result State (walk-node Root 0 Config State Visit)))))
+        (walk-result State (walk-node (untrailed Root) 0 Config State Visit)))))
 
 \\ These calls use the same C runtime and UTF-16 conversion as the existing file endpoints.
 (define simple

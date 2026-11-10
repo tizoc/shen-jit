@@ -151,8 +151,25 @@
 
 (let Result (process-test.run ["hold" "10000"] (buffer.new 0)
                [[cancel (freeze true)] [terminate-grace 0]])
-  (process-test.check "cancellation is explicit" cancelled
-    (freeze (io.error-domain (process-test.error Result)))))
+  (do (process-test.check "cancellation is explicit" cancelled
+        (freeze (io.error-domain (process-test.error Result))))
+      (process-test.check "cancellation before the start launches nothing" 2
+        (freeze (length Result)))))
+
+(process-test.check "invalid cancel is refused before launching a child" true
+  (freeze
+    (trap-error
+      (do (process-test.run ["hold" "1000"] (buffer.new 0) [[cancel 1] [terminate-grace 0]])
+          false)
+      (/. X true))))
+
+(process-test.check "invalid cancel is refused before launching a pipeline" true
+  (freeze
+    (trap-error
+      (do (process.pipeline [[(value process-test.helper) ["hold" "1000"]]] (buffer.new 0)
+            [[cancel 1] [terminate-grace 0]])
+          false)
+      (/. X true))))
 
 (let Input (buffer.new 1048576)
      Result (process-test.run ["slow-input"] Input [[timeout 60] [terminate-grace 0]])

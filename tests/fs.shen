@@ -202,6 +202,12 @@
         (freeze Change))))
 
 (if (value fs-test.links)
+    (fs-test.check "walk does not follow a linked root with a trailing slash"
+      [ok (@p 1 false)]
+      (freeze (fs.walk (fs-test.path "tree/loop/") [] (/. Info Depth continue))))
+    skip)
+
+(if (value fs-test.links)
     (do (fs-test.check "lstat preserves symlink kind" symlink
           (freeze (fs.kind (fs-test.ok (fs.lstat (fs-test.path "file-link"))))))
         (fs-test.check "stat follows symlink" file

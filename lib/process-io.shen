@@ -155,13 +155,19 @@
 (define first-stdin
   State -> (<-address (subprocess.pipes (hd (session.children State))) 0))
 
+\\ Run and pipeline also ask before starting anything, so that a cancel option that is not a
+\\ frozen boolean raises, and one already set returns, before a child exists.
+(define cancel-check
+  Config -> (if (thaw (config.cancel Config))
+                [error (error-at cancelled "process" "process operation cancelled")]
+                [ok]))
+
 (define check-cancel
   State ->
-    (cond ((thaw (config.cancel (session.config State)))
-            [error (error-at cancelled "process" "process operation cancelled")])
-          ((deadline.expired? (session.budget State))
-            [error (error-at timeout "process" "process deadline expired")])
-          (true [ok])))
+    (io.let-ok _ (cancel-check (session.config State))
+      (if (deadline.expired? (session.budget State))
+          [error (error-at timeout "process" "process deadline expired")]
+          [ok])))
 
 (define feed
   State ->
@@ -480,7 +486,8 @@
          _ (capture-limits Config)
          Source (view-source Input)
          Budget (clock.deadline (config.timeout Config))
-      (io.let-ok Child (spawn-config Program Args Config)
+      (io.let-ok _ (cancel-check Config)
+                 Child (spawn-config Program Args Config)
         (single-result (owned-exchange [Child] Source [] [] Config Budget)))))
 
 (define run-to
@@ -488,7 +495,8 @@
     (let Config (options Options true)
          _ (stream-arguments Source OutSink ErrSink)
          Budget (clock.deadline (config.timeout Config))
-      (io.let-ok Child (spawn-config Program Args Config)
+      (io.let-ok _ (cancel-check Config)
+                 Child (spawn-config Program Args Config)
         (single-result (owned-exchange [Child] Source OutSink ErrSink Config Budget)))))
 
 (define report-check
@@ -611,6 +619,7 @@
          Budget (clock.deadline (config.timeout Config))
          Home (value *home-directory*)
       (io.let-ok _ (ready)
+                 _ (cancel-check Config)
                  Env (environment Config)
         (build-pipeline Commands Config Home Env Source [] [] Budget))))
 
@@ -622,6 +631,7 @@
          Budget (clock.deadline (config.timeout Config))
          Home (value *home-directory*)
       (io.let-ok _ (ready)
+                 _ (cancel-check Config)
                  Env (environment Config)
         (build-pipeline Commands Config Home Env Source OutSink ErrSink Budget))))
 

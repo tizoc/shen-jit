@@ -92,6 +92,9 @@ All notable changes to this project are documented in this file. The format is b
   `grammar.read-within` did not count input already buffered; a head already buffered was parsed after its head
   deadline; an aborted body read forgot what it had read; and a deadline that expired during a response
   producer's callback dropped the producer's error.
+- `process.run`, `process.run-to` and the pipelines started a child before calling the `cancel` option, so a
+  value that was not a frozen boolean, or a cancellation already requested, still started one.
+- `fs.walk` walked into a linked root named with a trailing slash, such as `tree/loop/`.
 
 ## [0.6] - 2026-11-08
 

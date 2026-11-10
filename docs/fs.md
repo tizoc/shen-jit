@@ -122,7 +122,7 @@ Entry limits include the root and must be positive. The maximum depth is 256. At
 depth, a directory is visited but not descended, so depth zero visits only the root.
 
 The walker uses `lstat` and does not descend entries reported as links/reparse points, including a
-linked root. It observes a changing tree, rather than locking it: concurrent edits can fail the walk.
+linked root, whose trailing separators it ignores. It observes a changing tree, rather than locking it: concurrent edits can fail the walk.
 It does not provide directory confinement against concurrent path replacement. Visitor exceptions
 become errors, and native directory resources are already closed when a visitor runs. Changing the
 home setting in a visitor does not redirect the pending walk.

@@ -163,6 +163,8 @@ caller-owned source/sink storage and bounded native argument/environment copies.
 
 A normal exit returns `[ok Report]`, including a nonzero exit. Launch/setup failures can return
 `[error Error]`. Transfer failures, limits, cancellation and timeouts return `[error Error Partial]`.
+Run and pipelines call the cancellation predicate once before starting anything: a value that is not
+a frozen boolean raises there, and a cancellation already requested returns `[error Error]`.
 If a child exits before consuming stdin, a pipe-write failure can be primary, with its exit status in
 the partial report.
 Already received output is retained within its cap. Failure requests termination, closes pipes,
