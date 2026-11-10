@@ -81,6 +81,8 @@ enum {
 
 #define HEADER(type, size) \
     ((((uint64_t)(size)) << 8) | (((uint64_t)(type)) << 3) | TAG_HEADER)
+/* The least size the field cannot hold: constructors refuse it rather than cut it short. */
+#define HEADER_SIZE_LIMIT (UINT64_C(1) << 56)
 
 static inline bool is_header(uint64_t w) { return (w & 7) == TAG_HEADER; }
 static inline unsigned hdr_type(uint64_t h) { return (unsigned)((h >> 3) & 31); }

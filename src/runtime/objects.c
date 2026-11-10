@@ -25,6 +25,8 @@ V make_pair(VM *vm, V head, V tail)
 
 static V make_byte_object(VM *vm, unsigned type, const void *bytes, size_t len)
 {
+    if (len >= HEADER_SIZE_LIMIT)
+        return FAILED;
     uint64_t h = HEADER(type, len);
     uint64_t *p = vm_alloc_object(vm, obj_words(h));
     if (!p)
@@ -62,6 +64,8 @@ V make_real(VM *vm, double d)
 
 V make_vector(VM *vm, size_t n, V fill)
 {
+    if (n >= HEADER_SIZE_LIMIT)
+        return FAILED;
     uint64_t h = HEADER(T_VECTOR, n);
     vm_root(vm, &fill);
     uint64_t *p = vm_alloc_object(vm, obj_words(h));
@@ -255,14 +259,21 @@ V cell_symbol(VM *vm, size_t cell)
     return V_NIL;
 }
 
+/* The new table goes in the semispace even when it is large: every collection builds the next
+   one in to-space, in the room the old one leaves there. */
 static bool table_grow(VM *vm)
 {
-    size_t n = vm->intern == V_NIL ? 0 : table_size(vm);
-    V bigger = make_vector(vm, n ? 2 * n : 1024, V_NIL);
-    if (bigger == FAILED)
+    size_t n = vm->intern == V_NIL ? 0 : table_size(vm), m = n ? 2 * n : 1024;
+    uint64_t *p = vm_alloc(vm, 1 + m);
+    if (!p)
         return false;
+    p[0] = HEADER(T_VECTOR, m);
+    for (size_t i = 0; i < m; i++)
+        p[1 + i] = V_NIL;
+    /* The allocation may have collected, and the collection shrunk the table. */
     V old = vm->intern;
-    vm->intern = bigger;
+    n = old == V_NIL ? 0 : table_size(vm);
+    vm->intern = tagged(p, TAG_OBJECT);
     for (size_t i = 0; i < n; i++) {
         V s = ((V *)(ptr(old) + 1))[i];
         if (s != V_NIL) {
@@ -275,6 +286,11 @@ static bool table_grow(VM *vm)
 
 static V intern_name(VM *vm, V name)
 {
+    uint64_t hash = hash_bytes(string_bytes(name), string_length(name));
+    V found = vm->intern == V_NIL ? V_NIL : *table_slot(vm, hash, string_bytes(name), string_length(name));
+    if (found != V_NIL)
+        return found;
+    /* Only a new symbol can take the table past half full. */
     if (vm->intern == V_NIL || 2 * (vm->nsymbols + 1) > table_size(vm)) {
         vm_root(vm, &name);
         bool grown = table_grow(vm);
@@ -282,10 +298,6 @@ static V intern_name(VM *vm, V name)
         if (!grown)
             return FAILED;
     }
-    uint64_t hash = hash_bytes(string_bytes(name), string_length(name));
-    V *slot = table_slot(vm, hash, string_bytes(name), string_length(name));
-    if (*slot != V_NIL)
-        return *slot;
 
     vm_root(vm, &name);
     uint64_t *p = vm_alloc(vm, SYM_WORDS);

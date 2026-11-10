@@ -39,6 +39,13 @@ All notable changes to this project are documented in this file. The format is b
 - Printing an I/O endpoint, reader or writer, a framer, an HTTP head or body reader or response, or a child
   process called the library function named by the record's tag, which the writer takes for a printer, and
   raised an error or printed something else.
+- A program that interns many symbols could crash in a collection: when the symbol table grew while most of its
+  symbols had died since the last collection, or at the first collection after it grew to 32768 slots with the heap
+  full of live data. Interning a name that already exists no longer grows the table.
+- Saving an image or executable at `SHEN_JIT_MAX_HEAP` failed with "cannot write" when a large object made since
+  loading took more than about half of what was left, though the heap fitted.
+- `shen_make_vector` and `shen_make_bytes` given a length of 2^56 or more wrote past the object they made. They
+  raise "out of memory".
 
 ## [0.6] - 2026-11-08
 

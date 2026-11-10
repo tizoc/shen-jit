@@ -447,6 +447,15 @@ Nothing in the runtime changes for it alone.
 - **A bug this allows** (2026-11-04). `save-executable` interned a symbol and kept only its cell across more allocation. A
   collection freed both, and the saved binary ran as the launcher. It showed at stress 1 and 10, and at 1000 on a release
   build.
+- **Two crashes in the table's growth,** found by reading the collector (2026-11-10). `table_grow` read the table's size,
+  allocated the new one, and copied that many slots. A collection in the allocation shrinks the table when fewer than a
+  quarter of its slots hold live symbols, so after most of its symbols died the copy read past it. Stress hid this: when every
+  allocation collects, the count stays near the live one, and the table never grows while it could shrink. Symbols dropped by
+  stores, which allocate nothing, show it at once. And a table of 32768 slots was a large object, while every collection builds
+  the next one in to-space, in room counted on the old one being there: with the heap full of live data, the first collection
+  after that growth wrote 16K words past to-space. The size is now read after the allocation, and the table always goes in the
+  semispace. A test of each in `tests/cli.sh` crashed every run before. `intern_name` also grew the table before looking the
+  name up, so a name that existed doubled it at the threshold; it looks first now.
 - **Constants of dead code,** about 110 lines. After four runs, 26.9K of 45.3K constant slots (59%) were dead code's, and kept
   5,027 code objects alive. A code object now owns its slots, and one pass after collection frees the unreached. Live heap
   6.67 to 5.62 MB, code objects 13.5K to 8.4K. Rejected: a weak list of code objects for that pass, as reading each header
@@ -564,6 +573,10 @@ Nothing in the runtime changes for it alone.
 - **Executables.** A trailer gives an image's length, so one appended to the runtime is found from the end of the file
   (2026-11-02). `save-executable` (2026-11-03) is about 90 lines of C and gives 1.0 MB on macOS. It ends the process, as an
   image holds no frames, and writes beside the path and renames, so a binary can replace itself.
+- **A save refused at the heap limit** (2026-11-10). To copy large objects into the heap, `write_image` asked `vm_collect`
+  for their size as room in the area, where it had already counted them live. So at `SHEN_JIT_MAX_HEAP` a heap that fitted
+  was refused: a 500,000-word vector and the kernel in a semispace of a million words. The room is needed in to-space, which
+  the check after the collection measures, so the collection's answer is ignored there now.
 
 ### What a future collector should know
 

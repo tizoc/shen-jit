@@ -29,6 +29,8 @@
 (define-foreign-procedure make-all t "make_all" 0)
 (define-foreign-procedure copy-string t "copy_string" 1)
 (define-foreign-procedure vector-set-out-of-range t "vector_set_out_of_range" 1)
+(define-foreign-procedure huge-vector t "huge_vector" 0)
+(define-foreign-procedure huge-bytes t "huge_bytes" 0)
 (define-foreign-procedure global-named t "global_named" 1)
 (define-foreign-procedure call-named t "call_named" 2)
 (define-foreign-procedure raises t "raises" 0)
@@ -113,6 +115,8 @@
 
 (c-test.check "a string made from one in the heap" "abcdefgh" (freeze (copy-string (cn "abcd" "efgh"))))
 (c-test.check "a store out of range" false (freeze (vector-set-out-of-range (c-test.vector567))))
+(c-test.check "a vector longer than a header holds" [error "out of memory"] (freeze (huge-vector)))
+(c-test.check "and bytes" [error "out of memory"] (freeze (huge-bytes)))
 
 \\ ---------------------------------------------------------------------------
 \\ Globals and functions, by name.

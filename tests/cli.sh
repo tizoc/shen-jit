@@ -480,6 +480,65 @@ SHEN_JIT_GC_STRESS= SHEN_JIT_STATS=1 SHEN_JIT_SEMISPACE=3000000 "$SHEN" < "$dir/
 contains semispace-grows "$dir/semi.out" "(1-) 10000000"
 SHEN_JIT_GC_STRESS= SHEN_JIT_SEMISPACE=2M SHEN_JIT_MAX_HEAP=8M "$SHEN" < "$dir/heap.in" > "$dir/semi.out" 2>&1
 check semispace-limit "$dir/semi.out" '(1-) "out of memory"'
+# Saving at SHEN_JIT_MAX_HEAP: a large object made since loading counts once, so its 500000 words
+# and the rest fit a semispace of a million.
+SHEN_JIT_GC_STRESS= SHEN_JIT_SEMISPACE=8000000 SHEN_JIT_MAX_HEAP=8000000 "$SHEN" --save "$dir/large.img" eval \
+    -e '(shen-jit.collect)' -e '(do (set big (vector 499998)) ok)' > "$dir/large.out" 2>&1 < /dev/null
+SHEN_JIT_GC_STRESS= SHEN_JIT_IMAGE="$dir/large.img" "$SHEN" eval -e '(limit (value big))' > "$dir/large.out" 2>&1 < /dev/null
+check save-large-at-limit "$dir/large.out" "499998"
+# The symbol table, which grows past half full and which a collection shrinks below a quarter. The
+# collection that growing it can start may shrink it, when most of its symbols died since the last
+# one: here they die by stores, which allocate nothing. The counts take it to 16384 slots and then
+# past 8192 symbols, and a stress below the new table's size makes that growth always collect.
+cat > "$dir/shrink.shen" <<'EOF'
+(define names
+  0 _ Acc -> Acc
+  N Prefix Acc -> (names (- N 1) Prefix [(cn Prefix (str N)) | Acc]))
+(define intern-into
+  _ _ [] -> done
+  V I [S | Ss] -> (do (address-> V I (intern S)) (intern-into V (+ I 1) Ss)))
+(define drop-all
+  V I N -> (if (= I N) done (do (address-> V I 0) (drop-all V (+ I 1) N))))
+(define intern-each
+  [] -> done
+  [S | Ss] -> (do (intern S) (intern-each Ss)))
+(define repro
+  -> (let Held (names 5000 "held-" [])
+          Fresh (names 6000 "fresh-" [])
+          V (absvector 5000)
+       (do (intern-into V 0 Held)
+           (shen-jit.collect)
+           (drop-all V 0 5000)
+           (intern-each Fresh)
+           (= (intern "append") append))))
+(output "interned after a shrink: ~A~%" (repro))
+EOF
+SHEN_JIT_GC_STRESS=32768 "$SHEN" script "$dir/shrink.shen" > "$dir/shrink.out" 2>&1
+check symbols-shrunk-while-growing "$dir/shrink.out" "interned after a shrink: true"
+# And the first collection after it grows to 32768 slots, with every symbol kept and the heap full of
+# live pairs: the new table needs the room the old one leaves.
+cat > "$dir/table.shen" <<'EOF'
+(define names
+  0 _ Acc -> Acc
+  N Prefix Acc -> (names (- N 1) Prefix [(cn Prefix (str N)) | Acc]))
+(define intern-list
+  [] Acc -> Acc
+  [S | Ss] Acc -> (intern-list Ss [(intern S) | Acc]))
+(define fill
+  0 Acc -> Acc
+  N Acc -> (fill (- N 1) [N | Acc]))
+(define repro
+  -> (let Before (names 3000 "before-" [])
+          After (names 4500 "after-" [])
+          Kept (intern-list Before [])
+       (do (shen-jit.collect)
+           (let More (intern-list After Kept)
+                List (fill 1000000 [])
+             [(length More) (length List)]))))
+(output "kept beside a grown table: ~A~%" (repro))
+EOF
+SHEN_JIT_GC_STRESS= SHEN_JIT_SEMISPACE=8M "$SHEN" script "$dir/table.shen" > "$dir/table.out" 2>&1
+check symbols-grown-in-full-heap "$dir/table.out" "kept beside a grown table: [7500 1000000]"
 # With little address space it reserves less for the heap, and still runs.
 (ulimit -v 2000000 2> /dev/null; "$SHEN" eval -e '(+ 1 2)') > "$dir/limited.out" 2>&1
 check limited-address-space "$dir/limited.out" "3"

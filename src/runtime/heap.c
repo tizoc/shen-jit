@@ -105,7 +105,7 @@ VM *vm_create(size_t semispace_words, size_t stack_words)
     vm->space = reserve_heap(semispace_words, &vm->reserved_words);
     vm->area = vm->space ? vm->space + vm->reserved_words + STAGGER_WORDS : NULL;
     vm->other = vm->space ? vm->area + vm->reserved_words + STAGGER_WORDS : NULL;
-    vm->stack = malloc(stack_words * sizeof(V));
+    vm->stack = vm_cleared_stack(stack_words);
     if (!vm->space || !vm->stack || !commit_space(vm->space, semispace_words) ||
         !commit_space(vm->area, semispace_words) || !commit_space(vm->other, semispace_words)) {
         vm_destroy(vm);
@@ -117,7 +117,6 @@ VM *vm_create(size_t semispace_words, size_t stack_words)
     vm->stack_words = stack_words;
     vm->stack_max_words = (size_t)1 << 27; /* 1 GiB of slots */
     vm->fp = vm->top = vm->stack;
-    fill_cleared(vm->stack, vm->stack + stack_words);
     vm_set_limit(vm, vm->stack);
     vm->exception = V_NIL;
     vm->api = ffi_api();
@@ -848,13 +847,12 @@ static bool past_limit(VM *vm, size_t words)
    dead ones, and toward SHEN_JIT_MAX_HEAP. */
 static uint64_t *alloc_large(VM *vm, size_t words)
 {
-    if ((vm->large_since + words > vm->space_words || vm->stress) && !vm_collect(vm, 0))
-        return NULL;
+    if (vm->large_since + words > vm->space_words || vm->stress)
+        vm_collect(vm, 0);
     if (vm->max_words && past_limit(vm, words)) {
         free_spares(vm);
         if (past_limit(vm, words)) {
-            if (!vm_collect(vm, 0))
-                return NULL;
+            vm_collect(vm, 0);
             free_spares(vm);
             if (past_limit(vm, words))
                 return NULL;

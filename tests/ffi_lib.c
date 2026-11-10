@@ -347,6 +347,17 @@ shen_value vector_set_out_of_range(shen_vm *vm, shen_value *args)
     return shen_make_bool(shen_vector_set(vm, args[0], 99, SHEN_NIL) || shen_vector_set(vm, shen_make_fixnum(1), 0, SHEN_NIL));
 }
 
+/* Lengths past what an object's header holds. */
+shen_value huge_vector(shen_vm *vm, shen_value *args)
+{
+    return shen_make_vector(vm, (int64_t)1 << 56, SHEN_NIL);
+}
+
+shen_value huge_bytes(shen_vm *vm, shen_value *args)
+{
+    return shen_make_bytes(vm, NULL, (size_t)1 << 56);
+}
+
 /* Named by a string from Shen: none if there is no such thing. */
 shen_value global_named(shen_vm *vm, shen_value *args)
 {

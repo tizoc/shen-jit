@@ -155,10 +155,13 @@ static bool write_image(VM *vm, const char *path, const char *mode)
     vm->trace = V_NIL;
     /* Large objects go into the heap, so that the image holds them as it
        does any other object: one collection makes room, the next copies
-       them. */
-    if (vm->large_words && (!vm_collect(vm, vm->large_words) ||
-                            (size_t)(vm->live_end - vm->space) + vm->large_words > vm->space_words))
-        return false;
+       them. The room is in to-space, so what the first says of the area,
+       where it counts them twice, does not matter. */
+    if (vm->large_words) {
+        vm_collect(vm, vm->large_words);
+        if ((size_t)(vm->live_end - vm->space) + vm->large_words > vm->space_words)
+            return false;
+    }
     vm->copy_large = true;
     vm_collect(vm, 0);
     vm->copy_large = false;
