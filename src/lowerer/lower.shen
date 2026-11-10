@@ -72,15 +72,30 @@
   X Bs -> (let B (assoc X Bs) (if (cons? B) (tl B) X)) where (symbol? X)
   X _ -> X)
 
-\\ Whether every lambda in X is a goal as the Prolog compiler passes one: four
-\\ parameters, applied as the last arguments of a call.
+\\ Whether every closure in X is one the Prolog compiler makes, which the query
+\\ does not outlive: a lambda only as a goal for findall or call, four
+\\ parameters applied as the last arguments of a call; a freeze only as a
+\\ continuation, the last argument of a call after the query's own B, L and K,
+\\ in Vars.
 (define shen-jit.lower.only-goals?
-  [lambda B [lambda L [lambda K [lambda C [F | Args]]]]]
+  [lambda B [lambda L [lambda K [lambda C [F | Args]]]]] _
   -> (and (shen-jit.symbol? F) (not (shen-jit.lower.occurs? lambda Args))
           (shen-jit.lower.ends-with? [B L K C] Args))
-  [lambda | _] -> false
-  [X | Xs] -> (and (shen-jit.lower.only-goals? X) (shen-jit.lower.only-goals? Xs))
-  _ -> true)
+  [lambda | _] _ -> false
+  [freeze _] _ -> false
+  [F | Args] Vars -> (shen-jit.lower.goal-args? (reverse Args) Vars) where (shen-jit.symbol? F)
+  [X | Xs] Vars -> (shen-jit.lower.all-goals? [X | Xs] Vars)
+  _ _ -> true)
+
+\\ A call's arguments, the last first.
+(define shen-jit.lower.goal-args?
+  [[freeze E] K L B | Xs] [B L K] -> (and (shen-jit.lower.only-goals? E [B L K])
+                                          (shen-jit.lower.all-goals? Xs [B L K]))
+  Xs Vars -> (shen-jit.lower.all-goals? Xs Vars))
+
+(define shen-jit.lower.all-goals?
+  [X | Xs] Vars -> (and (shen-jit.lower.only-goals? X Vars) (shen-jit.lower.all-goals? Xs Vars))
+  _ _ -> true)
 
 (define shen-jit.lower.ends-with?
   Ys Xs -> (= Ys Xs) where (= (length Ys) (length Xs))
@@ -378,11 +393,12 @@
 (define shen-jit.lower.norm
   \\ A query as the kernel compiles prolog?: its vector of bindings goes back when the
   \\ query ends, for the next one to take. Not when the query makes a lambda other than
-  \\ a goal passed to findall or call, which may outlive it and read the vector.
+  \\ a goal passed to findall or call, or a freeze other than a continuation, which may
+  \\ outlive it and read the vector.
   Scope [[[[[lambda B [lambda L [lambda K [lambda C Body]]]] [shen.prolog-vector]] Lock] Key] Cont]
   -> (shen-jit.lower.norm Scope [let B [shen.prolog-vector]
                                   [shen-jit.prolog-done B [let L Lock [let K Key [let C Cont Body]]]]])
-      where (and (shen-jit.lower.only-goals? Body) (shen-jit.sealed? shen-jit.prolog-done)
+      where (and (shen-jit.lower.only-goals? Body [B L K]) (shen-jit.sealed? shen-jit.prolog-done)
                  (empty? (intersection [let lambda shen.prolog-vector shen-jit.prolog-done] Scope))
                  \\ Lock, Key and Cont end up inside B, L and K, so none may name them.
                  (not (or (shen-jit.lower.occurs? B [Lock Key Cont])
@@ -396,7 +412,8 @@
   \\ when compiling: one defined later, or in another package. A named call
   \\ when F takes n arguments, tested each time; otherwise the lambda form,
   \\ which also curries and raises "fn: F is undefined". The arguments are
-  \\ evaluated before fn, which only shows when F is undefined.
+  \\ evaluated before fn, which shows when F is undefined, and before F is
+  \\ applied to the first when it takes fewer (docs/semantics.md).
   Scope [[fn F] | Args] -> (shen-jit.lower.norm Scope (shen-jit.lower.fn-call F Args))
       where (and (shen-jit.symbol? F) (cons? Args) (not (shen-jit.sealed? F))
                  (not (shen-jit.lower.fixed? F))

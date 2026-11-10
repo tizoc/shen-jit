@@ -283,9 +283,10 @@ the shifts. The others are calls to C.
   `(if (shen.unlocked? L) (shen.lock K L) false)`, with no closure and no call to `shen.cut`.
 - A query as the kernel compiles `prolog?`,
   `((((lambda B (lambda L (lambda K (lambda C Body)))) (shen.prolog-vector)) Lock) Key) Cont)`, where every `lambda`
-  in Body is a goal as the Prolog compiler passes one to `findall` or `call`: its vector of bindings is given back
+  in Body is a goal as the Prolog compiler passes one to `findall` or `call`, and every `freeze` a continuation, the
+  last argument of a call after B, L and K: its vector of bindings is given back
   when Body returns (`shen-jit.prolog-done`), for the next query's `shen.prolog-vector` to take. A query that makes
-  any other `lambda` keeps its vector, which that closure may read later, and so does one whose Lock, Key or Cont
+  any other `lambda` or `freeze` keeps its vector, which that closure may read later, and so does one whose Lock, Key or Cont
   names B, L or K, as they are evaluated inside those bindings.
 - `(= (shen.deref X B) (shen.deref Y B))`, with B and Y each a variable, a number or `[]`, which the Prolog compiler makes of
   `(when (= X Y))`: `(shen-jit.deref= X Y B)`, which dereferences as it compares and copies neither term.

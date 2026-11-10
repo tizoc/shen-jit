@@ -1178,6 +1178,8 @@ goes through the stub, and a function that cannot be found raises as anything do
 "Dereferences compared at once only when the second argument cannot change the bindings."
 (value 100 (set shen.*prolog-memory* 100))
 (value false (let B (shen.prolog-vector) (let X (shen.newpv B) (do (shen.bindv X 1 B) (= (shen.deref X B) (shen.deref (do (shen.bindv X 2 B) 2) B))))))
+"A query whose freeze is not a continuation keeps its vector of bindings, which the freeze may read later."
+(value 2 (let F (((((lambda B (lambda L (lambda K (lambda C (freeze (<-address B 1)))))) (shen.prolog-vector)) 0) 0) 0) (let B2 (shen.prolog-vector) (do (address-> B2 1 99) (thaw F)))))
 "A query's lock, key and continuation are evaluated outside its own variables."
 (value true (let B 7 (((((lambda B (lambda L (lambda K (lambda C (number? L))))) (shen.prolog-vector)) B) 0) 0)))
 "Inlined sealed bodies: a parameter bound again, a literal shaped like lowered code, and a parameter named lambda."

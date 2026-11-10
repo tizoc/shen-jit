@@ -688,11 +688,16 @@ cannot. The kernel suite is the kernel's `tests/runme.shen`; the stlib install l
   through a parameter the body bound again; thaw substitution went inside literal lists; and integer arguments were
   substituted as if a parameter named `lambda` were the binder. Each now falls back to the plain lowering, with an
   eval-kl case that failed before. The kernel's lowered code is byte-identical: only `lower.shen`'s own output moved.
-  - **Not changed:** pooling a query's vector while a `freeze` in it may outlive it. Refusing every `freeze` would
-    end pooling for nearly every query; allowing one only where the Prolog compiler puts a continuation needs its
-    own measurement. `((fn F) A1 ... An)` with n other than F's arity evaluates every argument before applying, where
-    a closure applies F to A1 before evaluating A2; which order is right is open. And a variable named like the
-    lowerer's own, `shen-jit.lower.arg1`, can be captured: those names are the lowerer's.
+  - **Then two more** (2026-11-10). A query's vector went back to the pool while a `freeze` in it could outlive the
+    query and read it. Refusing every `freeze` would have ended pooling for nearly every query, so one is allowed only
+    where the Prolog compiler puts a continuation: the last argument of a call after the query's own B, L and K. Every
+    kernel query still pools (its lowered code is byte-identical), and so does a `defprolog` query compiled at run time.
+  - **Documented, not changed:** `((fn F) A1 ... An)` for an open F that takes fewer than n arguments evaluates every
+    argument before applying F to A1. Shen/Scheme applies it first: 1 against 0 for a `defun` whose call reads, as
+    its second argument, what applying F to the first set. Code compiled from Shen gave 1 on both, a call to a
+    function defined later included. Applying in order would mean lowering each argument twice, once for the named
+    call and once for the curried one, on every open `fn` call; `docs/semantics.md` lists it as a deviation instead.
+    And a variable named like the lowerer's own, `shen-jit.lower.arg1`, can be captured: those names are the lowerer's.
 
 ### Sealing and inlining
 

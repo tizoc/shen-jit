@@ -211,6 +211,12 @@ error; a non-symbol raises an error.
   to right, and a thunk takes no arguments, so applying one to any raises an error.
   Applying a closure to too few arguments, or applying anything that is not a
   procedure, raises an error.
+  *Deviation:* `((fn F) A1 ... An)`, where F is not sealed and takes fewer than n
+  arguments, evaluates A1 ... An before applying F to A1, where Shen/Scheme applies
+  it before evaluating A2: the arguments are evaluated once, before a test of F's
+  arity chooses between a named call and the lambda form. It shows only when those
+  applications and the later arguments affect each other, which code compiled from
+  Shen was not seen to do.
 - **Order and tail calls:** arguments are evaluated left to right, after the
   operator of an application. A call in tail position, and the last form of `do`,
   uses no stack, including between different functions.

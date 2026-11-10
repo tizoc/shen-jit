@@ -61,8 +61,9 @@ All notable changes to this project are documented in this file. The format is b
 - Code in shapes the kernel does not produce could compute the wrong value: a lambda nested in one that binds the
   same name, called with both arguments at once; a condition that binds a name the then branch also uses; a
   comparison of two dereferenced Prolog terms whose second changes the bindings; a query whose lock, key or
-  continuation names one of its own variables; and three cases of inlining a sealed function, through a parameter
-  bound again, a literal list, or a parameter named `lambda`.
+  continuation names one of its own variables; a query that returns or keeps a `freeze` reading its bindings,
+  which went back to the pool; and three cases of inlining a sealed function, through a parameter bound again, a
+  literal list, or a parameter named `lambda`.
 
 ## [0.6] - 2026-11-08
 
