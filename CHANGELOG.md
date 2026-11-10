@@ -46,6 +46,12 @@ All notable changes to this project are documented in this file. The format is b
   loading took more than about half of what was left, though the heap fitted.
 - `shen_make_vector` and `shen_make_bytes` given a length of 2^56 or more wrote past the object they made. They
   raise "out of memory".
+- At `SHEN_JIT_MAX_HEAP`, a real or a string that a primitive could not make, as in arithmetic on reals, `str` or
+  `get-time`, gave the handler `[]` instead of the "out of memory" error, and the process ended. Small objects made
+  after a large one could also take the heap past the limit until the next collection.
+- Compiled code calling `shen-jit.newpv` on an absvector of one element wrote past it, over the next object. It
+  raises, as the call through C did.
+- On Windows, a `save-executable` that failed to write removed the previous executable too.
 
 ## [0.6] - 2026-11-08
 

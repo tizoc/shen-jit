@@ -885,7 +885,16 @@ static uint64_t *alloc_large(VM *vm, size_t words)
 
 uint64_t *vm_alloc_object(VM *vm, size_t words)
 {
-    return words < LARGE_WORDS ? vm_alloc(vm, words) : alloc_large(vm, words);
+    if (words < LARGE_WORDS)
+        return vm_alloc(vm, words);
+    uint64_t *p = alloc_large(vm, words);
+    /* At SHEN_JIT_MAX_HEAP, the area's room is what the limit left at the last collection, and
+       a large object takes its words from it: the limit is on small and large objects together. */
+    if (p && vm->max_words) {
+        size_t room = (size_t)(vm->hlimit - vm->hp);
+        vm->hlimit -= words < room ? words : room;
+    }
+    return p;
 }
 
 /* The live heap by object type, for SHEN_JIT_STATS: count[0] and words[0] are

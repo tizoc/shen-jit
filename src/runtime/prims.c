@@ -239,6 +239,9 @@ V sj_raise_value(VM *vm, const char *message, V value)
 
 V sj_raise(VM *vm, const char *message) { return sj_raise_value(vm, message, V_CLEARED); }
 
+/* What a constructor made, or "out of memory" raised when it could not (objects.c). */
+static V made(VM *vm, V v) { return v == V_CLEARED ? sj_raise(vm, "out of memory") : v; }
+
 /* For rare errors whose text is built when they are raised, or lasts no longer. */
 V sj_raise_text_value(VM *vm, const char *text, V value)
 {
@@ -440,7 +443,7 @@ static V arithmetic(VM *vm, unsigned prim, V a, V b)
         case P_MUL: overflow = __builtin_mul_overflow(x, y, &r); break;
         default: /* P_DIV */
             if (x % y != 0)
-                return make_real(vm, (double)x / (double)y);
+                return made(vm, make_real(vm, (double)x / (double)y));
             r = x / y;
         }
         if (overflow || !fix_fits(r))
@@ -449,10 +452,10 @@ static V arithmetic(VM *vm, unsigned prim, V a, V b)
     }
     double x = number(a), y = number(b);
     switch (prim) {
-    case P_ADD: return make_real(vm, x + y);
-    case P_SUB: return make_real(vm, x - y);
-    case P_MUL: return make_real(vm, x * y);
-    default: return make_real(vm, x / y);
+    case P_ADD: return made(vm, make_real(vm, x + y));
+    case P_SUB: return made(vm, make_real(vm, x - y));
+    case P_MUL: return made(vm, make_real(vm, x * y));
+    default: return made(vm, make_real(vm, x / y));
     }
 }
 
@@ -846,7 +849,7 @@ static V to_string(VM *vm, V v)
     else
         text = "#<value>";
     len = strlen(text);
-    return make_string(vm, text, len);
+    return made(vm, make_string(vm, text, len));
 }
 
 /* Streams (docs/semantics.md, section 12). */
@@ -933,10 +936,14 @@ static V save_executable(VM *vm)
     *cell_value(vm, hush) = base[0];
     *cell_value(vm, argv) = base[1];
     vm->fp = vm->top = base;
+    /* The old file is replaced only by a whole new one. */
+    bool written = image_append(vm, temporary) && chmod(temporary, 0755) == 0;
 #ifdef _WIN32
-    remove(name); /* rename does not replace a file there */
+    written = written && win_replace(temporary, name);
+#else
+    written = written && rename(temporary, name) == 0;
 #endif
-    if (!image_append(vm, temporary) || chmod(temporary, 0755) != 0 || rename(temporary, name) != 0) {
+    if (!written) {
         fprintf(stderr, "shen-jit: cannot write %s\n", name);
         remove(temporary);
         exit(1);
@@ -1027,7 +1034,7 @@ static V read_file(VM *vm)
         }
     }
     free(text);
-    return v == V_CLEARED ? sj_raise(vm, "out of memory") : v;
+    return made(vm, v);
 }
 
 /* shen-jit.append, behind the port's append: a copy of the first list,
@@ -1234,16 +1241,16 @@ static V get_time(VM *vm)
     V kind = vm->args[0];
 #ifdef _WIN32
     if (symbol_named(kind, "run"))
-        return make_real(vm, win_run_seconds());
+        return made(vm, make_real(vm, win_run_seconds()));
     if (symbol_named(kind, "unix"))
-        return make_real(vm, win_unix_seconds());
+        return made(vm, make_real(vm, win_unix_seconds()));
 #else
     if (symbol_named(kind, "run"))
-        return make_real(vm, (double)clock() / CLOCKS_PER_SEC);
+        return made(vm, make_real(vm, (double)clock() / CLOCKS_PER_SEC));
     if (symbol_named(kind, "unix")) {
         struct timeval tv;
         gettimeofday(&tv, NULL);
-        return make_real(vm, (double)tv.tv_sec + tv.tv_usec * 1e-6);
+        return made(vm, make_real(vm, (double)tv.tv_sec + tv.tv_usec * 1e-6));
     }
 #endif
     return sj_raise_value(vm, "get-time: ~S is not run or unix", vm->args[0]);
@@ -1261,7 +1268,11 @@ bool sj_init_host(VM *vm)
     FILE *files[] = {stdin, stdout, stderr};
     for (size_t i = 0; i < 3; i++) {
         V s = make_stream(vm, std[i].flags, files[i]);
-        V g = s == V_CLEARED ? V_CLEARED : intern_cstr(vm, std[i].global);
+        if (s == V_CLEARED)
+            return false;
+        vm_root(vm, &s); /* interning may collect */
+        V g = intern_cstr(vm, std[i].global);
+        vm_unroot(vm, 1);
         if (g == V_CLEARED)
             return false;
         *cell_value(vm, symbol_cell(g)) = s;
@@ -1273,7 +1284,14 @@ bool sj_init_host(VM *vm)
         V empty = make_string(vm, "", 0);
         if (empty == V_CLEARED)
             return false;
-        *cell_value(vm, symbol_cell(intern_cstr(vm, "*home-directory*"))) = empty;
+        /* The symbol, with no value yet, may have gone in that allocation, and interning it
+           again may collect. */
+        vm_root(vm, &empty);
+        home = intern_cstr(vm, "*home-directory*");
+        vm_unroot(vm, 1);
+        if (home == V_CLEARED)
+            return false;
+        *cell_value(vm, symbol_cell(home)) = empty;
     }
     return true;
 }
@@ -1295,7 +1313,7 @@ static __attribute__((noinline)) V trace_text(VM *vm, V message)
     bool newline = is_type(message, T_STRING) && string_length(message) > 0 &&
                    string_bytes(message)[string_length(message) - 1] != '\n';
     size_t len = sj_trace_text(vm, text, sizeof text, newline);
-    return make_string(vm, text, len);
+    return made(vm, make_string(vm, text, len));
 }
 
 static __attribute__((noinline)) V backtrace(VM *vm)
@@ -1371,12 +1389,12 @@ static V wide_access(VM *vm, unsigned prim)
     case P_F32: {
         float f;
         memcpy(&f, at, sizeof f);
-        return make_real(vm, f);
+        return made(vm, make_real(vm, f));
     }
     case P_F64: {
         double d;
         memcpy(&d, at, sizeof d);
-        return make_real(vm, d);
+        return made(vm, make_real(vm, d));
     }
     case P_SET_S32: {
         if (!is_fix(x) || fixval(x) < INT32_MIN || fixval(x) > INT32_MAX)
@@ -1438,7 +1456,7 @@ static V decimal(VM *vm, V s, V e)
     snprintf(text + strlen(text), 32, "e%lld", exponent);
     double d = strtod(text, NULL);
     free(text);
-    return make_real(vm, d);
+    return made(vm, make_real(vm, d));
 }
 
 static V bytes_primitive(VM *vm, unsigned prim)
@@ -1453,7 +1471,7 @@ static V bytes_primitive(VM *vm, unsigned prim)
         if (!is_fix(a) || fixval(a) < 0 || fixval(a) >> 48)
             return sj_raise_value(vm, "shen-jit.bytes: ~S is not a valid length", a);
         v = make_bytes(vm, NULL, (size_t)fixval(a));
-        return v == V_CLEARED ? sj_raise(vm, "out of memory") : v;
+        return made(vm, v);
     case P_BYTES_LENGTH:
         return memory_of(a, &base, &length) ? fix((int64_t)length)
                                             : sj_raise_value(vm, "bytes: ~S is not a byte buffer", a);
@@ -1473,7 +1491,7 @@ static V bytes_primitive(VM *vm, unsigned prim)
         /* substring reads the buffer again after allocating, which may move it. A pointer's
            memory stays where it is. */
         return is_type(a, T_BYTES) ? substring(vm, (size_t)fixval(b), (size_t)fixval(c))
-                                   : make_string(vm, base + fixval(b), (size_t)fixval(c));
+                                   : made(vm, make_string(vm, base + fixval(b), (size_t)fixval(c)));
     default: /* P_COPY_BYTES: to, its start, from, its start, how many */
         if (!memory_of(a, &base, &length))
             return sj_raise_value(vm, "bytes: ~S is not a byte buffer", a);
@@ -1591,7 +1609,7 @@ V sj_primitive(VM *vm, size_t index)
         else {
             V fail = fail_symbol(vm);
             V v = fail == V_CLEARED ? V_CLEARED : make_vector(vm, (size_t)fixval(vm->args[0]), fail);
-            return v == V_CLEARED ? sj_raise(vm, "out of memory") : v;
+            return made(vm, v);
         }
     case P_ABSVECTORP: return boolean(is_type(a, T_VECTOR));
     case P_GET_ADDRESS:
@@ -1632,7 +1650,7 @@ V sj_primitive(VM *vm, size_t index)
             return sj_raise_value(vm, "error-to-string: ~S is not an exception", a);
         else {
             V s = exception_message(vm, a);
-            return s == V_CLEARED ? sj_raise(vm, "out of memory") : s;
+            return made(vm, s);
         }
     case P_CN:
         if (!is_type(a, T_STRING) || !is_type(b, T_STRING))
@@ -1664,7 +1682,7 @@ V sj_primitive(VM *vm, size_t index)
             utf8[i] = (char)(0x80 | (n & 0x3F));
         utf8[0] = (char)(lead[len] | n);
         V s = make_string(vm, utf8, len);
-        return s == V_CLEARED ? sj_raise(vm, "out of memory") : s;
+        return made(vm, s);
     }
     case P_STRING_N:
         if (!is_type(a, T_STRING) || string_length(a) == 0)
@@ -1759,7 +1777,7 @@ V sj_primitive(VM *vm, size_t index)
             return sj_raise_value(vm, "shen-jit.filled-vector: ~S is not a valid length", a);
         else {
             V v = make_vector(vm, (size_t)fixval(a), b);
-            return v == V_CLEARED ? sj_raise(vm, "out of memory") : v;
+            return made(vm, v);
         }
     case P_EXIT:
         if (!is_fix(a) || fixval(a) < 0 || fixval(a) > 255)

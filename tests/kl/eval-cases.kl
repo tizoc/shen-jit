@@ -838,6 +838,11 @@ has them."
 (error "shen-jit.deref: " (shen-jit.deref (shen-jit.pvar 9) (t.deref-new 0) n))
 (error "shen-jit.deref: " (shen-jit.deref (shen-jit.pvar 2) 5 n))
 (error "shen-jit.deref: " (shen-jit.deref (shen-jit.pvar 2) (cons 1 2) n))
+"A new variable needs an offset in element 1, so bindings of one element are refused before it is read:
+compiled, it read and wrote the word after them, here the head of the pair made next."
+(value t.newpv-short (defun t.newpv-short (Z) (let V (absvector 1) (let P (cons Z ()) (trap-error (do (shen-jit.newpv V m) (hd P)) (lambda E (hd P)))))))
+(value 0 (t.newpv-short 0))
+(error "shen-jit.newpv: " (shen-jit.newpv (absvector 1) m))
 "The same object, not equal ones."
 (value true (shen-jit.same? 5 5))
 (value false (shen-jit.same? 5 6))

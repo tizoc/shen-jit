@@ -126,4 +126,6 @@ void *win_library_find(void *library, const char *name) { return (void *)GetProc
 
 int win_last_error(void) { return (int)GetLastError(); }
 
+bool win_replace(const char *from, const char *to) { return MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING) != 0; }
+
 #endif

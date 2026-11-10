@@ -24,6 +24,8 @@ void win_sleep_briefly(void);
 void *win_library_open(const char *file);
 void *win_library_find(void *library, const char *name);
 int win_last_error(void);
+/* Moves a file over another, which rename refuses to do there. */
+bool win_replace(const char *from, const char *to);
 
 #endif
 #endif

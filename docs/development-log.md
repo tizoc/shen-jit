@@ -362,6 +362,9 @@ Lowering rules, the collector and the kernel port have their own sections.
 - **Byte buffers stay checked and in C** (2026-11-03, M3 Max). Checks cost 0.52 ns of a read: 1.36 ns against 0.84
   with none. No unchecked mode, or check per loop, until a real program shows the need. Written in Shen, only
   `bit-not`, `rotate32` and `bswap32` could move, freeing about 21 of 230 lines of C.
+- **A bound missing in the inline `newpv`** (2026-11-10). It read element 1 of the bindings before checking that there
+  were two elements, so on an absvector of one it read and wrote the word after it, there the head of the next pair. The
+  C path and the inline `gc` checked. One comparison.
 
 ### Not tried yet
 
@@ -447,6 +450,9 @@ Nothing in the runtime changes for it alone.
 - **A bug this allows** (2026-11-04). `save-executable` interned a symbol and kept only its cell across more allocation. A
   collection freed both, and the saved binary ran as the launcher. It showed at stress 1 and 10, and at 1000 on a release
   build.
+- **Two more values held across an intern** (2026-11-10). `sj_init_host` kept each standard stream, and the empty home
+  directory, in a C local across an `intern_cstr` that may collect. It runs only while building the image, where no
+  collection had fallen there. Both are rooted now.
 - **Two crashes in the table's growth,** found by reading the collector (2026-11-10). `table_grow` read the table's size,
   allocated the new one, and copied that many slots. A collection in the allocation shrinks the table when fewer than a
   quarter of its slots hold live symbols, so after most of its symbols died the copy read past it. Stress hid this: when every
@@ -1224,6 +1230,10 @@ the Ryzen VM, in 214 s. macOS had hidden everything below. Timing is in the JIT 
 - **Rejected: WSL as the answer for users.** It means enabling a Windows feature and installing a distribution.
 - **No JIT change was needed:** the Win64 convention worked at the first run, and its eight saved registers give loops four
   registers against Linux's two. Threads stay on pthreads through winpthreads.
+- **A failed save lost the executable** (2026-11-10). As `rename` does not replace a file there, `save-executable`
+  removed the old one before writing the new one, so a write that failed, on a full disk say, left neither. The new
+  file is now written whole and then moved over the old one with `MoveFileExA`. Untested: it needs Windows and a
+  full disk.
 - **What it found:**
   - `select` works only on sockets, so the read of stdin waits by itself, without the lock.
   - Ctrl-C runs on a thread of its own and ends the main thread's read with `CancelSynchronousIo`, only during a read:
@@ -1404,6 +1414,12 @@ Built from a table of call sites the JIT records when it compiles, so nothing is
   raise, where the old message without a value took 17. The printer avoids `snprintf`, at 145 ns at first.
 - **`SHEN_JIT_MAX_HEAP`** raises a catchable "out of memory". At the limit the last tenth of the heap is a reserve: without one, a heap
   full of live data left no room for the error, and the handler received `[]`.
+  - **Two holes in it,** found by reading the primitives (2026-11-10). Primitives that make a real or a string returned the
+    constructor's failure without raising, so at the limit `(* 1.5 X)`, `str`, `get-time`, the wide reads and `bytes->string` of
+    a pointer gave the handler `[]` again, and the process ended. The 15 places now go through one `made`, as `ffi.c` does. And a
+    large object made after a collection left the area the room the limit had left it then, so small objects beside it could
+    take the heap past the limit until the next collection: 3.5 million pairs beside a 4-million-word vector, under 64 MB. It
+    now takes its words from that room.
 
 ### String escape CLI check (2026-11-07)
 

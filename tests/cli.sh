@@ -423,6 +423,31 @@ check limit-large-after "$dir/limit.out" "large after: ok"
 check limit-small-after "$dir/limit.out" "small after: ok"
 check limit-beside-list "$dir/limit.out" "large beside a list: ok"
 check limit-kept "$dir/limit.out" "kept: 3000000"
+# Small objects made after a large one share the limit with it: the room a collection left them
+# shrinks by the large object's words. With the semispace at the limit from the start, a list of
+# 3.5 million pairs beside a 4-million-word vector fitted under 64 MB.
+cat > "$dir/beside.shen" <<'EOF'
+(set beside.n 0)
+(define beside.grow Acc -> (do (set beside.n (+ 1 (value beside.n))) (beside.grow [0 | Acc])))
+(define beside.try -> (let V (absvector 4000000) (do (trap-error (beside.grow []) (/. E skip)) (<-address V 0))))
+(shen-jit.collect)
+(beside.try)
+(output "within the limit: ~A~%" (<= (+ 4000000 (* 2 (value beside.n))) 8000000))
+EOF
+SHEN_JIT_GC_STRESS= SHEN_JIT_SEMISPACE=64M SHEN_JIT_MAX_HEAP=64M "$SHEN" script "$dir/beside.shen" > "$dir/beside.out" 2>&1
+check limit-small-after-large "$dir/beside.out" "within the limit: true"
+# Reals and strings that primitives make at the limit raise "out of memory", which a handler takes
+# like any other error, after an earlier one was caught.
+cat > "$dir/made.shen" <<'EOF'
+(trap-error (simple-error "earlier") (/. E skip))
+(define made.reals V I -> (do (address-> V I (* 1.5 I)) (made.reals V (+ I 1))))
+(define made.strings V I -> (do (address-> V I (str I)) (made.strings V (+ I 1))))
+(output "reals: ~A~%" (trap-error (made.reals (absvector 4000000) 0) (/. E (error-to-string E))))
+(output "strings: ~A~%" (trap-error (made.strings (absvector 4000000) 0) (/. E (error-to-string E))))
+EOF
+SHEN_JIT_GC_STRESS= SHEN_JIT_MAX_HEAP=64M "$SHEN" script "$dir/made.shen" > "$dir/made.out" 2>&1
+check limit-real "$dir/made.out" "reals: out of memory"
+check limit-string "$dir/made.out" "strings: out of memory"
 # A write that fails raises, from write-byte once the buffer fills and from close for what is left.
 # Only Linux has it: MSYS2's shell shows one on Windows, which a native program cannot open.
 if [ "$(uname -s)" = Linux ] && [ -w /dev/full ]; then
