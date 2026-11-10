@@ -22,6 +22,7 @@ run_case() {
 run_case "$SHEN" eval "$@" -l tests/http_listener.shen
 run_case "$SHEN" eval "$@" -l tests/http_connection.shen
 run_case "$SHEN" eval "$@" -e '(tc +)' -l tests/http_listener_typed.shen
+sh tests/refused.sh "$SHEN" tests/http_listener_refused.shen "$@" > "$dir/refused.out" 2>&1 || { cat "$dir/refused.out"; exit 1; }
 run_case "$SHEN" eval "$@" -l example-apps/sqlite-http/main.shen \
     -s counter-test.path "\"$dir/counters.db\"" -l tests/sqlite_http.shen
 run_case "$SHEN" eval "$@" -l example-apps/sqlite-http/main.shen \

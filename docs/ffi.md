@@ -118,7 +118,8 @@ collection puts V on the list that `(shen-jit.pointers-dead)` gives, and Shen do
 
 **Typed code:** a declaration whose types are all plain Shen types, and whose result cannot be NULL, also emits a `declare`, with `int64`, `int32`,
 `uint32` and `double` as `number`, `bool` as `boolean`, and `string` for an argument. Others leave the declaring to the program, under `(tc -)`, since
-`declare` does not typecheck under `(tc +)`, and so does `define-foreign-procedure`, which never emits one.
+`declare` does not typecheck under `(tc +)`, and so does `define-foreign-procedure`, which never emits one. A function defined again
+loses the type of its earlier definition when the new one does not emit one.
 
 ## C written for Shen
 

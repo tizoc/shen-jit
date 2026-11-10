@@ -29,6 +29,10 @@
 
 (defgrammar (<gt.keyword> Word) {string ==> string} <gt.word> := <gt.word> where (= <gt.word> Word);)
 
+\\ A typed rule defined after the rule that calls it: its arguments are checked all the same.
+(defgrammar <gt.ahead> {==> string} (<gt.behind> "!") := "ahead";)
+(defgrammar (<gt.behind> Mark) {string ==> string} <gt.word> := (cn <gt.word> Mark);)
+
 (defgrammar <gt.let> {==> (string * number)} (<gt.keyword> "let") " " <gt.field> := <gt.field>;)
 
 \\ A rule named in another alternative with another capture has the capture's type there.
@@ -92,6 +96,7 @@
       (@p "a read at the end" (= (grammar.read <gt.field> (gt.reader "") (function gt.reject)) [eof]))
       (@p "a read with an argument" (= (grammar.read (<gt.keyword> "let") (gt.reader "let") (function gt.reject))
                                        [ok "let"]))
+      (@p "a call to a rule defined after" (= (grammar.parse <gt.ahead> (gt.view "go") (function gt.raise)) "ahead"))
       (@p "a value and a capture" (= (map (/. T (grammar.parse <gt.either> (gt.view T) (function gt.raise))) ["#ab" "cd"])
                                      ["#ab" "cd"]))])
 

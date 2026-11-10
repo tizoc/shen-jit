@@ -13,6 +13,11 @@
   {io.endpoint --> io.close-result}
   E -> (io.shutdown-write E))
 
+\\ Typed code connects with socket's own calls; this loads, and calls nothing.
+(define frame-typed.connect
+  {string --> number --> io.endpoint}
+  Host Port -> (io.socket (socket.connect Host Port) Host))
+
 (define frame-typed.run
   {--> boolean}
   ->

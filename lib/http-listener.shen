@@ -299,7 +299,7 @@
   [pending] : wait-result;
 
   Error : io.error;
-  ___________________________
+  ===========================
   [error Error] : wait-result;)
 
 (datatype http-listener-options
@@ -312,7 +312,7 @@
   [shutdown-grace N] : listener-option;
 
   Option : option;
-  =================================
+  _________________________________
   Option : listener-option;)
 
 (declare listen

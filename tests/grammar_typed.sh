@@ -49,6 +49,17 @@ refused "<bad.any>'s value has no type" '(defgrammar <bad.x> {==> number} <bad.a
 refused 'gives a value with := in every alternative' '(defgrammar <bad.x> {==> number} B := 1; B;)'
 refused 'a signature gives a type for each parameter' '(defgrammar (<bad.x> A) {==> number} B := A;)'
 refused 'a signature without }' '(defgrammar <bad.x> {==> number B := 1;)'
+refused 'X is a parameter' '(defgrammar (<bad.x> X) {string ==> string} X := X;)'
+refused 'X is a parameter' '(defgrammar (<bad.x> X) {string ==> string} (at X) := X;)'
+refused 'X is a parameter' '(defgrammar (<bad.x> X) {string ==> string} (* X) := X;)'
+refused 'type error in rule 1 of <bad.first>.types' '
+(defgrammar <bad.first> {==> string} (<bad.later> 1) := "ok";)
+(defgrammar (<bad.later> Text) {string ==> string} <e> := (cn Text "!");)'
+refused 'type error in rule 1 of <bad.first>.types' '
+(defgrammar <bad.first> {==> string} (<bad.later> 1) := "ok";)
+(defgrammar (<bad.later> N) N2 := N;)'
+refused 'free variables in <bad.x>' '(defgrammar <bad.x> {==> number} "a" B := B; "b" := B;)'
+refused 'free variables in <bad.x>' '(defgrammar <bad.x> {==> number} (where (> B 1)) B := B;)'
 
 # Rules loaded under (tc +) read from a reader under (tc -).
 "$SHEN" eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -e '(tc +)' -l tests/grammar_typed.shen -e '(tc -)' \

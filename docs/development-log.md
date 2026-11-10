@@ -1876,6 +1876,26 @@ strings, and arguments to a typed rule's parameters have their types; bytes, `(a
   expand to under `(tc +)`. `json.read` is declared with it, and so is `http.read-request`, whose outcomes are the same. On the way, `grammar.read`'s expansion evaluated its
   reader twice, once for the window's size; it binds it first now. 17 lines, 18 typed checks, and a read used at the
   wrong type refused.
+- **2026-11-10, eight found by a review of the libraries' types,** each a typed program that loaded and went wrong,
+  or a correct one refused:
+  - Six rules went both ways with a variable as their conclusion, `S : string` with `S : value` in JSON, and an
+    option of one kind with one of another in HTTP, so any `json.value` passed for a string and a listener option
+    for a response one. They go one way now; no typed code here used the other. Typed code takes a JSON string or
+    array apart with `json.string` and `json.array` instead, which check it. The listener's `[error E]` went one way
+    and had premises, so a client could not take `E` out; it goes both ways, which is sound for a constructor.
+  - A foreign function defined again kept the type of its definition before, when the new one gave none: `destroy`,
+    which removes only the type, now runs then, and for `define-foreign-procedure`.
+  - The socket calls had no types, so typed code could not make the integer `io.socket` takes. Ten are declared;
+    `recv` and `recv-into` stay out, as a buffer has no Shen type.
+  - Grammars: a byte with a parameter's name hid the argument, and the check gave it the parameter's type; an item
+    that binds a parameter's name is refused, typed or not. The arguments a typed rule gave a rule defined after it
+    went unchecked, as its signature was not known yet; as a file is read whole before it is checked, the check is
+    made all the same, against the `.match?` that rule's signature declares, so that rule must be typed. A typed
+    rule is compiled at its first call, so a variable only another alternative bound loaded and failed there; its
+    definition and every loop's are now compiled to KL, not run, when made, which the kernel checks as it checks a
+    definition. Loading JSON and the HTTP libraries took 104 ms against 104, ten runs in three alternating rounds.
+  - Refusals are tested by `tests/refused.sh`, which loads each case under `(tc +)` and passes only on a type error,
+    so that an error at run time cannot pass for one.
 
 ### Shen features in the SQLite example (2026-11-08, M3 Max, macOS arm64)
 

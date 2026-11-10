@@ -331,7 +331,7 @@
   [read-buffer-size N] : option;
 
   Option : response-option;
-  ===========================
+  ___________________________
   Option : option;
 
   N : number;
@@ -347,7 +347,7 @@
   [connection-timeout N] : option;
 
   Option : chunk-option;
-  ===========================
+  ___________________________
   Option : option;
 
   N : number;

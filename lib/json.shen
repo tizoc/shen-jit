@@ -9,8 +9,8 @@
   (externals [? at byte-limit defgrammar depth-limit eof json-options json-values object ok require
     span text])
   (shadow <e> read value)
-  (export decode encode integer json.number => number option parse read stringify value object
-    null)
+  (export array decode encode integer json.number => number json.string => string option parse read
+    stringify value object null)
 
 (define scan-fail
   I What -> (error "json: byte ~A: ~A" I What))
@@ -249,6 +249,17 @@
 (define parse
   Text Options -> (decode (buffer.from-string Text) Options))
 
+\\ A string value, or an array's values; any other value raises.
+(define json.string
+  S -> S where (string? S)
+  _ -> (error "json: not a string"))
+
+(define array
+  [number | _] -> (error "json: not an array")
+  [object | _] -> (error "json: not an array")
+  Values -> Values where (or (= Values []) (cons? Values))
+  _ -> (error "json: not an array"))
+
 (define json.number
   Token -> (grammar.parse <token> (buffer.from-string Token) (/. At Message (error "json: invalid number token"))))
 
@@ -362,13 +373,15 @@
 (define stringify
   Value Options -> (buffer.string (encode Value Options)))
 
+\\ A string, a number or a list is a value, but a value is not one of them without a check, as
+\\ json.string and json.array make: those rules go one way.
 (datatype json-values
   S : string;
-  ===========================
+  ___________________________
   S : value;
 
   N : number;
-  ===========================
+  ___________________________
   N : value;
 
   ___________________________
@@ -385,7 +398,7 @@
   [number Token] : value;
 
   Values : (list value);
-  ===========================
+  ___________________________
   Values : value;
 
   Key : string; Value : value;
@@ -409,6 +422,8 @@
 (declare parse [string --> [[list option] --> value]])
 (declare read [io.reader --> [[list option] --> [grammar.read-result value]]])
 (declare json.number [string --> value])
+(declare json.string [value --> string])
+(declare array [value --> [list value]])
 (declare integer [value --> number])
 (declare encode [value --> [[list option] --> buffer.view]])
 (declare stringify [value --> [[list option] --> string]])

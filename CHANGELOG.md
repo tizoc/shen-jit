@@ -17,6 +17,8 @@ All notable changes to this project are documented in this file. The format is b
   however it ends or only if it raised. The body's error is the one raised, with any error of the cleanup added
   to its message.
 - `(sqlite.with-database Path F)`, which closes the database however F ends.
+- `json.string` and `json.array`, which take a string or an array's values out of a JSON value in typed code.
+- Types for the socket functions whose arguments and results have plain ones, such as `socket.connect`.
 
 ### Changed
 
@@ -111,6 +113,11 @@ All notable changes to this project are documented in this file. The format is b
   holding a NUL byte came back cut at it, and could not be bound.
 - `socket.readable?` took a negative wait, which could wait for ever, and a real one.
 - A curl transfer whose response fields did not parse reported no body progress.
+- Types that let typed code go wrong: any JSON value passed for a string, a number or a list, and an HTTP server or
+  listener option for a response or chunk option; a foreign function defined again kept its earlier type; and a
+  typed grammar took a byte bound with a parameter's name for the parameter, left the arguments it gave a rule
+  defined after it unchecked, and accepted a variable that only another alternative bound, which then failed at
+  its first call. Typed code could not take the error out of `http.wait`'s result.
 
 ## [0.6] - 2026-11-08
 

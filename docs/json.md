@@ -47,7 +47,10 @@ gives it.
 
 Object keys are strings. Duplicate keys are rejected after escape decoding, including `"a"` alongside
 `"\u0061"`. Array elements cannot contain a bare `object` or `number` symbol, so the tags are distinct
-from ordinary arrays. The recursive `json.value` datatype supports these forms in typed clients.
+from ordinary arrays. The recursive `json.value` datatype supports these forms in typed clients. A string,
+a number or a list is a `json.value`, but typed code takes one apart with a check: `json.string Value`
+gives a string value, and `json.array Value` an array's values, each raising for any other value, while
+`[number Token]` and `[object | Members]` can be matched.
 
 Numbers are not passed through the Shen reader or silently rounded to doubles. Huge integers,
 exponents, negative zero and trailing fractional zeros remain lossless tokens. `json.number Text`

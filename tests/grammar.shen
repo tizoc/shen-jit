@@ -211,6 +211,7 @@
   Name Text -> (grammar-test.raises Name (freeze (eval (hd (read-from-string Text))))))
 
 (grammar-test.refused "a value from a rule without :=" "(defgrammar <g.bad> <g.crlf> := <g.crlf>;)")
+(grammar-test.refused "a parameter bound by an item" "(defgrammar (<g.bad> X) X := X;)")
 (grammar-test.refused "a rule named but not matched" "(defgrammar <g.bad> <g.digit> := <g.digits>;)")
 (grammar-test.refused "a rule named only inside a repetition" "(defgrammar <g.bad> (* <g.digit>) := <g.digit>;)")
 (grammar-test.refused "a repetition of several items" "(defgrammar <g.bad> (* 1 2 3);)")

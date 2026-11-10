@@ -400,6 +400,8 @@ test-json: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l lib/buffer.shen -l lib/grammar.shen -l lib/json.shen \
 	  -l tests/json_memory.shen | $(FFI_RESULT)
 	sh tests/json_image.sh $(SHEN_JIT)
+	sh tests/refused.sh $(SHEN_JIT) tests/json_refused.shen -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen \
+	  -l lib/json.shen
 
 # Independent chunk I/O, native file descriptors, typed results and image/GC safety.
 test-io: $(BUILD)/shen-jit
@@ -443,6 +445,9 @@ test-http: $(BUILD)/shen-jit
 	  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/grammar.shen -l lib/http-head.shen \
 	  -l lib/http-request.shen -l lib/http-response.shen -l lib/http-server.shen \
 	  -e '(tc +)' -l tests/http_stream_typed.shen | $(FFI_RESULT)
+	sh tests/refused.sh $(SHEN_JIT) tests/http_refused.shen -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen \
+	  -l lib/io.shen -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/grammar.shen -l lib/http-head.shen \
+	  -l lib/http-request.shen -l lib/http-response.shen -l lib/http-server.shen
 	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
 	  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/grammar.shen -l lib/http-head.shen \
 	  -l lib/http-request.shen -l lib/http-response.shen -l lib/http-server.shen \
@@ -508,6 +513,7 @@ $(FFI_TEST_LIB): tests/ffi_lib.c include/shen.h | $(BUILD)
 test-ffi: $(BUILD)/shen-jit $(FFI_TEST_LIB)
 	cd $(BUILD) && SHEN_JIT_GC_STRESS=$(GC_STRESS) ./shen-jit eval -l ../lib/ffi.shen -e '(tc +)' -l ../tests/ffi_typed.shen | $(FFI_RESULT)
 	cd $(BUILD) && $(call FFI_SUITES,SHEN_JIT_GC_STRESS=$(GC_STRESS) ./shen-jit)
+	sh tests/refused.sh $(SHEN_JIT) tests/ffi_refused.shen -l lib/ffi.shen
 
 # A real Ctrl-C to the REPL on Windows, which tests/cli.sh cannot send there.
 test-ctrlc-windows: $(BUILD)/shen-jit

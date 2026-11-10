@@ -378,4 +378,17 @@
 (define close
   S -> (if (< (c-close S) 0) (fail "close") true))
 
+\\ Types for the calls whose arguments and results have plain ones. A byte buffer has none, so
+\\ typed code sends strings here, and bytes through io.socket.
+(declare connect [string --> [number --> number]])
+(declare listen [string --> [number --> number]])
+(declare accept [number --> number])
+(declare port [number --> number])
+(declare close [number --> boolean])
+(declare shutdown [number --> boolean])
+(declare no-delay [number --> boolean])
+(declare readable? [number --> [number --> boolean]])
+(declare recv-string [number --> [number --> string]])
+(declare send [number --> [string --> number]])
+
 )

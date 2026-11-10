@@ -136,6 +136,7 @@
           Desc (ffi.fill (absvector (length Fields)) 0 Fields)
        (do (foreign Name Desc)
            (shen.store-arity Name Arity)
+           (destroy Name)
            Name)))
 
 (define ffi.repeat
@@ -143,13 +144,14 @@
   N X -> [X | (ffi.repeat (- N 1) X)])
 
 \\ Typed code can use a function at once if each of its types is a plain Shen type. A result
-\\ that may be [] is not, nor is a pointer: those are for the program to declare.
+\\ that may be [] is not, nor is a pointer: those are for the program to declare. A type from a
+\\ definition before goes either way, as destroy removes only the type.
 (define ffi.declare
   Name Types Result -> (let Plain (map (/. T (ffi.plain T)) [string | Types])
                             Out (ffi.plain Result)
                          (if (and (not (element? unknown [Out | Plain])) (not (= Out string)))
                              (declare Name (ffi.type (tl Plain) Out))
-                             skip)))
+                             (destroy Name))))
 
 (define ffi.plain
   int64 -> number

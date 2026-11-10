@@ -15,6 +15,17 @@
           _ (http.stop S)
        (listener-typed.finished? (http.wait S 2000))))
 
+(define listener-typed.message
+  {http.wait-result --> string}
+  [error E] -> (io.error-message E)
+  [ok] -> "stopped"
+  [pending] -> "pending")
+
+(output "~A~%"
+  (if (= (listener-typed.message [error (io.error listen "test" "failed")]) "failed")
+      "1 passed, 0 failed"
+      "0 passed, 1 failed"))
+
 (let Passed (trap-error (listener-typed.run)
                (/. X (if (= (error-to-string X) "foreign: this static build cannot load libraries")
                          true (simple-error (error-to-string X)))))

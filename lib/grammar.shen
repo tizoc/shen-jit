@@ -124,6 +124,7 @@
          Sig (fst Signed)
          Rules (map (/. R (split-rule R [])) (split (snd Signed) [] []))
          _ (if (empty? Rules) (error "defgrammar ~A: no rules" Name) skip)
+         _ (map (/. R (rebinds Name Params (binders (hd R)))) Rules)
          _ (put Name type Sig)
          _ (put Name value (every? (/. R (not (= (hd (tl R)) grammar.none))) Rules))
          _ (put Name class (if (empty? Params) (class Rules) []))
@@ -187,6 +188,9 @@
 (define sig-of
   R -> (trap-error (get R type) (/. E [])))
 
+(define untyped?
+  R -> (= (trap-error (get R type) (/. E unknown)) []))
+
 (define typed
   Name Params [Types Value] Rules ->
     (let Checked (types Name Params Types Value Rules)
@@ -242,6 +246,23 @@
                       (error "defgrammar ~A: ~A's value has no type: give ~A a signature" Name R R)
                       (hd (tl Sig)))))
 
+\\ An item cannot bind a parameter's name: the byte would hide the argument, and a typed rule's
+\\ check would give it the parameter's type.
+(define rebinds
+  _ _ [] -> skip
+  Name Params [V | Vs] -> (if (element? V Params)
+                              (error "defgrammar ~A: ~A is a parameter, which an item cannot bind" Name V)
+                              (rebinds Name Params Vs)))
+
+\\ What items bind, in repetitions, options and requires too.
+(define binders
+  [] -> []
+  [X | Items] -> [X | (binders Items)] where (variable? X)
+  [[F V] | Items] -> [V | (binders Items)] where (and (element? F [at u16-be u32-be]) (variable? V))
+  [[F X] | Items] -> (append (binders [X]) (binders Items)) where (element? F [* + ?])
+  [[require | Rest] | Items] -> (append (binders (butlast Rest)) (binders Items))
+  [_ | Items] -> (binders Items))
+
 \\ The numbers an alternative's items bind: bytes, positions and fields.
 (define scope
   [] -> []
@@ -251,6 +272,8 @@
   [_ | Items] -> (scope Items))
 
 \\ Guards are booleans, messages strings, and arguments have the types of a typed rule's parameters.
+\\ A rule not defined yet is checked too: a file is read whole before it is checked, so a typed
+\\ rule later in it has declared its .match? by then, and any other is refused.
 (define checks
   [] -> []
   [[where G] | Items] -> [G | (checks Items)]
@@ -258,12 +281,14 @@
     (append (checks (butlast Rest)) [[= (last Rest) ""] | (checks Items)])
   [[F X] | Items] -> (append (checks [X]) (checks Items)) where (element? F [* + ? text span])
   [[R | Args] | Items] -> [(append [(client-name R ".match?") | Args] [[buffer.new 0]]) | (checks Items)]
-    where (and (nonterminal? R) (cons? Args) (cons? (sig-of R)))
+    where (and (nonterminal? R) (cons? Args) (not (untyped? R)))
   [_ | Items] -> (checks Items))
 
-\\ A function compiled at its first call: Def, saved, and a stub that compiles it.
+\\ A function compiled at its first call: Def, saved, and a stub that compiles it. Its variables
+\\ are checked now, as a definition's are, by compiling it to KL without running it.
 (define stub
   H Def -> (let Params (parameters Def)
+                _ (shen.shendef->kldef H (tl (tl Def)))
                 _ (put H loop Def)
              (eval (append [define H | Params] [-> [compile H (list Params)]]))))
 

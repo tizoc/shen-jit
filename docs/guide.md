@@ -493,7 +493,9 @@ A server, in a thread, with a client beside it:
 | `(socket.shutdown S)`, `(socket.no-delay S)`, `(socket.close S)` | Tells the other end nothing more will be sent, sends small writes at once, and closes |
 
 A socket is an integer. Waiting lets other threads run, and Ctrl-C at the REPL ends it. A send to a closed connection
-raises instead of ending the process. The comments at the top of the file list every function.
+raises instead of ending the process. The comments at the top of the file list every function. Typed code can call
+those above but `socket.recv` and `socket.recv-into`, whose buffers have no Shen type, and sends strings: bytes go through
+a socket endpoint.
 
 [Socket I/O endpoints](https://github.com/tizoc/shen-jit/blob/main/docs/io-sockets.md), `lib/io-socket.shen`, put a
 connection behind the I/O library's readers and writers, with deadlines.
@@ -685,7 +687,8 @@ and one prints as
 | `(shen-jit.pointer! B I P)` | Stores a pointer's address at offset I, or NULL for `[]`, and returns B |
 
 In typed code, a declaration whose types are all plain Shen types, and whose result cannot be NULL, can be called at
-once. Others are for the program to `declare`, under `(tc -)`.
+once. Others are for the program to `declare`, under `(tc -)`, and a function defined again loses the type of its
+earlier definition.
 
 ### Memory outside the heap
 

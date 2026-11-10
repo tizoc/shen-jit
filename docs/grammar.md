@@ -59,7 +59,8 @@ never matches. They take one item each: to repeat a sequence, give it a rule of 
 runs as a loop, in constant stack, however long the input, and stops at an item that matches nothing.
 
 A rule can take parameters, named after it in parentheses. They can be used in guards, values, messages and the
-arguments of other calls, so a grammar can carry a limit or a byte it found:
+arguments of other calls, so a grammar can carry a limit or a byte it found. An item cannot bind a parameter's
+name again:
 
 ```shen
 (defgrammar (<list> Depth)
@@ -197,7 +198,10 @@ shen-jit eval -l lib/buffer.shen -l lib/grammar.shen -e '(tc +)' -l numbers.shen
 
 This gives `[1 22 333]`. Rules without a value need no signature, and typed rules can
 match them. The alternatives are checked as the clauses of a function, `<rule>.types`, so an error names
-the alternative, as in `type error in rule 2 of <numbers>.types`.
+the alternative, as in `type error in rule 2 of <numbers>.types`. A file is read whole before it is
+checked, so the arguments a typed rule gives a rule defined after it are checked too, and that rule must
+then be typed; a rule defined before it need not be. A typed rule is compiled at its first call, but its
+variables are checked as it is defined, as a definition's are.
 
 In typed code, `grammar.parse`, `grammar.match?`, `grammar.read` and `grammar.read-within` of a typed
 rule call functions that the signature declares: `<rule>.parse`, of type `T1 --> ... --> buffer.view -->
