@@ -3924,7 +3924,9 @@ gone, and the one remaining string bounds probe catches only the expected out-of
 
 The `fixnum?` declaration belongs to the default port image. Its lowerer arity entry remains necessary
 for compilation, and bootstrap registration supplies runtime arity and first-class calls; these are
-different uses. The registration chain uses the ordinary nesting.
+different uses. The registration chain uses the ordinary nesting. `mmap.create` and SQLite use the
+primitive in place of their local predicates. Bit operations already refused integral reals, so this
+preserves SQLite's INTEGER/REAL binding policy; a storage-class check passes with both predicates.
 Comments identify the string probe's dependency on runtime error wording and the full encoding cost
 of `encoded-size`. Tuple page sizes and fixed worker heap defaults remain unchanged. No throughput
 claim or new benchmark campaign is included.

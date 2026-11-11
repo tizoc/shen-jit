@@ -138,13 +138,9 @@
   Stmt I V -> (let B (shen-jit.string->bytes V) (c-bind-text Stmt I B (shen-jit.bytes-length B) -1))
     where (string? V)
   Stmt I V -> (c-bind-blob Stmt I V (shen-jit.bytes-length V) -1) where (shen-jit.bytes? V)
-  Stmt I V -> (c-bind-int64 Stmt I V) where (fixnum? V)
+  Stmt I V -> (c-bind-int64 Stmt I V) where (shen-jit.fixnum? V)
   Stmt I V -> (c-bind-double Stmt I V) where (number? V)
   _ _ V -> (error "sqlite: cannot store ~S" V))
-
-\\ Bit operations take only fixnums, and a real may have no fraction.
-(define fixnum?
-  V -> (trap-error (= V (shen-jit.bit-or V 0)) (/. E false)))
 
 (define step
   Stmt -> (let Rc (c-step Stmt)
