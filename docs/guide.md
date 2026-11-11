@@ -502,11 +502,14 @@ connection behind the I/O library's readers and writers, with deadlines.
 
 ### Structured workers
 
-`lib/parallel.shen` runs named entries of a saved image on 1 to 64 OS threads, each with its own
-runtime. A scope always joins before returning. Load `lib/buffer.shen`, then `lib/parallel.shen`.
-Messages are copied; one immutable byte buffer can be shared. The
-[reference](https://github.com/tizoc/shen-jit/blob/main/docs/parallel.md) covers typed read-only access,
-heap configuration and cooperative cancellation. `thread` is unchanged.
+For independent jobs over numbers, booleans, symbols, strings and proper lists, start with
+`parallel.with-map` and `parallel.map` from optional `lib/parallel-map.shen`. Results keep input order;
+`tools/parallel-map.shen` is a complete program. Each of 1 to 64 OS threads runs a named function of a saved
+image in its own runtime, and a scope always joins before returning. Load `lib/buffer.shen`, then
+`lib/parallel.shen`, then `lib/parallel-map.shen`. The underlying byte API offers copied messages and one
+immutable buffer shared by the workers. The [reference](https://github.com/tizoc/shen-jit/blob/main/docs/parallel.md)
+covers both APIs, a starting heap configuration, typed read-only access and cooperative cancellation.
+The source-deps example answers batches of queries with it. `thread` is unchanged.
 
 ### HTTP
 

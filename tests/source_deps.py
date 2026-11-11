@@ -355,6 +355,10 @@ def main():
     print(f'{checks} passed, 0 failed (independent graph/BFS oracles, saved CLI and safe failures)', flush=True)
     memory(executable, adapter, directory)
     image(executable, base, directory)
+    import source_deps_batch
+    source_deps_batch.check(program, source, output, directory)
+    import source_deps_values
+    source_deps_values.check(executable, adapter, directory, program)
 
 
 if __name__ == '__main__':

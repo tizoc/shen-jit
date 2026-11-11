@@ -22,6 +22,10 @@ All notable changes to this project are documented in this file. The format is b
 - Worker scopes, `lib/parallel.shen`: a named function of a saved image runs on 1 to 64 OS
   threads at once, each with a runtime of its own, over copied byte messages and one read-only buffer they share.
   A scope always joins its workers. `thread` is unchanged.
+- `lib/parallel-map.shen`: `parallel.map` over workers, for copied numbers, booleans, symbols, strings and proper
+  lists, with results in order, and the example `tools/parallel-map.shen`.
+- The source-deps example answers batches of reach and impact queries, `--batch QUERIES`, sequentially or with
+  1 to 64 workers over one shared graph, and offers the same through `parallel.map`.
 
 ### Changed
 
@@ -46,6 +50,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- The `parallel.value` datatype allowed unchecked conversions to its member types. Its introduction
+  rules are now one-way, with checked number, boolean, string, symbol and list accessors.
 - Printing an I/O endpoint, reader or writer, a framer, an HTTP head or body reader or response, or a child
   process called the library function named by the record's tag, which the writer takes for a printer, and
   raised an error or printed something else.

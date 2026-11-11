@@ -85,8 +85,104 @@ input. Inspect linkage and ambiguous/unresolved/excluded records when interpreti
 
 `--reach` follows outgoing matched calls; `--impact` follows them backwards to callers. Both mean
 one or more edges: the selected function appears in its own answers only if a cycle reaches it.
-Only one selected root/direction is evaluated. A default report never computes an all-pairs
+Each ordinary query evaluates one selected root/direction. A default report never computes an all-pairs
 transitive closure.
+
+## Batch queries
+
+Match calls once with the existing Datalog rules, export the matched graph to
+forward/reverse integer adjacency indexes, then run independent queries:
+
+```sh
+./source-deps facts.ndjson report.ndjson --batch queries.ndjson
+./source-deps facts.ndjson report.ndjson --batch queries.ndjson \
+  --workers 4 --worker-image ./source-deps
+```
+
+The saved executable built above contains the named worker entry too. Its
+main function is not invoked in children. For `script` use, build a compatible
+worker image explicitly with that command and supply its path. No image is
+needed for sequential batch execution, the default (`--workers 0`). Native
+worker counts are integers from 1 to 64. Parallel execution is explicit; no automatic
+threshold or general parallel Datalog evaluator is provided.
+The CLI opens one scope per invocation; the library can reuse one for several batches.
+
+The query file is NDJSON, in the desired answer order:
+
+```json
+{"mode":"reach","file":"a.c","name":"main"}
+{"mode":"impact","file":"b.c","name":"helper","definition_byte":123}
+```
+
+Selectors use the same validation and full function identity as ordinary
+queries. All selectors must resolve before output replacement starts. A batch
+report contains the ordinary graph records, then a `query` record and sorted
+answers per selector; query and answer records add zero-based `query_index`.
+Repeated queries are preserved. Empty query lists and empty worker shards are
+valid. Reach/impact still mean one or more edges, including the root only when
+a cycle reaches it.
+
+The parent owns matching, names and result assembly. Children borrow one
+immutable graph snapshot, run the same BFS as the sequential batch path with
+private visited sets/queues, and return copied answer IDs. All threads join
+before the graph snapshot is freed. Replies are converted back to full
+function identities and retained until reporting. See [the structured worker reference](../../docs/parallel.md)
+for cancellation, type checking and native-code limits.
+
+Query input is at most 1 MiB and 4096 selectors, with at most 64 KiB per
+nonblank line. The graph snapshot and aggregate reply bytes are each at most
+64 MiB. Each child gets an equal share of the reply limit; a large shard can
+fail even if another child has unused capacity. Report limits still apply.
+The worker heap caps divide 384 MiB minus the snapshot size between children,
+with a minimum of 64 MiB per child for the saved application image and private
+query state. At 64 workers the configured child heap caps sum to 4 GiB, plus
+the parent and snapshot. These are heap caps, not RSS limits; code, stacks and
+copying spaces also consume memory. Choose a worker count that fits the
+machine. Normal CLI invocation keeps the runtime's configured parent heap
+limit, and an image larger than a child's cap is refused during initialization.
+
+`batch-graph.shen` holds the common BFS and byte protocol; `batch.shen` holds
+export, validation, sharding and reports. These are an algorithm/representation
+change from the recursive Datalog walk. Compare **sequential CSR with threaded
+CSR** to isolate threading; compare the original Datalog path separately.
+
+Batches pay off only when they are large and a scope serves several of them: for 4096 selectors over the
+Shen/JIT runtime's own sources, 4 workers answered in 1.9 ms warm against 4.2 ms sequentially, but a whole scope
+cost 7.2 ms per batch against 8.3, and writing the report outweighs both. Small batches are faster sequentially.
+
+### Optional ordinary-value batches
+
+`batch-values.shen` adds a library-only alternative over `parallel.map`. Load
+`lib/parallel-map.shen` and that file after `source-deps/load.shen`, under
+`(tc -)`. The compatible worker image must contain them too:
+
+```sh
+build/shen-jit eval -q -l example-apps/source-deps/load.shen \
+  -l lib/parallel-map.shen -l example-apps/source-deps/batch-values.shen \
+  -e '(shen-jit.save-executable "source-deps-value-workers" [])'
+```
+
+Given an existing graph `Export` from `source-deps.export` and the resolved
+`[direction root-ID]` query list from `source-deps.resolve-queries`, use:
+
+```shen
+(source-deps.with-value-workers Export "source-deps-value-workers" 4
+  (/. Scope (source-deps.values-batch Export Scope Selected)))
+```
+
+Worker counts are integers from 1 to 64. The callback can run several batches.
+`source-deps.batch-execute-values
+Export Selected Workers Image` opens one scope for one batch. Both return the
+same ordered `[reach-or-impact root-function answer-functions]` lists as
+`source-deps.batch-execute`. Children read the same immutable graph and run the
+same BFS, returning ordinary `[direction root-ID sorted-answer-IDs]` values.
+The host validates those IDs and restores complete function identities.
+Value-codec node/depth and per-shard byte bounds apply in addition to the
+application limits. Arguments/results are copied; globals and scratch space
+remain private. The normal CLI continues to use its existing byte protocol.
+
+For the same graph queries this adapter costs more than packed bytes, as encoding the answers outweighs the
+work saved; it suits coarser jobs.
 
 ## Reports and input validation
 

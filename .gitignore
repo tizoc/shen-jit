@@ -8,3 +8,4 @@ local/
 AGENTS.local.md
 local.mk
 .deps/
+__pycache__/

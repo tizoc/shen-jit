@@ -9,10 +9,101 @@ current behavior.
 Worker primitive metadata is installed by the normal runtime-image bootstrap.
 Loading this library defines its buffer wrappers and types.
 
-The parent waits
+For ordinary application jobs, start with `parallel.with-map` and
+`parallel.map` from `lib/parallel-map.shen`. The byte API gives explicit
+control of copied messages and one immutable byte snapshot. The parent waits
 for every child to join before the scope returns or propagates an ordinary
 Shen error. A scope can run
 several batches; use that to amortize image loading and compilation.
+
+## Mapping ordinary Shen values
+
+Load optional `lib/parallel-map.shen` after `buffer.shen` and `parallel.shen`.
+It adds copied values and a named unary worker function:
+
+```shen
+(parallel.with-map "worker-image" (intern "my-job") 4
+  (parallel.config 16777216 67108864 (buffer.new 0))
+  (/. Scope
+    (parallel.map Scope [["first" 100] ["second" 200]])))
+```
+
+For small jobs, use this starting heap configuration: 16 MiB initially and
+a 64 MiB maximum per child, with `(buffer.new 0)` when there is no shared
+input. The same `parallel.config` works with either API. Keep the worker
+count explicit, and increase the heap limits for larger images or working
+sets. These limits apply per child; see the resource limits below.
+
+`my-job` must be defined with arity one in the saved image, which must also
+contain the three libraries. Each invocation receives one value and returns
+one value. Results keep input order. The callback can call `parallel.map`
+several times; each worker's private globals and compiled code persist until
+scope exit. Input lists are partitioned into contiguous shards, one per worker.
+There is no automatic sequential fallback: private worker state and effects
+can differ from evaluating the same function in the parent.
+
+Supported values are numbers, booleans, symbols, strings, `[]` and proper lists
+of supported values, recursively. Signed integers retain their full precision;
+reals retain their binary representation, including negative zero and NaN
+payloads. Strings retain their bytes; symbols are re-interned by name in the
+receiving runtime. Mutable vectors/bytes, closures, streams, foreign/native
+handles, shared descriptors and improper lists are rejected. Arguments and
+results are copied, with no preservation of object identity or shared list
+tails. No managed pointer crosses heaps.
+
+All requests are encoded and checked before dispatch. A failure there runs no
+jobs. A worker failure or unsupported result follows the ordinary scope error
+and join rules; earlier worker effects are not rolled back. Cancellation is
+checked between jobs, and a long job can poll `parallel.cancelled?`. Large
+read-only input stays separate: a job may read `parallel.shared` and return
+ordinary values derived from it.
+
+| Function | Meaning |
+| --- | --- |
+| `parallel.with-map Image Name Count Config Body` | A structured scope using the saved image's named unary function. |
+| `parallel.map Scope Values` | Return one owned result per input, in order. Empty inputs and empty shards are valid. |
+| `parallel.encode Value ByteLimit` | Encode a supported value as a bounded `buffer.view`. |
+| `parallel.decode View` | Decode exactly one value, rejecting malformed or trailing data. |
+
+Each map accepts at most 4096 jobs. Each encoded packet has at most 262144
+value nodes and 64 nested nonempty lists, including the protocol envelope.
+Requests are at most 1 MiB per worker; each worker gets an equal share of the
+64 MiB aggregate reply limit. A large shard fails when it exceeds its own
+budget. Bounds cover the encoded packets; they do not bound the computation,
+allocation or running time of the user function. Existing heap caps apply.
+The binary codec is a versioned transport for compatible local workers, not
+a general object/image serializer or a persistent storage format.
+
+The optional checker describes this recursive subset as `parallel.value`;
+`parallel.map` returns `(list parallel.value)`. It cannot infer an arbitrary
+named function's result type, prove the contents of a saved image or enforce
+size/depth limits. Untyped callers and worker replies receive the same runtime
+validation. The opaque `parallel.map-scope` type is separate from a byte scope.
+
+The value type has one-way introduction rules. Extract a member with the checked
+accessors `parallel.number`, `parallel.boolean`, `parallel.string`, `parallel.symbol`
+or `parallel.list`; each raises if the value is not of that kind. `parallel.list`
+returns `(list parallel.value)` and checks its supported contents. A copied value
+cannot implicitly claim any of these member types.
+
+The complete example in [tools/parallel-map.shen](../tools/parallel-map.shen)
+maps named range-sum jobs and uses its own executable as the worker image:
+
+```sh
+build/shen-jit eval -q -l lib/buffer.shen -l lib/parallel.shen \
+  -l lib/parallel-map.shen -l tools/parallel-map.shen \
+  -e '(shen-jit.save-executable "parallel-map-demo" parallel-demo.main)'
+./parallel-map-demo --sequential
+./parallel-map-demo --workers 4
+```
+
+Both print the same ordered labels and totals. `make test-parallel` includes
+copied-value round trips, bounds, typed clients, state reuse, ownership and
+failure cleanup. When Python 3 is available it also runs independent binary
+fixtures, including exact integer/floating-point bits and malformed packets.
+
+The [source-deps value adapter](../example-apps/source-deps/README.md#optional-ordinary-value-batches)
+combines ordinary query/result lists with a separate shared immutable graph.
 
 ## Byte messages
 

@@ -1,0 +1,8 @@
+(define pm.echo X -> X)
+(set pm.calls 0)
+(define pm.counter X -> (set pm.calls (+ (value pm.calls) 1)))
+(define pm.where X -> [(parallel.index) (parallel.shared-u32 (parallel.shared) 0) X])
+(define pm.fail X -> (error "map fixture failure"))
+(define pm.bad-result X -> (vector 1))
+(define pm.binary X Y -> [X Y])
+(define pm.zero -> 1)

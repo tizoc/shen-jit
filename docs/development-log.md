@@ -1330,6 +1330,20 @@ Parallel Datalog queries, as fork/join over a relation split in shards, with the
   no primitive failures.
 - **Not kept from the experiment:** a barrier, primitives for timing, thread CPU time and counts, which only the
   benchmarks used, and reading the shared input by index, which the view replaced; 6 primitives remain.
+- **Source-deps batches** (2026-11-09). The call graph of the runtime's own C, exported once as integer indexes in
+  the shared buffer, 4096 reach and impact queries: 4.211 ms sequentially and 1.967 ms with 4 workers warm, but
+  8.133 and 7.253 ms per batch with the export and a scope of four batches. Writing the report outweighs both, so
+  the CLI stays sequential by default. The indexes beat the recursive Datalog walk on their own, apart from threads.
+  Byte and value reports agree with sequential execution at 32 and 64 workers. Each child's heap cap is at least
+  64 MiB so the application image fits; the 64-worker maximum therefore has 4 GiB of configured child capacity.
+  Contiguous shards are this workload's limit: interleaving the same uneven queries took 4 workers from 2.592 to
+  1.072 ms. **Rejected for now:** scheduling smaller jobs, which this balanced workload does not need.
+- **`parallel.map` over copied values** (2026-11-09, 2026-11-10). 16 coarse jobs 16.053 ms sequentially and 4.528
+  ms with 4 workers, 16.098 and 5.791 ms per batch over a scope of four. The first codec wrote each number through
+  a temporary buffer view, 78,475 of them per result: writing into one buffer the encoder owns took encoding a
+  real result from 10.001 to 1.225 ms, and 4 workers on the source-deps queries from 8.527 to 3.912 ms warm, still
+  above packed bytes, which that example's CLI keeps.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on
@@ -3550,6 +3564,12 @@ the retained change. Temporary instrumentation and all benchmark artifacts remai
 
 ### Close worker review gaps (2026-11-10, Apple M3 Max)
 
+The copied-value datatype had reversible bare-variable rules: typed code could turn a string into
+`number` through `parallel.value`. Introductions are now one-way, with checked scalar/list accessors
+and six refused-type cases. The codec uses a normally bootstrapped, JIT-inlined `fixnum?` predicate
+rather than depending on arithmetic allocating a fresh real. Byte-scope and value-map libraries use
+namespaces and the existing native tagged-record predicate.
+
 Runtime cleanup removes the duplicate isolation flag, shares the C stack-size constant and drops a
 result root across allocation-free shutdown. Whole-file reads remain self-contained and allowed;
 stream creation is refused. Cancellation polling reads atomic flags rather than taking the scope
@@ -3562,6 +3582,27 @@ value library identical on both sides: three alternating fresh processes, 100 wa
 | 4 | 0.113 | 0.100 |
 | 12 | 0.333 | 0.247 |
 | 16 | 0.415 | 0.320 |
+
+### Simplify bounded worker encoding (2026-11-10, Apple M3 Max)
+
+A second review found no new correctness issue, but the transport preflight duplicated the encoder's
+value walk and string conversions. `try-encode` now runs the encoder once and treats only its four
+explicit byte/node/depth limit errors as a refusal; other errors still propagate. A refused large
+input can now allocate a partial packet, bounded by the codec limit. This keeps the exceptional
+path simple. `encoded-size` remains a convenience over that same encoder. Vocabulary paging instead
+computes scalar sizes directly, without per-value codec state. The byte-character cache warm-up is
+gone, and the one remaining string bounds probe catches only the expected out-of-range error.
+
+The `fixnum?` declaration belongs to the default port image. Its lowerer arity entry remains necessary
+for compilation, and bootstrap registration supplies runtime arity and first-class calls; these are
+different uses. The registration chain uses the ordinary nesting.
+Comments identify the string probe's dependency on runtime error wording and the full encoding cost
+of `encoded-size`. Tuple page sizes and fixed worker heap defaults remain unchanged. No throughput
+claim or new benchmark campaign is included.
+
+Validation: the core suite, parallel library and independent codec fixtures, Datalog and its
+application checks. This includes 138 map checks, six refused-type cases, 68 codec fixtures, and
+349 parallel Datalog checks. Generated hashes are updated; temporary files stay under `build/`.
 
 ## Benchmark results
 

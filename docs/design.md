@@ -327,6 +327,13 @@ A worker refuses what belongs to the process: legacy threads, nested scopes, str
 the REPL's handler, saving an executable, exiting and C API procedures. A host refuses legacy threads and
 process-wide profiling during a scope. Plain foreign functions are trusted to be safe on several threads.
 
+`lib/parallel-map.shen` maps a named unary function over ordinary values on that boundary. Each batch encodes the
+workers' contiguous shards before any runs, and decodes the results in input order. A versioned, bounded codec
+copies numbers with their representation, booleans, strings, symbols, which the receiver interns again, and proper
+lists, and refuses everything else; sharing within a value is not kept. The source-deps example exports its call
+graph once as forward and reverse integer indexes, the scope's shared buffer, and answers reach and impact
+queries with one BFS, sequentially or split between workers.
+
 ## Calling C
 
 Foreign functions are procedures entered through one shared stub, so a call needs no new instruction and no code per signature. See

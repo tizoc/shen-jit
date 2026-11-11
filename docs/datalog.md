@@ -31,6 +31,10 @@ and reverse impact queries.
 Configured translation-unit exports also require a preceding external declaration for cross-unit
 matches and keep build configurations separate.
 
+Its [batch queries](../example-apps/source-deps/README.md#batch-queries) can use
+[structured workers](parallel.md) for independent graph searches over one immutable index. Matching the
+source facts still runs Datalog sequentially; workers run the batch's BFS queries after that matching.
+
 ```text
 ((a b) (a c) (b c) (x x) (x y) (y x) (y y))
 ((a b) (a c))
