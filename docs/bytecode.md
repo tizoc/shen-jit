@@ -143,6 +143,11 @@ plus:
 - `shen-jit.thread`: arity 1, runs a procedure of no arguments in a new thread
   (`src/runtime/thread.c`). The port defines `thread` with it, after sealing ends, so
   that programs may define their own.
+- `shen-jit.worker-scope` (arity 5), `shen-jit.worker-batch` (2), and with no arguments
+  `shen-jit.worker-index`, `shen-jit.worker-live`, `shen-jit.worker-cancelled?` and
+  `shen-jit.worker-shared-view`: worker scopes (`src/runtime/worker.c`), which `lib/parallel.shen`
+  wraps. They call C, with no new instruction. A shared view is an object of its own type laid out as a
+  pointer; byte reads take it on the pointer's slow path, after the test for a pointer, and in memory caches.
 - `shen-jit.foreign`: arity 2, `(shen-jit.foreign Name Desc)` makes Name a C function, as `lib/ffi.shen`
   describes it (`src/runtime/ffi.c`, and [ffi.md](ffi.md)), and returns Name. Calls go through a stub shared by all of them, so
   no instruction is new. `shen-jit.pointer?`, `shen-jit.pointer-kind`, `shen-jit.pointer-address`,
@@ -150,6 +155,8 @@ plus:
   handle the pointers such functions pass around, and `shen-jit.errno`, `shen-jit.c-errno` (arity 0) what
   the last one left. `shen-jit.pointer-sized` (arity 2) states a length, `shen-jit.pointer!` (arity 3) stores an address, and `shen-jit.pointer-read-only` (arity 1) marks one against stores. `shen-jit.pointer-guard` (arity 2), `shen-jit.pointer-owner` (arity 1) and `shen-jit.pointers-dead` (arity 0)
   tell Shen when a pointer has died, and `shen-jit.collect` (arity 0) collects. [ffi.md](ffi.md) has their use.
+- `shen-jit.fixnum?`: arity 1, true exactly for immediate integers, excluding boxed reals even when
+  integral. The value codec uses this representation test; the JIT emits a tag check.
 - `shen-jit.integer?`: arity 1, the kernel's `integer?` as a primitive: true of a fixnum and of a
   real with no fraction.
 - `shen-jit.vector?`: arity 1, the kernel's `vector?` without its

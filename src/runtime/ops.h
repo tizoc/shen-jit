@@ -191,6 +191,7 @@ enum Prim {
     P_ERROR_TO_STRING, P_EVAL_KL, P_GET_TIME, P_OPEN, P_CLOSE, P_READ_BYTE,
     P_WRITE_BYTE, P_CHAR_STREAMP, P_READ_UNIT_STRING, P_WRITE_STRING,
     P_INSTALL, /* port primitive behind eval-kl */
+    P_FIXNUMP, /* shen-jit.fixnum?: an immediate integer */
     P_SYMBOLP, /* shen-jit.symbol?: exactly the symbol objects */
     P_HASH,    /* shen-jit.hash: the hash override */
     P_EXIT,    /* shen-jit.exit: ends the process with a status */
@@ -232,6 +233,7 @@ enum Prim {
     P_POINTER_GUARD, P_POINTER_OWNER, P_POINTERS_DEAD, P_POINTER_READ_ONLY,
     P_COLLECT, /* shen-jit.collect */
     P_WRITE_BYTES, /* shen-jit.write-bytes: a range of a buffer to a stream, at once */
+    P_WORKER_SCOPE, P_WORKER_BATCH, P_WORKER_INDEX, P_WORKER_LIVE, P_WORKER_CANCELLED, P_WORKER_SHARED_VIEW,
     P_COUNT
 };
 #define PRIM_RAISE_COND P_COUNT

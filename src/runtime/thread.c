@@ -26,7 +26,6 @@
 
 enum {
     THREAD_STACK_WORDS = 1 << 13,        /* grows as the main thread's does */
-    C_STACK_BYTES = 8 * 1024 * 1024,     /* C helpers recurse on deep data; on macOS the default is 512 KB */
     C_STACK_MARGIN = 256 * 1024,         /* for what runs past the check on a nested call */
     TICK_NANOSECONDS = 10 * 1000 * 1000
 };
@@ -84,6 +83,11 @@ void thread_note_main_stack(VM *vm)
         bytes = (size_t)limit.rlim_cur;
 #endif
     vm->c_stack_limit = bytes > C_STACK_MARGIN ? c_stack_limit(bytes) : 0;
+}
+
+void thread_note_worker_stack(VM *vm)
+{
+    vm->c_stack_limit = c_stack_limit(C_STACK_BYTES);
 }
 
 Thread *thread_leave(VM *vm)
@@ -252,6 +256,8 @@ static bool first_thread(VM *vm)
 
 V thread_start(VM *vm)
 {
+    if (vm->worker_owner || vm->worker_scope)
+        return sj_raise(vm, "worker: legacy threads cannot run inside a worker scope");
     if (!is_proc(vm->args[0]))
         return sj_raise_value(vm, "thread: ~S is not a function", vm->args[0]);
     if (!vm->threads && !first_thread(vm))

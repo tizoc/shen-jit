@@ -182,7 +182,7 @@ static void print_stats(void)
     /* What stays live, by type, to help find memory growth. */
     static const char *const names[T_LIMIT] = {"pairs", "strings", "bytecode", "symbols", "reals",
                                                "absvectors", "closures", "foreign functions", "code",
-                                               "exceptions", "streams", "pointers"};
+                                               "exceptions", "streams", "pointers", "shared views"};
     size_t count[T_LIMIT] = {0}, words[T_LIMIT] = {0}, total = 0;
     vm_census(stats_vm, count, words);
     for (int t = 0; t < T_LIMIT; t++)

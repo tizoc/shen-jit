@@ -304,6 +304,29 @@ exec resets it, and a child finds the default.
 The first thread has everything compile again on its next call, since loops must then test for a switch, and code compiled before need not have.
 The same goes for the REPL, when it starts catching Ctrl-C.
 
+### Worker scopes
+
+`thread` shares one VM under a lock. A worker scope (`src/runtime/worker.c`, wrapped by `lib/parallel.shen`) runs
+1 to 64 VMs at once, one per joinable OS thread, each loaded from the same saved image with a heap, globals
+and JIT of its own. No lock is held while Shen code, a collection or a compilation runs; a mutex and a condition
+variable hand work over. Each batch copies one byte request into each worker, calls a named function there, and
+copies the byte slices it returns into the host's heap. A worker keeps its reply rooted and does not run again until
+the host has copied it. No value, closure or address crosses heaps. The scope destroys every VM and joins every
+thread before it returns or raises, also when the host's body or a worker raised: an error stops further batches,
+and the jobs already running finish first. Cancellation is cooperative, through `shen-jit.worker-cancelled?`.
+At shutdown the scope mutex serializes native-code release, avoiding contention in SLJIT's process-wide
+executable allocator. Heap destruction remains parallel.
+
+A scope can own a read-only copy of one byte buffer, at most 64 MiB. `shen-jit.worker-shared-view` gives an
+object of its own type, `T_SHARED_BYTES`, laid out as a pointer, which byte reads and copies accept and stores,
+resizing and foreign-pointer operations refuse. The collector moves the object and never looks at the memory.
+When the scope ends, after every worker is gone, the host's view is cleared before the memory is freed, so a view
+that escaped has length 0, and an image clears it too.
+
+A worker refuses what belongs to the process: legacy threads, nested scopes, streams (also those an image kept),
+the REPL's handler, saving an executable, exiting and C API procedures. A host refuses legacy threads and
+process-wide profiling during a scope. Plain foreign functions are trusted to be safe on several threads.
+
 ## Calling C
 
 Foreign functions are procedures entered through one shared stub, so a call needs no new instruction and no code per signature. See

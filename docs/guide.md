@@ -500,6 +500,14 @@ a socket endpoint.
 [Socket I/O endpoints](https://github.com/tizoc/shen-jit/blob/main/docs/io-sockets.md), `lib/io-socket.shen`, put a
 connection behind the I/O library's readers and writers, with deadlines.
 
+### Structured workers
+
+`lib/parallel.shen` runs named entries of a saved image on 1 to 64 OS threads, each with its own
+runtime. A scope always joins before returning. Load `lib/buffer.shen`, then `lib/parallel.shen`.
+Messages are copied; one immutable byte buffer can be shared. The
+[reference](https://github.com/tizoc/shen-jit/blob/main/docs/parallel.md) covers typed read-only access,
+heap configuration and cooperative cancellation. `thread` is unchanged.
+
 ### HTTP
 
 `lib/http-*.shen` are HTTP/1.1 over the I/O library and sockets.
@@ -1042,6 +1050,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-io` | Bounded chunk I/O, binary files and framing, socket endpoints/echo, native lifetimes, typed results and images/GC |
 | `make test-http` | Request/response framing, streaming, persistent connections, shutdown, SQLite example, typing and images/GC |
 | `make test-datalog` | Datalog answers/errors/generated programs against its plain evaluator; Shen/KL dependency analysis and source-fact matching/reach/impact with independent graph oracles |
+| `make test-parallel` | Worker scopes, typed shared reads, copied replies, lifetimes and cleanup after errors |
 | `make test-datalog-swipl` | The same generated programs against SWI-Prolog's tabling, if `swipl` is there |
 | `make test-ffi` | C functions called from Shen and C written for Shen, against `tests/ffi_lib.c`, memory outside the heap, and the SQLite and socket libraries |
 | `make test-curl` | Optional libcurl adapter, independent loopback HTTP/TLS fixtures, downloader, typing, threads and images/GC; needs libcurl development headers, Python 3 and `openssl` |

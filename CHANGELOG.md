@@ -19,9 +19,13 @@ All notable changes to this project are documented in this file. The format is b
 - `(sqlite.with-database Path F)`, which closes the database however F ends.
 - `json.string` and `json.array`, which take a string or an array's values out of a JSON value in typed code.
 - Types for the socket functions whose arguments and results have plain ones, such as `socket.connect`.
+- Worker scopes, `lib/parallel.shen`: a named function of a saved image runs on 1 to 64 OS
+  threads at once, each with a runtime of its own, over copied byte messages and one read-only buffer they share.
+  A scope always joins its workers. `thread` is unchanged.
 
 ### Changed
 
+- Worker scopes avoid allocator contention while releasing compiled code at shutdown; heap cleanup remains parallel.
 - All optional Shen libraries use namespaces, with explicit dependency prefixes and exported operations, types and
   shared support functions. Their qualified API names and data formats stay the same. The kernel pin moves to
   43.6 for namespace interfaces and syntax annotation hooks, using the release's precompiled KLambda. With it,

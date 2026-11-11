@@ -78,13 +78,14 @@ Run what the change can break, and nothing more: CI runs everything on every pus
 | `lib/ffi.shen` | `make test-ffi test-libs` |
 | A library others load: `buffer`, `io`, `io-file`, `grammar`, `json`, `memory`, `socket`, `deadline`, `clock` or `fs` | `make test-libs` (about 30 s) |
 | `datalog`, `http-*`, `process*`, `tree-sitter`, `curl` | `make test-datalog`, `test-http`, `test-process`, `test-tree-sitter`, `test-curl` |
+| `parallel` | `make test-parallel`; add `make test-parallel-stress` for ownership/lifetime changes |
 | `frame`; `cursor`; `mmap`, `handle`, `sqlite` | `make test-io`; `test-buffer`; `test-ffi`, and `test-http` for `sqlite` |
 | An application in `example-apps/` | `test-http` for `sqlite-http`, `test-datalog` for `depends` and `source-deps`, `test-tree-sitter` for `source-facts` |
 | A test, `Makefile`, `tools/` or CI | What the edit touches |
 | Documentation only | Nothing; `make guide` if a rendered page's layout changed, and the examples you changed |
 
 `make test-core` is `test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn
-test-native test-ffi test-overrides test-structs`, and `make test-libs` is `test-buffer test-json test-io test-fs test-process
+test-native test-ffi test-overrides test-structs test-workers`, and `make test-libs` is `test-buffer test-json test-io test-fs test-process test-parallel
 test-tree-sitter test-http test-datalog test-curl test-namespaces`.
 
 Keep each suite fast. A check that needs a collection at every allocation, a long wait or a large input goes in a

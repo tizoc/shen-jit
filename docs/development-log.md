@@ -1301,6 +1301,35 @@ machine on a Ryzen 5 5600X with Ubuntu 20.04, gcc 9.4 and glibc 2.31. A bare rat
   exception, but `vm->trace` was one for all, and a trace is not captured over another: once one thread's error had
   one, every later thread's error showed it. A thread keeps its own now, as it keeps its exception.
 
+### Structured workers (2026-11-08 to 2026-11-10, Apple M3 Max)
+
+Parallel Datalog queries, as fork/join over a relation split in shards, with the whole lookup relation in each.
+8000 facts give 2,208,520 pairs; warm medians of three shuffled rounds.
+
+- **Rejected: processes supervised from Python** (2026-11-08). 393 ms sequentially, 397, 338 and 321 ms with 1, 2
+  and 4 workers: evaluation scaled, but turning the results into Python values took most of the time.
+- **Processes under a Shen parent, over nonblocking pipes** (2026-11-08). 94 ms sequentially, 97, 49 and 28 ms with
+  1, 2 and 4 workers; a cold scope of 4 workers 44 ms against 104 locally. Kept as the baseline, not as code.
+- **A runtime per OS thread** (2026-11-09). 4 workers 28.15 ms, against 93.81 sequentially and 27.44 with 4
+  processes; starting a scope 4.34 ms against 6.01. No clear warm advantage over processes. Making it possible
+  moved the equality depth, the JIT's slow-primitive flag and the list of deleted C roots out of process globals.
+- **One read-only index shared by all workers** (2026-11-09). An 18 MiB graph index and 65536 queries: 4 workers
+  sharing it 3.42 times serial throughput warm and 1.74 times over a whole scope, at a peak of 102 MiB against 174
+  MiB with a private copy each. Small jobs are faster serially. This is what threads give over processes. The view
+  has a type of its own, as a pointer type would let it become writable; a byte read tests for it only after the
+  test for a pointer has missed, so ordinary reads keep their path. Adding the type to `obj_words`'s switch made
+  `=` on trees 1.25 to 1.35 times as slow, by where the compiled comparator's code fell, which the equality change
+  under "Equality" fixed and more.
+- **Single-threaded cost** (2026-11-10, against main's lowered-node walker fix). Three interleaved rounds give
+  a 1.004 geometric mean worker/main time over 98 rows. Numeric and nested-tree equality span 0.961-1.040 and
+  0.980-1.043 across 32/64-byte C function alignment and 0/5/32 unrelated Shen definitions compiled first;
+  independent workloads span 0.974-1.052, excluding startup. Results remain workload and placement dependent.
+- **Supported range:** 1-64 workers. Core/library and normal/stress worker checks pass on macOS arm64,
+  Linux x86-64 and Windows x86-64, with static Linux worker checks, both bootstrap hosts and a full 64-worker
+  scope. Worker, map and codec suites pass ThreadSanitizer and Rosetta; 20,882,371 differential checks find
+  no primitive failures.
+- **Not kept from the experiment:** a barrier, primitives for timing, thread CPU time and counts, which only the
+  benchmarks used, and reading the shared input by index, which the view replaced; 6 primitives remain.
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on
@@ -3463,6 +3492,76 @@ A word that a loop reads before it writes it is carried from one iteration to th
 - **On x86-64, rejected.** That entry left kernels there as they were, and the chain walk's position in the frame. Counting a carried word as 4 or as 16 more uses in each loop that carries it made nothing faster on the Ryzen, and the nonlinear closure 6% slower, 261 to 265 → 277 to 284 ms, `matmul` 12%, 44.3 to 45.4 → 49.9 to 50.4, and at 16 the relaxation 10%, 53.1 → 58.6. With four registers, the chain walk's position still did not get one: the probe's slot took the register of the tuples' limit, and in the numeric programs a temporary or a base lost its own.
 - **On arm64, kept.** There it decides at the margin. Counted as used once more in a loop inside the one that carries it, four rounds alternating on the M3: the dense closure 5.7 to 6.1 → 5.0 to 5.4 ms, same generation 10.6 to 10.9 → 9.5 to 10.1, the call graph 7.2 to 7.6 → 6.7 to 7.1, points-to small 92 to 96 → 85 to 88 (order a) and 121 to 126 → 112 to 116 (order b), points-to large 366 to 372 → 334 to 359 and 464 to 486 → 423 to 452, the sparse closure 4% and the nonlinear closure unchanged; the raw programs within 2%, with the same checks. Bonuses of 4 and 16 uses measured alike. It applies only where `MANY_GPRS` holds, and x86-64 times as before: the nonlinear closure 254 to 259 ms against 254 to 260, `matmul` 44.5 to 44.6 against 44.3, the relaxation 53.0 against 53.0 to 53.2.
 - **With the entry above,** against the commit before both, on the M3, three rounds: the sparse closure 94 to 99 → 79 to 87 ms, the dense closure 6.3 to 6.8 → 5.0 to 5.6, the nonlinear closure 147 to 164 → 132 to 138, same generation 11.0 to 11.4 → 9.3 to 9.9, the skewed join 98 to 105 → 86 to 92, the call graph 7.6 to 8.4 → 6.7 to 7.1, points-to small 107 to 109 → 85 to 89 and 136 to 146 → 112 to 116, points-to large 423 to 439 → 345 to 346 and 555 to 572 → 454 to 458.
+
+### Release worker native code without allocator contention (2026-11-10, Apple M3 Max, before/after on rebased main)
+
+Rebased `workers` onto current `main` before building either side. Shutdown was spending time freeing
+roughly 500 compiled functions per worker. In one instrumented 12-worker join, native-code release
+occupied 1.7–6.7 ms per worker: SLJIT takes its process-wide executable-allocator mutex for each free.
+The scope now keeps its existing mutex through native-code release, then unlocks before destroying
+that VM's heap. This avoids competing on every function free, while heap cleanup stays parallel.
+No lock is added to guest execution, collection or compilation. The runtime change is seven lines.
+
+The same matched evaluation/count/eight-query workflow and complete-cleanup boundaries as above.
+Three interleaved fresh-process repetitions per variant/count; every answer agrees with the graph
+oracle and all original counts match the verified fixtures. Warm work includes the final warmed
+rebuild, all queries, database/answer cleanup and complete runtime/process shutdown. Startup is
+excluded from work. Wall-clock medians in ms; Soufflé was rerun in the same campaign:
+
+| Workload | Threads | Shutdown before → after | Warm work before → after | Soufflé warm work |
+| --- | ---: | ---: | ---: | ---: |
+| Sparse closure | 4 | 7.10 → 6.65 | 34.91 → 34.92 | 181.72 |
+|  | 12 | 12.09 → 8.46 | 26.14 → 21.90 | 149.92 |
+|  | 16 | 14.94 → 11.01 | 30.23 → 24.90 | 160.43 |
+| Dense closure | 4 | 3.70 → 3.01 | 9.55 → 8.73 | 14.07 |
+|  | 12 | 8.85 → 5.45 | 13.88 → 10.23 | 11.50 |
+|  | 16 | 10.97 → 6.39 | 17.32 → 13.09 | 12.94 |
+| Skewed join | 4 | 9.61 → 10.22 | 38.25 → 38.69 | 25.46 |
+|  | 12 | 13.36 → 13.56 | 26.72 → 27.66 | 15.90 |
+|  | 16 | 19.55 → 15.86 | 38.15 → 32.57 | 16.74 |
+
+Startup and first work are separate below. First work includes initial JIT compilation in Shen,
+evaluation/counts/eight queries and complete cleanup in a one-job process. Executable/image builds
+and validation printing are excluded in both engines:
+
+| Workload | Threads | Startup before → after | First work before → after | Soufflé startup | Soufflé first work |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Sparse closure | 4 | 13.59 → 14.18 | 46.24 → 46.45 | 3.79 | 168.73 |
+|  | 12 | 18.35 → 18.85 | 35.57 → 33.59 | 4.45 | 153.18 |
+|  | 16 | 21.88 → 22.18 | 44.45 → 40.00 | 4.72 | 160.85 |
+| Dense closure | 4 | 13.46 → 12.89 | 17.16 → 16.11 | 4.01 | 13.30 |
+|  | 12 | 17.17 → 17.48 | 24.18 → 22.74 | 4.03 | 10.91 |
+|  | 16 | 20.90 → 20.03 | 31.98 → 28.83 | 3.99 | 12.00 |
+| Skewed join | 4 | 18.67 → 19.45 | 52.70 → 51.71 | 5.35 | 27.33 |
+|  | 12 | 23.47 → 23.45 | 43.22 → 40.60 | 5.03 | 16.38 |
+|  | 16 | 26.35 → 26.28 | 53.75 → 49.27 | 5.40 | 16.55 |
+
+At 12 workers, closure shutdown falls 30–38% and whole warm work 16–26%. The 12-worker skewed join
+has no shutdown gain and warm work is 4% slower in this campaign; at 16 its work improves 15%.
+Heap mappings and buffer release remain significant costs, so this is not a general elimination
+of scope teardown. Moving all destruction to the joining thread was rejected: 12-worker skewed-join
+work regressed 26.72 → 31.07 ms. A smaller virtual reservation saved less than 1 ms in one probe and
+would change heap-growth policy; it was not kept.
+
+`make test-core test-libs` passes, including worker failures/lifetimes, 8,777 Datalog checks and 340
+parallel Datalog checks. A bounded correctness review found no lock-order or lifetime blocker in
+the retained change. Temporary instrumentation and all benchmark artifacts remain under ignored
+`build/`; no allocator, heap-policy or API redesign is included.
+
+### Close worker review gaps (2026-11-10, Apple M3 Max)
+
+Runtime cleanup removes the duplicate isolation flag, shares the C stack-size constant and drops a
+result root across allocation-free shutdown. Whole-file reads remain self-contained and allowed;
+stream creation is refused. Cancellation polling reads atomic flags rather than taking the scope
+mutex for every mapped job; all flag writes are atomic. Small-job measurements keep the surrounding
+value library identical on both sides: three alternating fresh processes, 100 warmed batches of
+1,024 identity jobs, startup and scope teardown outside the timer. Median ms per complete batch:
+
+| Workers | Mutex polling | Atomic polling |
+| --- | ---: | ---: |
+| 4 | 0.113 | 0.100 |
+| 12 | 0.333 | 0.247 |
+| 16 | 0.415 | 0.320 |
 
 ## Benchmark results
 

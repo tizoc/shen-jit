@@ -61,6 +61,7 @@ states which fields hold values:
 | Exception | Message string, and a value that goes before it, or none. An error raised from C keeps the offending value apart; `error-to-string` builds the full message the first time it is asked. |
 | Stream | Kind, direction, open flag; raw OS handle. |
 | Pointer | Kind and what keeps it alive; raw address and length. Its header says whether it is read only. |
+| Shared view | A worker scope's read-only input: raw address and length, cleared when the scope ends and in an image. Equal only to itself; prints as `#<shared-bytes>`. |
 
 There is no partial-application object: KLambda named calls are saturated (see
 section 9), so only closures and foreign functions are ever applied.

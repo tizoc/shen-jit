@@ -79,6 +79,9 @@ A system function cannot be redefined this way, and a library must be named with
 
 `=` compares kind, address and whether it is read only, and a pointer prints as `#<pointer sqlite3 0x...>`. One saved in an image loads dead.
 
+A worker scope's shared view (`lib/parallel.shen`) is not a pointer: byte reads and copies take it, while stores,
+`pointer-address`, `pointer-sized` and passing it to C refuse it.
+
 **Memory outside the heap** is a pointer with a length. Pointers come from C with none, which refuses any read. `shen-jit.pointer-sized` states one, and then
 what works on a byte buffer works on the pointer, checked against that length: `shen-jit.u8` to `u32`, `s32`, `s64`, `f32`, `f64`, their stores, `bytes-length`,
 `copy-bytes`, `bytes->string`, `bytes->pointer` and `pointer!` ([bytecode.md](bytecode.md), "Byte buffers and bit operations").
@@ -210,6 +213,9 @@ Handlers, C roots, the native stack bound and error codes are per thread, swappe
 
 A root that outlives a call is four words that never move: its table, its value, a link and the VM that made it. `shen_root_delete` takes no `shen_vm`, so the wrapper finds the table in the root itself. It pushes the root on its VM's lock-free list, which that VM drains at the next
 `shen_root_new`, collection or its end. The link is apart from the value because a collection may be writing the value while another thread deletes it.
+
+A worker's runtime refuses C API procedures and callbacks. It may call plain foreign functions, which must then be
+safe to call from several threads at once. Loading a library takes a lock around the cache of those loaded.
 
 **A later collector.** C reads through calls, allocates through calls, and writes only through `shen_vector_set` and `shen_root_set`, which is where a write barrier would go, and holds nothing across an allocation except in roots. The header names no tag, header bit or layout but
 the fixnum encoding and a few constants. The one assumption left is that the heap does not move while a thread holds the lock and makes no API call, which `shen_bytes_data` and `shen_string_bytes` need and any stop-the-world collector gives.

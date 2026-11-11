@@ -387,6 +387,7 @@ may use as values, as (fn shen-jit.u8)."
       (shen.set-lambda-form-entry (cons F (shen-jit.absvector3 shen-jit.lazy-form N 0)))))
 
 (defun shen-jit.register-primitives ()
+  (do (shen-jit.primitive shen-jit.fixnum? 1)
   (do (shen-jit.primitive shen-jit.tagged? 2)
     (do (shen-jit.primitive shen-jit.bytes 1)
     (do (shen-jit.primitive shen-jit.bytes? 1)
@@ -444,7 +445,13 @@ may use as values, as (fn shen-jit.u8)."
     (do (shen-jit.primitive shen-jit.pointers-dead 0)
     (do (shen-jit.primitive shen-jit.pointer-read-only 1)
     (do (shen-jit.primitive shen-jit.collect 0)
-    (do (shen-jit.primitive shen-jit.write-bytes 4) shen.skip)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+    (do (shen-jit.primitive shen-jit.write-bytes 4)
+    (do (shen-jit.primitive shen-jit.worker-scope 5)
+    (do (shen-jit.primitive shen-jit.worker-batch 2)
+    (do (shen-jit.primitive shen-jit.worker-index 0)
+    (do (shen-jit.primitive shen-jit.worker-live 0)
+    (do (shen-jit.primitive shen-jit.worker-cancelled? 0)
+    (do (shen-jit.primitive shen-jit.worker-shared-view 0) shen.skip))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
 
 "Cleanup, as a library that holds something outside the heap needs it.
 (shen-jit.finally Body Cleanup) thaws Body, then Cleanup however Body ended,
@@ -495,6 +502,7 @@ ended, since programs may define their own thread."
                             (cons shen-jit.finally (cons 2 (cons shen-jit.on-error (cons 2 ())))))))))))))))))))))))))))))))))))))))))
       (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.finally))
       (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.on-error))
+      (do (declare shen-jit.fixnum? (cons A (cons --> (cons boolean ()))))
       (do (declare shen-jit.finally (cons (cons lazy (cons A ()))
                                       (cons --> (cons (cons (cons lazy (cons B ())) (cons --> (cons A ()))) ()))))
       (do (declare shen-jit.on-error (cons (cons lazy (cons A ()))
@@ -504,7 +512,7 @@ ended, since programs may define their own thread."
           (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.exit))
               (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.code))
                   (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.save-executable))
-                      (set shen-jit.defined ())))))))))))))))
+                      (set shen-jit.defined ()))))))))))))))))
 
 "Definitions are factorised as they are evaluated, as Shen/Scheme's compiler
 does: the kernel's shen.factor binds each selector once and shares the tests

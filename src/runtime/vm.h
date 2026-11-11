@@ -20,7 +20,7 @@ typedef struct {
 
 /* Roots C keeps beyond a call (ffi.c), where they never move: what include/shen.h calls a
    shen_root_box, whose first field is api. next links the free ones. */
-enum { FOREIGN_ROOT_CHUNK = 256 };
+enum { FOREIGN_ROOT_CHUNK = 256, C_STACK_BYTES = 8 * 1024 * 1024 };
 
 typedef struct ForeignRoot {
     const struct shen_api *api;
@@ -183,6 +183,10 @@ typedef struct VM {
     void *compile_stub;
     void *foreign_stub;
     struct Jit *jit;
+
+    /* Worker scopes (src/runtime/worker.c). Ordinary emitted code never reads these. */
+    struct WorkerScope *worker_scope; /* the host's open scope */
+    struct Worker *worker_owner;      /* the worker this VM runs, on its own OS thread */
 } VM;
 
 enum { INTERRUPT = 1, PREEMPT = 2 }; /* vm->interrupted */
@@ -227,6 +231,7 @@ void thread_forget_others(VM *vm);
 bool thread_is_only(const VM *vm);
 void thread_free_all(VM *vm);
 void thread_note_main_stack(VM *vm);
+void thread_note_worker_stack(VM *vm);
 void vm_destroy(VM *vm);
 V *ra_at(RootArray *ra, size_t i);
 bool ra_push(RootArray *ra, V v, size_t *index);
@@ -322,11 +327,19 @@ static inline bool memory_of(V v, char **base, size_t *length)
         *length = (size_t)ptr(v)[POINTER_LENGTH];
         return true;
     }
+    if (obj_type(v) == T_SHARED_BYTES) {
+        *base = ptr(v)[POINTER_ADDRESS] ? (char *)(uintptr_t)ptr(v)[POINTER_ADDRESS] : (char *)"";
+        *length = (size_t)ptr(v)[POINTER_LENGTH];
+        return true;
+    }
     return false;
 }
 
-/* Whether stores to v are refused: a pointer marked so, by the size in its header. */
-static inline bool is_read_only(V v) { return obj_type(v) == T_POINTER && hdr_size(ptr(v)[0]); }
+/* Whether stores to v are refused: a shared view, or a pointer marked so, by the size in its header. */
+static inline bool is_read_only(V v)
+{
+    return obj_type(v) == T_SHARED_BYTES || (obj_type(v) == T_POINTER && hdr_size(ptr(v)[0]));
+}
 
 static inline double real_value(V r)
 {

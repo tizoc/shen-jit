@@ -13,7 +13,7 @@
 
 \\ The runtime's own primitives that are not yet values.
 (map (/. P (if (= (language) "Scheme") skip (eval-kl [shen-jit.primitive (hd P) (hd (tl P))])))
-     [[shen-jit.integer? 1] [shen-jit.symbol? 1] [shen-jit.vector? 1] [shen-jit.pvar 1] [shen-jit.pvar? 1] [shen-jit.pvar-offset 1]
+     [[shen-jit.fixnum? 1] [shen-jit.integer? 1] [shen-jit.symbol? 1] [shen-jit.vector? 1] [shen-jit.pvar 1] [shen-jit.pvar? 1] [shen-jit.pvar-offset 1]
       [shen-jit.hash 2] [shen-jit.filled-vector 2] [shen-jit.tagged? 2] [shen-jit.same? 2] [shen-jit.newpv 2] [shen-jit.gc 2] [shen-jit.append 2]
       [shen-jit.decimal 2] [shen-jit.deref 3]
       [shen-jit.pointer-kill 1] [shen-jit.pointer-owner 1] [shen-jit.pointer-kind 1] [shen-jit.pointer-address 1]
@@ -222,7 +222,7 @@
   5 -> [a b c d e])
 
 (define d.boolean-prims
-  -> [< > <= >= = number? cons? string? absvector? shen-jit.symbol? shen-jit.integer? shen-jit.vector?
+  -> [< > <= >= = number? cons? string? absvector? shen-jit.symbol? shen-jit.fixnum? shen-jit.integer? shen-jit.vector?
       shen-jit.bytes? shen-jit.pvar? shen-jit.pointer? shen-jit.same? shen-jit.tagged?])
 
 (define d.boolean?
@@ -790,7 +790,7 @@
 
 (define d.prims
   -> [[1 number? cons? string? absvector? hd tl tlstr str n->string string->n intern absvector value error-to-string
-         shen-jit.symbol? shen-jit.integer? shen-jit.vector? shen-jit.bytes? shen-jit.bytes shen-jit.bytes-length
+         shen-jit.symbol? shen-jit.fixnum? shen-jit.integer? shen-jit.vector? shen-jit.bytes? shen-jit.bytes shen-jit.bytes-length
          shen-jit.string->bytes shen-jit.bit-not shen-jit.bswap32 shen-jit.popcount shen-jit.clz shen-jit.ctz
          shen-jit.pvar shen-jit.pvar? shen-jit.pvar-offset shen-jit.pointer? simple-error
          shen-jit.pointer-kind shen-jit.pointer-address shen-jit.pointer-kill shen-jit.pointer-owner shen-jit.pointer-read-only]

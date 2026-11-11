@@ -870,7 +870,7 @@ static bool virtual_handler(const uint32_t *w, size_t i, size_t n, const size_t 
         case OP_PRIM:
             switch (p[2]) {
             case P_HD: case P_TL: case P_GET_ADDRESS: case P_SET_ADDRESS: case P_VALUE:
-            case P_SET: case P_SIMPLE_ERROR: case P_EQ: case P_CONSP: case P_SYMBOLP:
+            case P_SET: case P_SIMPLE_ERROR: case P_EQ: case P_CONSP: case P_FIXNUMP: case P_SYMBOLP:
             case P_ABSVECTORP: case P_STRINGP: case P_NUMBERP: case P_TAGGEDP: case P_VECTORP:
             case P_PVAR: case P_PVARP: case P_PVAR_OFFSET: case P_SAMEP:
                 break;
@@ -1137,11 +1137,13 @@ static void emit_memory_caches(Emit *e)
         sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));
         struct sljit_jump *bytes = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(T_BYTES << 3 | TAG_HEADER));
         struct sljit_jump *pointer = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(T_POINTER << 3 | TAG_HEADER));
+        struct sljit_jump *shared = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(T_SHARED_BYTES << 3 | TAG_HEADER));
         sljit_emit_op1(c, SLJIT_MOV, R1, IMM(0));
         sljit_emit_op1(c, SLJIT_MOV, R3, IMM(0));
         sljit_emit_op1(c, SLJIT_MOV, R4, IMM(0));
         struct sljit_jump *other = sljit_emit_jump(c, SLJIT_JUMP);
         sljit_set_label(pointer, sljit_emit_label(c));
+        sljit_set_label(shared, sljit_emit_label(c));
         sljit_emit_op1(c, SLJIT_MOV, R3, SLJIT_MEM1(SLJIT_R1), POINTER_LENGTH * WORD - TAG_OBJECT);
         sljit_emit_op1(c, SLJIT_MOV, R4, R3);
         struct sljit_jump *writable = sljit_emit_cmp(c, SLJIT_EQUAL, R2, IMM(T_POINTER << 3 | TAG_HEADER));
@@ -1884,7 +1886,7 @@ typedef struct {
 
 static bool type_test(uint32_t prim)
 {
-    return prim == P_CONSP || prim == P_SYMBOLP || prim == P_ABSVECTORP || prim == P_STRINGP ||
+    return prim == P_FIXNUMP || prim == P_CONSP || prim == P_SYMBOLP || prim == P_ABSVECTORP || prim == P_STRINGP ||
            prim == P_NUMBERP || prim == P_TAGGEDP || prim == P_PVARP || prim == P_SAMEP;
 }
 
@@ -1897,6 +1899,11 @@ static Test emit_type_test(Emit *e, uint32_t prim, const uint32_t *arg)
         return t;
     }
     sljit_s32 r = operand_reg(e, arg[0]);
+    if (prim == P_FIXNUMP) {
+        sljit_emit_op2(c, SLJIT_AND, R1, r, 0, IMM(3));
+        t.no[0] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(0));
+        return t;
+    }
     if (prim == P_PVARP) {
         sljit_emit_op2(c, SLJIT_AND, R1, r, 0, IMM(0xFF));
         t.no[0] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(PVAR_TAG));
@@ -2322,6 +2329,7 @@ static void emit_prim(Emit *e, const uint32_t *p)
         break;
     }
     case P_CONSP:
+    case P_FIXNUMP:
     case P_SYMBOLP:
     case P_ABSVECTORP:
     case P_STRINGP:
@@ -3195,16 +3203,28 @@ static void emit_slow_paths(Emit *e)
             if (s->from[j])
                 sljit_set_label(s->from[j], here);
         switch (s->kind) {
-        case SLOW_POINTER:
+        case SLOW_POINTER: {
             /* Not a byte buffer, with its header in R2 and that's low byte in R3. A pointer goes
                back to the byte primitive with its length and base, and the rest to raise. A store
                tests the whole header, which a read-only pointer's differs in. */
-            sljit_set_label(sljit_emit_cmp(c, SLJIT_NOT_EQUAL, s->store ? SLJIT_R2 : SLJIT_R3, 0,
-                                           IMM(T_POINTER << 3 | TAG_HEADER)), s->prim->start);
+            struct sljit_jump *other = sljit_emit_cmp(c, SLJIT_NOT_EQUAL,
+                s->store ? SLJIT_R2 : SLJIT_R3, 0, IMM(T_POINTER << 3 | TAG_HEADER));
+            if (s->store)
+                sljit_set_label(other, s->prim->start);
+            struct sljit_label *read = sljit_emit_label(c);
             sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), POINTER_LENGTH * (sljit_sw)sizeof(V) - TAG_OBJECT);
             sljit_emit_op1(c, SLJIT_MOV, R0, SLJIT_MEM1(SLJIT_R0), POINTER_ADDRESS * (sljit_sw)sizeof(V) - TAG_OBJECT);
             go_back(e, s);
+            if (!s->store) {
+                /* Ordinary pointers keep their old path. Check scoped views
+                   only after that test misses. */
+                sljit_set_label(other, sljit_emit_label(c));
+                sljit_set_label(sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3,
+                    IMM(T_SHARED_BYTES << 3 | TAG_HEADER)), s->prim->start);
+                sljit_set_label(sljit_emit_jump(c, SLJIT_JUMP), read);
+            }
             break;
+        }
         case SLOW_PRIM: {
             const uint32_t *p = s->insn;
             if (s->catch_label != NONE) {

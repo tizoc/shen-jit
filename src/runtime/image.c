@@ -95,6 +95,9 @@ static void clear_raw(VM *vm, uint64_t *o)
         o[POINTER_ADDRESS] = 0;
         o[POINTER_LENGTH] = 0;
         break;
+    case T_SHARED_BYTES:
+        o[POINTER_ADDRESS] = o[POINTER_LENGTH] = 0;
+        break;
     case T_CODE: o[CODE_NATIVE] = 0; break;
     case T_STREAM:
         /* File streams always load closed, so write them closed. */
@@ -116,6 +119,9 @@ static void restore_raw(VM *vm, uint64_t *o)
         o[CODE_NATIVE] = 0;
         if (o[CODE_FRAME] > vm->max_frame)
             vm->max_frame = o[CODE_FRAME];
+        break;
+    case T_SHARED_BYTES:
+        o[POINTER_ADDRESS] = o[POINTER_LENGTH] = 0;
         break;
     case T_STREAM: {
         uint64_t kind = o[STREAM_FLAGS] & STREAM_KIND_MASK;

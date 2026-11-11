@@ -6,6 +6,7 @@
 #include "ops.h"
 #include "reader.h"
 #include "vm.h"
+#include "worker.h"
 
 #include <errno.h>
 #include <math.h>
@@ -44,6 +45,7 @@ const Primitive primitive_table[] = {
     {"char-stream?", 1, NULL}, {"read-unit-string", 1, NULL},
     {"write-string", 2, NULL},
     {"shen-jit.install", 1, NULL},
+    {"shen-jit.fixnum?", 1, NULL},
     {"shen-jit.symbol?", 1, NULL},
     {"shen-jit.hash", 2, NULL},
     {"shen-jit.exit", 1, NULL},
@@ -127,6 +129,12 @@ const Primitive primitive_table[] = {
     {"shen-jit.pointer-read-only", 1, NULL},
     {"shen-jit.collect", 0, NULL},
     {"shen-jit.write-bytes", 4, NULL},
+    {"shen-jit.worker-scope", 5, NULL},
+    {"shen-jit.worker-batch", 2, NULL},
+    {"shen-jit.worker-index", 0, NULL},
+    {"shen-jit.worker-live", 0, NULL},
+    {"shen-jit.worker-cancelled?", 0, NULL},
+    {"shen-jit.worker-shared-view", 0, NULL},
 };
 
 const size_t primitive_count = sizeof primitive_table / sizeof primitive_table[0];
@@ -770,6 +778,7 @@ static void show(VM *vm, Show *s, V v)
         put_text(s, v == V_TRUE ? "true" : v == V_FALSE ? "false" : v == V_NIL ? "[]"
                     : is_proc(v) ? "#<procedure>" : is_type(v, T_STREAM) ? "#<stream>"
                     : is_type(v, T_BYTES) ? "#<bytes>"
+                    : is_type(v, T_SHARED_BYTES) ? "#<shared-bytes>"
                     : is_type(v, T_EXCEPTION) ? "#<exception>" : "#<value>");
     }
 }
@@ -855,6 +864,8 @@ static V to_string(VM *vm, V v)
         text = "#<stream>";
     else if (is_type(v, T_BYTES))
         text = "#<bytes>";
+    else if (is_type(v, T_SHARED_BYTES))
+        text = "#<shared-bytes>";
     else if (is_type(v, T_EXCEPTION))
         text = "#<exception>";
     else if (is_type(v, T_POINTER))
@@ -867,8 +878,12 @@ static V to_string(VM *vm, V v)
 
 /* Streams (docs/semantics.md, section 12). */
 
-static FILE *stream_file(V s, bool output)
+static FILE *stream_file(VM *vm, V s, bool output)
 {
+    /* An image can retain aliases to its original standard streams, even
+       after sj_init_host replaces the three standard-stream globals. */
+    if (vm->worker_owner)
+        return NULL;
     if (!is_type(s, T_STREAM))
         return NULL;
     uint64_t flags = ptr(s)[STREAM_FLAGS];
@@ -915,6 +930,8 @@ static FILE *open_path(VM *vm, const char *mode)
    is written beside Path and renamed, so a binary can replace itself. */
 static V save_executable(VM *vm)
 {
+    if (vm->worker_owner || vm->worker_scope)
+        return sj_raise(vm, "worker: saving an executable is a host-only operation");
     if (!thread_is_only(vm))
         return sj_raise(vm, "save-executable: other threads are running");
     V path = vm->args[0], entry = vm->args[1];
@@ -966,6 +983,8 @@ static V save_executable(VM *vm)
 
 static V open_file(VM *vm)
 {
+    if (vm->worker_owner)
+        return sj_raise(vm, "worker: a worker cannot open streams");
     V out = intern_cstr(vm, "out"), in = intern_cstr(vm, "in");
     V path = vm->args[0], direction = vm->args[1];
     if (out == V_CLEARED || in == V_CLEARED)
@@ -1094,6 +1113,8 @@ static V append(VM *vm)
 
 static V close_stream(VM *vm, V s)
 {
+    if (vm->worker_owner)
+        return sj_raise(vm, "worker: a worker cannot close streams");
     if (!is_type(s, T_STREAM))
         return sj_raise_value(vm, "close: ~S is not a stream", s);
     uint64_t *o = ptr(s);
@@ -1189,7 +1210,7 @@ static V read_stdin(VM *vm)
 
 static V read_byte(VM *vm, V s)
 {
-    FILE *f = stream_file(s, false);
+    FILE *f = stream_file(vm, s, false);
     if (!f)
         return sj_raise_value(vm, "read-byte: ~S is not an open input stream", s);
     if (f == stdin)
@@ -1239,7 +1260,7 @@ static void catch_interrupts(VM *vm)
 
 static V write_byte(VM *vm, V b, V s)
 {
-    FILE *f = stream_file(s, true);
+    FILE *f = stream_file(vm, s, true);
     if (!f)
         return sj_raise_value(vm, "write-byte: ~S is not an open output stream", s);
     if (!is_fix(b) || fixval(b) < 0 || fixval(b) > 255)
@@ -1280,7 +1301,8 @@ bool sj_init_host(VM *vm)
                {"*sterror*", STREAM_STDERR | STREAM_OUTPUT | STREAM_OPEN}};
     FILE *files[] = {stdin, stdout, stderr};
     for (size_t i = 0; i < 3; i++) {
-        V s = make_stream(vm, std[i].flags, files[i]);
+        V s = make_stream(vm, vm->worker_owner ? 0 : std[i].flags,
+                         vm->worker_owner ? NULL : files[i]);
         if (s == V_CLEARED)
             return false;
         vm_root(vm, &s); /* interning may collect */
@@ -1530,7 +1552,7 @@ static V write_bytes(VM *vm)
         return sj_raise_value(vm, "bytes: ~S is not a byte buffer", b);
     if (!bytes_range(length, i, n))
         return sj_raise_value(vm, "shen-jit.write-bytes: ~S is not a valid range", i);
-    FILE *f = stream_file(vm->args[3], true);
+    FILE *f = stream_file(vm, vm->args[3], true);
     if (!f)
         return sj_raise_value(vm, "shen-jit.write-bytes: ~S is not an open output stream", vm->args[3]);
     if (fixval(n) > 0 && fwrite(base + fixval(i), 1, (size_t)fixval(n), f) != (size_t)fixval(n))
@@ -1721,6 +1743,7 @@ V sj_primitive(VM *vm, size_t index)
     case P_READ_UNIT_STRING:
     case P_WRITE_STRING: return sj_raise(vm, "character streams are not supported");
     case P_INSTALL: return sj_install(vm, a);
+    case P_FIXNUMP: return boolean(is_fix(a));
     case P_SYMBOLP: return boolean(is_symbol(a));
     case P_HASH: return hash(vm, a, b);
     case P_SYMBOL_KIND: return symbol_kind(a);
@@ -1748,6 +1771,8 @@ V sj_primitive(VM *vm, size_t index)
                        number(ptr(a)[1]) >= 0);
     case P_QUIETP: return boolean(quiet_handler(vm));
     case P_MARK_TOPLEVEL:
+        if (vm->worker_owner)
+            return sj_raise(vm, "worker: a worker cannot install a REPL interrupt handler");
         vm->trace_floor = (size_t)(vm->fp - vm->stack);
         vm->trace = V_NIL;
         vm->repl_handlers = vm->nhandlers;
@@ -1793,6 +1818,8 @@ V sj_primitive(VM *vm, size_t index)
             return made(vm, v);
         }
     case P_EXIT:
+        if (vm->worker_owner || vm->worker_scope)
+            return sj_raise(vm, "worker: exit is a host-only operation");
         if (!is_fix(a) || fixval(a) < 0 || fixval(a) > 255)
             return sj_raise_value(vm, "~S is not an exit status", a);
         if (vm->threads)
@@ -1840,6 +1867,12 @@ V sj_primitive(VM *vm, size_t index)
         ptr(a)[2] = fix(fixval(ptr(a)[2]) - 1);
         return V_FALSE;
     case P_THREAD: return thread_start(vm);
+    case P_WORKER_SCOPE: return worker_scope(vm);
+    case P_WORKER_BATCH: return worker_batch(vm);
+    case P_WORKER_INDEX: return worker_index(vm);
+    case P_WORKER_LIVE: return worker_live(vm);
+    case P_WORKER_CANCELLED: return worker_cancelled(vm);
+    case P_WORKER_SHARED_VIEW: return worker_shared_view(vm);
     case P_FOREIGN: case P_POINTERP: case P_POINTER_KIND: case P_POINTER_ADDRESS: case P_BYTES_POINTER:
     case P_POINTER_STRING: case P_POINTER_BYTES: case P_ERRNO: case P_C_ERRNO: case P_POINTER_KILL:
     case P_POINTER_SIZED: case P_SET_POINTER: case P_POINTER_GUARD: case P_POINTER_OWNER: case P_POINTERS_DEAD:

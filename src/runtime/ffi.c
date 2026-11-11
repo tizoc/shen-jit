@@ -377,6 +377,8 @@ V h_foreign(VM *vm)
         return V_CLEARED;
     int64_t flags = fixval(desc[DESC_FLAGS]);
     unsigned result = (unsigned)fixval(desc[DESC_RESULT]), fixed = (unsigned)(flags >> FLAG_FIXED_SHIFT);
+    if (result == F_LIMIT && vm->worker_owner)
+        return sj_raise(vm, "worker: C API procedures and callbacks are not supported");
     if (result == F_LIMIT)
         return call_procedure(vm, function, n);
     Converted c;

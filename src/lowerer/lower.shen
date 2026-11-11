@@ -321,11 +321,13 @@
 \\ dictionary, made the first time it is needed.
 (define shen-jit.lower.fixed-names
   -> [[0 [shen-jit.quiet? shen-jit.mark-toplevel shen-jit.backtrace shen-jit.errno shen-jit.c-errno
-       shen-jit.pointers-dead shen-jit.collect]]
+       shen-jit.pointers-dead shen-jit.collect
+       shen-jit.worker-index shen-jit.worker-live shen-jit.worker-cancelled?
+       shen-jit.worker-shared-view]]
    [1 [number? hd tl cons? tlstr str string? n->string string->n
        intern absvector absvector? value simple-error error-to-string
        get-time close read-byte char-stream? read-unit-string
-       shen-jit.install shen-jit.symbol? shen-jit.exit
+       shen-jit.install shen-jit.fixnum? shen-jit.symbol? shen-jit.exit
        shen-jit.symbol-kind shen-jit.dict-entries
        shen-jit.sealed? shen-jit.sealing shen-jit.inline-body
        shen-jit.vector? shen-jit.trace-text shen-jit.integer?
@@ -344,13 +346,13 @@
        shen-jit.bit-and shen-jit.bit-or shen-jit.bit-xor
        shen-jit.shift-left shen-jit.shift-right shen-jit.rotate32
        shen-jit.decimal shen-jit.s32 shen-jit.s64 shen-jit.f32 shen-jit.f64
-       shen-jit.pointer-sized shen-jit.pointer-guard]]
+       shen-jit.pointer-sized shen-jit.pointer-guard shen-jit.worker-batch]]
    [3 [address-> shen-jit.dict-put shen-jit.absvector3 shen-jit.deref
        shen-jit.u8! shen-jit.u16! shen-jit.u32! shen-jit.bytes->string
        shen-jit.bytes->pointer shen-jit.pointer->bytes
        shen-jit.s32! shen-jit.s64! shen-jit.f32! shen-jit.f64! shen-jit.pointer!]]
    [4 [shen-jit.write-bytes]]
-   [5 [shen-jit.copy-bytes]]
+   [5 [shen-jit.copy-bytes shen-jit.worker-scope]]
    [fixed [if and or cond let lambda defun freeze type trap-error do thaw eval-kl protect]]])
 
 (define shen-jit.lower.fixed-table
