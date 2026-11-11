@@ -530,6 +530,7 @@ test-overrides: $(BUILD)/shen-jit
 test-datalog: $(BUILD)/shen-jit
 	SHEN_JIT_GC_STRESS=$(GC_STRESS) $(BUILD)/shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/datalog-generate.shen -l tests/datalog.shen < /dev/null | \
 	  grep -a 'FAIL\|uncaught\| checks, ' | awk '{ print } END { exit !/ 0 failed$$/ }'
+	sh tests/datalog-parallel.sh $(SHEN_JIT)
 	sh example-apps/depends/test.sh $(BUILD)/shen-jit $(KERNEL_DIR)/klambda
 	CC="$(CC)" sh example-apps/source-deps/test.sh $(SHEN_JIT)
 

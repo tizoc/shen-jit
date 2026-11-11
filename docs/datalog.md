@@ -1,7 +1,9 @@
 # Datalog
 
 `lib/datalog.shen` evaluates relations, facts and recursive rules bottom up, to a fixed point. It is not in the
-image. It needs `lib/native.shen`, and a macro applies only to files read after it, so load them first:
+image. `datalog.run` evaluates sequentially. Optional `lib/datalog-parallel.shen` adds
+[opt-in parallel evaluation](#opt-in-parallel-evaluation), with automatic detection and sequential fallback.
+It needs `lib/native.shen`, and a macro applies only to files read after it, so load them first:
 
 ```shen
 \\ deps.shen
@@ -221,3 +223,120 @@ shen-jit eval -l lib/native.shen -l lib/datalog.shen -l lib/ffi.shen -l lib/buff
 - **Saving:** a program saved with `--save` runs in the saved image, and one saved as an executable runs on its own:
   [example-apps/depends](https://github.com/tizoc/shen-jit/blob/main/example-apps/depends/README.md) is a dependency analyser
   over Shen and KL sources, built so, which uses most of the above.
+
+## Opt-in parallel evaluation
+
+Load `lib/native.shen`, `lib/datalog.shen`, `lib/buffer.shen`, `lib/parallel.shen`,
+`lib/parallel-map.shen` and `lib/datalog-parallel.shen`, in that order, under `(tc -)`.
+
+| Function | Meaning |
+| --- | --- |
+| `(datalog.parallel.run Name Facts Image Workers)` | Evaluate with a positive worker budget from 1 to 64. Return an ordinary, parent-owned database after joining all workers. |
+| `(datalog.parallel.plan Name)` | A structural plan: `[parallel KeyType DerivedRelations]`, or `[sequential Reason]`. Unknown programs raise. |
+| `(datalog.parallel.with-db Name Facts Image Workers Body)` | Evaluate once and call `Body` with a read-only view. Keep results in workers and reuse them for several queries; always join on exit. |
+| `(datalog.parallel.count View Relation)`, `(datalog.parallel.holds? View Fact)` | Read cardinality or membership without collecting the whole database. |
+| `(datalog.parallel.match View Pattern)`, `(datalog.parallel.tuples View Relation)` | Return owned tuples from the view. Input-only relations are returned once. |
+| `(datalog.parallel.match-many View Patterns)` | Answer a list of patterns in one worker dispatch, returning one tuple list per pattern in the same order. |
+| `(datalog.parallel.materialize View)` | Consume the view and return an ordinary database. Use this as the last operation when full local access or updates are needed. |
+
+Use a view when only counts or selected answers are needed:
+
+```shen
+(datalog.parallel.with-db paths Facts "parallel-paths" 4
+  (/. View [(datalog.parallel.count View path)
+           (datalog.parallel.match View [path 1 [var "Destination"]])]))
+```
+
+The view reuses its workers, evaluated relations and query indexes throughout the callback. Returned
+answers belong to the parent and survive joining. The view closes after the callback, on error, or
+when materialized; subsequent view operations raise. Save the materialized database or returned
+answers, rather than the view. Use `match-many` to amortize dispatch across several queries. It accepts
+up to 4,096 patterns; requests are at most 1 MiB, and replies share the 64 MiB batch budget equally
+among active workers. The per-worker reply budget applies to the whole batch, together with the
+codec's node/depth limits. `match` has the same reply budget for one query. Use separate queries, `tuples` or materialization
+for larger result sets.
+
+The planner recognizes positive programs over scalar columns whose derived relations preserve a common
+first-column key. Every derived body atom must have the head's key as its first term. All derived
+relations must use the same key type, and a head key must be a literal or a variable read from a body
+atom. Workers receive disjoint keys, replicate input-only relations, partition seeded derived facts,
+and run the existing evaluator independently to a fixed point. The caller need not annotate rules or
+partition facts.
+
+Programs outside this subset use `datalog.run`: cross-key recursion, negation, aggregates, records,
+equivalences, keyed relations and computed head keys. A budget of one, fewer than two candidate keys,
+or an input that exceeds the copied-value transport bounds also uses the sequential engine, without
+opening the image. Invalid facts still raise. The budget is an upper bound; fewer workers are used
+when fewer candidate keys exist.
+
+`Image` must be a compatible saved executable containing the six libraries above. It need not contain
+the program definition: the parent supplies the checked rules and facts. The named worker entry runs
+without invoking the executable's main function. A program can use its own executable, as here:
+
+```shen
+\\ parallel-paths.shen
+(defdatalog paths
+  (relation edge [integer integer])
+  (relation path [integer integer])
+  (rule (path X Y) <-- (edge X Y))
+  (rule (path X Z) <-- (path X Y) (edge Y Z)))
+
+(define paths.main
+  -> (let Facts [[edge 1 2] [edge 2 3] [edge 9 10] [edge 10 11]]
+          Db (datalog.parallel.run paths Facts (hd (value *argv*)) 4)
+       (do (set *hush* false) (output "~S~%" (datalog.sorted Db path)))))
+```
+
+```sh
+build/shen-jit eval -q -l lib/native.shen -l lib/datalog.shen -l lib/buffer.shen \
+  -l lib/parallel.shen -l lib/parallel-map.shen -l lib/datalog-parallel.shen \
+  -l parallel-paths.shen -e '(shen-jit.save-executable "parallel-paths" paths.main)'
+./parallel-paths
+```
+
+After return, the database supports the ordinary query, explanation, fact-file and image operations.
+`datalog.add` and `datalog.remove` update it sequentially. Packed tuples are copied back, symbol and
+string IDs are translated to the parent's interner, and normal hash tables and derivation ordering are
+restored. No worker view or runtime must remain alive to use the database. `datalog.stats` reports the
+largest worker round count and the sum of worker plans; these need not equal serial diagnostics.
+
+Detection establishes that partitioning is safe; it does not estimate whether starting workers will
+pay off. Short jobs can be faster sequentially. Each worker starts with a 16 MiB semispace and may grow
+to the runtime's 512 MiB child heap limit; replicated inputs, private indexes and the returned database
+consume additional memory. Shared input uses the value codec's 64 MiB, 262144-node and depth bounds.
+Snapshot decoding reads shared bytes directly; decoded facts and indexes still belong to each worker.
+The heap caps are per worker, not a total RSS budget; 64 workers permit up to 32 GiB of configured
+guest heap, with copying spaces, native allocations and the parent consuming additional memory.
+The high-level Datalog API uses these fixed defaults; choose fewer workers when memory is limited.
+Vocabulary pages normally fit 1 MiB and advance by encoded byte size, rather than just value count.
+A single larger vocabulary value can use its worker's full reply budget; a value exceeding that budget raises.
+Metadata and queries use the same per-worker share of the 64 MiB aggregate reply limit. Missing
+images, worker errors and exhausted resources after dispatch propagate; they are not silently retried
+sequentially. Cancellation is cooperative, and an evaluation may have to finish before a scope can join.
+The default `datalog.run` and the source-deps application retain their sequential behavior.
+
+`make test-datalog` includes parallel results, fallback, explanations, updates, image/GC checks and
+worker failure handling. It needs no external Datalog engine.
+
+## Comparing evaluation
+
+`tests/bench/datalog-workers.py` compares the public API with sequential evaluation and compiled Soufflé.
+It checks every returned tuple before timing, then shuffles fresh-process runs and verifies relation
+sizes in every sample. The public API's clock includes scope creation, image/JIT startup, evaluation,
+packed collection, parent index rebuilding and joining; the database is usable when that clock stops.
+The driver needs a 32-bit OpenMP build of Soufflé and its C++ compiler flags:
+
+```sh
+SOUFFLE_FLAGS='-I/path/to/souffle/include -fopenmp' \
+SOUFFLE_LIBS='-fopenmp' \
+python3 tests/bench/datalog-workers.py --souffle /path/to/souffle/bin/souffle \
+  --counts 4 12 16
+```
+
+Choose counts for the machine's CPUs and memory. Apple's clang instead needs `-Xpreprocessor -fopenmp`,
+libomp's include path, and `-L/path/to/libomp/lib -lomp` for linking. Facts are already in memory.
+Soufflé's C++ compilation and final destruction are outside its evaluation clock; destruction is
+reported separately. There is no startup subtraction. `--engines sequential workers souffle` instead
+isolates resident-worker evaluation with reused scopes and excludes parent result collection; those
+times do not measure `datalog.parallel.run`. Generated programs, complete outputs and individual
+timings stay under `build/`.

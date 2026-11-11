@@ -26,6 +26,12 @@ All notable changes to this project are documented in this file. The format is b
   lists, with results in order, and the example `tools/parallel-map.shen`.
 - The source-deps example answers batches of reach and impact queries, `--batch QUERIES`, sequentially or with
   1 to 64 workers over one shared graph, and offers the same through `parallel.map`.
+- `lib/datalog-parallel.shen`: opt-in Datalog evaluation with an explicit worker budget, automatic detection
+  of key-preserving programs and sequential fallback. Results are ordinary parent-owned databases supporting
+  queries, explanations and subsequent sequential updates.
+  `datalog.parallel.with-db` keeps a read-only database in a reusable scope for counts and queries,
+  with explicit materialization when a normal local database is needed. `datalog.parallel.match-many`
+  answers several queries in one worker dispatch; bound-key queries skip non-owning shards.
 
 ### Changed
 
@@ -52,6 +58,9 @@ All notable changes to this project are documented in this file. The format is b
 
 - The `parallel.value` datatype allowed unchecked conversions to its member types. Its introduction
   rules are now one-way, with checked number, boolean, string, symbol and list accessors.
+- Parallel Datalog materialization could reject a small relation containing long strings because vocabulary
+  pages were bounded only by item count. Pages now follow encoded size, and replies use each worker's
+  share of the batch budget. Unexpected planning/encoding errors propagate instead of selecting serial execution.
 - Printing an I/O endpoint, reader or writer, a framer, an HTTP head or body reader or response, or a child
   process called the library function named by the record's tag, which the writer takes for a printer, and
   raised an error or printed something else.

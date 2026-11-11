@@ -533,7 +533,9 @@ downloads to a file with it.
 [Datalog](https://github.com/tizoc/shen-jit/blob/main/docs/datalog.md): `lib/datalog.shen` evaluates relations, facts
 and recursive rules bottom up, to a fixed point, over symbols, strings, integers and records, with each rule compiled
 through the JIT and its join order chosen from the sizes of the relations as it runs, and answers a query by deriving
-only what bears on it.
+only what bears on it. Optional `lib/datalog-parallel.shen` adds `datalog.parallel.run`: an explicit
+worker budget, automatic detection of programs that partition safely, sequential fallback, and an
+ordinary database returned after the workers join. Short jobs can still be faster sequentially.
 
 #### SQLite
 

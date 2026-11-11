@@ -3507,6 +3507,315 @@ A word that a loop reads before it writes it is carried from one iteration to th
 - **On arm64, kept.** There it decides at the margin. Counted as used once more in a loop inside the one that carries it, four rounds alternating on the M3: the dense closure 5.7 to 6.1 → 5.0 to 5.4 ms, same generation 10.6 to 10.9 → 9.5 to 10.1, the call graph 7.2 to 7.6 → 6.7 to 7.1, points-to small 92 to 96 → 85 to 88 (order a) and 121 to 126 → 112 to 116 (order b), points-to large 366 to 372 → 334 to 359 and 464 to 486 → 423 to 452, the sparse closure 4% and the nonlinear closure unchanged; the raw programs within 2%, with the same checks. Bonuses of 4 and 16 uses measured alike. It applies only where `MANY_GPRS` holds, and x86-64 times as before: the nonlinear closure 254 to 259 ms against 254 to 260, `matmul` 44.5 to 44.6 against 44.3, the relaxation 53.0 against 53.0 to 53.2.
 - **With the entry above,** against the commit before both, on the M3, three rounds: the sparse closure 94 to 99 → 79 to 87 ms, the dense closure 6.3 to 6.8 → 5.0 to 5.6, the nonlinear closure 147 to 164 → 132 to 138, same generation 11.0 to 11.4 → 9.3 to 9.9, the skewed join 98 to 105 → 86 to 92, the call graph 7.6 to 8.4 → 6.7 to 7.1, points-to small 107 to 109 → 85 to 89 and 136 to 146 → 112 to 116, points-to large 423 to 439 → 345 to 346 and 555 to 572 → 454 to 458.
 
+### Key-preserving fixed points over workers (2026-11-10, Apple M3 Max, against sequential evaluation and compiled Soufflé 2.5 with OpenMP)
+
+`tests/bench/datalog-workers.shen` is a bounded prototype over the existing OS-thread workers. It
+checks that every derived body atom has the head's first-column key. Disjoint keys then need no
+communication during evaluation: workers replicate input-only relations, partition seeded derived
+facts, add a key guard to every rule, and each run the existing evaluator to a fixed point. The union
+is the result. Head keys must be input values, propagated keys or literal constants. Unsupported
+programs raise; there is no automatic fallback or change to `datalog.run`, its JIT or collector.
+
+The driver, `tests/bench/datalog-workers.py`, compares the existing sparse closure (3,000 facts,
+1,388,324 derived paths), dense closure (1,500 facts, 88,208 paths), and skewed join (8,000 facts,
+2,208,520 pairs). Soufflé is its release source built with OpenMP and the same 32-bit domain, generated
+with `-j auto`, compiled with clang `-O3`, and run at matching thread counts. Both rebuild from
+in-memory facts, evaluate and read all relation sizes. No output conversion, file reading, AOT C++
+compilation or executable launch is timed. Soufflé's destruction is outside that clock and reported
+separately; Shen includes any GC triggered during evaluation. No startup is subtracted.
+
+Warm medians in ms, five shuffled fresh-process runs with three warm rebuilds per count; at 12 and
+16, another three paired runs with five rebuilds. Sequential controls were interleaved. This Mac has
+12 performance and 4 efficiency cores, so 16 was the upper count. No affinity was set.
+
+| Workload | Engine | 1 | 2 | 4 | 8 | 12 | 16 |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Sparse closure | Workers | 83.42 | 44.28 | 23.05 | 12.27 | 8.07 | 9.62 |
+| | Soufflé | 381.62 | 236.65 | 163.79 | 149.70 | 146.56 | 153.76 |
+| Dense closure | Workers | 5.22 | 3.00 | 1.74 | 1.12 | 1.00 | 1.21 |
+| | Soufflé | 33.86 | 19.52 | 12.31 | 10.01 | 9.20 | 10.07 |
+| Skewed join | Workers | 87.98 | 48.16 | 25.52 | 13.62 | 9.49 | 10.45 |
+| | Soufflé | 92.02 | 38.01 | 20.02 | 11.59 | 9.01 | 8.64 |
+
+Sequential Shen medians were 76.77, 5.16 and 89.70 ms: 12 workers give 9.5, 5.2 and 9.5 times their
+throughput. Sixteen is slower on all three. Twelve-worker warm ranges were 7.81–9.71, 0.92–1.40 and
+7.13–11.93 ms; the skewed join's small difference from Soufflé is not a win. Soufflé's later teardown
+costs about 4–6 ms for the sparse closure and skewed join, and 0.1–0.3 ms for the dense closure.
+
+The first reply includes snapshot encoding, scope creation, image loading, program specialization
+and JIT compilation, before the final scope join. Medians in ms:
+
+| Workload | Sequential first | 4 workers | 12 workers | 16 workers | Soufflé 12 first |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Sparse closure | 84.66 | 34.77 | 28.58 | 35.56 | 148.40 |
+| Dense closure | 9.29 | 13.29 | 21.86 | 27.48 | 9.58 |
+| Skewed join | 100.25 | 38.73 | 31.28 | 38.37 | 9.55 |
+
+The experiment supports parallel Datalog without a shared mutable heap. It beats Soufflé on these
+closures, but does not beat it generally: the skewed join keeps a small warm lead, and worker startup
+loses for short one-off runs. Warm runs reuse an image, input and compiled kernels, recomputing the
+same fixed point, rather than accepting changing datasets. Only positive scalar programs with one
+common key type qualify. Nonlinear rules that change keys, negation, aggregates, records, equivalence
+and keyed relations are rejected; there is no general parallel join scheduler. Input encoding also
+inherits the value codec's 262,144-node/64-MiB bounds. Replicated inputs and private indexes consume
+memory per worker. This stays a benchmark prototype pending an application that fits its restrictions.
+
+Checked: every output tuple of all three full workloads agrees with Soufflé at four workers;
+43 small checks against the naive evaluator include recursion, seeded derived facts, duplicates,
+empty inputs/partitions, signed integers, symbol/string keys, constants, unsupported rules and 16
+workers. Every timed evaluation checks all relation cardinalities. Individual timings, generated
+C++ and full result files remain ignored under `build/`.
+
+### Release the previous fixed point before rebuilding (2026-11-10, Apple M3 Max, against the worker prototype above)
+
+The worker kept its last database in `dwp.state` throughout the next `datalog.run`. Rebuilding now
+tail-calls a helper with only the schema and facts, then clears the stored database before evaluating.
+No local state record keeps the old database reachable. The completed replacement stays available
+for tuple retrieval. The serial evaluator and worker runtime are unchanged.
+
+Three alternating before/after runs, five warm rebuilds each, using the same rules, facts, worker
+counts and heap limits. Warm medians are ms; peak RSS is the whole process, parent and all workers,
+in MiB, the median of three process peaks from macOS `time -l`:
+
+| Workload | Workers | Warm before → after | Peak RSS before → after |
+| --- | ---: | ---: | ---: |
+| Sparse closure | 1 | 81.24 → 78.89 | 430.1 → 252.6 |
+| | 12 | 8.21 → 7.99 | 580.1 → 580.4 |
+| Dense closure | 1 | 5.05 → 5.10 | 52.8 → 52.4 |
+| | 12 | 0.98 → 0.98 | 144.5 → 145.3 |
+| Skewed join | 1 | 86.76 → 81.21 | 527.5 → 415.2 |
+| | 12 | 9.52 → 9.56 | 906.1 → 901.6 |
+
+The useful change is lower peak memory for the larger single-worker databases; at 12 workers the
+effect is small. All 43 Datalog checks pass, including repeated evaluation, and all measured relation
+sizes agree with the earlier Soufflé results. The guide now starts with `parallel.with-map` for
+ordinary jobs and documents 16 MiB initial / 64 MiB maximum per child as a starting configuration.
+The map example uses it and returns the same sequential and parallel results. The guide renders.
+Raw measurements remain ignored under `build/`.
+
+### Opt-in parallel evaluation returning a database (2026-11-10, Apple M3 Max, against sequential evaluation and compiled 32-bit OpenMP Soufflé 2.5)
+
+`lib/datalog-parallel.shen` promotes the checked partition into `datalog.parallel.run Name Facts
+Image Workers`. Detection selects the key-preserving scalar subset automatically. Unsupported
+programs, a one-worker budget, fewer than two candidate keys and inputs outside the value transport
+bounds use `datalog.run` before starting workers. `datalog.parallel.plan` explains structural
+eligibility. Worker/image failures propagate after dispatch, with no silent serial retry.
+
+The result is an ordinary parent-owned database. Tuples return in packed chunks; vocabulary maps
+translate each worker's symbol/string IDs, the existing full-column index kernel rebuilds insertion
+tables, and merge histories retain derivation order above the parent's initial facts. Queries,
+explanations, subsequent sequential add/remove and saved images work after the scope joins. The
+original evaluator and runtime are unchanged. The older resident-worker benchmark uses thin adapters
+over the same backend, rather than a second implementation of partitioning.
+
+The public call includes snapshot preparation, worker image loading and compilation, evaluation,
+result transfer, parent index reconstruction and joining. Three shuffled fresh-process campaigns,
+three warm parent calls each, with fresh workers on every call; facts are already in memory. Warm
+medians in ms, on the same workloads and matching counts as above:
+
+| Workload | Sequential | Public 4 | Public 12 | Public 16 | Soufflé 4 | Soufflé 12 | Soufflé 16 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Sparse closure | 70.15 | 49.42 | 48.24 | 58.87 | 158.81 | 147.28 | 150.94 |
+| Dense closure | 5.05 | 14.24 | 25.64 | 33.55 | 12.12 | 9.10 | 9.70 |
+| Skewed join | 82.90 | 68.35 | 71.84 | 83.48 | 19.70 | 8.64 | 8.57 |
+
+Whole-call gains are much smaller than resident evaluation gains: 1.45 times sequential throughput
+for sparse closure at 12 workers and 1.21 for the skewed join at four. The dense closure loses to
+startup and collection. Structural eligibility is not a cost model; choosing parallel evaluation is
+explicit, and adding workers need not help. The complete call still beats Soufflé on sparse closure,
+but the earlier warm dense-closure win does not survive returning an ordinary database.
+
+Checked: the Datalog suite, 298 parallel checks against the naive evaluator and fixtures, and exact
+full-output agreement with Soufflé on all three large workloads at four workers, exercising multiple
+transfer packets. Coverage includes seeded facts, multiple derived relations and proofs, mixed
+columns, generated strings, vocabulary spanning packets, updates with new keys/values, fallback before
+opening an image, worker failures without retries, namespaces, collection and saved databases. The
+documented self-image example runs and the guide renders. Individual measurements remain ignored
+under `build/`.
+
+### Keep query results partitioned inside a reusable scope (2026-11-10, Apple M3 Max, against the API above)
+
+The breakdown identified parent hash-table reconstruction as the largest steady-state cost. At 12
+workers, sparse closure took 8.0 ms evaluating and 12.5 collecting, including 9.4 rebuilding tables;
+the skewed join took 9.0 evaluating and 28.9 collecting, including 24.7 rebuilding. Tuple transfer
+alone was 0.7 and 1.9 ms. A one-shot call also paid VM/image startup, first-call compilation and join.
+These are direct stage timers in an instrumented library copy, three processes per case/count.
+
+A smaller union-table builder omitted unused key chains and duplicate comparisons. Rejected:
+three alternating runs of the skewed join at 12 workers gave 28.47 → 28.90 ms collection and
+37.68 → 38.74 ms total steady work. The extra kernel did not earn its complexity and is not kept.
+
+`datalog.parallel.with-db` instead keeps the evaluated database in workers and returns only requested
+answers. A callback can reuse counts, membership, queries and indexes. Explicit materialization
+consumes the view and returns the normal database. Scope exit and errors invalidate escaped views;
+serial fallback uses the same interface. The existing `run` still materializes normally.
+
+Before/after workflow: evaluate, count and answer eight fixed-root queries, checking complete sorted
+answers against serial execution. Before returns a local database first; after uses the scoped view.
+Three alternating fresh processes, with three steady work samples each. Facts are already in memory.
+End-to-end includes worker startup, first evaluation, answers and join. Work time is measured directly
+after warm-up in an existing scope, including a fresh fixed-point rebuild and the same queries; it
+excludes image/JIT startup and joining, and is not merely a lookup of cached answers. Wall-clock ms:
+
+| Workload | Workers | End-to-end before → after | Work before → after |
+| --- | ---: | ---: | ---: |
+| Sparse closure | 4 | 59.25 → 44.52 | 37.22 → 25.55 |
+| | 12 | 55.12 → 42.63 | 23.58 → 12.01 |
+| | 16 | 66.66 → 54.33 | 25.64 → 13.72 |
+| Dense closure | 4 | 17.12 → 16.56 | 3.29 → 2.84 |
+| | 12 | 29.12 → 29.72 | 2.94 → 3.21 |
+| | 16 | 38.07 → 38.65 | 3.27 → 4.03 |
+| Skewed join | 4 | 86.38 → 50.96 | 56.86 → 27.63 |
+| | 12 | 87.86 → 51.56 | 45.64 → 14.91 |
+| | 16 | 99.28 → 63.46 | 44.49 → 17.15 |
+
+Avoiding collection helps large results when consumers need only selected answers. It does not make
+short jobs profitable or accelerate explicit full materialization. Twelve workers give the best
+steady work times on the larger cases; four can be as good for a single call. The 330 targeted checks
+pass, including repeated queries, no duplicate input-only rows, owned answers after join, view closure,
+materialization, fallback and sticky worker errors. Raw profiles and measurements stay under `build/`.
+
+### Batch scoped queries in one dispatch (2026-11-10, Apple M3 Max, against separate scoped queries)
+
+`datalog.parallel.match-many` sends several patterns in one request. Each worker uses the existing
+query operation; the parent combines answers in pattern order. Input-only relations still come from
+one worker. The single-query API is unchanged. A batch accepts at most 4,096 patterns and shares the
+existing 1 MiB request/reply budget per child, without paging or automatic retries.
+
+The same evaluate/count/eight-query workflow as above, now comparing eight dispatches with one.
+Three alternating fresh-process campaigns, three warmed fresh evaluations each; all complete sorted
+answers checked against sequential execution outside the timer. Facts are already in memory.
+End-to-end includes startup, first evaluation, queries and join; work excludes image/JIT startup and
+join, but includes rebuilding the fixed point and answering all eight queries. Medians in ms:
+
+| Workload | Workers | End-to-end separate → batch | Work separate → batch | Earlier Soufflé evaluation only |
+| --- | ---: | ---: | ---: | ---: |
+| Sparse closure | 4 | 45.90 → 45.86 | 26.84 → 26.46 | 158.81 |
+| | 12 | 42.96 → 42.12 | 12.05 → 10.57 | 147.28 |
+| | 16 | 54.26 → 52.63 | 13.98 → 11.56 | 150.94 |
+| Dense closure | 4 | 17.12 → 16.95 | 2.95 → 2.56 | 12.12 |
+| | 12 | 30.38 → 29.70 | 3.24 → 1.87 | 9.10 |
+| | 16 | 39.94 → 37.60 | 4.13 → 2.14 | 9.70 |
+| Skewed join | 4 | 51.67 → 51.33 | 28.03 → 28.06 | 19.70 |
+| | 12 | 53.05 → 52.81 | 15.03 → 14.03 | 8.64 |
+| | 16 | 65.60 → 61.37 | 17.33 → 14.60 | 8.57 |
+
+The Soufflé column reuses the compiled 32-bit OpenMP 2.5 measurements from the public-API comparison
+above, at matching thread counts. It times evaluation and cardinalities, excluding these eight
+queries, startup and destruction: it is context, not an identical workflow comparison. Shen's work
+including queries is faster on both closures and slower on the skewed join; its cold dense closure
+still loses to Soufflé's evaluation alone.
+
+Kept as a small optional operation: at 12 workers, work falls 12% on sparse closure, 42% on dense
+closure and 7% on the skewed join. End-to-end gains are smaller, and four-worker large cases barely
+change. Twelve workers remain faster than sixteen on this 12-performance/4-efficiency-core Mac.
+All 335 focused checks pass, including batch order, empty answers, input-only uniqueness, sequential
+fallback and view lifetime. Raw measurements and images remain ignored under `build/`.
+
+### Simplify worker setup and skip non-owning query shards (2026-11-10, Apple M3 Max, against the scoped batching API above)
+
+Public evaluation and resident benchmarks share snapshot preparation and scope construction. Tuple
+collection uses the existing chunk fold, and the forwarding-only benchmark adapter is removed.
+Workers retain the existing ownership dictionary and reject bound-key queries and membership checks
+on non-owning shards. Unbound keys search all shards; input-only relations still return once.
+
+Same evaluate/count/eight-query workflow, three interleaved fresh-process campaigns and three warm
+rebuilds each, checking complete answers outside the timer. The timing boundaries are:
+
+- **Shen full scope call:** from immediately before `with-db` until it returns after joining its
+  workers. Includes snapshot preparation, OS-thread creation, worker image loading, first JIT
+  compilation/evaluation, count, eight queries, answer transfer/sorting and worker teardown. Excludes
+  parent executable launch, parent library loading and fact generation, which precede the clock.
+- **Shen warm work:** fresh database evaluation, count and the same eight queries, including answer
+  transfer/sorting and query-index construction, inside initialized workers with warmed code.
+  Excludes worker/image/JIT startup and scope teardown. GC triggered inside either Shen timer counts.
+- **Soufflé warm database build/evaluation:** the harness clock starts before constructing a fresh
+  program/database, then inserts the in-memory facts, runs the rules and reads all relation counts.
+  Includes OpenMP dispatch and synchronization inside that run. Excludes executable launch, input
+  file parsing, AOT C++ compilation, the eight queries and database destruction. These are `SAMPLE`
+  medians after the first run, so first-run OpenMP initialization is excluded. Destruction is timed
+  separately by the harness, outside the numbers below.
+
+All three clocks run inside already-started processes. None is command launch-to-exit time. Medians
+in ms; the Soufflé column has a different query and lifetime boundary from both Shen columns:
+
+| Workload | Workers | Shen full scope call before → after | Shen warm work before → after | Soufflé warm DB build + evaluation/counts |
+| --- | ---: | ---: | ---: | ---: |
+| Sparse closure | 4 | 45.92 → 45.72 | 26.33 → 26.02 | 163.56 |
+| | 12 | 42.08 → 41.30 | 10.66 → 10.19 | 147.07 |
+| | 16 | 52.90 → 51.46 | 11.96 → 10.75 | 155.78 |
+| Dense closure | 4 | 16.89 → 17.15 | 2.59 → 2.56 | 12.22 |
+| | 12 | 31.13 → 30.38 | 1.91 → 1.86 | 9.31 |
+| | 16 | 39.42 → 39.03 | 2.09 → 2.08 | 10.06 |
+| Skewed join | 4 | 51.72 → 50.63 | 27.61 → 28.75 | 20.31 |
+| | 12 | 52.49 → 50.83 | 14.08 → 13.14 | 9.05 |
+| | 16 | 64.43 → 60.48 | 14.89 → 12.98 | 8.77 |
+
+At 12 workers, large-case work falls 4–7%; dense closure barely changes. The four-worker skewed join
+was checked alone in two more alternating processes, five samples each: 26.38 → 26.60 ms, and with
+unrelated code compiled first in each worker, 26.21 → 26.92 ms. No four-worker work-time gain is
+claimed. The larger gains at 16 workers do not establish a scaling win over 12.
+
+Soufflé values reuse a separate three-campaign diagnostic run of the existing compiled 32-bit
+OpenMP 2.5 programs at matching thread counts, five warm samples per campaign. The clock is in
+`tests/bench/datalog-workers.cpp`; Shen's workflow clocks are in `tests/bench/datalog-scope.shen`.
+No matching Soufflé eight-query workflow or command launch-to-exit measurement was taken.
+Separately timed Soufflé database destruction at 12 threads took 5.21 ms for sparse closure, 0.21 ms
+for dense closure and 4.64 ms for the skewed join (warm medians); these are not included in the table.
+The 340 focused checks and 43 resident checks pass, including unbound, string and absent keys,
+repeated evaluation, and multi-chunk tuple collection. Generated measurements remain under `build/`.
+
+### Match evaluation, eight queries and complete cleanup (2026-11-10, Apple M3 Max, Shen workers against compiled 32-bit OpenMP Soufflé 2.5)
+
+Both engines now evaluate the full program, count every original relation, answer the same eight
+fixed-root queries, return and sort their two-column tuples, and release the database and answers.
+The roots are 0, 1, 2, 7, 31, 127, 255 and 511; the queried relation is `path` for the closures and
+`two` for the skewed join. Soufflé compiles eight indexed query rules alongside the original program;
+the original output relations remain live, so all original tuples are still derived. Both receive
+the same facts, including duplicates. Original counts match previously verified complete outputs;
+every query tuple agrees with an independent Python graph calculation.
+
+The clocks have these explicit boundaries:
+
+- **Startup:** fresh executable launch through the readiness timestamp, after facts are in memory
+  and all worker threads are initialized. Shen includes parent/image loading, input snapshot and
+  worker specialization; Soufflé includes input parsing and OpenMP team initialization. No evaluation
+  or query warm-up is counted as startup. Building the saved image or compiling C++ is excluded.
+- **Work:** fresh database construction/input insertion, evaluation, original relation counts,
+  all eight queries, result transfer/sorting, database/answer cleanup, and final runtime/process
+  shutdown. Shen drops the databases and explicitly collects child and parent heaps; Soufflé destroys
+  its database and result vectors. Both then terminate. Final shutdown includes Shen's worker join
+  and VM destruction, or Soufflé's OpenMP/runtime teardown, observed through process exit.
+- **First / warm:** first is a one-job fresh process, including first-use JIT compilation in Shen.
+  Warm is a fresh rebuild after one first run and two warmed runs, followed by complete shutdown.
+  Startup is reported from the one-job processes. Each entry is a median of three fresh-process
+  repetitions. Compute, data cleanup and final shutdown are directly timed and summed; startup is
+  never estimated by subtraction. Validation output is outside the compute/data-cleanup clocks.
+
+All values are wall-clock ms. In each work cell, the first number is **first run**, the second
+**warmed run**. Both include complete cleanup; neither includes startup:
+
+| Workload | Threads | Shen startup | Soufflé startup | Shen work: first / warm | Soufflé work: first / warm |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Sparse closure | 4 | 13.99 | 4.32 | 47.29 / 32.37 | 167.95 / 168.19 |
+| | 12 | 17.71 | 4.47 | 36.60 / 23.02 | 150.71 / 153.63 |
+| | 16 | 20.38 | 4.41 | 44.10 / 27.32 | 157.51 / 164.58 |
+| Dense closure | 4 | 12.97 | 4.04 | 16.43 / 8.31 | 13.25 / 13.09 |
+| | 12 | 17.01 | 3.88 | 25.42 / 12.92 | 10.67 / 11.15 |
+| | 16 | 20.25 | 3.97 | 32.57 / 17.34 | 12.04 / 12.18 |
+| Skewed join | 4 | 18.35 | 4.94 | 51.03 / 35.81 | 26.96 / 25.02 |
+| | 12 | 22.57 | 5.13 | 43.34 / 25.77 | 16.42 / 15.56 |
+| | 16 | 25.38 | 5.28 | 54.23 / 33.26 | 16.44 / 16.16 |
+
+Shen wins sparse closure including startup and cleanup. On dense closure, Shen wins warmed work at
+four threads, but loses the first call and the larger thread counts. Soufflé wins the skewed join
+when complete shutdown is included. At 12 threads, before final runtime shutdown, warmed skewed-join
+evaluation/queries/data cleanup alone takes 12.82 ms in Shen and 14.30 ms in Soufflé; final shutdown
+adds medians of 13.05 and 1.17 ms respectively. The cheap retained-runtime figure is therefore not
+the cost of completing a structured scope. Twelve threads is the useful upper count on the larger
+Shen cases; sixteen loses. Benchmark-only harnesses, generated programs and raw measurements remain
+ignored under `build/`; production code is unchanged.
+
 ### Release worker native code without allocator contention (2026-11-10, Apple M3 Max, before/after on rebased main)
 
 Rebased `workers` onto current `main` before building either side. Shutdown was spending time freeing
@@ -3570,6 +3879,15 @@ and six refused-type cases. The codec uses a normally bootstrapped, JIT-inlined 
 rather than depending on arithmetic allocating a fresh real. Byte-scope and value-map libraries use
 namespaces and the existing native tagged-record predicate.
 
+Datalog decodes the shared snapshot directly, eliminating the temporary managed copy in every child;
+decoded facts and indexes remain private. Planning returns explicit refusals and is performed once.
+Bounded encoding preflight distinguishes transport limits from unexpected errors, which propagate.
+This preflight adds a size traversal during setup; ordinary encoding remains unchanged. Vocabulary
+pages track independent worker cursors and encoded bytes, fixing materialization of 130 distinct
+10 KiB strings. Query and metadata replies use each worker's share of the 64 MiB aggregate budget.
+A single vocabulary value must fit that share. Materialization takes its hash mask from the completed
+index. View cleanup uses `finally`, retaining shared-descriptor revocation for copied views.
+
 Runtime cleanup removes the duplicate isolation flag, shares the C stack-size constant and drops a
 result root across allocation-free shutdown. Whole-file reads remain self-contained and allowed;
 stream creation is refused. Cancellation polling reads atomic flags rather than taking the scope
@@ -3582,6 +3900,17 @@ value library identical on both sides: three alternating fresh processes, 100 wa
 | 4 | 0.113 | 0.100 |
 | 12 | 0.333 | 0.247 |
 | 16 | 0.415 | 0.320 |
+
+Kept: reply budgets, ordinals and count validation, shared-view lifetime checks, stream-alias guards,
+and live-worker diagnostics. The strict resident helper still measures one actual worker, while the
+public one-worker budget deliberately uses sequential fallback. No new heap-options API was added;
+per-worker defaults, total-memory implications and reply limits are documented explicitly.
+
+Validation: core/library suites, focused parallel and Datalog regressions, six refused-type cases,
+independent codec fixtures, namespace clients and primitive differential checks. The differential
+run completed 20,884,309 checks; its 107 saved compiled/C output pairs were also normalized and
+compared under the C locale after the host locale rejected binary text. Generated hashes and the
+guide are updated. Benchmark results and temporary reproducers remain ignored under `build/`.
 
 ### Simplify bounded worker encoding (2026-11-10, Apple M3 Max)
 
@@ -3603,6 +3932,58 @@ claim or new benchmark campaign is included.
 Validation: the core suite, parallel library and independent codec fixtures, Datalog and its
 application checks. This includes 138 map checks, six refused-type cases, 68 codec fixtures, and
 349 parallel Datalog checks. Generated hashes are updated; temporary files stay under `build/`.
+
+### Worker lifetime and smaller key chunks (2026-11-10, Apple M3 Max)
+
+Tried the proposed lifetime and scheduling alternatives in bounded, benchmark-only variants.
+Fresh-process timings use three shuffled repetitions at 4, 12 and 16 threads; original relation
+counts and all eight sorted query answers agree with the independent graph oracle in every run.
+No runtime, library, heap-policy or scheduler change was retained.
+
+The matched driver above forced a final GC immediately before destroying the VMs. Ordinary worker
+scope exit does not do this. Retaining GC between rebuilds but letting VM destruction and process
+exit reclaim the final database/answers avoids that redundant pass. This is a measurement correction,
+not a runtime speed-up; no heap, native-code free, join or process shutdown is skipped. In a fresh
+matched campaign, warmed ms including complete disposal, excluding startup:
+
+| Workload | Threads | Shen | Souffle |
+| --- | ---: | ---: | ---: |
+| Sparse closure | 4 / 12 / 16 | 29.53 / 17.01 / 18.81 | 167.27 / 150.46 / 160.87 |
+| Dense closure | 4 / 12 / 16 | 4.47 / 6.44 / 8.81 | 13.52 / 11.18 / 12.79 |
+| Skewed join | 4 / 12 / 16 | 32.41 / 19.34 / 22.78 | 26.15 / 16.08 / 16.43 |
+
+At 12 threads, skewed-join evaluation/counts/eight queries take 9.61 ms in Shen and 10.10 in Souffle.
+Shen's final disposal/shutdown takes 9.69 ms; Souffle's data cleanup takes 4.78 and its final shutdown
+1.21 ms. These are independent medians, so components need not sum exactly to total medians. Startup
+is measured separately, and saved-image/C++ construction is excluded. At four threads Shen's actual
+evaluation is also slower, 24.28 against 20.59 ms; the overall gap is not exclusively teardown there.
+
+- **Reuse works.** Four skewed-join evaluations with the same facts, counts and queries, retaining the
+  diagnostic cleanup hooks, take 236.32 / 232.72 / 289.83 ms in four separate scopes at 4 / 12 / 16
+  workers, versus 157.32 / 105.09 / 120.70 in one scope. These sum directly timed startup, work,
+  cleanup and joins, excluding validation printing. At 12, work excluding startup is 158.84 versus
+  80.16 ms for the four jobs. Existing structured callbacks and Datalog views already retain workers
+  for repeated queries; no general worker pool or new public rebuild API was added.
+- **Keep code release serialized.** In the first campaign, parallel native-code release changed
+  skewed-join whole warm work from 24.06 to 25.95 ms at 12 and 28.38 to 33.53 at 16. Heap destruction
+  was already parallel. One diagnostic 12-worker run spent mostly 0.11-0.43 ms per worker freeing
+  native code, with one 4.24 ms outlier; VM destruction took 0.71-4.87 ms, overlapping other workers.
+- **Do not add an exit-only leak mode.** Skipping VM frees until process exit changed those control
+  totals to 23.66 / 27.73 ms. In a second campaign, skipping both JIT and VM frees changed controls
+  of 23.45 / 28.71 to 22.30 / 25.40 at 12 / 16. Exit still reclaims the memory: shutdown remains
+  9.31 / 10.67 ms. This diagnostic cannot implement ordinary scopes, which must release resources
+  before returning; the modest gains do not justify another lifetime contract.
+- **Smaller chunks do not pay here.** Four chunks per worker use the same key rule and replicated
+  input relations. Workers take one initial chunk, then claim another through a benchmark-only atomic
+  counter. Static small chunks provide a control. At 16 workers on skewed join, evaluation/queries
+  take 9.97 ms currently, 13.50 with static chunks and 11.73 dynamically; complete warm work takes
+  28.61, 29.39 and 30.13 ms. Dynamic claiming helps relative to static small chunks, but extra shard
+  setup, indexing and query work outweigh it. At 12, dynamic evaluation rises from 9.43 to 11.39 ms.
+  No CPU-affinity measurement was made; slower-core placement remains a hypothesis, not a conclusion.
+
+Raw outputs, the small native claim adapter, instrumented runtimes and reports remain ignored under
+`build/`. Timings from different campaigns are identified above; no code gain is claimed from merely
+removing a diagnostic GC. All normal core/library checks passed before these source-identical trials.
 
 ## Benchmark results
 

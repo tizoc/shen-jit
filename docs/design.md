@@ -345,6 +345,23 @@ same bounds check and access. A pointer that is dead or has no length has length
 
 ## Datalog
 
+Optional `lib/datalog-parallel.shen` adds an opt-in entry point. It checks for positive scalar rules
+whose derived inputs preserve the head's first-column key, then gives disjoint keys to private worker
+runtimes. Input-only relations are replicated and seeded derived facts are partitioned. Eligibility
+checking returns explicit refusals; unexpected checker or codec errors propagate. Snapshot decoding
+reads shared bytes directly, while decoded values remain private to each worker. Unsupported
+programs and inputs outside the snapshot transport bounds use the sequential evaluator before any
+worker starts. Each child calls the existing Datalog evaluator with an extra key guard on its rules.
+The parent collects packed tuples, translates intern IDs for noninteger columns, and uses the existing
+full-column index kernel to rebuild ordinary insertion tables. Merge histories retain each worker's
+derivation order, offset beyond the parent's initial facts; subsequent parent merges start after them.
+The returned database therefore needs no live worker for queries, explanations, updates or images.
+`datalog.parallel.with-db` instead keeps a read-only view inside the worker scope. Counts use the
+reported cardinalities; membership and selected queries execute in the workers and return owned
+values. A worker retains its owned keys and skips derived-relation queries bound to another key;
+queries with an unbound key still search every shard. This avoids collecting every tuple and rebuilding parent tables. Explicit materialization
+consumes the view and provides the ordinary database; scope exit invalidates any escaped view.
+
 `lib/datalog.shen` is Shen, loaded on request, and the JIT knows nothing of it. A program is checked into relations and rules, and planned: relations
 by strongly connected components in dependency order, and each rule as an order of joins, the atom with the most columns known going next. In a
 recursive component a rule has one variant for each of its atoms in that component, which reads that relation's new tuples and goes first, as a new
