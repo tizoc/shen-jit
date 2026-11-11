@@ -5,6 +5,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.7] - 2026-11-10
+
 ### Added
 
 - `defstruct`, available at startup: fixed managed records with read-only fields by default, optional mutable
@@ -13,29 +15,29 @@ All notable changes to this project are documented in this file. The format is b
   support and stable image/reload metadata. Records print with their type and fields, or through a declaration's
   `(printer F)`. Fields may have types, `(x : number)`: the operations are then typed, under `(tc +)` and
   for typed clients of a struct declared under `(tc -)`.
+- Experimental worker scopes, `lib/parallel.shen`, whose API is expected to change: a named function of a saved
+  image runs on 1 to 64 OS threads at once, each with a runtime of its own, over copied byte messages and one
+  read-only buffer they share. A scope always joins its workers. `thread` is unchanged.
+- Experimental `lib/parallel-map.shen`: `parallel.map` over workers, for copied numbers, booleans, symbols,
+  strings and proper lists, with results in order, checked accessors for typed code, and the example
+  `tools/parallel-map.shen`.
+- Experimental `lib/datalog-parallel.shen`: opt-in Datalog evaluation with an explicit worker budget, automatic
+  detection of key-preserving programs and sequential fallback. Results are ordinary parent-owned databases
+  supporting queries, explanations and subsequent sequential updates.
+  `datalog.parallel.with-db` keeps a read-only database in a reusable scope for counts and queries,
+  with explicit materialization when a normal local database is needed. `datalog.parallel.match-many`
+  answers several queries in one worker dispatch; bound-key queries skip non-owning shards.
+- The source-deps example answers batches of reach and impact queries, `--batch QUERIES`, sequentially or with
+  1 to 64 workers over one shared graph, and offers the same through `parallel.map`.
 - `(shen-jit.finally Body Cleanup)` and `(shen-jit.on-error Body Cleanup)`, which clean up after a frozen body,
   however it ends or only if it raised. The body's error is the one raised, with any error of the cleanup added
   to its message.
 - `(sqlite.with-database Path F)`, which closes the database however F ends.
 - `json.string` and `json.array`, which take a string or an array's values out of a JSON value in typed code.
 - Types for the socket functions whose arguments and results have plain ones, such as `socket.connect`.
-- Worker scopes, `lib/parallel.shen`: a named function of a saved image runs on 1 to 64 OS
-  threads at once, each with a runtime of its own, over copied byte messages and one read-only buffer they share.
-  A scope always joins its workers. `thread` is unchanged.
-- `lib/parallel-map.shen`: `parallel.map` over workers, for copied numbers, booleans, symbols, strings and proper
-  lists, with results in order, and the example `tools/parallel-map.shen`.
-- The source-deps example answers batches of reach and impact queries, `--batch QUERIES`, sequentially or with
-  1 to 64 workers over one shared graph, and offers the same through `parallel.map`.
-- `lib/datalog-parallel.shen`: opt-in Datalog evaluation with an explicit worker budget, automatic detection
-  of key-preserving programs and sequential fallback. Results are ordinary parent-owned databases supporting
-  queries, explanations and subsequent sequential updates.
-  `datalog.parallel.with-db` keeps a read-only database in a reusable scope for counts and queries,
-  with explicit materialization when a normal local database is needed. `datalog.parallel.match-many`
-  answers several queries in one worker dispatch; bound-key queries skip non-owning shards.
 
 ### Changed
 
-- Worker scopes avoid allocator contention while releasing compiled code at shutdown; heap cleanup remains parallel.
 - All optional Shen libraries use namespaces, with explicit dependency prefixes and exported operations, types and
   shared support functions. Their qualified API names and data formats stay the same. The kernel pin moves to
   43.6 for namespace interfaces and syntax annotation hooks, using the release's precompiled KLambda. With it,
@@ -56,11 +58,6 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
-- The `parallel.value` datatype allowed unchecked conversions to its member types. Its introduction
-  rules are now one-way, with checked number, boolean, string, symbol and list accessors.
-- Parallel Datalog materialization could reject a small relation containing long strings because vocabulary
-  pages were bounded only by item count. Pages now follow encoded size, and replies use each worker's
-  share of the batch budget. Unexpected planning/encoding errors propagate instead of selecting serial execution.
 - Printing an I/O endpoint, reader or writer, a framer, an HTTP head or body reader or response, or a child
   process called the library function named by the record's tag, which the writer takes for a printer, and
   raised an error or printed something else.
@@ -89,11 +86,6 @@ All notable changes to this project are documented in this file. The format is b
   continuation names one of its own variables; a query that returns or keeps a `freeze` reading its bindings,
   which went back to the pool; and three cases of inlining a sealed function, through a parameter bound again, a
   literal list, or a parameter named `lambda`.
-- Structs: a declaration whose generated names repeat another's in the same file replaced its operations and
-  broke its patterns, and raises now; a value after a `(protect ...)` one could run first; a pattern of a
-  registered handler inside a struct pattern was refused; a declaration refused under `(tc +)` could not be
-  corrected without restarting; `key <- ...` left other fields out; and in a namespace, dotted field labels
-  lost their prefix.
 - `SHEN_JIT_MAX_HEAP` and `SHEN_JIT_SEMISPACE` took any text: `garbage` or a limit under a word meant no limit,
   `8MBogus` meant 8 MB, and a large value wrapped. Anything but digits with one K, M or G is now refused.
 - A directory named `shen-jit` on `PATH` before the executable made it fail to start.
@@ -392,7 +384,8 @@ All notable changes to this project are documented in this file. The format is b
 
 - Initial release
 
-[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.6...HEAD
+[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.7...HEAD
+[0.7]: https://github.com/tizoc/shen-jit/compare/v0.6...v0.7
 [0.6]: https://github.com/tizoc/shen-jit/compare/v0.5...v0.6
 [0.5]: https://github.com/tizoc/shen-jit/compare/v0.4...v0.5
 [0.4]: https://github.com/tizoc/shen-jit/compare/v0.3...v0.4

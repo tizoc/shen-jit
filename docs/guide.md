@@ -274,7 +274,8 @@ cat build/runtime app.img > app && chmod +x app
 
 `(thread Frozen)` runs a frozen expression in a new thread and returns `true`, as programs written for Shen/Scheme
 expect. Threads are real, and one runs at a time, holding a global lock. So they give concurrency, for work that
-waits or runs beside the main program, and no speed-up from more cores.
+waits or runs beside the main program, and no speed-up from more cores: for that, [structured workers](#structured-workers)
+run a saved image's function on several cores at once.
 
 ```shen
 (set done false)
@@ -502,6 +503,8 @@ connection behind the I/O library's readers and writers, with deadlines.
 
 ### Structured workers
 
+*Experimental:* this API is expected to change in a later release.
+
 For independent jobs over numbers, booleans, symbols, strings and proper lists, start with
 `parallel.with-map` and `parallel.map` from optional `lib/parallel-map.shen`. Results keep input order;
 `tools/parallel-map.shen` is a complete program. Each of 1 to 64 OS threads runs a named function of a saved
@@ -533,9 +536,10 @@ downloads to a file with it.
 [Datalog](https://github.com/tizoc/shen-jit/blob/main/docs/datalog.md): `lib/datalog.shen` evaluates relations, facts
 and recursive rules bottom up, to a fixed point, over symbols, strings, integers and records, with each rule compiled
 through the JIT and its join order chosen from the sizes of the relations as it runs, and answers a query by deriving
-only what bears on it. Optional `lib/datalog-parallel.shen` adds `datalog.parallel.run`: an explicit
-worker budget, automatic detection of programs that partition safely, sequential fallback, and an
-ordinary database returned after the workers join. Short jobs can still be faster sequentially.
+only what bears on it. Optional `lib/datalog-parallel.shen`, experimental as the workers it runs on are, adds
+`datalog.parallel.run`: an explicit worker budget, automatic detection of programs that partition safely,
+sequential fallback, and an ordinary database returned after the workers join. Short jobs can still be faster
+sequentially.
 
 #### SQLite
 
@@ -623,7 +627,8 @@ them.
 | `(shen-jit.write-bytes B I N S)` | Writes the N bytes from I to the output stream S at once, and returns N |
 
 On a fixnum's 62 bits: `shen-jit.bit-and`, `bit-or`, `bit-xor`, `bit-not`, `shift-left`, `shift-right`, `rotate32`,
-`bswap32`, `popcount`, `clz` and `ctz`.
+`bswap32`, `popcount`, `clz` and `ctz`, which raise for a real. `(shen-jit.fixnum? X)` says whether X is a fixnum: false
+for a real, even `1.0`, which `integer?` accepts.
 
 [docs/bytecode.md](https://github.com/tizoc/shen-jit/blob/main/docs/bytecode.md), "Byte buffers and bit operations",
 has the details.
@@ -975,7 +980,8 @@ flat profile at exit, and `SHEN_JIT_STATS=1` prints the collector's work and the
 - **Fixnums only.** Integers are 62-bit, and a result outside that range raises `integer overflow`.
 - **Sealing.** Internal kernel functions cannot be redefined, where Shen/Scheme accepts such definitions.
 - **Numbers hash by value.** A real and an integer that are `=` have the same `hash`, where Shen/Scheme's tells them apart.
-- **Threads run one at a time,** where Shen/Scheme's run in parallel.
+- **Threads run one at a time,** where Shen/Scheme's run in parallel. [Structured workers](#structured-workers) run in
+  parallel, each in a runtime of its own.
 - **Definitions are factorised,** as with `(factorise +)`: a guard that consecutive clauses share runs once, so
   guards should have no effects, and a vector pattern may read its first element before a clause that does not
   need it, which raises if that element was never set.

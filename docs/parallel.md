@@ -1,5 +1,7 @@
 # Structured workers
 
+*Experimental:* this API is expected to change in a later release, which may replace it.
+
 `lib/parallel.shen` provides structured workers with isolated runtimes.
 Load `lib/buffer.shen`, then this library, under `(tc -)`. It uses native OS
 threads: each child has a private heap, collector, globals and JIT. Guest

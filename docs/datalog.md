@@ -226,6 +226,8 @@ shen-jit eval -l lib/native.shen -l lib/datalog.shen -l lib/ffi.shen -l lib/buff
 
 ## Opt-in parallel evaluation
 
+*Experimental,* as the [structured workers](parallel.md) it runs on are: this API is expected to change in a later release.
+
 Load `lib/native.shen`, `lib/datalog.shen`, `lib/buffer.shen`, `lib/parallel.shen`,
 `lib/parallel-map.shen` and `lib/datalog-parallel.shen`, in that order, under `(tc -)`.
 
