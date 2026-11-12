@@ -6,7 +6,6 @@
 #include "ops.h"
 #include "reader.h"
 #include "vm.h"
-#include "worker.h"
 
 #include <errno.h>
 #include <math.h>
@@ -111,7 +110,6 @@ const Primitive primitive_table[] = {
     {"shen-jit.same?", 2, NULL},
     {"shen-jit.newpv", 2, NULL},
     {"shen-jit.gc", 2, NULL},
-    {"shen-jit.thread", 1, NULL},
     {"shen-jit.foreign", 2, NULL},
     {"shen-jit.pointer?", 1, NULL},
     {"shen-jit.pointer-kind", 1, NULL},
@@ -130,12 +128,6 @@ const Primitive primitive_table[] = {
     {"shen-jit.pointer-read-only", 1, NULL},
     {"shen-jit.collect", 0, NULL},
     {"shen-jit.write-bytes", 4, NULL},
-    {"shen-jit.worker-scope", 5, NULL},
-    {"shen-jit.worker-batch", 2, NULL},
-    {"shen-jit.worker-index", 0, NULL},
-    {"shen-jit.worker-live", 0, NULL},
-    {"shen-jit.worker-cancelled?", 0, NULL},
-    {"shen-jit.worker-shared-view", 0, NULL},
     {"shen-jit.arity", 1, NULL},
     {"shen-jit.set-arity", 2, NULL},
     {"shen-jit.function", 1, NULL},
@@ -194,7 +186,8 @@ static void capture_trace(VM *vm)
         return;
     bool evaluated;
     size_t n = jit_backtrace(vm, NULL, 0, &evaluated);
-    if (!evaluated || n == 0)
+    /* An isolate does not evaluate, so its errors all come from running code. */
+    if ((!evaluated && vm->program->owner == vm) || n == 0)
         return; /* not from running code, or raised where it was written */
     size_t k = n < TRACE_FRAMES ? n : TRACE_FRAMES;
     V t = make_vector(vm, 1 + k, V_NIL);
@@ -784,7 +777,6 @@ static void show(VM *vm, Show *s, V v)
         put_text(s, v == V_TRUE ? "true" : v == V_FALSE ? "false" : v == V_NIL ? "[]"
                     : is_proc(v) ? "#<procedure>" : is_type(v, T_STREAM) ? "#<stream>"
                     : is_type(v, T_BYTES) ? "#<bytes>"
-                    : is_type(v, T_SHARED_BYTES) ? "#<shared-bytes>"
                     : is_type(v, T_EXCEPTION) ? "#<exception>" : "#<value>");
     }
 }
@@ -870,8 +862,6 @@ static V to_string(VM *vm, V v)
         text = "#<stream>";
     else if (is_type(v, T_BYTES))
         text = "#<bytes>";
-    else if (is_type(v, T_SHARED_BYTES))
-        text = "#<shared-bytes>";
     else if (is_type(v, T_EXCEPTION))
         text = "#<exception>";
     else if (is_type(v, T_POINTER))
@@ -888,8 +878,6 @@ static FILE *stream_file(VM *vm, V s, bool output)
 {
     /* An image can retain aliases to its original standard streams, even
        after sj_init_host replaces the three standard-stream globals. */
-    if (vm->worker_owner)
-        return NULL;
     if (!is_type(s, T_STREAM))
         return NULL;
     uint64_t flags = ptr(s)[STREAM_FLAGS];
@@ -936,10 +924,6 @@ static FILE *open_path(VM *vm, const char *mode)
    is written beside Path and renamed, so a binary can replace itself. */
 static V save_executable(VM *vm)
 {
-    if (vm->worker_owner || vm->worker_scope)
-        return sj_raise(vm, "worker: saving an executable is a host-only operation");
-    if (!thread_is_only(vm))
-        return sj_raise(vm, "save-executable: other threads are running");
     if (!vm->builder)
         return sj_raise(vm, "save-executable: only the builder can save");
     if (isolates_running(vm->program))
@@ -999,8 +983,6 @@ static V save_executable(VM *vm)
 
 static V open_file(VM *vm)
 {
-    if (vm->worker_owner)
-        return sj_raise(vm, "worker: a worker cannot open streams");
     V out = intern_cstr(vm, "out"), in = intern_cstr(vm, "in");
     V path = vm->args[0], direction = vm->args[1];
     if (out == V_CLEARED || in == V_CLEARED)
@@ -1129,8 +1111,6 @@ static V append(VM *vm)
 
 static V close_stream(VM *vm, V s)
 {
-    if (vm->worker_owner)
-        return sj_raise(vm, "worker: a worker cannot close streams");
     if (!is_type(s, T_STREAM))
         return sj_raise_value(vm, "close: ~S is not a stream", s);
     uint64_t *o = ptr(s);
@@ -1161,8 +1141,7 @@ bool sj_take_interrupt(VM *vm)
 /* Standard input is read here rather than through stdio, whose read would
    restart after a Ctrl-C (SA_RESTART, which writes need) and which does not say
    when it is about to wait. The wait is in select, which a signal always ends.
-   Only the wait is without the lock, so threads reading at once take turns over
-   the buffer: others run meanwhile, and whoever gets the lock first reads. */
+   Isolates reading at once take turns over the buffer (read_stdin). */
 static unsigned char input[4096];
 static size_t input_next, input_end;
 
@@ -1200,14 +1179,12 @@ static V read_stdin_waiting(VM *vm)
 {
     fflush(stdout);
     while (input_next == input_end) {
-        /* A Ctrl-C is for the main thread, which the REPL runs in. */
-        if (vm->interrupted == INTERRUPT && (!vm->thread || vm->thread->main) && sj_take_interrupt(vm))
+        /* A Ctrl-C is for the builder, which the REPL runs in. */
+        if (vm->interrupted == INTERRUPT && sj_take_interrupt(vm))
             return sj_raise(vm, "interrupted");
 #ifdef _WIN32
-        /* select is for sockets there, so the read itself waits, without the lock,
-           and a Ctrl-C ends it. One thread reads at a time; the others look again. */
+        /* select is for sockets there, so the read itself waits, and a Ctrl-C ends it. */
         static bool input_busy;
-        Thread *t = vm->threads ? thread_leave(vm) : NULL;
         isolate_block(vm);
         long n = 1;
         if (input_busy) {
@@ -1222,8 +1199,6 @@ static V read_stdin_waiting(VM *vm)
             }
         }
         isolate_unblock(vm);
-        if (t)
-            thread_enter(t);
         if (n == 0)
             return fix(-1);
 #else
@@ -1234,12 +1209,9 @@ static V read_stdin_waiting(VM *vm)
             input_next = 0;
             input_end = (size_t)n;
         } else {
-            Thread *t = vm->threads ? thread_leave(vm) : NULL;
             isolate_block(vm);
             input_ready(true);
             isolate_unblock(vm);
-            if (t)
-                thread_enter(t);
         }
 #endif
     }
@@ -1339,8 +1311,7 @@ bool sj_init_host(VM *vm)
                {"*sterror*", STREAM_STDERR | STREAM_OUTPUT | STREAM_OPEN}};
     FILE *files[] = {stdin, stdout, stderr};
     for (size_t i = 0; i < 3; i++) {
-        V s = make_stream(vm, vm->worker_owner ? 0 : std[i].flags,
-                         vm->worker_owner ? NULL : files[i]);
+        V s = make_stream(vm, std[i].flags, files[i]);
         if (s == V_CLEARED)
             return false;
         vm_root(vm, &s); /* interning may collect */
@@ -1866,8 +1837,6 @@ V sj_primitive(VM *vm, size_t index)
                        number(ptr(a)[1]) >= 0);
     case P_QUIETP: return boolean(quiet_handler(vm));
     case P_MARK_TOPLEVEL:
-        if (vm->worker_owner)
-            return sj_raise(vm, "worker: a worker cannot install a REPL interrupt handler");
         vm->trace_floor = (size_t)(vm->fp - vm->stack);
         vm->trace = V_NIL;
         vm->repl_handlers = vm->nhandlers;
@@ -1913,12 +1882,10 @@ V sj_primitive(VM *vm, size_t index)
             return made(vm, v);
         }
     case P_EXIT:
-        if (vm->worker_owner || vm->worker_scope)
-            return sj_raise(vm, "worker: exit is a host-only operation");
         if (!is_fix(a) || fixval(a) < 0 || fixval(a) > 255)
             return sj_raise_value(vm, "~S is not an exit status", a);
-        if (vm->threads)
-            thread_exit(vm, (int)fixval(a));
+        if (vm->program->isolates)
+            program_exit(vm, (int)fixval(a)); /* other isolates may be blocked reading a stream */
         exit((int)fixval(a)); /* flushes every open stream */
     case P_SAVE_EXECUTABLE: return save_executable(vm);
     case P_BYTESP: return boolean(is_type(a, T_BYTES));
@@ -1961,15 +1928,7 @@ V sj_primitive(VM *vm, size_t index)
             return sj_raise_value(vm, "shen-jit.gc: ~S is not a vector of bindings", a);
         ptr(a)[2] = fix(fixval(ptr(a)[2]) - 1);
         return V_FALSE;
-    case P_THREAD:
-        return vm->program->isolates ? sj_raise(vm, "thread: not beside isolates") : thread_start(vm);
     case P_ISOLATE: return sj_isolate(vm, a, b, vm->args[2]);
-    case P_WORKER_SCOPE: return worker_scope(vm);
-    case P_WORKER_BATCH: return worker_batch(vm);
-    case P_WORKER_INDEX: return worker_index(vm);
-    case P_WORKER_LIVE: return worker_live(vm);
-    case P_WORKER_CANCELLED: return worker_cancelled(vm);
-    case P_WORKER_SHARED_VIEW: return worker_shared_view(vm);
     case P_FOREIGN: case P_POINTERP: case P_POINTER_KIND: case P_POINTER_ADDRESS: case P_BYTES_POINTER:
     case P_POINTER_STRING: case P_POINTER_BYTES: case P_ERRNO: case P_C_ERRNO: case P_POINTER_KILL:
     case P_POINTER_SIZED: case P_SET_POINTER: case P_POINTER_GUARD: case P_POINTER_OWNER: case P_POINTERS_DEAD:

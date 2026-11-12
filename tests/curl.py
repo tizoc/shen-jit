@@ -56,14 +56,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.wfile.flush()
             self.close_connection = True
             return
-        if self.path == '/hold':
-            self.server.hold_started.set()
-            assert self.server.hold_release.wait(15)
-        if self.path == '/await-hold':
-            assert self.server.hold_started.wait(5)
-        if self.path == '/release-hold':
-            self.server.hold_release.set()
-        if self.path in ['/slow', '/slow-echo']:
+        if self.path == '/slow':
             time.sleep(.3)
         if self.path == '/partial':
             self.send_response(200)
@@ -93,7 +86,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
         size = int(self.headers.get('Content-Length', '0'))
         incoming = self.rfile.read(size) if size else b''
-        body = incoming if self.path in ['/echo', '/slow-echo'] else b'missing' if self.path == '/error' else BINARY
+        body = incoming if self.path == '/echo' else b'missing' if self.path == '/error' else BINARY
         if self.path == '/json':
             body = b'{"ok":true}'
         status = 404 if self.path == '/error' else 302 if self.path in ['/redirect', '/loop', '/downgrade'] else 200
@@ -161,8 +154,6 @@ def main():
     executable = Path(sys.argv[1]).resolve()
     adapter = Path(sys.argv[2]).resolve()
     server = Server(('127.0.0.1', 0), Handler)
-    server.hold_started = threading.Event()
-    server.hold_release = threading.Event()
     server.sink_blocked = threading.Event()
     server.sink_release = threading.Event()
     server.produced = 0
@@ -241,19 +232,14 @@ def main():
                     streamed += '(do (output "1 passed, 0 failed~%") true) (error "borrowed stream example failed")))'
                     check_lines(run(args+['-l','lib/io-file.shen','-l','lib/grammar.shen','-l','lib/json.shen','-l',str(examples),'-e',verify,'-e',saved,'-e',streamed]),3)
                     assert example_file.read_bytes()==BINARY
-                server.hold_started.clear()
-                server.hold_release.clear()
-                check_lines(run(args+base_args+['-l','tests/curl_wait.shen','-l','tests/curl_stream_thread.shen']),1)
-                check_lines(run(args+base_args+['-l','tests/curl_wait.shen','-l','tests/curl_thread.shen']),1)
+                check_lines(run(args+base_args+['-l','tests/curl_stream_reentrant.shen']),1)
                 image = directory/'curl.img'
-                save = [str(executable),'--save',str(image)]+args[1:]+base_args+['-l','tests/curl_wait.shen','-l','tests/curl_thread.shen',
+                save = [str(executable),'--save',str(image)]+args[1:]+base_args+[
                     '-e','(set curl-image.client (curl.open))',
                     '-e','(set curl-image.streamed (let Sink (io.output-buffer (buffer.new 5)) '
                          'Result (curl.get-to (cn (value curl-test.base) "/chunked") Sink [[proxy ""]]) '
                          '_ (io.close Sink) (hd (tl Result))))',
                     '-e','(set curl-image.response (hd (tl (curl.get (cn (value curl-test.base) "/binary") [[proxy ""]]))))']
-                server.hold_started.clear()
-                server.hold_release.clear()
                 run(save)
                 env = {**os.environ,'SHEN_JIT_IMAGE':str(image)}
                 restored = run([str(executable),'eval','-e',

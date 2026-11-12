@@ -1,6 +1,5 @@
-\\ Bounded HTTP connections over existing Shen threads. Load http-server.shen first.
-\\ One supervisor owns admission and the registry; each worker publishes one final result.
-\\ Stop and socket cancellation are monotonic flags. No shared read/modify/write queue is used.
+\\ An HTTP listener that serves its connections one at a time, in the caller of http.run, until a
+\\ handler calls http.stop. Load http-server.shen first.
 
 (shen.x.namespace http
   (use buffer)
@@ -11,11 +10,11 @@
   (use shen-jit)
   (use socket)
   (import struct defstruct)
-  (externals [accept blocking cancelling define-foreign draining http-listener-options
+  (externals [accept blocking define-foreign draining http-listener-options
     http-listener-results int32 int64 listening max-connections ok pending pointer serve
-    shutdown-grace stopped thread void])
-  (shadow port)
-  (export listen listener-option option port request response server state stats stop wait
+    shutdown-grace stopped void])
+  (shadow port run)
+  (export listen listener-option option port request response run server state stats stop wait
     wait-result)
 
 (shen-jit.library wait-lib ["libc.so.6" "libSystem.dylib"])
@@ -47,52 +46,25 @@
              true (listener-config Rest Cap Grace [[Name N] | Request] [Name | Seen])))
   _ _ _ _ _ -> (error "http: listener options must be [Name Number] pairs"))
 
-\\ Public control: image guard, port, stop flag, immutable snapshot, final result.
-\\ Private registry: listener token, workers, accepted/completed/failed/cancelled/peak,
-\\ primary failure, grace deadline and phase. Only the supervisor writes the registry.
+\\ The server: its image guard, port, listening socket, handler and options, and what running it has
+\\ done so far. Only http.run and the handlers it calls change it.
 (define show-server
-  S -> (make-string "#<http server port ~A ~A>" (server.port S) (snapshot.phase (server.snapshot S))))
+  S -> (make-string "#<http server port ~A ~A>" (server.port S) (server.phase S)))
 
 (defstruct server
   (printer show-server)
   guard
   port
-  (mutable stopping)
-  (mutable snapshot)
-  (mutable result))
-
-(defstruct snapshot
-  phase
-  live
-  accepted
-  completed
-  failed
-  cancelled
-  peak)
-
-(define show-registry
-  O -> (make-string "#<http listener ~A>" (registry.phase O)))
-
-(defstruct registry
-  (printer show-registry)
   token
-  (mutable workers)
+  handler
+  options
+  (mutable stopping)
+  (mutable phase)
+  (mutable active)
   (mutable accepted)
   (mutable completed)
   (mutable failed)
-  (mutable cancelled)
-  (mutable peak)
   (mutable error)
-  (mutable grace)
-  (mutable phase))
-
-\\ A worker: its endpoint and, once it has finished, its result.
-(define show-task
-  W -> (if (empty? (task.result W)) "#<http worker running>" "#<http worker done>"))
-
-(defstruct task
-  (printer show-task)
-  endpoint
   (mutable result))
 
 (define listen
@@ -104,34 +76,21 @@
       (socket.closing-on-error L (freeze (listener-start L Handler Config)))))
 
 (define listener-start
-  L Handler Config ->
-    (let Guard (shen-jit.bytes->pointer (shen-jit.u32! (shen-jit.bytes 8) 0 1) 0 server)
-         S (:server
-             guard <- Guard
-             port <- (socket.port L)
-             stopping <- false
-             snapshot <- (:snapshot
-                           phase <- listening
-                           live <- 0
-                           accepted <- 0
-                           completed <- 0
-                           failed <- 0
-                           cancelled <- 0
-                           peak <- 0)
-             result <- [])
-         O (:registry
-             token <- (io.socket-token L)
-             workers <- []
-             accepted <- 0
-             completed <- 0
-             failed <- 0
-             cancelled <- 0
-             peak <- 0
-             error <- []
-             grace <- []
-             phase <- listening)
-         _ (thread (freeze (supervisor S O Handler Config)))
-      S))
+  L Handler [_ _ Options] ->
+    (:server
+      guard <- (shen-jit.bytes->pointer (shen-jit.u32! (shen-jit.bytes 8) 0 1) 0 server)
+      port <- (socket.port L)
+      token <- (io.socket-token L)
+      handler <- Handler
+      options <- Options
+      stopping <- false
+      phase <- listening
+      active <- 0
+      accepted <- 0
+      completed <- 0
+      failed <- 0
+      error <- []
+      result <- []))
 
 (define listener-check
   S ->
@@ -144,152 +103,98 @@
   S -> (server.port (listener-check S)))
 
 (define stop
-  S -> (do (server.stopping-> (listener-check S) true) true))
+  S -> (let _ (server.stopping-> (listener-check S) true)
+            _ (if (= (server.phase S) listening) (server.phase-> S draining) true)
+         true))
 
 (define state
-  S -> (snapshot.phase (server.snapshot (listener-check S))))
+  S -> (server.phase (listener-check S)))
 
 (define stats
   S ->
-    (let V (server.snapshot (listener-check S))
-      [(snapshot.live V) (snapshot.accepted V) (snapshot.completed V)
-       (snapshot.failed V) (snapshot.cancelled V) (snapshot.peak V)]))
+    (let _ (listener-check S)
+      [(server.active S) (server.accepted S) (server.completed S) (server.failed S) 0
+       (if (> (server.accepted S) 0) 1 0)]))
 
+\\ Connections are served in the caller of http.run, so nothing progresses while one waits: wait gives
+\\ the result once run has returned, and [pending] before.
 (define wait
   S Milliseconds ->
-    (do (listener-check S) (wait-until S (clock.deadline Milliseconds))))
+    (let _ (listener-check S)
+         _ (if (and (number? Milliseconds) (>= Milliseconds 0)) true
+               (error "http: a wait budget is a nonnegative number of milliseconds"))
+         Result (server.result S)
+      (if (empty? Result) [pending] Result)))
 
-(define wait-until
-  S D ->
-    (let Result (server.result S)
-      (cond ((not (empty? Result)) Result)
-            ((deadline.expired? D) [pending])
-            (true (do (pause (deadline.slice D 50)) (wait-until S D))))))
+\\ Serves connections one at a time, each to its end, until a handler calls http.stop or the listener
+\\ fails, then closes the listener and gives the result. The listener is polled in slices, so that
+\\ Ctrl-C reaches a REPL that runs it.
+(define run
+  S -> (let _ (listener-check S)
+            Result (server.result S)
+         (if (empty? Result)
+             (trap-error (serve-turns S)
+               (/. X (do (note-error S (io.error serve "HTTP listener" (error-to-string X)))
+                         (finish S))))
+             Result)))
 
-(define publish
-  S O ->
-    (server.snapshot-> S (:snapshot
-                           phase <- (registry.phase O)
-                           live <- (length (registry.workers O))
-                           accepted <- (registry.accepted O)
-                           completed <- (registry.completed O)
-                           failed <- (registry.failed O)
-                           cancelled <- (registry.cancelled O)
-                           peak <- (registry.peak O))))
+(define serve-turns
+  S -> (cond ((or (server.stopping S) (not (empty? (server.error S)))) (finish S))
+             ((socket.readable? (io.socket-id (server.token S)) 50) (do (admit S) (serve-turns S)))
+             (true (serve-turns S))))
+
+(define admit
+  S ->
+    (let Peer (socket.c-accept (io.socket-id (server.token S)) [] [])
+         Code (if (< Peer 0) (io.socket-code) 0)
+      (cond ((>= Peer 0) (serve-peer S (socket.closing-on-error Peer (freeze (socket.set-up Peer)))))
+            ((io.socket-again? Code) true)
+            (true (note-error S (io.socket-error accept "HTTP listener" Code))))))
+
+\\ A connection's requests, under its limits and deadlines, until it ends; after http.stop, it closes
+\\ once its active response is written. A failure ends the connection and is counted, not raised.
+(define serve-peer
+  S Peer ->
+    (let E (io.socket Peer "HTTP peer")
+         _ (server.accepted-> S (+ 1 (server.accepted S)))
+         _ (server.active-> S 1)
+         Result (trap-error
+                  (io.with-endpoint E
+                    (/. Connection (serve-controlled Connection (server.handler S) (server.options S)
+                                                     (freeze (server.stopping S)))))
+                  (/. X [error (io.error serve "HTTP connection" (error-to-string X))]))
+         _ (server.active-> S 0)
+         _ (server.completed-> S (+ 1 (server.completed S)))
+      (count-failure S Result)))
+
+(define count-failure
+  _ [ok | _] -> true
+  S [error | _] -> (do (server.failed-> S (+ 1 (server.failed S))) true))
 
 (define note-error
-  O Error ->
-    (let Previous (registry.error O)
-      (registry.error-> O (if (empty? Previous) Error (io.secondary Previous Error)))))
+  S Error ->
+    (let Previous (server.error S)
+      (server.error-> S (if (empty? Previous) Error (io.secondary Previous Error)))))
 
 (define close-listener
-  O ->
-    (let Token (registry.token O)
+  S ->
+    (let Token (server.token S)
       (if (= (shen-jit.pointer-address Token) 0)
           true
-          (listener-closed O (io.socket-close Token "HTTP listener")))))
+          (listener-closed S (io.socket-close Token "HTTP listener")))))
 
 (define listener-closed
   _ [ok] -> true
-  O [error Error] -> (do (note-error O Error) true))
+  S [error Error] -> (do (note-error S Error) true))
 
-(define reap
-  O -> (registry.workers-> O (reap-workers O (registry.workers O) [])))
-
-(define reap-workers
-  _ [] Live -> (reverse Live)
-  O [W | Rest] Live ->
-    (let Result (task.result W)
-      (if (empty? Result)
-          (reap-workers O Rest [W | Live])
-          (do (registry.completed-> O (+ 1 (registry.completed O)))
-              (count-failure O Result)
-              (reap-workers O Rest Live)))))
-
-(define count-failure
-  _ [ok _] -> true
-  O [error _] -> (do (registry.failed-> O (+ 1 (registry.failed O))) true))
-
-(define worker
-  W Handler Options Stop ->
-    (let E (task.endpoint W)
-         Result (io.with-endpoint E
-                  (/. Connection (serve-controlled Connection Handler Options Stop)))
-      (task.result-> W Result)))
-
-(define admit
-  S O Handler Options ->
-    (let Peer (socket.c-accept (io.socket-id (registry.token O)) [] [])
-         Code (if (< Peer 0) (io.socket-code) 0)
-      (cond ((>= Peer 0)
-              (if (server.stopping S)
-                  (socket.close Peer)
-                  (launch S O (socket.closing-on-error Peer (freeze (socket.set-up Peer)))
-                               Handler Options)))
-            ((io.socket-again? Code) true)
-            (true (note-error O (io.socket-error accept "HTTP listener" Code))))))
-
-(define launch
-  S O Peer Handler Options ->
-    (let E (io.socket Peer "HTTP peer")
-         W (task.make E [])
-         Workers [W | (registry.workers O)]
-         _ (registry.workers-> O Workers)
-         _ (registry.accepted-> O (+ 1 (registry.accepted O)))
-         N (length Workers)
-         _ (if (> N (registry.peak O)) (registry.peak-> O N) true)
-      (trap-error (thread (freeze (worker W Handler Options (freeze (server.stopping S)))))
-        (/. X (task.result-> W
-                (io.finish [error (io.error thread "HTTP worker" (error-to-string X))] (io.close E)))))))
-
-(define begin-stop
-  O Grace ->
-    (do (close-listener O)
-        (registry.grace-> O (clock.deadline Grace))
-        (registry.phase-> O draining)))
-
-(define cancel-workers
-  [] -> true
-  [W | Rest] -> (do (io.socket-cancel (task.endpoint W)) (cancel-workers Rest)))
-
-(define supervise
-  S O Handler [Cap Grace Options] ->
-    (do (reap O)
-        (if (and (= (registry.phase O) listening)
-                 (or (server.stopping S) (not (empty? (registry.error O)))))
-            (begin-stop O Grace) true)
-        (publish S O)
-        (cond ((= (registry.phase O) listening)
-                (do (if (< (length (registry.workers O)) Cap)
-                        (if (socket.readable? (io.socket-id (registry.token O)) 50)
-                            (admit S O Handler Options) true)
-                        (pause 50))
-                    (supervise S O Handler [Cap Grace Options])))
-              ((empty? (registry.workers O)) (finish-listener S O))
-              ((and (= (registry.phase O) draining) (deadline.expired? (registry.grace O)))
-                (do (cancel-workers (registry.workers O))
-                    (registry.cancelled-> O (length (registry.workers O)))
-                    (registry.phase-> O cancelling)
-                    (supervise S O Handler [Cap Grace Options])))
-              (true (do (pause 50) (supervise S O Handler [Cap Grace Options]))))))
-
-(define finish-listener
-  S O ->
-    (let _ (close-listener O)
-         _ (registry.phase-> O stopped)
-         _ (publish S O)
-         Error (registry.error O)
-      (server.result-> S (if (empty? Error) [ok] [error Error]))))
-
-(define supervisor
-  S O Handler Config ->
-    (trap-error (supervise S O Handler Config)
-      (/. X (do (note-error O (io.error serve "HTTP listener" (error-to-string X)))
-                (close-listener O)
-                (cancel-workers (registry.workers O))
-                (registry.cancelled-> O (length (registry.workers O)))
-                (registry.phase-> O cancelling)
-                (supervise S O Handler Config)))))
+(define finish
+  S ->
+    (let _ (close-listener S)
+         _ (server.phase-> S stopped)
+         Error (server.error S)
+         Result (if (empty? Error) [ok] [error Error])
+         _ (server.result-> S Result)
+      Result))
 
 (datatype http-listener-results
   ___________________________
@@ -323,5 +228,6 @@
 (declare state [server --> symbol])
 (declare stats [server --> [list number]])
 (declare wait [server --> [number --> wait-result]])
+(declare run [server --> wait-result])
 
 )

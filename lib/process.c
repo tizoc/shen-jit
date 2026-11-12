@@ -395,7 +395,7 @@ EXPORT shen_value shen_process_signal(shen_vm *vm, shen_value *args)
     return e.domain ? error_result(vm, e) : SHEN_TRUE;
 }
 
-/* Invalidators kill aliases while holding the VM lock, before native resources are freed. */
+/* Invalidators kill aliases before native resources are freed. */
 static bool invalidate(shen_vm *vm, shen_value *args, const char *kind)
 {
     if (!shen_is_procedure(vm, args[1])) {

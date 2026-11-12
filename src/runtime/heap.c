@@ -224,7 +224,6 @@ void vm_destroy(VM *vm)
     if (!vm)
         return;
     ffi_drain_roots(vm);
-    thread_free_all(vm);
     if (vm->space) {
 #ifdef _WIN32
         win_release(vm->space < vm->other ? vm->space : vm->other);
@@ -859,17 +858,6 @@ static void collect_into(VM *vm, uint64_t *to)
     Copy c = {from, (size_t)(from_end - from), to, vm, NULL, 0, 0};
     for (V *p = vm->stack; p < vm->top; p++)
         copy_slot(&c, p);
-    for (Thread *t = vm->threads; t; t = t->next) {
-        copy_slot(&c, &t->thunk);
-        if (t != vm->thread) {
-            copy_slot(&c, &t->exception);
-            copy_slot(&c, &t->trace);
-            for (V *p = t->stack; p < t->top; p++)
-                copy_slot(&c, p);
-            for (size_t i = 0; i < t->ncroots; i++)
-                copy_slot(&c, t->croots[i]);
-        }
-    }
     /* The program's roots may point into its owner's heap alone, so only its collections scan
        and sweep them; another context's heap holds no code (Program). */
     bool owner = vm->program->owner == vm;
@@ -967,9 +955,6 @@ static void collect_into(VM *vm, uint64_t *to)
     vm_fresh_area(vm);
     vm->collections++;
     vm_set_limit(vm, clear_above_top(vm, vm->stack, vm->stack_words, vm->fp, vm->top, vm->stack_limit));
-    for (Thread *t = vm->threads; t; t = t->next)
-        if (t != vm->thread)
-            t->stack_limit = clear_above_top(vm, t->stack, t->stack_words, t->fp, t->top, t->stack_limit);
 }
 
 static double seconds(void)

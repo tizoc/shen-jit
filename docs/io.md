@@ -38,7 +38,7 @@ open time; the library resolves this itself without kernel file helpers. POSIX p
 bytes; Windows converts UTF-8 to UTF-16 for `_wopen`, opens in binary mode and prevents inheritance.
 Windows drive-relative paths such as `C:name` are rejected. POSIX descriptors use close-on-exec. Creation permissions are 0666 subject to the POSIX umask.
 
-File reads/writes release the VM lock when other Shen threads exist. They retry EINTR, but do not promise
+File reads/writes are blocking foreign calls. They retry EINTR, but do not promise
 cancellation or deadlines: a blocking file operation can wait indefinitely. Close is never blindly retried.
 This backend supplies files; [socket endpoints](io-sockets.md) and [subprocess pipes](processes.md) use
 separate adapters. Seeking and durability sync remain separate work. [Filesystem operations](fs.md) add metadata,
@@ -188,9 +188,8 @@ condition on the next call. Expected failures must use these results rather than
 Close is a frozen zero-argument operation returning `[ok]` or `[error Error]`. Unused directions can use
 `(function io.no-read)` / `(function io.no-write)`.
 
-Public arbitrary views are copied through these bounded chunks. Blocking FFI byte arguments may be
-copied by the runtime too when other threads exist; no unrooted moving-heap address crosses a blocking
-call. This first implementation favors safe bounded copies; it does not promise zero-copy I/O.
+Public arbitrary views are copied through these bounded chunks; nothing else moves an isolate's heap during a
+blocking call. This first implementation favors safe bounded copies; it does not promise zero-copy I/O.
 
 Declarations expose opaque `io.endpoint`, `io.reader`, `io.writer`, `io.error`, and datatype rules for
 `io.read-result`, `io.write-result`, `io.transfer-result`, `io.peek-result`, `io.chunk-result`,

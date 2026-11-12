@@ -20,6 +20,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <unistd.h>
+#ifndef _WIN32
+#include <sys/resource.h>
+#endif
 
 /* A fragment's blocks, and a new isolate's heap and stack, in words. Both grow as needed. */
 enum { BLOCK_WORDS = 1 << 12, CONTEXT_WORDS = 1 << 14, CONTEXT_STACK = 1 << 12 };
@@ -638,7 +642,7 @@ static Isolates *isolates_start(VM *vm)
 {
     if (vm->program->isolates)
         return vm->program->isolates;
-    if (vm->program->owner != vm || vm->threads || vm->worker_owner)
+    if (vm->program->owner != vm)
         return NULL;
     Isolates *ps = calloc(1, sizeof *ps);
     Isolate *self = calloc(1, sizeof *self);
@@ -921,7 +925,7 @@ static void *isolate_main(void *argument)
     vm->isolate = p;
     vm->stress = program->owner->stress;
     vm->max_words = program->owner->max_words;
-    thread_note_worker_stack(vm);
+    vm_note_thread_stack(vm);
     pthread_mutex_lock(&ps->lock);
     p->vm = vm;
     vm_globals_commit(vm, ps->globals > program->nglobals ? ps->globals : program->nglobals);
@@ -1313,7 +1317,7 @@ V sj_isolate(VM *vm, V op, V a, V b)
 {
     Isolates *ps = isolates_start(vm);
     if (!ps)
-        return sj_raise(vm, "isolates start in the builder, and not beside threads or in a worker");
+        return sj_raise(vm, "isolates start in the builder");
     size_t index;
     uint32_t generation;
     switch (is_fix(op) ? fixval(op) : -1) {
@@ -1373,4 +1377,69 @@ V sj_isolate(VM *vm, V op, V a, V b)
     case OP_SELF: return handle(vm, ps->tag_isolate, vm->isolate->index, vm->isolate->generation);
     default: return sj_raise_value(vm, "shen-jit.isolate: ~S is not an operation", op);
     }
+}
+
+/* ---------------------------------------------------------------------------------------------
+   OS threads and the end of the program. */
+
+enum { C_STACK_MARGIN = 256 * 1024 }; /* for what runs past the check on a nested call */
+
+/* Where nested calls stop on a C stack of this size, seen from near its base. */
+static uintptr_t c_stack_limit(size_t bytes)
+{
+    char here;
+    return (uintptr_t)&here - bytes + C_STACK_MARGIN;
+}
+
+/* The main thread's stack: what the system gives it, with the linker's choice on Windows
+   (Makefile). */
+void vm_note_main_stack(VM *vm)
+{
+    size_t bytes = C_STACK_BYTES;
+#ifndef _WIN32
+    struct rlimit limit;
+    if (getrlimit(RLIMIT_STACK, &limit) == 0 && limit.rlim_cur != RLIM_INFINITY)
+        bytes = (size_t)limit.rlim_cur;
+#endif
+    vm->c_stack_limit = bytes > C_STACK_MARGIN ? c_stack_limit(bytes) : 0;
+}
+
+void vm_note_thread_stack(VM *vm)
+{
+    vm->c_stack_limit = c_stack_limit(C_STACK_BYTES);
+}
+
+/* Reports for the end of the program, SHEN_JIT_STATS's and the profiler's: at exit, and from
+   program_exit, whose _exit skips what atexit registers. */
+static void (*reports[4])(void);
+static size_t nreports;
+
+static void run_reports(void)
+{
+    while (nreports)
+        reports[--nreports]();
+}
+
+void at_program_exit(void (*report)(void))
+{
+    if (nreports == sizeof reports / sizeof reports[0])
+        return;
+    if (!nreports)
+        atexit(run_reports);
+    reports[nreports++] = report;
+}
+
+/* Ends the program while isolates may run. exit would flush every stream, waiting on any that
+   another isolate is blocked reading, so this flushes what this one wrote and goes. */
+void program_exit(VM *vm, int status)
+{
+    run_reports();
+    fflush(stdout);
+    fflush(stderr);
+    for (size_t i = 0; i < vm->nfiles; i++) {
+        uint64_t *o = ptr(vm->files[i]);
+        if ((o[STREAM_FLAGS] & STREAM_OPEN) && (o[STREAM_FLAGS] & STREAM_OUTPUT))
+            fflush((FILE *)(uintptr_t)o[STREAM_HANDLE]);
+    }
+    _exit(status);
 }

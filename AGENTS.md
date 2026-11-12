@@ -19,8 +19,8 @@ checkout's own workflow, and git ignores it.
 | `docs/` | The guide's source, and how it works |
 | `site/` | What renders the guide: pandoc's template and a filter |
 | `include/` | `shen.h`, for C written for Shen |
-| `lib/` | Libraries that are not in the default image, loaded on request: `native.shen`, native code written by hand and the rules bytecode is checked against, `ffi.shen`, calling C, and `memory.shen`, `mmap.shen`, `sqlite.shen` and `socket.shen` over it, `handle.shen`, which releases memory once nothing reaches it, `datalog.shen`, relations and recursive rules, over `native.shen`, `buffer.shen` and `cursor.shen`, views over bytes, `grammar.shen`, parsers over those, I/O over those (`io.shen`, `io-file.shen`, `io-socket.shen`, `frame.shen`, `deadline.shen` and `clock.shen`), HTTP/1.1 over that (`http-*.shen`), `json.shen`, and worker scopes, runtimes on OS threads over copied bytes (`parallel.shen`), with `parallel-map.shen`, copied values, and `datalog-parallel.shen`, Datalog over workers |
-| `tools/` | Scripts: `stlib.shen` writes the executable of `make stlib`, `ci-deps.sh` fetches the kernel, the earlier release that builds this one and Shen/Scheme, `package.sh` makes a release archive, `release-notes.sh` prints a version's section of the changelog, `tree-sitter-deps.sh` fetches the pinned Tree-sitter runtime and C grammar, and `buffer-parsers.shen`, `frame-echo.shen`, `http-echo.shen`, `http-head-capture.shen`, `fs-copy.shen`, `process-filter.shen`, `curl-fetch.shen` and `parallel-map.shen` are small examples over the libraries |
+| `lib/` | Libraries that are not in the default image, loaded on request: `native.shen`, native code written by hand and the rules bytecode is checked against, `ffi.shen`, calling C, and `memory.shen`, `mmap.shen`, `sqlite.shen` and `socket.shen` over it, `handle.shen`, which releases memory once nothing reaches it, `datalog.shen`, relations and recursive rules, over `native.shen`, `buffer.shen` and `cursor.shen`, views over bytes, `grammar.shen`, parsers over those, I/O over those (`io.shen`, `io-file.shen`, `io-socket.shen`, `frame.shen`, `deadline.shen` and `clock.shen`), HTTP/1.1 over that (`http-*.shen`), and `json.shen` |
+| `tools/` | Scripts: `stlib.shen` writes the executable of `make stlib`, `ci-deps.sh` fetches the kernel, the earlier release that builds this one and Shen/Scheme, `package.sh` makes a release archive, `release-notes.sh` prints a version's section of the changelog, `tree-sitter-deps.sh` fetches the pinned Tree-sitter runtime and C grammar, and `buffer-parsers.shen`, `frame-echo.shen`, `http-echo.shen`, `http-head-capture.shen`, `fs-copy.shen`, `process-filter.shen` and `curl-fetch.shen` are small examples over the libraries |
 | `example-apps/` | Runnable applications built over the public libraries, each with its own README and independent test: `sqlite-http` over HTTP and SQLite, `depends` over Datalog, `source-facts`, C source facts from Tree-sitter, and `source-deps`, those facts in Datalog |
 | `assets/` | The logos and icons |
 | `tests/` | Unit tests, `eval-kl` cases, CLI tests and benchmark drivers |
@@ -73,19 +73,18 @@ Run what the change can break, and nothing more: CI runs everything on every pus
 | What changed | What to run |
 | --- | --- |
 | The runtime, the JIT, the lowerer, the port, `vendor/` or the generated files | `make test-core` (about 20 s) |
-| The C API (`include/shen.h`, `src/runtime/ffi.c`), images or threads, which libraries and their adapters use too | `make test-core test-libs` |
+| The C API (`include/shen.h`, `src/runtime/ffi.c`), images or isolates, which libraries and their adapters use too | `make test-core test-libs` |
 | `lib/native.shen` | `make test-native test-datalog` |
 | `lib/ffi.shen` | `make test-ffi test-libs` |
 | A library others load: `buffer`, `io`, `io-file`, `grammar`, `json`, `memory`, `socket`, `deadline`, `clock` or `fs` | `make test-libs` (about 30 s) |
 | `datalog`, `http-*`, `process*`, `tree-sitter`, `curl` | `make test-datalog`, `test-http`, `test-process`, `test-tree-sitter`, `test-curl` |
-| `parallel` | `make test-parallel`; add `make test-parallel-stress` for ownership/lifetime changes |
 | `frame`; `cursor`; `mmap`, `handle`, `sqlite` | `make test-io`; `test-buffer`; `test-ffi`, and `test-http` for `sqlite` |
 | An application in `example-apps/` | `test-http` for `sqlite-http`, `test-datalog` for `depends` and `source-deps`, `test-tree-sitter` for `source-facts` |
 | A test, `Makefile`, `tools/` or CI | What the edit touches |
 | Documentation only | Nothing; `make guide` if a rendered page's layout changed, and the examples you changed |
 
 `make test-core` is `test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn
-test-native test-ffi test-overrides test-structs test-workers test-isolates`, and `make test-libs` is `test-buffer test-json test-io test-fs test-process test-parallel
+test-native test-ffi test-overrides test-structs test-isolates`, and `make test-libs` is `test-buffer test-json test-io test-fs test-process
 test-tree-sitter test-http test-datalog test-curl test-namespaces`.
 
 Keep each suite fast. A check that needs a collection at every allocation, a long wait or a large input goes in a

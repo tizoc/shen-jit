@@ -403,7 +403,7 @@ static int isolate_test(const char *image, const char *program)
         return 1;
     }
     jit_attach(vm, jit);
-    thread_note_main_stack(vm);
+    vm_note_main_stack(vm);
     const char *stress = getenv("SHEN_JIT_GC_STRESS");
     vm->stress = stress ? strtoul(stress, NULL, 10) : 0;
     V path = make_string(vm, program, strlen(program));

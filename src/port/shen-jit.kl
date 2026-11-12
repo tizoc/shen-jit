@@ -273,9 +273,6 @@ binding, so what an earlier query left above that offset is never read."
   (let Vector (absvector (value shen.*prolog-memory*))
     (do (address-> Vector 0 shen.print-prolog-vector) (address-> Vector 1 2))))
 
-"No call between reading the free list and setting it, so another thread cannot
-take the same vector: threads switch at function entries and loop checks."
-
 (defun shen-jit.prolog-done (Vector Result)
   (do (set shen-jit.*free-prolog-vectors*
            (cons Vector (trap-error (value shen-jit.*free-prolog-vectors*) (lambda E ()))))
@@ -617,7 +614,6 @@ which the printer calls."
     (do (shen-jit.primitive shen-jit.same? 2)
     (do (shen-jit.primitive shen-jit.newpv 2)
     (do (shen-jit.primitive shen-jit.gc 2)
-    (do (shen-jit.primitive shen-jit.thread 1)
     (do (shen-jit.primitive shen-jit.foreign 2)
     (do (shen-jit.primitive shen-jit.pointer? 1)
     (do (shen-jit.primitive shen-jit.pointer-kind 1)
@@ -644,14 +640,8 @@ which the printer calls."
     (do (shen-jit.primitive shen-jit.pointer-read-only 1)
     (do (shen-jit.primitive shen-jit.collect 0)
     (do (shen-jit.primitive shen-jit.write-bytes 4)
-    (do (shen-jit.primitive shen-jit.worker-scope 5)
-    (do (shen-jit.primitive shen-jit.worker-batch 2)
-    (do (shen-jit.primitive shen-jit.worker-index 0)
-    (do (shen-jit.primitive shen-jit.worker-live 0)
-    (do (shen-jit.primitive shen-jit.worker-cancelled? 0)
-    (do (shen-jit.primitive shen-jit.worker-shared-view 0)
     (do (shen-jit.primitive shen-jit.arity 1) (do (shen-jit.primitive shen-jit.function 1)
-    (do (shen-jit.primitive shen-jit.set-arity 2) (do (shen-jit.primitive shen-jit.apply 2) (do (shen-jit.primitive shen-jit.isolate 3) shen.skip)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+    (do (shen-jit.primitive shen-jit.set-arity 2) (do (shen-jit.primitive shen-jit.apply 2) (do (shen-jit.primitive shen-jit.isolate 3) shen.skip))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
 
 "Cleanup, as a library that holds something outside the heap needs it.
 (shen-jit.finally Body Cleanup) thaws Body, then Cleanup however Body ended,
@@ -678,11 +668,7 @@ the process with status N; it is not named exit, since port definitions are
 sealed and programs may define their own exit. (shen-jit.save-executable Path
 Entry) writes a binary and ends the process. shen-jit.finally and
 shen-jit.on-error are typed, and can be given one argument. The others are for native.shen,
-which would otherwise compile its calls to them as look-ups with fn.
-
-(thread Frozen) runs Frozen in a new thread, as Shen/Scheme's does, with one
-thread at a time holding a lock (thread.c). It is defined here, once sealing has
-ended, since programs may define their own thread."
+which would otherwise compile its calls to them as look-ups with fn."
 
 (defun shen-jit.initialise ()
   (do (shen.initialise-arity-table
@@ -700,9 +686,8 @@ ended, since programs may define their own thread."
   (do (shen-jit.struct.initialise)
   (do (shen-jit.register-primitives)
   (do (shen-jit.primitive-procedures)
-  (do (eval-kl (cons defun (cons thread (cons (cons x ()) (cons (cons shen-jit.thread (cons x ())) ())))))
   (do (shen.initialise-arity-table
-        (cons thread (cons 1 (cons shen-jit.seal (cons 1 (cons shen-jit.backtrace (cons 0
+        (cons shen-jit.seal (cons 1 (cons shen-jit.backtrace (cons 0
           (cons shen-jit.exit (cons 1 (cons shen-jit.code (cons 1
             (cons shen-jit.save-executable (cons 2
               (cons shen-jit.install (cons 1 (cons shen-jit.symbol? (cons 1
@@ -712,7 +697,7 @@ ended, since programs may define their own thread."
                       (cons shen-jit.lower.constant (cons 2 (cons shen-jit.lower.add-code (cons 2
                         (cons shen-jit.lower.code-form (cons 1 (cons shen-jit.lower.prim-arity (cons 1
                           (cons shen-jit.lower.fixed? (cons 1
-                            (cons shen-jit.finally (cons 2 (cons shen-jit.on-error (cons 2 ())))))))))))))))))))))))))))))))))))))))))
+                            (cons shen-jit.finally (cons 2 (cons shen-jit.on-error (cons 2 ())))))))))))))))))))))))))))))))))))))))
       (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.finally))
       (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.on-error))
       (do (declare shen-jit.fixnum? (cons A (cons --> (cons boolean ()))))
@@ -720,12 +705,11 @@ ended, since programs may define their own thread."
                                       (cons --> (cons (cons (cons lazy (cons B ())) (cons --> (cons A ()))) ()))))
       (do (declare shen-jit.on-error (cons (cons lazy (cons A ()))
                                        (cons --> (cons (cons (cons lazy (cons B ())) (cons --> (cons A ()))) ()))))
-      (do (shen.set-lambda-form-entry (shen.lambda-entry thread))
       (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.seal))
           (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.exit))
               (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.code))
                   (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.save-executable))
-                      (set shen-jit.defined ())))))))))))))))))))))
+                      (set shen-jit.defined ())))))))))))))))))))
 
 "Definitions are factorised as they are evaluated, as Shen/Scheme's compiler
 does: the kernel's shen.factor binds each selector once and shares the tests

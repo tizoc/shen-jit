@@ -149,8 +149,7 @@
 (sqlite-test.message-starts "closed twice" "foreign:" (freeze (sqlite.close (db))))
 
 \\ ---------------------------------------------------------------------------
-\\ A file, from two threads with a connection each, which wait for each other inside C while
-\\ the lock is free: the threads run in turns only if sqlite.step gives it up.
+\\ A file, with two connections open to it, which write in turn.
 
 (set path "sqlite-test.db")
 (set file (sqlite.open (value path)))
@@ -158,25 +157,20 @@
 (sqlite.close (value file))
 
 (define sqlite-test.insert
-  _ 0 -> true
-  Db N -> (do (sqlite.run Db "INSERT INTO n VALUES (?)" [N]) (sqlite-test.insert Db (- N 1))))
+  _ _ 0 -> true
+  A B N -> (do (sqlite.run A "INSERT INTO n VALUES (?)" [N])
+               (sqlite.run B "INSERT INTO n VALUES (?)" [N])
+               (sqlite-test.insert A B (- N 1))))
 
 (define sqlite-test.writer
-  Name -> (let Db (sqlite.open (value path))
-            (do (sqlite.exec Db "PRAGMA synchronous = OFF")
-                (sqlite-test.insert Db 20)
-                (sqlite.close Db)
-                (set Name done))))
+  -> (let Db (sqlite.open (value path))
+       (do (sqlite.exec Db "PRAGMA synchronous = OFF") Db)))
 
-(define sqlite-test.wait
-  Name -> (if (= (value Name) waiting) (sqlite-test.wait Name) done))
-
-(set first waiting)
-(set second waiting)
-(thread (freeze (sqlite-test.writer first)))
-(thread (freeze (sqlite-test.writer second)))
-(sqlite-test.wait first)
-(sqlite-test.wait second)
+(let A (sqlite-test.writer)
+     B (sqlite-test.writer)
+  (do (sqlite-test.insert A B 20)
+      (sqlite.close A)
+      (sqlite.close B)))
 (sqlite-test.check "two writers" [[40]]
   (freeze (let Db (sqlite.open (value path))
                Rows (sqlite.query Db "SELECT count(*) FROM n" [])

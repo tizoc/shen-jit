@@ -41,7 +41,7 @@
    6. Returning from a procedure unroots what it rooted, however it returns. A callback a C library
       makes, not being a procedure, unroots its own. A callback must come on the thread that called
       the library: a thread the runtime did not start cannot call in.
-   7. shen_vm is this thread's and this call's: never keep one past the call that gave it.
+   7. shen_vm is this isolate's and this call's: never keep one past the call that gave it.
 
    A read of the wrong type gives SHEN_NONE, or NULL, or as it says below, and never raises. Passing
    SHEN_NONE or SHEN_ERROR on, or returning SHEN_NONE, ends the process with a message naming the
@@ -233,7 +233,8 @@ static inline shen_value shen_exception(shen_vm *vm) { return (*vm)->exception(v
 /* Its message, as a Shen string. May collect. */
 static inline shen_value shen_exception_message(shen_vm *vm) { return (*vm)->exception_message(vm); }
 
-/* The lock, around a call that waits: other threads run meanwhile, and may collect. */
+/* Around C that waits: the isolate counts as stopped meanwhile, so that the builder need not wait for
+   it to define. */
 static inline void *shen_release(shen_vm *vm) { return (*vm)->release(vm); }
 static inline void shen_acquire(shen_vm *vm, void *token) { (*vm)->acquire(vm, token); }
 

@@ -1,4 +1,4 @@
-/* Optional libcurl adapter over the public Shen C API. No Shen access without the VM lock. */
+/* Optional libcurl adapter over the public Shen C API. No Shen access between shen_release and shen_acquire. */
 #include "shen.h"
 #include <curl/curl.h>
 #include <stdbool.h>
@@ -35,7 +35,7 @@ typedef struct {
     char error[CURL_ERROR_SIZE];
 } Transfer;
 
-/* All entry points start with the VM lock held; initialization precedes any released transfer. */
+/* Initialization precedes any transfer. */
 static bool initialized;
 static CURLcode initialize(void)
 {
@@ -80,7 +80,7 @@ EXPORT shen_value shen_curl_close(shen_vm *vm, shen_value *args)
     if (!c) return shen_raise(vm, "curl: client is closed or stale");
     if (c->busy) return shen_raise(vm, "curl: client is already in use");
     c->busy = true;
-    /* Invalidate every ordinary alias before releasing the lock or freeing the native client. */
+    /* Invalidate every ordinary alias before the transfer waits or the native client is freed. */
     if (!shen_is_procedure(vm, args[1])) { c->busy = false; return shen_raise(vm, "curl: missing invalidator"); }
     if (shen_call(vm, args[1], 1, args) == SHEN_ERROR) { c->busy = false; return SHEN_ERROR; }
     if (shen_pointer(vm, args[0], "curl.client")) {
@@ -120,7 +120,7 @@ static bool append(Buffer *b, const void *data, size_t n, size_t limit, Transfer
 
 static shen_value result(shen_vm *vm, Transfer *t, CURLcode rc, CURL *easy);
 
-/* Called with the lock held. Callback roots must leave before this C frame does. */
+/* Callback roots must leave before this C frame does. */
 static bool stream_event(Transfer *t, bool head, const char *data, size_t n)
 {
     shen_value args[2] = {SHEN_NIL, SHEN_NIL};
@@ -357,7 +357,7 @@ static shen_value request(shen_vm *vm, shen_value *args, shen_value handler)
     if (!rc) {
         t.token = shen_release(vm);
         rc = curl_easy_perform(c->easy);
-        /* A failed callback keeps the lock, preserving a pending Shen exception until return. */
+        /* A failed callback keeps a pending Shen exception until return. */
         if (!t.locked) shen_acquire(vm, t.token);
     }
     if (!rc && t.streaming && !t.started && !stream_event(&t, true, NULL, 0)) rc = CURLE_WRITE_ERROR;

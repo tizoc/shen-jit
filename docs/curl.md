@@ -153,11 +153,11 @@ domain, code and resource. All streaming failures report the total bytes accepte
 guarantee. Cleanup failures accompany a primary error as secondary errors. If only close fails,
 its error still reports the total accepted body bytes. The client remains reusable after failure.
 
-Backpressure is synchronous: the native write callback reacquires the VM lock, copies at most
+Backpressure is synchronous: the native write callback copies at most
 `chunk-size` bytes into an owned managed chunk, and fully writes it through our I/O API before
 returning to libcurl. There is no background producer, body queue or native whole-response buffer.
-Other Shen threads can run during network waits and blocking sink operations. The callback always
-runs on the thread that initiated the request and releases its temporary roots before returning.
+The callback always runs on the thread of the isolate that made the request, and releases its
+temporary roots before returning.
 
 Live payload storage depends on the bounded request copy, header budget, one delivery chunk and I/O
 scratch, rather than the response's total size. Unreachable scratch awaits collection; allocator,
@@ -167,7 +167,7 @@ own storage. The body limit is a total transfer quota, independent of this memor
 `timeout` cannot interrupt arbitrary Shen code or a blocked sink backend. libcurl observes its
 network timer as control returns to it. Configure the sink's own deadlines, such as a socket I/O
 deadline, when its writes can block. Slow sinks can therefore outlast a network timeout before
-returning an error; no worker thread is left downloading in the background.
+returning an error; nothing is left downloading in the background.
 
 ## Options and limits
 
@@ -248,7 +248,7 @@ another explicit request, so this API does not silently replay uploads or choose
 rules. Custom headers can be forwarded to redirect targets: enable redirects only with an
 appropriate header policy. See [libcurl's header forwarding rules](https://curl.se/libcurl/c/CURLOPT_HTTPHEADER.html).
 
-## Ownership and threads
+## Ownership
 
 `curl.open` returns a `curl.client`. `curl.close` returns `[ok]` or `[error Error]` and remembers its
 completed result, making repeated closure safe. `curl.with-client` requires a callback returning
@@ -258,13 +258,12 @@ discarding it does not install a GC finalizer. Saved clients are stale and must 
 
 Use one client per simultaneous transfer. An overlapping request or close returns an error without
 freeing or invalidating the active client. A completed transfer leaves it reusable after success or
-failure. The VM lock is released during the network operation and native cleanup, allowing other
-Shen threads to run. Buffered callbacks touch native storage. Streaming body callbacks reacquire the
-VM lock before calling the sink and do not resume network reads until the write completes.
+failure. A client belongs to the isolate that opened it. Buffered callbacks touch native storage.
+Streaming body callbacks call the sink and do not resume network reads until the write completes.
 
 The adapter initializes libcurl once and leaves global cleanup to process exit. With libcurl older
 than 7.84.0, or a build without thread-safe global initialization, call `curl.version` or `curl.open`
-before creating application threads. Its [global initialization contract](https://curl.se/libcurl/c/threadsafe.html)
+in the builder before spawning isolates that use libcurl. Its [global initialization contract](https://curl.se/libcurl/c/threadsafe.html)
 applies to other native threads in an embedding host too.
 
 ## Downloader and tests

@@ -76,7 +76,6 @@ enum {
     T_EXCEPTION,  /* [message][value]: the value goes before the message */
     T_STREAM,     /* [flags raw][handle raw] */
     T_POINTER,    /* [kind][owner][address raw][length raw]: a C pointer, read only if its size is 1; an image clears all but the kind */
-    T_SHARED_BYTES, /* a worker scope's read-only input, laid out as a pointer; an image and the scope's end clear it */
     T_LIMIT
 };
 
@@ -128,7 +127,7 @@ static inline size_t obj_words(uint64_t h)
     case T_CODE: return CODE_WORDS;
     case T_EXCEPTION: return EXC_WORDS;
     case T_STREAM: return STREAM_WORDS;
-    case T_POINTER: case T_SHARED_BYTES: return POINTER_WORDS;
+    case T_POINTER: return POINTER_WORDS;
     default: return 0;
     }
 }

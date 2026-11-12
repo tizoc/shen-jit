@@ -67,11 +67,9 @@ pagination. Streaming storage and database lifetimes remain bounded by the row/o
 
 ## Shutdown
 
-Use `POST /shutdown` for controlled shutdown of the runnable example. The main task notices the flag
-within its 100 ms wait loop, calls `http.stop`, then waits for all workers to clean up. The listener stops
-admitting connections; active work gets a grace period, after which blocked socket I/O is cancelled.
-SQLite calls already in progress finish under SQLite's configured busy timeout. Ordinary errors during
-the main wait also request shutdown and wait before being raised again.
+Use `POST /shutdown` for controlled shutdown of the runnable example. Its handler calls `http.stop`, the
+response is written, and the listener closes and `http.run` returns. Connections are served one at a time,
+in turn, so a client that stalls holds the others back until its own head or body timeout ends it.
 
 Scripts currently receive Ctrl-C as process termination. It does not invoke this application's graceful
 stop path. Catchable interruption at the REPL has different semantics. Signal-driven service shutdown
@@ -81,8 +79,8 @@ would need separate runtime/library support; this example uses an explicit appli
 
 `main.shen` holds the routes, database scopes, startup and shutdown. `run.shen` loads their public
 dependencies and passes the command-line arguments. Applications can instead load `main.shen` and call
-`counter-app.start Path Host Port Options`, which returns an `http.server`; its caller controls shutdown
-with `http.stop` and `http.wait`. The `/shutdown` control route is supplied by `counter-app.run`.
+`counter-app.start Path Host Port Options`, which returns an `http.server` that its caller serves with
+`http.run` until a handler calls `http.stop`. The `/shutdown` control route is supplied by `counter-app.run`.
 
 ```sh
 python3 example-apps/sqlite-http/test.py build/shen-jit
@@ -90,9 +88,9 @@ make test-http
 ```
 
 The independent Python test uses temporary files, HTTP clients and SQLite to check routes, HEAD,
-malformed input, parameter handling, JSON PUT bodies, 32 concurrent increments, persistence across restart
-streaming NDJSON and repeated requests on the same socket,
-and shutdown with stalled fixed-body and chunk-extension input. It also launches `run.shen` and exercises its shutdown command. `make test-http`
+malformed input, parameter handling, JSON PUT bodies, 32 increments from concurrent clients, persistence
+across restart, streaming NDJSON and repeated requests on the same socket. It also launches `run.shen` and
+exercises its shutdown command. `make test-http`
 runs the Shen regression tests on supported platforms, including static-build skips for native parts.
 
 The [bounded server reference](../../docs/http-listener.md) documents the reusable API and ownership
