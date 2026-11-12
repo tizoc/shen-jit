@@ -94,7 +94,7 @@ def fixtures(root):
 def saved_image(executable, base, root):
     image = root / "fs.img"
     save = [str(executable), "--save", str(image)] + base[1:] + [
-        "-l", "tests/curl_wait.shen", "-l", "tests/fs_gc_helpers.shen",
+        "-l", "tests/fs_gc_helpers.shen",
         "-s", "fs-image.root", string(root),
         "-e", '(set fs-image.info (hd (tl (fs.stat (fs.join (value fs-image.root) "data")))))',
         "-e", '(set fs-image.names (hd (tl (fs.list (fs.join (value fs-image.root) "listing") []))))',
@@ -113,7 +113,7 @@ def saved_image(executable, base, root):
     assert "restored: 6 true true" in restored.stdout, restored.stdout[-1000:]
     stressed = run([
         str(executable), "eval", "-e",
-        '(do (fs-gc.threaded (value fs-image.root)) (output "fs gc ok~%") true)',
+        '(do (fs-gc.run (value fs-image.root)) (output "fs gc ok~%") true)',
     ], env={**env, "SHEN_JIT_GC_STRESS": "1"})
     assert "fs gc ok" in stressed.stdout, stressed.stdout[-1000:]
     print("4 passed, 0 failed", flush=True)

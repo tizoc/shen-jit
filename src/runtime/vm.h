@@ -103,26 +103,6 @@ typedef struct Program {
     struct Isolates *isolates;
 } Program;
 
-/* What a thread keeps of its own (thread.c). The running thread's stack and
-   handlers are in the VM's fields; these hold them while it waits. */
-typedef struct Thread {
-    struct Thread *next;
-    struct VM *vm;
-    bool main;
-    V thunk; /* what it will run, until it starts */
-    V exception, trace; /* its vm->exception and vm->trace while another thread runs */
-    V *stack, *fp, *top, *stack_limit;
-    size_t stack_words;
-    struct Handler *handlers;
-    size_t nhandlers, handlers_cap;
-    size_t trace_floor;
-    void *site;
-    uintptr_t c_stack_limit;
-    V **croots;
-    size_t ncroots, croots_cap;
-    int foreign_error, foreign_c_error;
-} Thread;
-
 typedef struct VM {
     /* Fields read by emitted code first, at fixed offsets. */
     uint64_t *hp;      /* allocation cursor */
@@ -200,9 +180,8 @@ typedef struct VM {
        shen-jit.save-executable. */
     const char *self;
     size_t launch_base;
-    /* Ctrl-C at the REPL: the signal
-       handler sets interrupted to INTERRUPT and clears check_limit. The thread
-       ticker does the same with PREEMPT. */
+    /* Ctrl-C at the REPL: the signal handler sets interrupted to INTERRUPT and clears
+       check_limit. The builder does the same with ATTEND for an isolate (isolate.c). */
     volatile int interrupted;
     size_t repl_handlers; /* handlers active when the REPL's is the innermost */
     uintptr_t c_stack_limit; /* nested calls stop before the C stack reaches this; 0: never */
@@ -234,18 +213,11 @@ typedef struct VM {
     /* What the last foreign call on this thread left in errno and, on Windows,
        GetLastError: saved at once, since anything after it may overwrite them. */
     int foreign_error, foreign_c_error;
-    /* All threads, the running one included, and the running one: NULL until
-       the first (thread F). */
-    Thread *threads, *thread;
 
     /* What C written for Shen is given a pointer to (include/shen.h), so that it links against
        nothing: its first word is the table of functions, and ffi.c finds the VM from it. */
     const struct shen_api *api;
 
-
-    /* Worker scopes (src/runtime/worker.c). Ordinary emitted code never reads these. */
-    struct WorkerScope *worker_scope; /* the host's open scope */
-    struct Worker *worker_owner;      /* the worker this VM runs, on its own OS thread */
 
     /* Global values, by the number a symbol gets once code names it as a global or it is set
        (objects.c, Program): the slots lie in the VM's own block of address space, committed as
@@ -259,7 +231,7 @@ typedef struct VM {
     V globals[];
 } VM;
 
-enum { INTERRUPT = 1, PREEMPT = 2, ATTEND = 3 }; /* vm->interrupted; ATTEND: the isolate's turn (isolate.c) */
+enum { INTERRUPT = 1, ATTEND = 2 }; /* vm->interrupted; ATTEND: the isolate's turn (isolate.c) */
 
 typedef struct Handler {
     /* Frame of the trap-error, as an offset in the stack, shifted left by 1;
@@ -287,21 +259,13 @@ void vm_fresh_area(VM *vm);
 size_t vm_semispace_for(size_t live_words);
 V *vm_cleared_stack(size_t words);
 
-/* Threads (thread.c): real ones, of which one runs at a time. (thread F) starts
-   one with F in vm->args[0]. thread_leave lets others run, for a thread about
-   to block, until thread_enter. */
-V thread_start(VM *vm);
-Thread *thread_leave(VM *vm);
-void thread_enter(Thread *t);
-void thread_yield(VM *vm);
-void thread_preempted(VM *vm);
-void thread_exit(VM *vm, int status);
-void thread_at_exit(void (*report)(void));
-void thread_forget_others(VM *vm);
-bool thread_is_only(const VM *vm);
-void thread_free_all(VM *vm);
-void thread_note_main_stack(VM *vm);
-void thread_note_worker_stack(VM *vm);
+/* OS threads (isolate.c): where nested calls stop on the main thread's C stack and on an
+   isolate's; reports for the end of the program; and its end while isolates may be blocked,
+   which flushes what was written and leaves without waiting for them. */
+void vm_note_main_stack(VM *vm);
+void vm_note_thread_stack(VM *vm);
+void at_program_exit(void (*report)(void));
+void program_exit(VM *vm, int status);
 void vm_destroy(VM *vm);
 V *ra_at(RootArray *ra, size_t i);
 bool ra_push(RootArray *ra, V v, size_t *index);
@@ -466,11 +430,6 @@ static inline bool memory_of(V v, char **base, size_t *length)
         *length = (size_t)ptr(v)[POINTER_LENGTH];
         return true;
     }
-    if (obj_type(v) == T_SHARED_BYTES) {
-        *base = ptr(v)[POINTER_ADDRESS] ? (char *)(uintptr_t)ptr(v)[POINTER_ADDRESS] : (char *)"";
-        *length = (size_t)ptr(v)[POINTER_LENGTH];
-        return true;
-    }
     return false;
 }
 
@@ -478,7 +437,7 @@ static inline bool memory_of(V v, char **base, size_t *length)
    marked so, by the size in its header. */
 static inline bool is_read_only(V v)
 {
-    return obj_type(v) == T_STRING || obj_type(v) == T_SHARED_BYTES ||
+    return obj_type(v) == T_STRING ||
            (obj_type(v) == T_POINTER && hdr_size(ptr(v)[0]));
 }
 

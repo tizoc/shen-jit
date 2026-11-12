@@ -140,14 +140,6 @@ plus:
   argument, and if that is false, moves the next offset of the bindings back by one, inline; the port's `shen.gc`
   uses it. `shen-jit.same?` (arity 2) tells whether two values are one and the same. The port's `shen.make-prolog-variable`, `shen.pvar?`,
   `shen.lazyderef`, `shen.deref`, `shen.bindv` and `shen.unwind` use them.
-- `shen-jit.thread`: arity 1, runs a procedure of no arguments in a new thread
-  (`src/runtime/thread.c`). The port defines `thread` with it, after sealing ends, so
-  that programs may define their own.
-- `shen-jit.worker-scope` (arity 5), `shen-jit.worker-batch` (2), and with no arguments
-  `shen-jit.worker-index`, `shen-jit.worker-live`, `shen-jit.worker-cancelled?` and
-  `shen-jit.worker-shared-view`: worker scopes (`src/runtime/worker.c`), which `lib/parallel.shen`
-  wraps. They call C, with no new instruction. A shared view is an object of its own type laid out as a
-  pointer; byte reads take it on the pointer's slow path, after the test for a pointer, and in memory caches.
 - `shen-jit.foreign`: arity 2, `(shen-jit.foreign Name Desc)` makes Name a C function, as `lib/ffi.shen`
   describes it (`src/runtime/ffi.c`, and [ffi.md](ffi.md)), and returns Name. Calls go through a stub shared by all of them, so
   no instruction is new. `shen-jit.pointer?`, `shen-jit.pointer-kind`, `shen-jit.pointer-address`,

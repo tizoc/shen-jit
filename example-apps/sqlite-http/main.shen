@@ -204,48 +204,34 @@
     (do (counter-app.initialize Path)
         (http.listen Host Port (/. Request (counter-app.handle Path Request)) Options)))
 
+\\ Serves until a handler stops the server; connections are served one at a time.
 (define counter-app.await
-  S -> (counter-app.await-result S (http.wait S 1000)))
+  S -> (counter-app.await-result S (http.run S)))
 
 (define counter-app.await-result
-  S [pending] -> (counter-app.await S)
   _ [ok] -> true
   _ [error Error] -> (error "counter server: ~A" (io.error-message Error)))
 
 (define counter-app.run
   Path Port ->
-    (let Stop (io.record [false])
+    (let Server (io.record [[]])
          _ (counter-app.initialize Path)
-         S (http.listen "127.0.0.1" Port (/. Q (counter-app.control Path Stop Q))
-              [[max-connections 16] [shutdown-grace 1000] [body-limit 4096]
-               [response-body-limit 65536]])
+         S (http.listen "127.0.0.1" Port (/. Q (counter-app.control Path Server Q))
+              [[body-limit 4096] [response-body-limit 65536]])
+         _ (address-> Server 0 S)
          _ (output "Listening on http://127.0.0.1:~A~%" (http.port S))
-      (trap-error (counter-app.run-until-stopped S Stop)
-        (/. X (do (http.stop S)
-                  (counter-app.await S)
-                  (simple-error (error-to-string X)))))))
+      (counter-app.await S)))
 
 (define counter-app.control
-  Path Stop Request ->
+  Path Server Request ->
     (if (= (http.target Request) "/shutdown")
         (cond ((not (= (http.method Request) "POST"))
                 (http.response 405 [["Allow" "POST"]] (buffer.new 0)))
               ((> (http.content-length Request) 0)
                 (counter-app.error 400 "this API expects an empty body"))
-              (true (do (address-> Stop 0 true)
+              (true (do (http.stop (<-address Server 0))
                         (http.close-after (counter-app.json 202 [object ["stopping" true]])))))
         (counter-app.handle Path Request)))
-
-(define counter-app.run-until-stopped
-  S Stop ->
-    (if (<-address Stop 0)
-        (do (http.stop S) (counter-app.await S))
-        (counter-app.control-result S Stop (http.wait S 100))))
-
-(define counter-app.control-result
-  S Stop [pending] -> (counter-app.run-until-stopped S Stop)
-  _ _ [ok] -> true
-  _ _ [error Error] -> (error "counter server: ~A" (io.error-message Error)))
 
 (define counter-app.port-number
   Text ->

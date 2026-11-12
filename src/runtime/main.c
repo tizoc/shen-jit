@@ -185,7 +185,7 @@ static void print_stats(void)
     /* What stays live, by type, to help find memory growth. */
     static const char *const names[T_LIMIT] = {"pairs", "strings", "bytecode", "symbols", "reals",
                                                "absvectors", "closures", "foreign functions", "code",
-                                               "exceptions", "streams", "pointers", "shared views"};
+                                               "exceptions", "streams", "pointers"};
     size_t count[T_LIMIT] = {0}, words[T_LIMIT] = {0}, total = 0;
     vm_census(stats_vm, count, words);
     for (int t = 0; t < T_LIMIT; t++)
@@ -262,7 +262,7 @@ static int run(int argc, char **argv)
     }
     jit_attach(vm, jit);
     vm->self = self;
-    thread_note_main_stack(vm);
+    vm_note_main_stack(vm);
     /* For testing: collect after every N words allocated. */
     const char *stress = getenv("SHEN_JIT_GC_STRESS");
     vm->stress = stress ? strtoul(stress, NULL, 10) : 0;
@@ -291,7 +291,7 @@ static int run(int argc, char **argv)
     vm->seal_user = (seal && *seal && strcmp(seal, "0") != 0) || seal_flag;
     if (getenv("SHEN_JIT_STATS")) {
         stats_vm = vm;
-        thread_at_exit(print_stats);
+        at_program_exit(print_stats);
     }
     if (getenv("SHEN_JIT_PROFILE") && !profile_start())
         fprintf(stderr, "shen-jit: cannot start the profiler\n");
@@ -332,12 +332,11 @@ static int run(int argc, char **argv)
     fflush(stdout);
     if (result == V_CLEARED) {
         sj_report(vm, "uncaught error");
-        if (vm->threads)
-            thread_exit(vm, 1);
+        if (vm->program->isolates)
+            program_exit(vm, 1);
         return 1;
     }
     if (save) {
-        thread_forget_others(vm);
         args = vm->stack + base; /* the run may have moved the stack */
         *hush = args[0];
         *argv_slot = args[1];
@@ -349,8 +348,8 @@ static int run(int argc, char **argv)
             return 1;
         }
     }
-    if (vm->threads)
-        thread_exit(vm, 0); /* the other threads end with the process */
+    if (vm->program->isolates)
+        program_exit(vm, 0); /* the other isolates end with the program */
     return 0;
 }
 

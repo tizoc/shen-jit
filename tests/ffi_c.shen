@@ -32,7 +32,6 @@
 (define-foreign-procedure huge-vector t "huge_vector" 0)
 (define-foreign-procedure huge-bytes t "huge_bytes" 0)
 (define-foreign-procedure heap-text t "heap_text" 1)
-(define-foreign-procedure raise-and-wait t "raise_and_wait" 1)
 (define-foreign-procedure global-named t "global_named" 1)
 (define-foreign-procedure call-named t "call_named" 2)
 (define-foreign-procedure raises t "raises" 0)
@@ -190,7 +189,7 @@
 (c-test.check "deleted" true (freeze (kept-delete)))
 (c-test.churn 50 "")
 (c-test.check "more than a chunk of them" 0 (freeze (many-roots)))
-(c-test.check "deleted without the lock" true (freeze (delete-when-released 1)))
+(c-test.check "deleted between release and acquire" true (freeze (delete-when-released 1)))
 (c-test.check "and on a thread of C's own" 0 (freeze (delete-on-another-thread (cn "a" "b"))))
 
 \\ ---------------------------------------------------------------------------
@@ -204,46 +203,7 @@
 (c-test.check "with collections" 3 (freeze (walk 3 (/. I (c-test.churn 20 "")))))
 
 \\ ---------------------------------------------------------------------------
-\\ Threads. Each holds a value in C across a switch, finishing in the order they did not start: A
-\\ roots its value, then B roots its own, then A returns first, and B collects before it returns.
-
-(define c-test.wait
-  Name V -> (if (= (value Name) V) Name (c-test.wait Name V)))
-
-(set stage 0)
-(set done false)
-(define c-test.a X -> (do (set stage 1) (c-test.wait stage 2) 0))
-(define c-test.b X -> (do (set stage 2) (c-test.wait stage 3) (c-test.churn 20 "")))
-(thread (freeze (do (set ra (call-in-c (/. X (c-test.a X)) (cn "aa" "aa"))) (set stage 3))))
-(c-test.wait stage 1)
-(thread (freeze (do (set rb (call-in-c (/. X (c-test.b X)) (cn "bb" "bb"))) (set done true))))
-(c-test.wait done true)
-(c-test.check "the first thread's" ["aaaa" | 0] (freeze (value ra)))
-(c-test.check "the second's" ["bbbb" | "xy"] (freeze (value rb)))
-
-\\ The lock given up from C, with a value in its arguments that a collection moves meanwhile.
-(set waited waiting)
-(thread (freeze (set waited (released-wait (cn "waited" " for") 50))))
-(define c-test.wait-for
-  Name -> (if (= (value Name) waiting) (do (c-test.churn 5 "") (c-test.wait-for Name)) (value Name)))
-(c-test.check "held while another collected" "waited for" (freeze (c-test.wait-for waited)))
-(c-test.check "alone, it just waits" "alone" (freeze (released-wait "alone" 1)))
-
-\\ An error raised in another thread's nested call stays in that thread.
-(set other waiting)
-(thread (freeze (set other (trap-error (call-in-c (/. X (hd X)) 1) (/. E (error-to-string E))))))
-(c-test.check "in another thread" "hd: 1 is not a pair" (freeze (c-test.wait-for other)))
-
-\\ An error raised in C stays that thread's while C gives up the lock and another thread raises its own.
-(define c-test.wait-flag
-  V I -> (if (<-address V I) true (c-test.wait-flag V I)))
-(set pending waiting)
-(set flags (address-> (address-> (absvector 2) 0 false) 1 false))
-(thread (freeze (set pending (trap-error (raise-and-wait (value flags)) (/. E E)))))
-(c-test.wait-flag (value flags) 0)
-(trap-error (simple-error "main error") (/. E (error-to-string E)))
-(address-> (value flags) 1 true)
-(c-test.check "an error kept while the lock is given up" "worker error"
-              (freeze (error-to-string (c-test.wait-for pending))))
+\\ shen_release and shen_acquire around a wait, which change nothing now.
+(c-test.check "a release around a wait" "alone" (freeze (released-wait "alone" 1)))
 
 (output "~A passed, ~A failed~%" (value c-test.*passed*) (value c-test.*failed*))

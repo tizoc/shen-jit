@@ -21,12 +21,10 @@
     (error "~A: ~A" (io.error-resource Error) (io.error-message Error)))
 
 (define source-deps.main
-  [_ Input Output "--batch" Queries | Options] ->
-    (source-deps.finish (source-deps.batch-run Input Output Queries Options (source-deps.limits)))
   [_ Input Output | Options] ->
     (source-deps.finish
       (source-deps.run Input Output (source-deps.query-option Options) (source-deps.limits)))
-  _ -> (error "usage: source-deps FACTS OUTPUT [--reach FILE NAME [BYTE] | --impact FILE NAME [BYTE] | --batch QUERIES [--workers COUNT (0..64) --worker-image IMAGE]]"))
+  _ -> (error "usage: source-deps FACTS OUTPUT [--reach FILE NAME [BYTE] | --impact FILE NAME [BYTE]]"))
 
 (define source-deps.entry
   -> (trap-error (source-deps.main (value *argv*))

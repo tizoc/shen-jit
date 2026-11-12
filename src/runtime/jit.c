@@ -96,7 +96,7 @@ struct Jit {
     void *foreign;
     void *stubs;
     FILE *perf_map; /* address, size and name of each compiled code object */
-    bool slow_prims; /* compilation policy belongs to this VM, including legacy threads */
+    bool slow_prims; /* compilation policy, for every VM of the program */
     /* For backtraces: the return address of every call in compiled code,
        with the call's window offset in slots, in an open-addressing table
        (0 is an empty entry). */
@@ -453,10 +453,6 @@ static V h_grow(VM *vm, size_t frame)
     if (vm->interrupted == ATTEND) {
         if (isolate_attend(vm) == V_CLEARED) /* its turn, or a kill (isolate.c) */
             return V_CLEARED;
-    } else if (vm->interrupted == PREEMPT) {
-        thread_preempted(vm);
-    } else if (vm->interrupted && vm->thread && !vm->thread->main) {
-        thread_yield(vm); /* a Ctrl-C is for the main thread, which the REPL runs in */
     } else if (vm->interrupted && sj_take_interrupt(vm)) {
         return sj_raise(vm, "interrupted");
     }
@@ -1152,13 +1148,11 @@ static void emit_memory_caches(Emit *e)
         struct sljit_jump *bytes = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(T_BYTES << 3 | TAG_HEADER));
         struct sljit_jump *string = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(T_STRING << 3 | TAG_HEADER));
         struct sljit_jump *pointer = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(T_POINTER << 3 | TAG_HEADER));
-        struct sljit_jump *shared = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(T_SHARED_BYTES << 3 | TAG_HEADER));
         sljit_emit_op1(c, SLJIT_MOV, R1, IMM(0));
         sljit_emit_op1(c, SLJIT_MOV, R3, IMM(0));
         sljit_emit_op1(c, SLJIT_MOV, R4, IMM(0));
         struct sljit_jump *other = sljit_emit_jump(c, SLJIT_JUMP);
         sljit_set_label(pointer, sljit_emit_label(c));
-        sljit_set_label(shared, sljit_emit_label(c));
         sljit_emit_op1(c, SLJIT_MOV, R3, SLJIT_MEM1(SLJIT_R1), POINTER_LENGTH * WORD - TAG_OBJECT);
         sljit_emit_op1(c, SLJIT_MOV, R4, R3);
         struct sljit_jump *writable = sljit_emit_cmp(c, SLJIT_EQUAL, R2, IMM(T_POINTER << 3 | TAG_HEADER));
@@ -1685,9 +1679,9 @@ static void emit_call(Emit *e, const uint32_t *p)
 }
 
 /* A loop back to the body skips the entry checks, so it tests for a pending
-   interrupt itself, in code compiled once the REPL catches Ctrl-C or the first
-   thread starts: elsewhere SIGINT ends the process, and the test would only
-   cost time. Either one has everything compiled again (jit_recompile). */
+   interrupt itself, in code compiled once the REPL catches Ctrl-C, or by an
+   isolate: elsewhere SIGINT ends the program, and the test would only cost
+   time. The REPL's catching has everything compiled again (jit_recompile). */
 static void emit_loop_check(Emit *e)
 {
     if (!e->vm->interruptible)
@@ -3261,22 +3255,11 @@ static void emit_slow_paths(Emit *e)
                the whole header, which a read-only pointer's differs in. */
             if (!s->store)
                 sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));
-            struct sljit_jump *other = sljit_emit_cmp(c, SLJIT_NOT_EQUAL,
-                s->store ? SLJIT_R2 : SLJIT_R3, 0, IMM(T_POINTER << 3 | TAG_HEADER));
-            if (s->store)
-                sljit_set_label(other, s->prim->start);
-            struct sljit_label *read = sljit_emit_label(c);
+            sljit_set_label(sljit_emit_cmp(c, SLJIT_NOT_EQUAL, s->store ? SLJIT_R2 : SLJIT_R3, 0,
+                                            IMM(T_POINTER << 3 | TAG_HEADER)), s->prim->start);
             sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), POINTER_LENGTH * (sljit_sw)sizeof(V) - TAG_OBJECT);
             sljit_emit_op1(c, SLJIT_MOV, R0, SLJIT_MEM1(SLJIT_R0), POINTER_ADDRESS * (sljit_sw)sizeof(V) - TAG_OBJECT);
             go_back(e, s);
-            if (!s->store) {
-                /* Ordinary pointers keep their old path. Check scoped views
-                   only after that test misses. */
-                sljit_set_label(other, sljit_emit_label(c));
-                sljit_set_label(sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3,
-                    IMM(T_SHARED_BYTES << 3 | TAG_HEADER)), s->prim->start);
-                sljit_set_label(sljit_emit_jump(c, SLJIT_JUMP), read);
-            }
             break;
         }
         case SLOW_PRIM: {
@@ -3528,8 +3511,8 @@ static void emit_slow_paths(Emit *e)
             sljit_set_label(sljit_emit_jump(c, SLJIT_JUMP), s->back);
             break;
         case SLOW_LOOP:
-            /* A loop's check, with the arguments in place: another thread may
-               collect here, so all that is live goes to the frame and back. */
+            /* A loop's check, with the arguments in place: raising the interrupt may
+               collect, so all that is live goes to the frame and back. */
             if (e->entry == 2)
                 sljit_emit_op1(c, SLJIT_MOV, HOME(e, 2), CACHE);
             publish(e);

@@ -311,43 +311,7 @@ are other programs.
 - **Defining while isolates run:** the builder can define at any time. Isolates stop for each definition and see
   it at once. Grammars compile at their first call, which an isolate cannot do, so the builder compiles them before
   each spawn; `(shen-jit.publish)` does it at other times.
-- **Not beside threads:** `thread` raises an error once an isolate has started, and isolates do not start beside
-  threads or in a [structured worker](#structured-workers). `shen-jit.save-executable` refuses while other isolates
-  run.
-
-### Threads
-
-`(thread Frozen)` runs a frozen expression in a new thread and returns `true`, as programs written for Shen/Scheme
-expect. Threads are real, and one runs at a time, holding a global lock. So they give concurrency, for work that
-waits or runs beside the main program, and no speed-up from more cores: for that, [isolates](#isolates) run on
-several cores at once, and so do [structured workers](#structured-workers), a saved image's function.
-
-```shen
-(set done false)
-(define work 0 -> (set done true) N -> (work (- N 1)))
-(thread (freeze (work 1000000)))
-
-(define wait -> (if (value done) finished (wait)))
-(wait)    \\ finished
-```
-
-- **Switching:** every 10 ms if another thread is waiting, at a function's entry or a loop's next turn, and whenever
-  a thread waits for input on stdin or a socket. Between those points no other thread runs, though a program should
-  not count on where they fall.
-- **Errors:** one that nothing catches ends its thread and is printed to stderr. The other threads go on.
-- **The end:** the process ends when the main thread does, or when any thread calls `(shen-jit.exit N)`. An image
-  saved with `--save` holds what the main thread reaches, and `shen-jit.save-executable` refuses to run while other
-  threads do.
-- **Ctrl-C** at the REPL stops the main thread's work, and threads beside it go on.
-- **Not provided,** as in Shen/Scheme: join, mutexes and channels. A thread signals another through a global, which
-  the other can spin on, as above.
-- **Waiting elsewhere:** reading a file that blocks, such as a FIFO, holds the lock, and Ctrl-C does not end that
-  wait.
-- **Cost:** nothing until the first thread starts. All code then compiles again on its next call, with a test at
-  each loop's turn. The time is shared with the threads that are running.
-- **A loop running when the first thread starts** keeps the code it had, with no such test, so it never gives way:
-  one that starts the first thread and then spins on it in the same call waits for ever. Start a thread before
-  such a loop, or spin in a function called after, as `wait` above.
+- **Saving:** `shen-jit.save-executable` refuses while other isolates run, and in any isolate but the builder.
 
 ### Cleaning up
 
@@ -512,18 +476,18 @@ command has exited with 0.
 shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l program.shen
 ```
 
-A server, in a thread, with a client beside it:
+A server and a client, taking turns: on loopback a connection is made before the server accepts it, and a short
+message waits in the socket until it is read.
 
 ```shen
-(set l (socket.listen "127.0.0.1" 0))
-
-(thread (freeze (let S (socket.accept (value l))
-                  (do (socket.send S (socket.recv S 100))
-                      (socket.close S)))))
-
-(let C (socket.connect "127.0.0.1" (socket.port (value l)))
-  (do (socket.send C "hello")
-      (output "~A~%" (socket.recv-string C 100))    \\ hello
+(let L (socket.listen "127.0.0.1" 0)
+     C (socket.connect "127.0.0.1" (socket.port L))
+     _ (socket.send C "hello")
+     S (socket.accept L)
+     _ (socket.send S (socket.recv S 100))
+     _ (socket.close S)
+     _ (socket.close L)
+  (do (output "~A~%" (socket.recv-string C 100))    \\ hello
       (socket.close C)))
 ```
 
@@ -538,26 +502,13 @@ A server, in a thread, with a client beside it:
 | `(socket.readable? S Ms)` | Whether there is something to read, waiting that long at most |
 | `(socket.shutdown S)`, `(socket.no-delay S)`, `(socket.close S)` | Tells the other end nothing more will be sent, sends small writes at once, and closes |
 
-A socket is an integer. Waiting lets other threads run, and Ctrl-C at the REPL ends it. A send to a closed connection
+A socket is an integer. Ctrl-C at the REPL ends a wait on one. A send to a closed connection
 raises instead of ending the process. The comments at the top of the file list every function. Typed code can call
 those above but `socket.recv` and `socket.recv-into`, whose buffers have no Shen type, and sends strings: bytes go through
 a socket endpoint.
 
 [Socket I/O endpoints](https://github.com/tizoc/shen-jit/blob/main/docs/io-sockets.md), `lib/io-socket.shen`, put a
 connection behind the I/O library's readers and writers, with deadlines.
-
-### Structured workers
-
-*Experimental:* this API is expected to change in a later release.
-
-For independent jobs over numbers, booleans, symbols, strings and proper lists, start with
-`parallel.with-map` and `parallel.map` from optional `lib/parallel-map.shen`. Results keep input order;
-`tools/parallel-map.shen` is a complete program. Each of 1 to 64 OS threads runs a named function of a saved
-image in its own runtime, and a scope always joins before returning. Load `lib/buffer.shen`, then
-`lib/parallel.shen`, then `lib/parallel-map.shen`. The underlying byte API offers copied messages and one
-immutable buffer shared by the workers. The [reference](https://github.com/tizoc/shen-jit/blob/main/docs/parallel.md)
-covers both APIs, a starting heap configuration, typed read-only access and cooperative cancellation.
-The source-deps example answers batches of queries with it. `thread` is unchanged.
 
 ### HTTP
 
@@ -568,8 +519,9 @@ keeping the bytes of the body that came with it.
 by Content-Length or chunked, within limits, with trailers kept apart, and encodes responses.
 [Streaming HTTP responses](https://github.com/tizoc/shen-jit/blob/main/docs/http-streaming.md) writes a response as it
 is made, with a length or chunked.
-[Bounded HTTP servers](https://github.com/tizoc/shen-jit/blob/main/docs/http-listener.md) accept connections up to a
-limit, keep them for later requests within limits, and shut down when asked. Ambiguous framing is refused.
+[HTTP servers](https://github.com/tizoc/shen-jit/blob/main/docs/http-listener.md) serve the connections a listener
+accepts, one at a time, keep each for later requests within limits, and stop when a handler asks. Ambiguous
+framing is refused.
 
 [HTTP clients with libcurl](https://github.com/tizoc/shen-jit/blob/main/docs/curl.md): `lib/curl.shen` makes HTTP and
 HTTPS requests through libcurl, with reusable clients, binary bodies, headers and trailers, timeouts, TLS
@@ -581,10 +533,7 @@ downloads to a file with it.
 [Datalog](https://github.com/tizoc/shen-jit/blob/main/docs/datalog.md): `lib/datalog.shen` evaluates relations, facts
 and recursive rules bottom up, to a fixed point, over symbols, strings, integers and records, with each rule compiled
 through the JIT and its join order chosen from the sizes of the relations as it runs, and answers a query by deriving
-only what bears on it. Optional `lib/datalog-parallel.shen`, experimental as the workers it runs on are, adds
-`datalog.parallel.run`: an explicit worker budget, automatic detection of programs that partition safely,
-sequential fallback, and an ordinary database returned after the workers join. Short jobs can still be faster
-sequentially.
+only what bears on it.
 
 #### SQLite
 
@@ -620,8 +569,7 @@ To use a statement many times: `sqlite.prepare`, `sqlite.bind`, `sqlite.step`, w
 
 Values go in and come out as Shen values: a number is an INTEGER or a REAL, a string is TEXT, a byte buffer is a
 BLOB, and `[]` is NULL. `true` and `false` go in as 1 and 0. Errors raise, with SQLite's message. A connection belongs
-to one thread: other threads run while a query does, and some builds of SQLite, Apple's among them, do not allow two
-threads on one.
+to the isolate that opened it.
 
 ### Example applications
 
@@ -715,8 +663,8 @@ Windows reaches nothing, as the executable is static. A static Linux build canno
 A function takes at most 6 arguments that are not doubles and 8 that are, and no structs by value. After the result,
 two flags:
 
-- **`blocking`** gives up the lock during the call, so other threads run. Its byte buffers are copied and back, as
-  another thread's collection may move them.
+- **`blocking`** marks a call that may wait, such as a read from a socket: the builder need not wait for an isolate
+  in one when it defines.
 - **`(varargs N)`** marks a variadic function with N fixed arguments, from 1 to 3, all integers.
 
 ```shen
@@ -885,7 +833,7 @@ cc -shared -fPIC -I include -o libmine.so mine.c
   `shen_root_new` for longer. Reads do not allocate, so the loop above needs no root.
 - **Errors** come back by value, as `SHEN_ERROR`. `shen_call` calls Shen, and no `longjmp` crosses C, so a C library
   calling back is safe.
-- **Waiting:** `shen_release` and `shen_acquire` let other threads run while C waits.
+- **Waiting:** `shen_release` and `shen_acquire` mark where C waits, touching no value.
 - **Limits:** up to 8 arguments, and a thread the runtime did not start cannot call in.
 
 > Test with `SHEN_JIT_GC_STRESS=1`, which collects at every allocation and finds most mistakes with values. `shen.h`
@@ -1025,8 +973,8 @@ flat profile at exit, and `SHEN_JIT_STATS=1` prints the collector's work and the
 - **Fixnums only.** Integers are 62-bit, and a result outside that range raises `integer overflow`.
 - **Sealing.** Internal kernel functions cannot be redefined, where Shen/Scheme accepts such definitions.
 - **Numbers hash by value.** A real and an integer that are `=` have the same `hash`, where Shen/Scheme's tells them apart.
-- **Threads run one at a time,** where Shen/Scheme's run in parallel. [Structured workers](#structured-workers) run in
-  parallel, each in a runtime of its own.
+- **No `thread`.** Shen/Scheme's `(thread Frozen)` is not provided. [Isolates](#isolates) run in parallel, each
+  with a heap of its own.
 - **Definitions are factorised,** as with `(factorise +)`: a guard that consecutive clauses share runs once, so
   guards should have no effects, and a vector pattern may read its first element before a clause that does not
   need it, which raises if that element was never set.
@@ -1106,10 +1054,9 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-io` | Bounded chunk I/O, binary files and framing, socket endpoints/echo, native lifetimes, typed results and images/GC |
 | `make test-http` | Request/response framing, streaming, persistent connections, shutdown, SQLite example, typing and images/GC |
 | `make test-datalog` | Datalog answers/errors/generated programs against its plain evaluator; Shen/KL dependency analysis and source-fact matching/reach/impact with independent graph oracles |
-| `make test-parallel` | Worker scopes, typed shared reads, copied replies, lifetimes and cleanup after errors |
 | `make test-datalog-swipl` | The same generated programs against SWI-Prolog's tabling, if `swipl` is there |
 | `make test-ffi` | C functions called from Shen and C written for Shen, against `tests/ffi_lib.c`, memory outside the heap, and the SQLite and socket libraries |
-| `make test-curl` | Optional libcurl adapter, independent loopback HTTP/TLS fixtures, downloader, typing, threads and images/GC; needs libcurl development headers, Python 3 and `openssl` |
+| `make test-curl` | Optional libcurl adapter, independent loopback HTTP/TLS fixtures, downloader, typing and images/GC; needs libcurl development headers, Python 3 and `openssl` |
 | `make test-fs` | Filesystem metadata, paths, bounded traversal, replacement, cleanup, typing, images/GC and the copy application; needs a C compiler and Python 3 |
 | `make test-process` | Child lifecycle, argv/environment/cwd, bounded communication, pipelines, inheritance, typing, images/GC and streaming memory; needs a C compiler and Python 3 |
 | `make test-tree-sitter` | Tree/query snapshots, independent C/coordinate oracles, types, images/GC and bounded source facts; needs a C compiler, Python 3 and `make deps-tree-sitter` on shared-capable builds |

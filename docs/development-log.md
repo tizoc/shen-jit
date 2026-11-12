@@ -1423,6 +1423,18 @@ machine on a Ryzen 5 5600X with Ubuntu 20.04, gcc 9.4 and glibc 2.31. A bare rat
   exception, but `vm->trace` was one for all, and a trace is not captured over another: once one thread's error had
   one, every later thread's error showed it. A thread keeps its own now, as it keeps its exception.
 
+- **Removed (2026-11-12),** with isolates in its place, which run in parallel (design D). Nothing in the runtime
+  swaps a thread's stack, handlers and roots any more, collections scan one stack, and the ticker and `PREEMPT` are
+  gone, with `thread.c`'s 355 lines; what stayed of it, the C stack bounds and leaving with `_exit` while other
+  threads may be blocked on a stream, moved to `isolate.c`. A `blocking` foreign call no longer copies its byte
+  buffers, as nothing else moves the heap during it. Until isolates serve HTTP connections, the listener serves
+  them one at a time, in the program that calls `http.run`, until a handler stops it. Tests that ran a peer in a
+  thread take turns instead, a loopback connection waiting in the listen backlog and a short message in the socket,
+  or run the peer in an isolate where waiting is the point, as for an 8 MB send; those that had another thread collect
+  while C waited were dropped, as no other thread collects an isolate's heap.
+  Against the build with isolates, alternating, the benchmark suite's geometric means were 0.99 and 1.00 over two
+  rounds; `make test-libs` took 39 s against 92 s, the worker suites gone.
+
 ### Structured workers (2026-11-08 to 2026-11-10, Apple M3 Max)
 
 Parallel Datalog queries, as fork/join over a relation split in shards, with the whole lookup relation in each.
@@ -1465,6 +1477,10 @@ Parallel Datalog queries, as fork/join over a relation split in shards, with the
   a temporary buffer view, 78,475 of them per result: writing into one buffer the encoder owns took encoding a
   real result from 10.001 to 1.225 ms, and 4 workers on the source-deps queries from 8.527 to 3.912 ms warm, still
   above packed bytes, which that example's CLI keeps.
+
+- **Removed (2026-11-12),** with `parallel.map`, parallel Datalog and the `source-deps` example's batches over them,
+  to come back over isolates: `worker.c`'s 447 lines, six primitives, the shared view's object type and its two
+  branches in the JIT's byte paths, three libraries and their tests and page.
 
 ### Isolates (2026-11-12, Apple M3 Max with 16 cores, against foreign functions in the program space)
 

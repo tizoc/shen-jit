@@ -15,7 +15,7 @@ larger or harder to follow needs clear evidence that it is worth the cost.
 | Boot artifact | A heap image written at build time, holding no native code |
 | Collector | A Cheney copying collector with inline bump allocation into one reused area, and no write barriers |
 | Native emitters | Handwritten C. Only what dominates execution is inline; the rest calls C helpers |
-| Runtime organisation | One contiguous guest stack per thread, and a handler stack |
+| Runtime organisation | One contiguous guest stack per isolate, and a handler stack |
 
 [bytecode.md](bytecode.md) defines the instructions and the lowering rules, and [semantics.md](semantics.md)
 the behaviour the system implements.
@@ -289,9 +289,9 @@ Reals are boxed, each a 16-byte object, and native code does their arithmetic an
 test for fixnums fails, loading each operand into a float register and allocating the result in line. Code written by hand can keep them unboxed
 in real registers, and 64-bit integers in word registers, which the collector never sees ([bytecode.md](bytecode.md), "Real and word registers").
 
-The roots are the scanned extent of each thread's guest stack, the global slots, function cells and constants, what C holds, and a few VM
-fields. C holds values in explicitly registered locals, per thread, and in the roots that outlive a call (`shen_root_new`), which a
-thread with no lock may delete, so a collection first drains its VM's list of those deleted.
+The roots are the scanned extent of the guest stack, the global slots, function cells and constants, what C holds, and a few VM
+fields. C holds values in explicitly registered locals, and in the roots that outlive a call (`shen_root_new`), which any OS
+thread may delete, so a collection first drains its VM's list of those deleted.
 
 The stack is scanned linearly, from its base to the published top, which three rules make sound:
 
@@ -332,7 +332,7 @@ put back, the standard streams made, and the port's `shen-jit.start-isolate` set
 state with the kernel's starting values: a new property vector, Prolog's memory and
 counters, the printer's settings, and `gensym` counting from a base of its own, so that
 names made in two isolates never meet. `test_kl --isolate` does the same in a VM that
-was the builder (`sj_start_isolate`), to test it apart from threads.
+was the builder (`sj_start_isolate`), to test it without spawning.
 
 **Spawning** (`isolate.c`). `shen-jit.spawn` takes the name of a function of one argument
 whose procedure is in the program space, and a value, which it copies into a fragment: blocks
@@ -391,51 +391,7 @@ A function goes to an isolate by its name, a published symbol, and the isolate g
 
 **Not yet.** A definition whose promotion failed stays in the builder's heap, where an isolate
 must not call it, and a channel whose receive endpoint is dropped stays until its receiver
-ends. Threads and isolates exclude each other.
-
-## Threads
-
-`thread` makes real threads, of which one runs at a time, holding a global lock. A timer asks for a switch every 10 ms if another
-thread is waiting, by the same mechanism as an interrupt: it clears the limit that frames check, so the next function entry or loop check comes to
-the runtime. Each thread has its own guest stack, handlers, C roots, native stack bound and saved error codes, swapped as the lock changes hands.
-A thread about to wait gives the lock up, and a foreign call can too. Waiters are served in order, each woken by its ticket rather than all at
-once, since threads waiting on sockets take the lock often.
-
-`SIGPIPE` has a handler that does nothing, set at startup, so that a write to a closed pipe fails and raises. Being a handler and not `SIG_IGN`,
-exec resets it, and a child finds the default.
-
-The first thread has everything compile again on its next call, since loops must then test for a switch, and code compiled before need not have.
-The same goes for the REPL, when it starts catching Ctrl-C.
-
-### Worker scopes
-
-`thread` shares one VM under a lock. A worker scope (`src/runtime/worker.c`, wrapped by `lib/parallel.shen`) runs
-1 to 64 VMs at once, one per joinable OS thread, each loaded from the same saved image with a heap, globals
-and JIT of its own. No lock is held while Shen code, a collection or a compilation runs; a mutex and a condition
-variable hand work over. Each batch copies one byte request into each worker, calls a named function there, and
-copies the byte slices it returns into the host's heap. A worker keeps its reply rooted and does not run again until
-the host has copied it. No value, closure or address crosses heaps. The scope destroys every VM and joins every
-thread before it returns or raises, also when the host's body or a worker raised: an error stops further batches,
-and the jobs already running finish first. Cancellation is cooperative, through `shen-jit.worker-cancelled?`.
-At shutdown the scope mutex serializes native-code release, avoiding contention in SLJIT's process-wide
-executable allocator. Heap destruction remains parallel.
-
-A scope can own a read-only copy of one byte buffer, at most 64 MiB. `shen-jit.worker-shared-view` gives an
-object of its own type, `T_SHARED_BYTES`, laid out as a pointer, which byte reads and copies accept and stores,
-resizing and foreign-pointer operations refuse. The collector moves the object and never looks at the memory.
-When the scope ends, after every worker is gone, the host's view is cleared before the memory is freed, so a view
-that escaped has length 0, and an image clears it too.
-
-A worker refuses what belongs to the process: legacy threads, nested scopes, streams (also those an image kept),
-the REPL's handler, saving an executable, exiting and C API procedures. A host refuses legacy threads and
-process-wide profiling during a scope. Plain foreign functions are trusted to be safe on several threads.
-
-`lib/parallel-map.shen` maps a named unary function over ordinary values on that boundary. Each batch encodes the
-workers' contiguous shards before any runs, and decodes the results in input order. A versioned, bounded codec
-copies numbers with their representation, booleans, strings, symbols, which the receiver interns again, and proper
-lists, and refuses everything else; sharing within a value is not kept. The source-deps example exports its call
-graph once as forward and reverse integer indexes, the scope's shared buffer, and answers reach and impact
-queries with one BFS, sequentially or split between workers.
+ends.
 
 ## Calling C
 
@@ -447,23 +403,6 @@ is unchanged. A loop that calls nothing and reads through a parameter it never c
 same bounds check and access. A pointer that is dead or has no length has length 0, so nothing else needs to test for that.
 
 ## Datalog
-
-Optional `lib/datalog-parallel.shen` adds an opt-in entry point. It checks for positive scalar rules
-whose derived inputs preserve the head's first-column key, then gives disjoint keys to private worker
-runtimes. Input-only relations are replicated and seeded derived facts are partitioned. Eligibility
-checking returns explicit refusals; unexpected checker or codec errors propagate. Snapshot decoding
-reads shared bytes directly, while decoded values remain private to each worker. Unsupported
-programs and inputs outside the snapshot transport bounds use the sequential evaluator before any
-worker starts. Each child calls the existing Datalog evaluator with an extra key guard on its rules.
-The parent collects packed tuples, translates intern IDs for noninteger columns, and uses the existing
-full-column index kernel to rebuild ordinary insertion tables. Merge histories retain each worker's
-derivation order, offset beyond the parent's initial facts; subsequent parent merges start after them.
-The returned database therefore needs no live worker for queries, explanations, updates or images.
-`datalog.parallel.with-db` instead keeps a read-only view inside the worker scope. Counts use the
-reported cardinalities; membership and selected queries execute in the workers and return owned
-values. A worker retains its owned keys and skips derived-relation queries bound to another key;
-queries with an unbound key still search every shard. This avoids collecting every tuple and rebuilding parent tables. Explicit materialization
-consumes the view and provides the ordinary database; scope exit invalidates any escaped view.
 
 `lib/datalog.shen` is Shen, loaded on request, and the JIT knows nothing of it. A program is checked into relations and rules, and planned: relations
 by strongly connected components in dependency order, and each rule as an order of joins, the atom with the most columns known going next. In a

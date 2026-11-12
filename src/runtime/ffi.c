@@ -235,26 +235,21 @@ static void *resolve(VM *vm, uint64_t *f)
 }
 #endif
 
-/* What a call's arguments became. Strings go in space, or in blocks if they are too long. A
-   call that gives up the lock works on copies of its byte buffers, in blocks too, since another
-   thread's collection may move them: argument says which each one copies, or -1. */
+/* What a call's arguments became. Strings go in space, or in blocks if they are too long. Byte
+   buffers are passed where they are: nothing else moves this heap during a call. */
 typedef struct {
     Call call;
     char space[STRING_SPACE];
     size_t used;
     char *block[MAX_WORDS];
-    int argument[MAX_WORDS];
     unsigned nblocks;
-    bool copy_buffers;
 } Converted;
 
-static char *new_block(Converted *c, size_t size, int argument)
+static char *new_block(Converted *c, size_t size)
 {
     char *p = malloc(size ? size : 1);
-    if (p) {
-        c->block[c->nblocks] = p;
-        c->argument[c->nblocks++] = argument;
-    }
+    if (p)
+        c->block[c->nblocks++] = p;
     return p;
 }
 
@@ -306,7 +301,7 @@ static V convert(VM *vm, Converted *c, unsigned type, V v, int i)
         if (c->used + length + 1 <= STRING_SPACE) {
             to = c->space + c->used;
             c->used += length + 1;
-        } else if (!(to = new_block(c, length + 1, -1))) {
+        } else if (!(to = new_block(c, length + 1))) {
             return sj_raise(vm, "out of memory");
         }
         memcpy(to, string_bytes(v), length);
@@ -327,19 +322,7 @@ static V convert(VM *vm, Converted *c, unsigned type, V v, int i)
     case F_BYTES: {
         if (!is_object(v) || obj_type(v) != T_BYTES)
             return sj_raise_value(vm, "foreign: ~S is not a byte buffer", v);
-        char *to = string_bytes(v);
-        if (c->copy_buffers) {
-            /* A buffer given twice is one copy, which goes back once. */
-            for (unsigned k = 0; k < c->nblocks; k++)
-                if (c->argument[k] >= 0 && vm->fp[2 + c->argument[k]] == v) {
-                    put_word(&c->call, (W)(uintptr_t)c->block[k]);
-                    return V_NIL;
-                }
-            if (!(to = new_block(c, string_length(v), i)))
-                return sj_raise(vm, "out of memory");
-            memcpy(to, string_bytes(v), string_length(v));
-        }
-        put_word(&c->call, (W)(uintptr_t)to);
+        put_word(&c->call, (W)(uintptr_t)string_bytes(v));
         return V_NIL;
     }
     default:
@@ -377,17 +360,15 @@ V h_foreign(VM *vm)
         return V_CLEARED;
     int64_t flags = fixval(desc[DESC_FLAGS]);
     unsigned result = (unsigned)fixval(desc[DESC_RESULT]), fixed = (unsigned)(flags >> FLAG_FIXED_SHIFT);
-    if (result == F_LIMIT && vm->worker_owner)
-        return sj_raise(vm, "worker: C API procedures and callbacks are not supported");
     if (result == F_LIMIT)
         return call_procedure(vm, function, n);
     Converted c;
     memset(&c.call, 0, sizeof c.call);
     c.used = 0;
     c.nblocks = 0;
-    /* Without other threads, nothing can happen while it waits, so it just waits. */
-    bool blocking = (flags & FLAG_BLOCKING) && vm->threads;
-    c.copy_buffers = blocking;
+    /* Nothing else moves this heap while it waits, so buffers are passed as they are; an isolate
+       waiting so is stopped for a rendezvous (isolate.c). */
+    bool blocking = flags & FLAG_BLOCKING;
     bool buffers = false;
     for (size_t i = 0; i < n; i++) {
         unsigned type = (unsigned)fixval(desc[DESC_TYPES + i]);
@@ -398,9 +379,8 @@ V h_foreign(VM *vm)
         }
     }
 
-    Thread *t = blocking ? thread_leave(vm) : NULL;
     if (blocking)
-        isolate_block(vm); /* a rendezvous need not wait for it (isolate.c) */
+        isolate_block(vm);
     W word = 0;
     D real = 0;
     if (fixed)
@@ -416,17 +396,9 @@ V h_foreign(VM *vm)
 #endif
     if (blocking)
         isolate_unblock(vm);
-    if (t)
-        thread_enter(t);
     vm->foreign_error = error;
     vm->foreign_c_error = c_error;
 
-    /* Everything read from the heap before the call may have moved, but the slots are up to date. */
-    for (unsigned i = 0; i < c.nblocks; i++)
-        if (c.argument[i] >= 0) {
-            V buffer = vm->fp[2 + c.argument[i]];
-            memcpy(string_bytes(buffer), c.block[i], string_length(buffer));
-        }
 
     V out;
     switch (result) {
@@ -435,7 +407,7 @@ V h_foreign(VM *vm)
     case F_UINT32: out = fix((uint32_t)word); break;
     case F_BOOL: out = (word & 0xFF) ? V_TRUE : V_FALSE; break;
     case F_DOUBLE: out = make_real(vm, real); break;
-    case F_STRING: out = result_string(vm, (const char *)(uintptr_t)word, buffers && !blocking); break;
+    case F_STRING: out = result_string(vm, (const char *)(uintptr_t)word, buffers); break;
     case F_POINTER:
         out = word ? make_pointer(vm, word, ptr(ptr(vm->fp[1])[FOREIGN_DESC])[1 + DESC_KIND]) : V_NIL;
         break;
@@ -1020,15 +992,13 @@ static shen_value api_exception_message(shen_vm *sv)
 
 static void *api_release(shen_vm *sv)
 {
-    VM *vm = vm_of(sv);
-    isolate_block(vm);
-    return vm->threads ? thread_leave(vm) : NULL;
+    isolate_block(vm_of(sv));
+    return NULL;
 }
 
 static void api_acquire(shen_vm *sv, void *token)
 {
-    if (token)
-        thread_enter(token);
+    (void)token;
     isolate_unblock(vm_of(sv));
 }
 

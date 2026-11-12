@@ -22,8 +22,8 @@
 \\   bool            true or false; the result's low byte
 \\   void            no argument; []
 \\
-\\ At most 6 arguments that are not doubles, and 8 that are. blocking lets other threads run
-\\ during the call, which then works on copies of its byte buffers, as they may move.
+\\ At most 6 arguments that are not doubles, and 8 that are. blocking marks a call that may wait,
+\\ and changes nothing now: nothing else uses an isolate's heap while it waits.
 \\ (varargs N) marks a variadic function with N fixed arguments, 1 to 3, and integers only.
 \\
 \\ A function is found at its first call, so an image saved with some finds them again, and a

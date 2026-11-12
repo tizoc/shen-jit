@@ -25,8 +25,8 @@
 \\ A socket is an integer. Errors raise, with the system's message or, on Windows, its number.
 \\
 \\ Sockets never block in C: a call that would have to wait waits in Shen, in poll slices of
-\\ 100 ms with the lock given up. So other threads run meanwhile, and a Ctrl-C at the REPL ends
-\\ the wait. A send to a closed connection raises instead of ending the process.
+\\ 100 ms, between which a kill reaches the isolate and a Ctrl-C at the REPL ends the wait. A send
+\\ to a closed connection raises instead of ending the process.
 \\
 \\ C differs by system in numbers and in a few names, which socket.by-os and the definitions
 \\ below hold, for Linux, macOS and Windows. Functions are found at their first call, so a system

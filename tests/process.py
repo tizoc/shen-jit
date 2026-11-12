@@ -132,7 +132,7 @@ def filter_application(executable, args, helper, root):
 def saved_image(executable, args, root):
     image = root / 'process.img'
     run([str(executable), '--save', str(image)] + args[1:] + [
-        '-l', 'tests/process_wait.shen', '-l', 'tests/process_gc_helpers.shen',
+        '-l', 'tests/process_gc_helpers.shen',
         '-e', '(do (set process-image.child (hd (tl (process.spawn (value process-test.helper) ["exit" "0"] '
               '[[stdin pipe] [stdout pipe] [stderr pipe]])))) true)',
         '-e', '(process.wait (value process-image.child) 2000)',
@@ -146,7 +146,7 @@ def saved_image(executable, args, root):
         '(buffer.string (process.output-bytes (value process-image.report))))'], env=env)
     assert 'restored: true saved' in restored.stdout, restored.stdout[-2000:]
     stressed = run([str(executable), 'eval', '-e',
-        '(do (process-gc.threaded (value process-test.helper)) (output "process gc ok~%") true)'],
+        '(do (process-gc.run (value process-test.helper)) (output "process gc ok~%") true)'],
         env={**env, 'SHEN_JIT_GC_STRESS': '1'})
     assert 'process gc ok' in stressed.stdout, stressed.stdout[-3000:]
     print('3 passed, 0 failed', flush=True)
@@ -169,7 +169,7 @@ def main():
             '-s', 'process-test.root', string(root),
             '-s', 'fs.*adapter-files*', '[' + string(fs_adapter) + ']',
         ]
-        checks(run(args + ['-l', 'tests/process.shen', '-l', 'tests/process_wait.shen', '-l', 'tests/process_stream.shen', '-l', 'tests/process_platform.shen']))
+        checks(run(args + ['-l', 'tests/process.shen', '-l', 'tests/process_stream.shen', '-l', 'tests/process_platform.shen']))
         oracle(root, data)
         typed = '(do (output "~A~%" (if (process-typed.run ' + string(helper)
         typed += ') "4 passed, 0 failed" "0 passed, 1 failed")) true)'

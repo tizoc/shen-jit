@@ -99,7 +99,7 @@ jobs:
         run: make deps-tree-sitter
       - name: Tests
         run: |
-          for suite in check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-fs test-process test-parallel test-workers test-tree-sitter test-http test-datalog test-ffi test-curl test-namespaces test-structs test-overrides; do
+          for suite in check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-fs test-process test-isolates test-tree-sitter test-http test-datalog test-ffi test-curl test-namespaces test-structs test-overrides; do
             echo "::group::$suite"
             make "KERNEL_DIR=$KERNEL_DIR" "$suite"
             echo "::endgroup::"
@@ -114,13 +114,13 @@ jobs:
         run: make test-differential
       - name: GC stress
         if: github.ref_type != 'tag'
-        run: make "KERNEL_DIR=$KERNEL_DIR" test-kernel-stress test-kl-stress test-lib-stress test-workers-stress
+        run: make "KERNEL_DIR=$KERNEL_DIR" test-kernel-stress test-kl-stress test-lib-stress
       # Ubuntu's address space layout has more random bits than AddressSanitizer accepts.
       - name: Sanitizers
         if: matrix.heavy && github.ref_type != 'tag'
         run: |
           if [ "$RUNNER_OS" = Linux ]; then sudo sysctl -q vm.mmap_rnd_bits=28; fi
-          make test-san test-workers-san
+          make test-san
       - name: Mutated code objects
         if: matrix.platform == 'linux-x86_64-static' && github.ref_type != 'tag'
         run: make fuzz-native

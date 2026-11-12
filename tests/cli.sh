@@ -861,49 +861,34 @@ check save-exe-arity "$dir/bad.out" "two.f is not a function of no arguments"
 check save-exe-unwritable "$dir/bad.out" 'save-executable: cannot write "none/x"'
 check save-exe-goes-on "$dir/bad.out" "still here"
 
-# Threads (tests/threads.shen).
-"$SHEN" script "$(dirname "$0")/threads.shen" > "$dir/threads.out" 2> "$dir/threads.err" < /dev/null
-check thread-started "$dir/threads.out" "first true"
-check thread-spin-wait "$dir/threads.out" "spin spin"
-check thread-loops "$dir/threads.out" "loops loops"
-check thread-deep "$dir/threads.out" "deep 2400120000"
-check thread-handlers "$dir/threads.out" "caught 15000"
-check thread-after-error "$dir/threads.out" "after-error ok"
-contains thread-error-message "$dir/threads.err" "shen-jit: thread: boom in a thread"
-check thread-defines "$dir/threads.out" "defined 2"
-check thread-by-fn "$dir/threads.out" "by-fn by-fn"
-check thread-not-a-function "$dir/threads.out" "not-a-function thread: 1 is not a function"
-check thread-many "$dir/threads.out" "many done"
-# A thread runs while the REPL waits for input, whose line then sees its work.
-{ printf '(thread (freeze (set tflag ran)))\n'; sleep 0.5; printf '(value tflag)\n'; } | "$SHEN" > "$dir/thr1.out" 2>&1
-check thread-while-reading "$dir/thr1.out" "(1-) ran"
-# A thread that ends the process while the REPL waits for input.
-{ printf '(thread (freeze (shen-jit.exit 3)))\n'; sleep 0.5; } | "$SHEN" > "$dir/thr2.out" 2>&1
+# Isolates beside the program (tests/isolates.shen has the rest).
+# An isolate that ends the program while the REPL waits for input.
+{ printf '(define ex X -> (shen-jit.exit 3))\n(shen-jit.spawn ex 0)\n'; sleep 0.5; } | "$SHEN" > "$dir/thr2.out" 2>&1
 echo "status $?" >> "$dir/thr2.out"
-contains thread-exit "$dir/thr2.out" "status 3"
-# Threads end with the main one, however long they would run.
-printf '(define forever N -> (forever (+ N 1)))\n(thread (freeze (forever 0)))\n(output "main ends~%%")\n' > "$dir/thr3.shen"
+contains isolate-exit "$dir/thr2.out" "status 3"
+# The program ends when the builder does, with an isolate still running.
+printf '(define forever N -> (forever (+ N 1)))\n(shen-jit.spawn forever 0)\n(output "main ends~%%")\n' > "$dir/thr3.shen"
 "$SHEN" script "$dir/thr3.shen" > "$dir/thr3.out" 2>&1 < /dev/null
 echo "status $?" >> "$dir/thr3.out"
-check thread-main-ends "$dir/thr3.out" "main ends"
-check thread-main-ends-status "$dir/thr3.out" "status 0"
-# Output written to a file before the process ends with threads about.
-printf '(define forever N -> (forever (+ N 1)))\n(thread (freeze (forever 0)))\n(set s (open "%s/thr4.txt" out))\n(pr "written" (value s))\n(shen-jit.exit 0)\n' "$dir" > "$dir/thr4.shen"
+check isolate-main-ends "$dir/thr3.out" "main ends"
+check isolate-main-ends-status "$dir/thr3.out" "status 0"
+# Output written to a file before the program ends with isolates about.
+printf '(define forever N -> (forever (+ N 1)))\n(shen-jit.spawn forever 0)\n(set s (open "%s/thr4.txt" out))\n(pr "written" (value s))\n(shen-jit.exit 0)\n' "$dir" > "$dir/thr4.shen"
 "$SHEN" script "$dir/thr4.shen" > /dev/null 2>&1 < /dev/null
 printf '\n' >> "$dir/thr4.txt"
-check thread-flushes-files "$dir/thr4.txt" "written"
-# Programs may define their own thread.
+check isolate-flushes-files "$dir/thr4.txt" "written"
+# Programs may define a function named thread.
 printf '(define thread X -> [own X])\n(output "~S~%%" (thread 1))\n' > "$dir/thr5.shen"
 "$SHEN" script "$dir/thr5.shen" > "$dir/thr5.out" 2>&1 < /dev/null
 check thread-own-definition "$dir/thr5.out" "[own 1]"
-# An image saved with a thread still about holds what the main thread reaches.
-printf '(define forever N -> (forever (+ N 1)))\n(thread (freeze (forever 0)))\n(set saved kept)\n' > "$dir/thr6.shen"
+# An image saved with an isolate still running holds what the builder reaches.
+printf '(define forever N -> (forever (+ N 1)))\n(shen-jit.spawn forever 0)\n(set saved kept)\n' > "$dir/thr6.shen"
 "$SHEN" --save "$dir/thr6.img" script "$dir/thr6.shen" > /dev/null 2>&1 < /dev/null
 SHEN_JIT_IMAGE="$dir/thr6.img" "$SHEN" eval -e '(value saved)' > "$dir/thr6.out" 2>&1
-check thread-saved-image "$dir/thr6.out" "kept"
-printf '(define forever N -> (forever (+ N 1)))\n(thread (freeze (forever 0)))\n(output "~A~%%" (trap-error (shen-jit.save-executable "%s/thr7" (fn hd)) (/. E (error-to-string E))))\n' "$dir" > "$dir/thr7.shen"
+check isolate-saved-image "$dir/thr6.out" "kept"
+printf '(define forever N -> (forever (+ N 1)))\n(shen-jit.spawn forever 0)\n(output "~A~%%" (trap-error (shen-jit.save-executable "%s/thr7" (fn hd)) (/. E (error-to-string E))))\n' "$dir" > "$dir/thr7.shen"
 "$SHEN" script "$dir/thr7.shen" > "$dir/thr7.out" 2>&1 < /dev/null
-check thread-save-executable "$dir/thr7.out" "save-executable: other threads are running"
+check isolate-save-executable "$dir/thr7.out" "save-executable: other isolates are running"
 
 wait_for() { # text, file
     n=0
@@ -928,8 +913,8 @@ ends() { # how long to give $pid to end; its status is in $status
 }
 
 if [ "$posix" = yes ]; then
-# Ctrl-C is for the REPL's own work: a thread running beside it goes on, and its
-# progress after the interrupt shows it was not the one stopped. A FIFO holds back
+# Ctrl-C is for the REPL's own work: an isolate running beside it goes on, and its
+# message after the interrupt shows it was not the one stopped. A FIFO holds back
 # what comes after the interrupt until it has been seen: on a busy machine the
 # signal can take longer than the wait between tries, and a second one must not
 # reach that expression.
@@ -939,26 +924,26 @@ pid=$!
 exec 3> "$dir/thr8"
 cat >&3 <<'EOF'
 (define spin N -> (spin (+ N 1)))
-(define pause 0 -> done N -> (pause (- N 1)))
-(set beats 0)
-(define beat N -> (do (set beats (+ (value beats) 1)) (beat N)))
-(thread (freeze (beat 0)))
+(define beat Out -> (beat-on Out 0))
+(define beat-on Out N -> (if (= N 300000000) (shen-jit.send Out beats-went-on) (beat-on Out (+ N 1))))
+(set beats (shen-jit.channel 1))
+(shen-jit.spawn beat (shen-jit.sender (value beats)))
 EOF
-wait_for "(4-) true" "$dir/thr8.out"
+wait_for "(4-) <isolate 1>" "$dir/thr8.out"
 printf '(spin 0)\n' >&3
 sleep 0.2
 interrupts_to 1 "$dir/thr8.out"
 sleep 0.2
-printf '(let A (value beats) W (pause 300000000) (if (> (value beats) A) beats-went-on stuck))\n' >&3
+printf '(shen-jit.receive (value beats))\n' >&3
 exec 3>&-
 ends
-contains thread-interrupt "$dir/thr8.out" "interrupted"
-contains thread-survives-interrupt "$dir/thr8.out" "beats-went-on"
+contains isolate-interrupt "$dir/thr8.out" "interrupted"
+contains isolate-survives-interrupt "$dir/thr8.out" "beats-went-on"
 
 # Ctrl-C while the REPL waits for input, which a FIFO holds open: a half-typed
 # expression is dropped, and a program waiting for input stops, even inside its own
-# trap-error. With a thread running beside it the signal still has to reach the main
-# thread, whose wait it ends. End of input then ends the REPL as usual.
+# trap-error. With an isolate running beside it the signal still has to reach the
+# builder, whose wait it ends. End of input then ends the REPL as usual.
 mkfifo "$dir/held"
 "$SHEN" < "$dir/held" > "$dir/held.out" 2>&1 &
 pid=$!
@@ -972,8 +957,8 @@ wait_for "(0-) 7" "$dir/held.out"
 printf '(trap-error (read-byte (stinput)) (/. E caught))\n' >&3
 sleep 0.3
 interrupts_to 2 "$dir/held.out"
-printf '(+ 5 6)\n(define beat N -> (beat (+ N 1)))\n(thread (freeze (beat 0)))\n' >&3
-wait_for "(4-) true" "$dir/held.out"
+printf '(+ 5 6)\n(define beat N -> (beat (+ N 1)))\n(shen-jit.spawn beat 0)\n' >&3
+wait_for "(4-) <isolate 1>" "$dir/held.out"
 sleep 0.1
 interrupts_to 3 "$dir/held.out"
 printf '(+ 7 8)\n' >&3
@@ -984,8 +969,8 @@ check interrupt-half-typed "$dir/held.out" "(0-) interrupted"
 check interrupt-half-typed-dropped "$dir/held.out" "(0-) 7"
 check interrupt-program-reading "$dir/held.out" "(1-) interrupted"
 check interrupt-program-reading-continues "$dir/held.out" "(2-) 11"
-check interrupt-prompt-beside-thread "$dir/held.out" "(5-) interrupted"
-check interrupt-prompt-beside-thread-continues "$dir/held.out" "(5-) 15"
+check interrupt-prompt-beside-isolate "$dir/held.out" "(5-) interrupted"
+check interrupt-prompt-beside-isolate-continues "$dir/held.out" "(5-) 15"
 [ "$status" -eq 0 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL interrupt-end-of-input: status $status"; }
 
 # A loop that ran before the REPL started, so before it caught Ctrl-C, can still be
@@ -1095,7 +1080,7 @@ EOF
     fi
 
     # Shen called from C without end stops before the C stack does, as an error any code can
-    # catch, on the main thread and on another. The test library is made for this by the Makefile,
+    # catch, on the main thread and in an isolate. The test library is made for this by the Makefile,
     # and is named in full: a program finds what it names from wherever it runs.
     ffi_test=$PWD/build/ffi_test.so
     if [ "$posix" = no ]; then ffi_test=$(cygpath -w "$PWD/build/ffi_test.dll"); fi
@@ -1106,10 +1091,10 @@ EOF
 EOF
     cat > "$dir/nest.shen" <<'EOF'
 (output "main: ~A~%" (trap-error (c.deep 0) (/. E (error-to-string E))))
-(set c.out 0)
-(thread (freeze (set c.out (trap-error (c.deep 0) (/. E (error-to-string E))))))
-(define c.wait -> (if (= (value c.out) 0) (c.wait) (value c.out)))
-(output "thread: ~A~%" (c.wait))
+(define c.in-isolate Out -> (shen-jit.send Out (trap-error (c.deep 0) (/. E (error-to-string E)))))
+(set c.out (shen-jit.channel 1))
+(shen-jit.spawn c.in-isolate (shen-jit.sender (value c.out)))
+(output "isolate: ~A~%" (shen-jit.receive (value c.out)))
 (output "goes on: ~A~%" (c.call (/. X (+ X 1)) 1))
 (define c.down N -> (if (= N 0) 0 (+ 1 (c.down (- N 1)))))
 (output "stack moved: ~S~%" (let A (cn "a" "b") (cons A (c.call (/. X (c.down 300000)) 1))))
@@ -1121,7 +1106,7 @@ EOF
 EOF
     "$SHEN" script "$dir/nest-main.shen" > "$dir/nest.out" 2>&1 < /dev/null
     check nested-stack-overflow "$dir/nest.out" "main: stack overflow"
-    check nested-stack-overflow-thread "$dir/nest.out" "thread: stack overflow"
+    check nested-stack-overflow-isolate "$dir/nest.out" "isolate: stack overflow"
     check nested-goes-on "$dir/nest.out" "goes on: [1 | 2]"
     check nested-stack-moved "$dir/nest.out" 'stack moved: ["ab" 1 | 300000]'
     # The same under a handler that ignores its error: C still gets the error to read, and goes on.
@@ -1185,8 +1170,9 @@ EOF
 (define net.main
   -> (let L (socket.listen "127.0.0.1" 0)
           Port (socket.port L)
-          Client (thread (freeze (let C (socket.connect "127.0.0.1" Port)
-                                   (do (socket.send C "over the wire") (socket.close C)))))
+          C (socket.connect "127.0.0.1" Port)
+          _ (socket.send C "over the wire")
+          _ (socket.close C)
           A (socket.accept L)
        (output "net: ~A~%" (socket.recv-string A 100))))
 (shen-jit.save-executable "$dir/net" net.main)
@@ -1226,25 +1212,19 @@ EOF
     fi
 fi
 
-# Each thread keeps its own backtrace, and the reports at exit still come once a thread has started.
+# An isolate's uncaught error reports its own backtrace, and the reports at exit still come once an
+# isolate has started.
 cat > "$dir/thread-traces.shen" <<'EOF'
-(define trace-wait Key -> (if (value Key) done (trace-wait Key)))
-(define trace-first X -> (do (set first-done true) (hd X)))
-(define trace-second X -> (do (set second-done true) (tl X)))
-(set first-done false)
-(set second-done false)
-(thread (freeze (eval-kl [trace-first 0])))
-(trace-wait first-done)
-(thread (freeze (eval-kl [trace-second 0])))
-(trace-wait second-done)
+(define trace-second X -> (tl X))
+(let P (shen-jit.spawn trace-second 0) M (shen-jit.monitor P) (shen-jit.receive M))
 EOF
 "$SHEN" script "$dir/thread-traces.shen" > "$dir/thread-traces.out" 2>&1
-check thread-own-backtrace "$dir/thread-traces.out" "  in trace-second"
-SHEN_JIT_STATS=1 "$SHEN" eval -e '(thread (freeze 1))' > "$dir/thread-stats.out" 2>&1
-contains thread-statistics "$dir/thread-stats.out" "shen-jit: live heap"
+contains isolate-own-backtrace "$dir/thread-traces.out" "  in trace-second"
+SHEN_JIT_STATS=1 "$SHEN" eval -e '(define one X -> X)' -e '(shen-jit.spawn one 1)' > "$dir/thread-stats.out" 2>&1
+contains isolate-statistics "$dir/thread-stats.out" "shen-jit: live heap"
 if [ "$posix" = yes ]; then
-    SHEN_JIT_PROFILE=1 "$SHEN" eval -e '(thread (freeze 1))' > "$dir/thread-profile.out" 2>&1
-    contains thread-profile "$dir/thread-profile.out" "shen-jit: profile of"
+    SHEN_JIT_PROFILE=1 "$SHEN" eval -e '(define one X -> X)' -e '(shen-jit.spawn one 1)' > "$dir/thread-profile.out" 2>&1
+    contains isolate-profile "$dir/thread-profile.out" "shen-jit: profile of"
     # A directory named shen-jit on PATH before the executable is not the executable.
     mkdir -p "$dir/path-a/shen-jit" "$dir/path-b"
     exe="$(cd "$(dirname "$SHEN")" && pwd)/$(basename "$SHEN")"
