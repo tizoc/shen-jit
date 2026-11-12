@@ -85,7 +85,7 @@ Run what the change can break, and nothing more: CI runs everything on every pus
 | Documentation only | Nothing; `make guide` if a rendered page's layout changed, and the examples you changed |
 
 `make test-core` is `test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn
-test-native test-ffi test-overrides test-structs test-workers`, and `make test-libs` is `test-buffer test-json test-io test-fs test-process test-parallel
+test-native test-ffi test-overrides test-structs test-workers test-isolates`, and `make test-libs` is `test-buffer test-json test-io test-fs test-process test-parallel
 test-tree-sitter test-http test-datalog test-curl test-namespaces`.
 
 Keep each suite fast. A check that needs a collection at every allocation, a long wait or a large input goes in a

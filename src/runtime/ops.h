@@ -239,6 +239,7 @@ enum Prim {
     P_SET_ARITY, /* shen-jit.set-arity: records a name's arity, -1 for none; the builder's alone */
     P_FUNCTION,  /* shen-jit.function: the procedure a name has now, inline (jit.c) */
     P_APPLY,     /* shen-jit.apply: calls a name's procedure, or a procedure, with a list */
+    P_ISOLATE,   /* shen-jit.isolate: spawning, channels, monitors and kill (isolate.c) */
     P_COUNT
 };
 #define PRIM_RAISE_COND P_COUNT

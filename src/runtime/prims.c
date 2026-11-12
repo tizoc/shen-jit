@@ -10,6 +10,7 @@
 
 #include <errno.h>
 #include <math.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -139,6 +140,7 @@ const Primitive primitive_table[] = {
     {"shen-jit.set-arity", 2, NULL},
     {"shen-jit.function", 1, NULL},
     {"shen-jit.apply", 2, NULL},
+    {"shen-jit.isolate", 3, NULL},
 };
 
 const size_t primitive_count = sizeof primitive_table / sizeof primitive_table[0];
@@ -938,6 +940,10 @@ static V save_executable(VM *vm)
         return sj_raise(vm, "worker: saving an executable is a host-only operation");
     if (!thread_is_only(vm))
         return sj_raise(vm, "save-executable: other threads are running");
+    if (!vm->builder)
+        return sj_raise(vm, "save-executable: only the builder can save");
+    if (isolates_running(vm->program))
+        return sj_raise(vm, "save-executable: other isolates are running");
     V path = vm->args[0], entry = vm->args[1];
     if (!is_type(path, T_STRING))
         return sj_raise_value(vm, "~S is not a path", path);
@@ -1172,7 +1178,25 @@ static bool input_ready(bool wait)
 }
 #endif
 
+static V read_stdin_waiting(VM *vm);
+
+/* Isolates read it one at a time, waiting for their turn inside a blocking region, and wait
+   for input inside one too (isolate.c). */
+static pthread_mutex_t input_lock = PTHREAD_MUTEX_INITIALIZER;
+
 static V read_stdin(VM *vm)
+{
+    if (!vm->program->isolates)
+        return read_stdin_waiting(vm);
+    isolate_block(vm);
+    pthread_mutex_lock(&input_lock);
+    isolate_unblock(vm);
+    V v = read_stdin_waiting(vm);
+    pthread_mutex_unlock(&input_lock);
+    return v;
+}
+
+static V read_stdin_waiting(VM *vm)
 {
     fflush(stdout);
     while (input_next == input_end) {
@@ -1184,6 +1208,7 @@ static V read_stdin(VM *vm)
            and a Ctrl-C ends it. One thread reads at a time; the others look again. */
         static bool input_busy;
         Thread *t = vm->threads ? thread_leave(vm) : NULL;
+        isolate_block(vm);
         long n = 1;
         if (input_busy) {
             win_sleep_briefly();
@@ -1196,6 +1221,7 @@ static V read_stdin(VM *vm)
                 input_end = (size_t)n;
             }
         }
+        isolate_unblock(vm);
         if (t)
             thread_enter(t);
         if (n == 0)
@@ -1209,7 +1235,9 @@ static V read_stdin(VM *vm)
             input_end = (size_t)n;
         } else {
             Thread *t = vm->threads ? thread_leave(vm) : NULL;
+            isolate_block(vm);
             input_ready(true);
+            isolate_unblock(vm);
             if (t)
                 thread_enter(t);
         }
@@ -1933,7 +1961,9 @@ V sj_primitive(VM *vm, size_t index)
             return sj_raise_value(vm, "shen-jit.gc: ~S is not a vector of bindings", a);
         ptr(a)[2] = fix(fixval(ptr(a)[2]) - 1);
         return V_FALSE;
-    case P_THREAD: return thread_start(vm);
+    case P_THREAD:
+        return vm->program->isolates ? sj_raise(vm, "thread: not beside isolates") : thread_start(vm);
+    case P_ISOLATE: return sj_isolate(vm, a, b, vm->args[2]);
     case P_WORKER_SCOPE: return worker_scope(vm);
     case P_WORKER_BATCH: return worker_batch(vm);
     case P_WORKER_INDEX: return worker_index(vm);

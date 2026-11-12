@@ -350,7 +350,7 @@
    [3 [address-> shen-jit.dict-put shen-jit.absvector3 shen-jit.deref
        shen-jit.u8! shen-jit.u16! shen-jit.u32! shen-jit.bytes->string
        shen-jit.bytes->pointer shen-jit.pointer->bytes
-       shen-jit.s32! shen-jit.s64! shen-jit.f32! shen-jit.f64! shen-jit.pointer!]]
+       shen-jit.s32! shen-jit.s64! shen-jit.f32! shen-jit.f64! shen-jit.pointer! shen-jit.isolate]]
    [4 [shen-jit.write-bytes]]
    [5 [shen-jit.copy-bytes shen-jit.worker-scope]]
    [fixed [if and or cond let lambda defun freeze type trap-error do thaw eval-kl protect]]])

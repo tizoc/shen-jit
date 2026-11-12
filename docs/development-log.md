@@ -1466,6 +1466,57 @@ Parallel Datalog queries, as fork/join over a relation split in shards, with the
   real result from 10.001 to 1.225 ms, and 4 workers on the source-deps queries from 8.527 to 3.912 ms warm, still
   above packed bytes, which that example's CLI keeps.
 
+### Isolates (2026-11-12, Apple M3 Max with 16 cores, against foreign functions in the program space)
+
+Step 3 of design D: isolates on OS threads over the builder's program, spawned by name, with one copier for
+arguments and messages, channels, `receive-any`, monitors, `kill`, the compile lock, installs by rendezvous, and
+publication hooks, which the grammar library uses. About 1,310 lines in `isolate.c`, comments included, and 350
+elsewhere, against an estimate of 850 in all.
+
+- **Parallel work:** `fib 32` eight times took 105 to 122 ms in sequence, 13 to 15 ms in one isolate, and 15 to 18 ms
+  in eight at once, with the machine at a load of 3.
+- **Messages:** a small message there and back 3.4 to 4.1 µs; a list of 40,000 elements, numbers, strings and reals,
+  there and back 3.1 to 3.4 ms.
+- **Spawning:** a spawn with a reply and the isolate's end first took 285 to 311 µs, nearly all in reserving and
+  releasing three 64 GiB heap regions: alone, reserving, touching and releasing 192 GiB took 202 µs, and 24 GiB 32 µs.
+  An isolate reserves 8 GiB a region, and the whole took 42 to 48 µs. What is left is mostly address space, clearing a
+  new stack and global slots, and starting a thread. **Not tried:** keeping ended contexts for new isolates.
+- **Channels:** a profile of 200,000 spawns, each leaving its reply channel open, showed the search for a free slot,
+  linear then. A free list replaced it. Such channels stay until their receiver ends, as the spec says; freeing a
+  channel once its receive endpoint is dropped would need the collector to track endpoints, as it tracks files.
+- **Defining beside isolates:** 200 definitions took 4.8 ms beside four busy isolates and 0.7 ms alone, about 20 µs a
+  rendezvous.
+- **Without isolates,** nothing in emitted code changes: the growth stub compares one more value, and compiling at a
+  first call takes a lock only once isolates exist. Benchmark suite, alternating with the build before, geometric
+  means 1.01 and 1.00 over two rounds, a 1.20 on one compile-pipeline row in the first round reading 1.01 in the second.
+- **Deadlocks found before running:** an isolate waiting for the compile lock, which the builder holds for a whole
+  rendezvous, counted as running, so the builder would wait for it for ever; it now waits inside a blocking region,
+  and the lock is recursive, as the builder collects while it holds it. An isolate starting during a rendezvous counted
+  as running too; it is counted from its first turn. An isolate clearing its interrupt just as the builder set it could
+  keep the limit the builder cleared, and frame checks would miss it, so the builder asks again every millisecond.
+- **The fix-up:** a name published while an isolate holds its own symbol for it must not give that isolate two symbols.
+  The isolate collects once with the fix-up on before anything published can reach it: at its next safe point, and as
+  it receives or interns, which may collect anyway.
+- **Handles print themselves:** an endpoint or isolate is an absvector whose first element is a tag. With the
+  primitive's name as a tag, printing one failed, as the printer calls an absvector's first element when it names a
+  function; the tags are now port functions that print them.
+- **A bug on the way:** a collection raised the count of function cells to cover cell 0, the reserved one, even in a VM
+  that had made none, and its next collection read a chunk that did not exist; `test_runtime` caught it.
+- **Checks:** 34 cases, 20 runs in a row, under a collection at every allocation (10 s), and under ThreadSanitizer,
+  which reports only the builder's writes of an isolate's interrupt and limit, the protocol Ctrl-C and the thread
+  ticker use.
+- **Rejected: letting `(fn F)` cross.** Made in the builder, it is a closure compiled into the builder's heap, which
+  the spec had crossing by pointer; that would need the builder's lambda forms in the program space. Passing the name
+  is enough, as the isolate gets the function with `fn` itself, so a function crosses by its name.
+- **Open:** a definition whose promotion failed stays in the builder's heap, where an isolate must not call it, though
+  none of 2,611 does with the libraries loaded.
+- **The name:** isolates, as what sets them apart is a heap, globals and a property list of their own, with values
+  crossing only as copies or shared immutable data, and the name does not tie them to OS threads. Rejected: process,
+  which `lib/process.shen` uses for the operating-system processes it starts, with its own `process.kill` and `make
+  test-process`; thread, the name of the global-lock feature they replace, which also suggests a shared heap; worker,
+  after the worker scopes they replace; actor, since messages go to channels, not to the isolate; fiber or task, which
+  suggest many cheap cooperative ones on one thread, a name kept for that if it ever comes.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on

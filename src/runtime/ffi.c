@@ -399,6 +399,8 @@ V h_foreign(VM *vm)
     }
 
     Thread *t = blocking ? thread_leave(vm) : NULL;
+    if (blocking)
+        isolate_block(vm); /* a rendezvous need not wait for it (isolate.c) */
     W word = 0;
     D real = 0;
     if (fixed)
@@ -412,6 +414,8 @@ V h_foreign(VM *vm)
 #else
     int error = errno, c_error = error;
 #endif
+    if (blocking)
+        isolate_unblock(vm);
     if (t)
         thread_enter(t);
     vm->foreign_error = error;
@@ -496,12 +500,15 @@ static V define_foreign(VM *vm)
     V proc = make_foreign(vm, desc, arity);
     if (proc == V_CLEARED)
         return sj_raise(vm, "out of memory");
+    bool stopped = program_stop(vm); /* while isolates run, they stop meanwhile (isolate.c) */
     proc = program_promote_foreign(vm, proc);
     name = vm->args[0]; /* it may have moved */
     size_t cell = symbol_cell(name);
     if (vm->program->redefine)
         vm->program->redefine(vm, cell);
     *cell_function(vm, cell) = proc;
+    if (stopped)
+        program_go(vm);
     if (vm->seal_user)
         symbol_seal(name);
     return name;
@@ -1014,6 +1021,7 @@ static shen_value api_exception_message(shen_vm *sv)
 static void *api_release(shen_vm *sv)
 {
     VM *vm = vm_of(sv);
+    isolate_block(vm);
     return vm->threads ? thread_leave(vm) : NULL;
 }
 
@@ -1021,6 +1029,7 @@ static void api_acquire(shen_vm *sv, void *token)
 {
     if (token)
         thread_enter(token);
+    isolate_unblock(vm_of(sv));
 }
 
 static const struct shen_api api_table = {

@@ -306,11 +306,11 @@ fit, so that a stale pointer fails at once. `SHEN_JIT_SLOW_PRIMS` compiles every
 
 ## The builder and isolates
 
-Parallelism is being redesigned around isolates over one program: an isolate runs the program's
-definitions with its own heap, globals and property list, and inherits nothing. Only the builder,
-the isolate a program starts as, defines: it alone installs code, records arities and gives
-globals their numbers, and in any other VM `eval`, `eval-kl`, installing, foreign definitions
-and recording an arity raise an error.
+A program runs as isolates over one program: each runs the program's definitions on an OS thread
+of its own, with its own heap, globals and property list, inherits nothing, and talks to others
+only through channels. Only the builder, the isolate a program starts as, defines: it alone
+installs code, records arities and gives globals their numbers, and in any other VM `eval`,
+`eval-kl`, installing, foreign definitions and recording an arity raise an error.
 
 The runtime is split the same way. What every isolate will share is a `Program`: the program space,
 the published symbols, function cells with arities, constant slots, global numbering, and the JIT
@@ -327,13 +327,71 @@ whose last call reads the name's function cell inline. A primitive's cell holds 
 made from a code object at startup, so a template can call primitives too. An isolate gives a value to a global
 with no number in a dictionary of its own, since only the builder numbers.
 
-An isolate starts as a program does (`sj_start_isolate`): its globals are cleared, the
-program's constants put back, the standard streams made, and the port's
-`shen-jit.start-isolate` sets the run state with the kernel's starting values: a new
-property vector, Prolog's memory and counters, the printer's settings, and `gensym`
-counting from a base of its own, so that names made in two isolates never meet. Until
-isolates exist, `test_kl --isolate` starts one in a VM that was the builder and runs a
-program there.
+An isolate starts as a program does: its globals are unbound, the program's constants are
+put back, the standard streams made, and the port's `shen-jit.start-isolate` sets the run
+state with the kernel's starting values: a new property vector, Prolog's memory and
+counters, the printer's settings, and `gensym` counting from a base of its own, so that
+names made in two isolates never meet. `test_kl --isolate` does the same in a VM that
+was the builder (`sj_start_isolate`), to test it apart from threads.
+
+**Spawning** (`isolate.c`). `shen-jit.spawn` takes the name of a function of one argument
+whose procedure is in the program space, and a value, which it copies into a fragment: blocks
+outside every heap. The new thread makes a context (`vm_create_context`), with a heap that
+reserves 8 GiB for each region rather than the builder's 64, as reserving and releasing that
+much took most of a spawn, a small stack that grows, and a slot for each global number. It
+starts as above and copies the fragment into its heap.
+
+**Copying.** Arguments and messages go through one copier, breadth first as a collection
+copies, with a table from old addresses to copies instead of forwarding pointers, so the
+sender's objects are untouched and nothing allocates in its heap meanwhile; sharing and cycles
+are kept. What lies in the program space crosses by pointer: published symbols, constants and
+the program's functions. A symbol of the sender's own crosses by name, interned by the
+receiver before anything else is copied in, after which there is room for the rest at once,
+so nothing moves while it is copied. Closures in a heap, streams, pointers, code and the end
+of a stream are refused. A receive endpoint moves only in a spawn's argument, marked by
+`shen-jit.give`, which hands its channel to the child.
+
+**Channels.** A table outside every heap, under the isolates' lock, holds each channel's
+queue of fragments, copied into the receiver's heap as it receives, its receiver, and the
+senders waiting while it is full. An endpoint is an absvector `[Tag Index Generation]`, whose
+tag is a port function that prints it; freeing a channel raises its slot's generation, so a
+stale endpoint raises "channel closed". Each isolate waits on a condition of its own. A
+monitor is a channel of capacity 1 that gets `[down P Reason]` when P ends. `kill` marks the
+isolate and sets its interrupt to `ATTEND`, so that its next safe point raises "killed",
+once, and wakes it if it waits. An isolate that ends tells its monitors, closes its files
+and the channels it receives on, and frees its context; its record is used again with a new
+generation.
+
+**The rendezvous.** The builder changes the program only while every other isolate is
+stopped: waiting on a channel, inside a blocking region (a blocking foreign call, C that
+releases the VM, a read of stdin, a wait for the compile lock), or parked at a safe point. To
+install a definition it takes the compile lock, sets each running isolate's interrupt to
+`ATTEND`, which clears its check limit as Ctrl-C does, and waits until none runs, asking again
+every millisecond, since an isolate clearing its interrupt at that moment may miss it at frame
+checks. The compile lock also guards compiling at a first call, the JIT's tables, which
+backtraces read, and the list of native code, which isolates add to; it is recursive, as the
+builder collects while it holds it. An isolate waits for it inside a blocking region, so a
+rendezvous never waits for an isolate that waits for the lock.
+
+**The fix-up.** When a rendezvous published symbols, a counter moves on, and each isolate,
+before anything published can reach it, at its next safe point or as it receives or interns,
+collects once with the fix-up on: a symbol of its own whose name is now published is replaced
+by the published one, and its value in the dictionary moves to that symbol's slot. So a name
+has one symbol in each isolate. A global number the builder gives has a slot in every isolate
+before code can use it.
+
+**Publication.** What compiles at a first call cannot be compiled in an isolate, so libraries
+that do it register a hook (`shen-jit.on-publish`), which the builder runs before each spawn
+and at `shen-jit.publish`. The grammar library's compiles the loops not compiled yet and
+prepares the streaming variants of the rules that reads name. In an isolate, a variant is
+found by its name, and one never prepared is refused.
+
+A function goes to an isolate by its name, a published symbol, and the isolate gets it with
+`fn`; what `fn` makes is a closure in a heap, which does not cross.
+
+**Not yet.** A definition whose promotion failed stays in the builder's heap, where an isolate
+must not call it, and a channel whose receive endpoint is dropped stays until its receiver
+ends. Threads and isolates exclude each other.
 
 ## Threads
 

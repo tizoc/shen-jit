@@ -270,12 +270,57 @@ cat build/runtime app.img > app && chmod +x app
 ./app eval -e '(main)'
 ```
 
+### Isolates
+
+`(shen-jit.spawn F X)` runs `F`, a function of one argument that the program defined, in an isolate of its own on an
+OS thread of its own, with a copy of `X`, and returns the isolate. Isolates share the program's code and nothing
+else: each has its own heap, globals and property list, and they talk through channels. They run on several cores at
+once, within one operating-system process; [subprocesses](https://github.com/tizoc/shen-jit/blob/main/docs/processes.md)
+are other programs.
+
+```shen
+(define fib 0 -> 0 1 -> 1 N -> (+ (fib (- N 1)) (fib (- N 2))))
+(define fib-of [N Out] -> (shen-jit.send Out [N (fib N)]))
+
+(let Replies (shen-jit.channel 4)
+     Out (shen-jit.sender Replies)
+     _ (map (/. N (shen-jit.spawn fib-of [N Out])) [27 28 29 30])
+  (map (/. I (shen-jit.receive Replies)) [1 2 3 4]))
+\\ [[27 196418] [28 317811] [29 514229] [30 832040]], in the order they finish
+```
+
+- **Channels:** `(shen-jit.channel N)` makes a channel that holds up to `N` messages and returns its receive endpoint,
+  which only the isolate that made it reads. `(shen-jit.sender R)` gives a send endpoint, which can go anywhere.
+  `shen-jit.send` waits while the channel is full and `shen-jit.receive` while it is empty;
+  `(shen-jit.receive-any [R1 R2 ...])` gives `[R Message]` from the first that has one.
+- **Closing:** a sender's `(shen-jit.close S)` ends the stream: the receiver gets what was queued, then a value that
+  `shen-jit.end?` recognises. The receiver's close drops what is queued. Sending on a closed channel raises "channel
+  closed". A channel is freed when its receiver closes it, reads its end, or ends, and not before.
+- **What crosses:** an argument or a message is copied, with its sharing and cycles. Symbols cross by name, so a
+  function goes by its name, and the isolate that gets it calls `(fn F)`. Closures made as the program runs, `fn`'s
+  among them, streams and pointers are refused. A receive endpoint moves to a new isolate only in its argument,
+  marked with `(shen-jit.give R)`, and its old holder can no longer read it.
+- **An isolate starts as a program does:** its globals are unbound and its property list is empty, so it takes what
+  it needs from its argument. Only the program's first isolate, the builder, defines: `eval`, `load` and the like
+  raise an error in any other.
+- **The end:** an isolate ends when its function returns, or raises an error that nothing catches, which is printed to
+  stderr. `(shen-jit.monitor P)` returns a receive endpoint that gets `[down P Reason]` when `P` ends, the reason being
+  `normal`, the error's message, or `killed`. `(shen-jit.kill P)` raises "killed" at `P`'s next function entry or
+  loop turn, waking it if it waits on a channel, so that its handlers can clean up. `(shen-jit.self)` is the isolate
+  running. The program ends when the builder does, or when any isolate calls `(shen-jit.exit N)`.
+- **Defining while isolates run:** the builder can define at any time. Isolates stop for each definition and see
+  it at once. Grammars compile at their first call, which an isolate cannot do, so the builder compiles them before
+  each spawn; `(shen-jit.publish)` does it at other times.
+- **Not beside threads:** `thread` raises an error once an isolate has started, and isolates do not start beside
+  threads or in a [structured worker](#structured-workers). `shen-jit.save-executable` refuses while other isolates
+  run.
+
 ### Threads
 
 `(thread Frozen)` runs a frozen expression in a new thread and returns `true`, as programs written for Shen/Scheme
 expect. Threads are real, and one runs at a time, holding a global lock. So they give concurrency, for work that
-waits or runs beside the main program, and no speed-up from more cores: for that, [structured workers](#structured-workers)
-run a saved image's function on several cores at once.
+waits or runs beside the main program, and no speed-up from more cores: for that, [isolates](#isolates) run on
+several cores at once, and so do [structured workers](#structured-workers), a saved image's function.
 
 ```shen
 (set done false)
@@ -1073,7 +1118,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make check-generated` | Compares the generated files with `generated.sha256`. `make update-generated` rewrites it after a change to the lowerer, the port or the lowered test programs |
 | `make test-kl-stress`, `make test-kernel-stress` | The same with frequent collections |
 | `make test-lib-stress` | The libraries' saved images reloaded with a collection at every allocation, which their own suites leave out |
-| `make test-san` | `test`, `test-jit`, `test-ops`, `test-kl`, FFI, libcurl, filesystem, subprocess and Tree-sitter adapters under AddressSanitizer and UBSan |
+| `make test-san` | `test`, `test-jit`, `test-ops`, `test-kl`, FFI, isolates, libcurl, filesystem, subprocess and Tree-sitter adapters under AddressSanitizer and UBSan |
 | `make test-x86` | The same five, built as x86-64 code (under Rosetta on Apple silicon) |
 | `make test-differential` | Each primitive over generated values, however it is compiled and through C, and properties they must keep. `make differential-scheme` lists what differs from Shen/Scheme, to read and not to pass |
 | `make fuzz-native` | Mutated code objects, run if the checker accepts them |

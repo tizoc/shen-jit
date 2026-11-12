@@ -483,3 +483,17 @@ V program_promote(VM *vm, V closure)
     free(pr.undo_value);
     return pr.failed ? closure : copy;
 }
+
+/* A string in the program space, for a value every isolate reads, such as *version*; or
+   V_CLEARED when there is no room. */
+V program_copy_string(VM *vm, V string)
+{
+    if (in_program(vm, ptr(string)))
+        return string;
+    size_t words = obj_words(ptr(string)[0]);
+    uint64_t *q = program_alloc(vm, words);
+    if (!q)
+        return V_CLEARED;
+    memcpy(q, ptr(string), words * sizeof(uint64_t));
+    return tagged(q, TAG_OBJECT);
+}

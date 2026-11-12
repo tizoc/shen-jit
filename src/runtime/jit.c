@@ -318,12 +318,9 @@ static void redefine(VM *vm, size_t cell)
    is returned, and *evaluated says whether the walk reached the expression
    being evaluated, so that the error came from running code rather than,
    say, the reader or the typechecker working on the input. */
-size_t jit_backtrace(VM *vm, V *names, size_t max, bool *evaluated)
+static size_t backtrace_frames(VM *vm, V *names, size_t max, bool *evaluated)
 {
     size_t n = 0;
-    *evaluated = false;
-    if (!vm->program->jit)
-        return 0;
     V *floor = vm->trace_floor == SIZE_MAX ? vm->stack : vm->stack + vm->trace_floor + 1;
     /* Each frame's code may have inlined bodies where it is: at the site of
        the C helper that raised, for the innermost, and at its call for the
@@ -355,6 +352,18 @@ size_t jit_backtrace(VM *vm, V *names, size_t max, bool *evaluated)
             break;
         fp -= window;
     }
+    return n;
+}
+
+/* The sites it reads are the Jit's, which an isolate compiling adds to. */
+size_t jit_backtrace(VM *vm, V *names, size_t max, bool *evaluated)
+{
+    *evaluated = false;
+    if (!vm->program->jit)
+        return 0;
+    program_compile_lock(vm);
+    size_t n = backtrace_frames(vm, names, max, evaluated);
+    program_compile_unlock(vm);
     return n;
 }
 
@@ -441,7 +450,10 @@ static V h_resolve(VM *vm, V *slot)
    frame or loop check comes here. */
 static V h_grow(VM *vm, size_t frame)
 {
-    if (vm->interrupted == PREEMPT) {
+    if (vm->interrupted == ATTEND) {
+        if (isolate_attend(vm) == V_CLEARED) /* its turn, or a kill (isolate.c) */
+            return V_CLEARED;
+    } else if (vm->interrupted == PREEMPT) {
         thread_preempted(vm);
     } else if (vm->interrupted && vm->thread && !vm->thread->main) {
         thread_yield(vm); /* a Ctrl-C is for the main thread, which the REPL runs in */
@@ -518,15 +530,17 @@ static void *compile_code(VM *vm, V code);
 /* Entered through a closure whose entry is still the compile stub. */
 static void *h_compile(VM *vm)
 {
+    program_compile_lock(vm); /* isolates share code (isolate.c) */
     uint64_t *p = ptr(vm->fp[1]);
     uint64_t *code = ptr(p[CLO_CODE]);
     if (!code[CODE_NATIVE]) {
         void *native = compile_code(vm, p[CLO_CODE]);
         if (!native)
             fatal("native compilation failed");
-        code[CODE_NATIVE] = (uint64_t)(uintptr_t)native;
+        __atomic_store_n(&code[CODE_NATIVE], (uint64_t)(uintptr_t)native, __ATOMIC_RELEASE);
     }
-    p[PROC_ENTRY] = code[CODE_NATIVE];
+    __atomic_store_n(&p[PROC_ENTRY], code[CODE_NATIVE], __ATOMIC_RELEASE);
+    program_compile_unlock(vm);
     return (void *)(uintptr_t)code[CODE_NATIVE];
 }
 

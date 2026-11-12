@@ -472,10 +472,13 @@ V sj_install(VM *vm, V form)
     if (!l.error)
         bind_sealed(&l, true);
     if (!l.error && defun) {
+        bool stopped = program_stop(vm); /* while isolates run, they stop meanwhile (isolate.c) */
         result = program_promote(vm, result);
         if (vm->program->redefine)
             vm->program->redefine(vm, symbol_cell(nth(form, 1)));
         *cell_function(vm, symbol_cell(nth(form, 1))) = result;
+        if (stopped)
+            program_go(vm);
         if (vm->seal_user)
             symbol_seal(nth(form, 1));
         result = nth(form, 1);
