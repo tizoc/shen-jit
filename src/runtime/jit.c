@@ -2498,34 +2498,39 @@ static void emit_prim(Emit *e, const uint32_t *p)
     }
     case P_VALUE:
     case P_SET: {
-        /* Global cells never move (vm.h): a constant symbol's value cell has
-           a fixed address, and another symbol's is found from the index in
-           its cell word, through the chunk directory, which may move.
-           Anything but a symbol, and an unbound symbol for value, goes to
-           C, which raises. */
-        sljit_s32 cell = SLJIT_MEM1(SLJIT_R3);
+        /* A global's value is in the VM's slots, by its number (vm.h): a constant symbol,
+           numbered as its code is compiled, is one load at a fixed offset from the VM's
+           register, and another symbol's number is in its cell word. A symbol with no number
+           goes to C, which numbers it for set and raises for value, as it does for anything
+           but a symbol, and for an unbound value. */
+        sljit_s32 cell = SLJIT_MEM1(VMR);
         sljit_sw at = 0;
-        if ((arg[0] & OPERAND_CONST) && is_symbol(*operand_cell(e, arg[0]))) {
-            cell = SLJIT_MEM0();
-            at = (sljit_sw)cell_value(e->vm, symbol_cell(*operand_cell(e, arg[0])));
+        V *slot = (arg[0] & OPERAND_CONST) && is_symbol(*operand_cell(e, arg[0]))
+                      ? global_slot_new(e->vm, *operand_cell(e, arg[0])) : NULL;
+        if (slot) {
+            at = (sljit_sw)((char *)slot - (char *)e->vm);
         } else {
             sljit_s32 r = operand_reg(e, arg[0]);
             slow = slow_path(e, SLOW_PRIM, tag_cmp(c, SLJIT_NOT_EQUAL, R1, r, 0, TAG_SYMBOL));
             sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM1(r), SYM_CELL * sizeof(V) - TAG_SYMBOL);
-            sljit_emit_op2(c, SLJIT_AND, R1, R1, IMM((UINT64_C(1) << 56) - 1));
-            sljit_emit_op2(c, SLJIT_SHL, R1, R1, IMM(1)); /* the value cell, 2 * index */
-            sljit_emit_op2(c, SLJIT_LSHR, R2, R1, IMM(RA_CHUNK_BITS));
-            sljit_emit_op2(c, SLJIT_AND, R1, R1, IMM(RA_CHUNK - 1));
-            sljit_emit_op1(c, SLJIT_MOV, R3, SLJIT_MEM1(VMR), (sljit_sw)offsetof(VM, cells.chunks));
-            sljit_emit_op1(c, SLJIT_MOV, R3, SLJIT_MEM2(SLJIT_R3, SLJIT_R2), 3);
-            sljit_emit_op2(c, SLJIT_SHL, R1, R1, IMM(3));
-            sljit_emit_op2(c, SLJIT_ADD, R3, R3, R1);
+            sljit_emit_op2(c, SLJIT_LSHR, R1, R1, IMM(CELL_BITS));
+            /* Slot 0 is always unbound, so a value read there goes to C as any unbound one does;
+               only a store must not land there. */
+            if (prim == P_SET) {
+                sljit_emit_op2(c, SLJIT_AND | SLJIT_SET_Z, R1, R1, IMM(CELL_MASK));
+                slow->from[1] = sljit_emit_jump(c, SLJIT_ZERO);
+            } else {
+                sljit_emit_op2(c, SLJIT_AND, R1, R1, IMM(CELL_MASK));
+            }
+            sljit_emit_op2(c, SLJIT_ADD, R3, VMR, 0, IMM(offsetof(VM, globals)));
+            cell = SLJIT_MEM2(SLJIT_R3, SLJIT_R1);
+            at = 3;
         }
         if (prim == P_VALUE) {
             sljit_emit_op1(c, SLJIT_MOV, R0, cell, at);
             struct sljit_jump *unbound = sljit_emit_cmp(c, SLJIT_EQUAL, R0, IMM(V_CLEARED));
             if (slow)
-                slow->from[1] = unbound;
+                slow->from[2] = unbound;
             else
                 slow = slow_path(e, SLOW_PRIM, unbound);
         } else {

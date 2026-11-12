@@ -97,16 +97,68 @@ V *vm_cleared_stack(size_t words)
     return stack;
 }
 
+/* A VM lies at the start of a block of address space that also holds its global slots
+   (vm.h), committed as numbers grow. */
+#define MAX_GLOBALS ((size_t)1 << 24)
+#define GLOBALS_STEP ((size_t)1 << 13) /* slots committed at a time: 64 KB */
+
+static size_t page_round(size_t bytes) { return (bytes + 65535) & ~(size_t)65535; }
+
+bool vm_globals_commit(VM *vm, size_t n)
+{
+    if (n <= vm->globals_committed)
+        return true;
+    if (n > MAX_GLOBALS)
+        return false;
+    size_t want = (n + GLOBALS_STEP - 1) / GLOBALS_STEP * GLOBALS_STEP;
+    if (want > MAX_GLOBALS)
+        want = MAX_GLOBALS;
+    size_t from = page_round(offsetof(VM, globals) + vm->globals_committed * sizeof(V));
+    size_t to = page_round(offsetof(VM, globals) + want * sizeof(V));
+    if (to > from && !commit_space((uint64_t *)((char *)vm + from), (to - from) / sizeof(uint64_t)))
+        return false;
+    fill_cleared(vm->globals + vm->globals_committed, vm->globals + want);
+    vm->globals_committed = want;
+    return true;
+}
+
+static VM *vm_block(void)
+{
+    size_t bytes = page_round(offsetof(VM, globals) + MAX_GLOBALS * sizeof(V));
+#ifdef _WIN32
+    VM *vm = win_reserve(bytes);
+#else
+    VM *vm = mmap(NULL, bytes, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (vm == MAP_FAILED)
+        vm = NULL;
+#endif
+    if (!vm)
+        return NULL;
+    if (!commit_space((uint64_t *)vm, page_round(offsetof(VM, globals)) / sizeof(uint64_t))) {
+#ifdef _WIN32
+        win_release(vm);
+#else
+        munmap(vm, bytes);
+#endif
+        return NULL;
+    }
+    memset(vm, 0, offsetof(VM, globals)); /* fresh pages are zero; this says so */
+    vm->block_bytes = bytes;
+    vm->nglobals = 1;
+    return vm;
+}
+
 VM *vm_create(size_t semispace_words, size_t stack_words)
 {
-    VM *vm = calloc(1, sizeof *vm);
+    VM *vm = vm_block();
     if (!vm)
         return NULL;
     vm->space = reserve_heap(semispace_words, &vm->reserved_words);
     vm->area = vm->space ? vm->space + vm->reserved_words + STAGGER_WORDS : NULL;
     vm->other = vm->space ? vm->area + vm->reserved_words + STAGGER_WORDS : NULL;
     vm->stack = vm_cleared_stack(stack_words);
-    if (!vm->space || !vm->stack || !program_init(&vm->program) || !commit_space(vm->space, semispace_words) ||
+    if (!vm->space || !vm->stack || !program_init(&vm->program) || !vm_globals_commit(vm, 1) ||
+        !commit_space(vm->space, semispace_words) ||
         !commit_space(vm->area, semispace_words) || !commit_space(vm->other, semispace_words)) {
         vm_destroy(vm);
         return NULL;
@@ -167,9 +219,14 @@ void vm_destroy(VM *vm)
     free(vm->natives);
     free(vm->guards);
     free(vm->free_cells);
+    free(vm->free_globals);
     free(vm->owned);
     free(vm->free_consts);
-    free(vm);
+#ifdef _WIN32
+    win_release(vm);
+#else
+    munmap(vm, vm->block_bytes);
+#endif
 }
 
 V *ra_at(RootArray *ra, size_t i)
@@ -590,10 +647,34 @@ static void free_spares(VM *vm)
     vm->nlarge = kept;
 }
 
+static bool push_free(size_t **list, size_t *n, size_t *cap, size_t value)
+{
+    if (*n == *cap) {
+        size_t c = *cap ? 2 * *cap : 1024;
+        size_t *l = realloc(*list, c * sizeof *l);
+        if (!l)
+            return false;
+        *list = l;
+        *cap = c;
+    }
+    (*list)[(*n)++] = value;
+    return true;
+}
+
+/* Free numbers at or above top leave the list. */
+static void trim_free(size_t *list, size_t *n, size_t top)
+{
+    size_t kept = 0;
+    for (size_t i = 0; i < *n; i++)
+        if (list[i] < top)
+            list[kept++] = list[i];
+    *n = kept;
+}
+
 /* The table of symbols that are not published is weak (objects.c): after everything else is
    copied, a new table gets the symbols that were reached, as marked, or that symbol_needed
-   keeps, with their names; the others give back their cells and slots. Symbols published
-   since the last collection leave the table. */
+   keeps, with their names; the others give back their cells, global numbers and slots.
+   Symbols published since the last collection leave the table. */
 static void sweep_symbols(VM *vm, Copy *c)
 {
     SymbolTable *old = &vm->own;
@@ -611,6 +692,7 @@ static void sweep_symbols(VM *vm, Copy *c)
         return; /* everything stays until a collection has room */
     SymbolTable t = {slots, m, 0};
     size_t top = vm->published_top; /* one past the highest cell kept */
+    size_t global_top = vm->published_global_top > 1 ? vm->published_global_top : 1;
     uint64_t *mark = c->next;
     for (size_t i = 0; i < old->cap; i++) {
         V s = old->slots[i];
@@ -618,36 +700,33 @@ static void sweep_symbols(VM *vm, Copy *c)
             continue;
         uint64_t *p = ptr(s);
         if (!((p[SYM_CELL] >> MARK_BIT) & 1) && !symbol_needed(vm, s)) {
-            if (vm->nfree_cells == vm->free_cells_cap) {
-                size_t cap = vm->free_cells_cap ? 2 * vm->free_cells_cap : 1024;
-                size_t *cells = realloc(vm->free_cells, cap * sizeof *cells);
-                if (cells) {
-                    vm->free_cells = cells;
-                    vm->free_cells_cap = cap;
-                }
-            }
-            if (vm->nfree_cells < vm->free_cells_cap) {
-                vm->free_cells[vm->nfree_cells++] = symbol_cell(s);
+            size_t n = symbol_global(s);
+            /* Kept, rather than lose its cell or number, if a list cannot grow. */
+            if ((!n || push_free(&vm->free_globals, &vm->nfree_globals, &vm->free_globals_cap, n)) &&
+                push_free(&vm->free_cells, &vm->nfree_cells, &vm->free_cells_cap, symbol_cell(s))) {
+                if (n)
+                    vm->globals[n] = V_CLEARED;
                 program_free_symbol(vm, p);
                 continue;
             }
-            /* Kept, rather than lose its cell. */
+            if (n)
+                vm->nfree_globals--;
         }
         p[SYM_CELL] &= ~(UINT64_C(1) << MARK_BIT);
         if (symbol_cell(s) >= top)
             top = symbol_cell(s) + 1;
+        if (symbol_global(s) >= global_top)
+            global_top = symbol_global(s) + 1;
         copy_slot(c, &p[SYM_NAME]);
         symbol_table_put(&t, s);
     }
     /* Every cell in use has a symbol in a table, so those above the last one kept are free, and
        they leave the array: every collection walks it, and a burst of new symbols would
        otherwise slow them all for good. */
-    size_t free_kept = 0;
-    for (size_t i = 0; i < vm->nfree_cells; i++)
-        if (vm->free_cells[i] < top)
-            vm->free_cells[free_kept++] = vm->free_cells[i];
-    vm->nfree_cells = free_kept;
-    vm->cells.count = 2 * top;
+    trim_free(vm->free_cells, &vm->nfree_cells, top);
+    vm->cells.count = top;
+    trim_free(vm->free_globals, &vm->nfree_globals, global_top);
+    vm->nglobals = global_top;
     drain(c, mark);
     free(old->slots);
     *old = t;
@@ -688,6 +767,8 @@ static void collect_into(VM *vm, uint64_t *to)
         }
     }
     copy_root_array(&c, &vm->cells);
+    for (size_t n = 1; n < vm->nglobals; n++)
+        copy_slot(&c, &vm->globals[n]);
     ffi_drain_roots(vm);
     for (size_t i = 0; i < vm->nforeign_roots; i++)
         copy_slot(&c, &vm->foreign_roots[i / FOREIGN_ROOT_CHUNK][i % FOREIGN_ROOT_CHUNK].value);

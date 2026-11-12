@@ -118,8 +118,8 @@ typedef struct VM {
     size_t stack_max_words;
     size_t max_frame; /* largest frame size of any code object */
 
-    /* Roots: global cells (value and function per symbol, two entries each),
-       constant slots, C locals and a few runtime values. */
+    /* Roots: function cells (one per symbol), constant slots, C locals and a
+       few runtime values. Global values are in `globals`, at the end. */
     RootArray cells;
     RootArray consts;
     V **croots;
@@ -210,6 +210,19 @@ typedef struct VM {
     /* Worker scopes (src/runtime/worker.c). Ordinary emitted code never reads these. */
     struct WorkerScope *worker_scope; /* the host's open scope */
     struct Worker *worker_owner;      /* the worker this VM runs, on its own OS thread */
+
+    /* Global values, by the number a symbol gets once code names it as a global or it is set
+       (objects.c): the slots lie in the VM's own block of address space, committed as numbers
+       grow, so emitted code reads one at a fixed offset from the VM's register. Number 0 is
+       none. Numbers of dropped symbols are reused, and those above the last one kept leave the
+       range that collections walk, as cells do. */
+    size_t nglobals;           /* one past the highest number in use, at least 1 */
+    size_t globals_committed;  /* slots committed, all holding a value or V_CLEARED */
+    size_t *free_globals;
+    size_t nfree_globals, free_globals_cap;
+    size_t published_global_top; /* one past the highest number of a published symbol */
+    size_t block_bytes;        /* the reserved block the VM lies in */
+    V globals[];
 } VM;
 
 enum { INTERRUPT = 1, PREEMPT = 2 }; /* vm->interrupted */
@@ -258,8 +271,7 @@ void thread_note_worker_stack(VM *vm);
 void vm_destroy(VM *vm);
 V *ra_at(RootArray *ra, size_t i);
 bool ra_push(RootArray *ra, V v, size_t *index);
-static inline V *cell_value(VM *vm, size_t cell) { return ra_at(&vm->cells, 2 * cell); }
-static inline V *cell_function(VM *vm, size_t cell) { return ra_at(&vm->cells, 2 * cell + 1); }
+static inline V *cell_function(VM *vm, size_t cell) { return ra_at(&vm->cells, cell); }
 
 /* program.c */
 static inline bool in_program(const VM *vm, const void *at)
@@ -339,11 +351,27 @@ bool symbol_sealed(V sym);
 void symbol_seal(V sym);
 void symbol_mark_called(V sym);
 bool symbol_needed(VM *vm, V sym);
-/* The word at SYM_CELL holds the global cell index below bit 56, and flags above it
-   (objects.c). A published symbol is never dropped, and its name is in the program space; a
-   collection marks the others it reaches. */
-enum { KIND_SHIFT = 56, SEALED_BIT = 58, CALLED_BIT = 59, PUBLISHED_BIT = 60, MARK_BIT = 61 };
+/* The word at SYM_CELL holds the function cell's index in its low CELL_BITS, the global's
+   number above that, and flags from bit 56 (objects.c). A published symbol is never dropped, and
+   its name is in the program space; a collection marks the others it reaches. */
+enum { CELL_BITS = 28, KIND_SHIFT = 56, SEALED_BIT = 58, CALLED_BIT = 59, PUBLISHED_BIT = 60, MARK_BIT = 61 };
+#define CELL_MASK ((UINT64_C(1) << CELL_BITS) - 1)
 static inline bool symbol_published(V sym) { return (ptr(sym)[SYM_CELL] >> PUBLISHED_BIT) & 1; }
+static inline size_t symbol_global(V sym) { return (size_t)(ptr(sym)[SYM_CELL] >> CELL_BITS & CELL_MASK); }
+/* A global's slot, or NULL when it has no number and so no value; global_slot_new numbers it
+   first, and is NULL only when it cannot. */
+static inline V *global_slot(VM *vm, V sym)
+{
+    size_t n = symbol_global(sym);
+    return n ? &vm->globals[n] : NULL;
+}
+static inline V global_value(VM *vm, V sym)
+{
+    V *slot = global_slot(vm, sym);
+    return slot ? *slot : V_CLEARED;
+}
+V *global_slot_new(VM *vm, V sym);
+bool vm_globals_commit(VM *vm, size_t n);
 bool symbol_table_put(SymbolTable *t, V sym);
 V *symbol_table_slot(SymbolTable *t, uint64_t hash, const char *bytes, size_t len);
 uint64_t hash_bytes(const void *bytes, size_t len);

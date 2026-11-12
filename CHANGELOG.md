@@ -10,6 +10,8 @@ All notable changes to this project are documented in this file. The format is b
 - Installed definitions, with what their code reaches, and every symbol now live in a program space that
   collections neither copy nor scan, so collections no longer copy the program. A redefined function's old
   versions stay there. `SHEN_JIT_STATS` reports the program space.
+- A global's value is kept in a slot of the runtime's own, which a symbol gets once code names it as a global or it
+  is set; `SHEN_JIT_STATS` reports function cells and global slots.
 
 ## [0.7] - 2026-11-10
 

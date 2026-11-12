@@ -766,7 +766,7 @@ static shen_value api_global(shen_vm *sv, const char *name)
 {
     VM *vm = vm_of(sv);
     V symbol = symbol_find(vm, name, strlen(name));
-    V value = symbol == V_NIL ? V_CLEARED : *cell_value(vm, symbol_cell(symbol));
+    V value = symbol == V_NIL ? V_CLEARED : global_value(vm, symbol);
     return value == V_CLEARED ? V_NONE : value;
 }
 
