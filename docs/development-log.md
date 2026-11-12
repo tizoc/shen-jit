@@ -519,6 +519,23 @@ at every allocation too.
   of 12 samples: 1.00, median 1.00; `symbol equality (true)`, `shen.sysfunc? (false)` and a control loop at 1.05
   to 1.06, rows that move with placement. The machine had a load of 4 to 5 from other work; the runs alternated.
 
+### The program apart from the VM (2026-11-12, Apple M3 Max, against the build above)
+
+The first piece of step 3: what isolates will share moves out of `VM` into `Program`, which a VM points at: the
+program space, published symbols, function cells and arities, constant slots, global numbering, the native-code list
+and the JIT. A VM is now a context: heap, stack, handlers, global slots, the dictionary, its own symbols and the
+rest. Emitted code reads only the context through the VM register, except `shen-jit.function`, which loads the
+program pointer first. The program's roots may point into one heap, its owner's, the builder's, and only that
+context's collections scan and sweep them. About 300 references changed, mechanically.
+
+- **Cost,** alternating against the build above: workloads never used for tuning 0.97 to 1.02; benchmark suite,
+  best of 12 samples, 1.00, median 1.00, no row above 1.04. Nothing.
+
+- **What would not be shared,** listed with a program that walks every function cell: at startup, none of 1,225
+  definitions stays in the heap. With the I/O, socket, JSON and Datalog libraries loaded, 34 of 2,611 do, all foreign
+  functions, whose descriptor is a vector, which promotion refuses as mutable. A JSON parse then compiles grammar
+  loops, and four stay, each for its byte table. Both need a way to be shared before isolates can call them.
+
 ### Copying (2026-11-02, M3 Max, against the build before)
 
 - **No `memcpy` per object,** about 10 lines. `memmove` was 61% of a run that spent 63.5% collecting. Kernel suite

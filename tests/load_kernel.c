@@ -72,7 +72,7 @@ int main(int argc, char **argv)
     printf("code objects:     %zu\n", stats.codes);
     printf("instructions:     %zu\n", stats.instructions);
     printf("bytecode:         %zu bytes\n", stats.bytecode_bytes);
-    printf("constants:        %zu (%zu const slots)\n", stats.constants, vm->consts.count);
+    printf("constants:        %zu (%zu const slots)\n", stats.constants, vm->program->consts.count);
     printf("symbols:          %zu\n", vm->nsymbols);
     printf("live heap:        %zu bytes\n", (size_t)((vm->live_end - vm->space) + (vm->hp - vm->area)) * 8);
     printf("load time:        %.3f s\n", loaded - start);

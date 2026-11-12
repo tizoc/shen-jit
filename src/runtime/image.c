@@ -14,7 +14,7 @@
 #define SJ_BUILD_ID "development"
 #endif
 
-enum { IMAGE_VERSION = 4 };
+enum { IMAGE_VERSION = 5 };
 
 typedef struct {
     char magic[4];
@@ -56,9 +56,12 @@ static uint64_t primitive_checksum(void)
     return h;
 }
 
-/* In an image a pointer is an offset from the start of the heap, or from the start of the
-   program space with this bit set. */
-#define IN_PROGRAM (UINT64_C(1) << 62)
+/* In an image a pointer is an offset from the start of the heap, or with one of these bits set,
+   from the start of the program space's symbols or of its objects. Where the objects start
+   depends on how much address space the process could reserve, so an offset from one start
+   would not do for both. */
+#define IN_SYMBOLS (UINT64_C(1) << 62)
+#define IN_OBJECTS (UINT64_C(1) << 61)
 
 typedef V Rebase(const VM *vm, V v);
 
@@ -66,8 +69,10 @@ static V to_image(const VM *vm, V v)
 {
     if (!is_ptr(v))
         return v;
+    const Space *p = &vm->program->space;
     if (in_program(vm, ptr(v)))
-        return (v - (V)(uintptr_t)vm->program.base) | IN_PROGRAM;
+        return ptr(v) < p->objects ? (v - (V)(uintptr_t)p->base) | IN_SYMBOLS
+                                   : (v - (V)(uintptr_t)p->objects) | IN_OBJECTS;
     return v - (V)(uintptr_t)vm->space;
 }
 
@@ -75,8 +80,11 @@ static V from_image(const VM *vm, V v)
 {
     if (!is_ptr(v))
         return v;
-    if (v & IN_PROGRAM)
-        return (v & ~IN_PROGRAM) + (V)(uintptr_t)vm->program.base;
+    const Space *p = &vm->program->space;
+    if (v & IN_SYMBOLS)
+        return (v & ~IN_SYMBOLS) + (V)(uintptr_t)p->base;
+    if (v & IN_OBJECTS)
+        return (v & ~IN_OBJECTS) + (V)(uintptr_t)p->objects;
     return v + (V)(uintptr_t)vm->space;
 }
 
@@ -146,12 +154,12 @@ static void clear_raw(VM *vm, uint64_t *o)
 static void restore_raw(VM *vm, uint64_t *o)
 {
     switch (hdr_type(o[0])) {
-    case T_CLOSURE: o[PROC_ENTRY] = (uint64_t)(uintptr_t)vm->compile_stub; break;
-    case T_FOREIGN: o[PROC_ENTRY] = (uint64_t)(uintptr_t)vm->foreign_stub; break;
+    case T_CLOSURE: o[PROC_ENTRY] = (uint64_t)(uintptr_t)vm->program->compile_stub; break;
+    case T_FOREIGN: o[PROC_ENTRY] = (uint64_t)(uintptr_t)vm->program->foreign_stub; break;
     case T_CODE:
         o[CODE_NATIVE] = 0;
-        if (o[CODE_FRAME] > vm->max_frame)
-            vm->max_frame = o[CODE_FRAME];
+        if (o[CODE_FRAME] > vm->program->max_frame)
+            vm->program->max_frame = o[CODE_FRAME];
         break;
     case T_SHARED_BYTES:
         o[POINTER_ADDRESS] = o[POINTER_LENGTH] = 0;
@@ -182,7 +190,7 @@ static bool write_root_array(FILE *f, VM *vm, RootArray *ra)
 
 static bool write_globals(FILE *f, VM *vm)
 {
-    for (size_t n = 0; n < vm->nglobals; n++) {
+    for (size_t n = 0; n < vm->program->nglobals; n++) {
         V v = to_image(vm, vm->globals[n]);
         if (fwrite(&v, sizeof v, 1, f) != 1)
             return false;
@@ -216,7 +224,7 @@ static bool write_image(VM *vm, const char *path, const char *mode)
     vm->copy_large = true;
     vm_collect(vm, 0);
     vm->copy_large = false;
-    Program *p = &vm->program;
+    Space *p = &vm->program->space;
     size_t words = (size_t)(vm->live_end - vm->space);
     size_t symbol_words = (size_t)(p->symbols_next - p->base);
     size_t program_words = (size_t)(p->objects_next - p->objects);
@@ -233,7 +241,7 @@ static bool write_image(VM *vm, const char *path, const char *mode)
     rebase_objects(vm, heap, words, to_image, clear_raw);
 
     ImageHeader h = {{'S', 'J', 'H', 'I'}, IMAGE_VERSION, {0}, sizeof(V), symbol_words, program_words,
-                     words, vm->cells.count, vm->consts.count, vm->nglobals, p->free_symbol,
+                     words, vm->program->cells.count, vm->program->consts.count, vm->program->nglobals, p->free_symbol,
                      primitive_count, primitive_checksum()};
     strncpy(h.build, SJ_BUILD_ID, sizeof h.build - 1);
     ImageTrailer t = {image_length(&h), {0}};
@@ -242,8 +250,8 @@ static bool write_image(VM *vm, const char *path, const char *mode)
     FILE *f = sj_fopen(path, mode);
     bool ok = f && fwrite(&h, sizeof h, 1, f) == 1 &&
               fwrite(copy, sizeof(uint64_t), all, f) == all &&
-              write_root_array(f, vm, &vm->cells) &&
-              write_root_array(f, vm, &vm->consts) && write_globals(f, vm) &&
+              write_root_array(f, vm, &vm->program->cells) &&
+              write_root_array(f, vm, &vm->program->consts) && write_globals(f, vm) &&
               fwrite(&t, sizeof t, 1, f) == 1;
     if (f && fclose(f) != 0)
         ok = false;
@@ -328,9 +336,9 @@ VM *image_load(const char *path, size_t min_semispace_words, size_t stack_words,
         words = min_semispace_words;
     if (!(vm = vm_create(words, stack_words)))
         goto fail;
-    vm->compile_stub = compile_stub;
-    vm->foreign_stub = foreign_stub;
-    Program *p = &vm->program;
+    vm->program->compile_stub = compile_stub;
+    vm->program->foreign_stub = foreign_stub;
+    Space *p = &vm->program->space;
     if (!program_reserve(vm, h.symbol_words, h.program_words) ||
         fread(p->base, sizeof(uint64_t), h.symbol_words, f) != h.symbol_words ||
         fread(p->objects, sizeof(uint64_t), h.program_words, f) != h.program_words ||
@@ -342,50 +350,50 @@ VM *image_load(const char *path, size_t min_semispace_words, size_t stack_words,
     rebase_symbols(vm, p->base, h.symbol_words, from_image);
     rebase_objects(vm, p->objects, h.program_words, from_image, restore_raw);
     rebase_objects(vm, vm->space, h.heap_words, from_image, restore_raw);
-    if (!read_root_array(f, vm, &vm->cells, h.cell_entries) ||
-        !read_root_array(f, vm, &vm->consts, h.const_entries) || h.global_entries < 1 ||
+    if (!read_root_array(f, vm, &vm->program->cells, h.cell_entries) ||
+        !read_root_array(f, vm, &vm->program->consts, h.const_entries) || h.global_entries < 1 ||
         !vm_globals_commit(vm, h.global_entries) ||
         fread(vm->globals, sizeof(V), h.global_entries, f) != h.global_entries)
         goto fail;
-    vm->nglobals = h.global_entries;
-    for (size_t n = 0; n < vm->nglobals; n++)
+    vm->program->nglobals = h.global_entries;
+    for (size_t n = 0; n < vm->program->nglobals; n++)
         vm->globals[n] = from_image(vm, vm->globals[n]);
     /* The symbol tables, again. */
     for (uint64_t *s = p->base; s < p->symbols_next; s += SYM_WORDS) {
         V sym = tagged(s, TAG_SYMBOL);
         if (!s[0])
             continue;
-        if (!symbol_table_put(symbol_published(sym) ? &vm->published : &vm->own, sym))
+        if (!symbol_table_put(symbol_published(sym) ? &vm->program->published : &vm->own, sym))
             goto fail;
-        if (symbol_published(sym) && symbol_cell(sym) >= vm->published_top)
-            vm->published_top = symbol_cell(sym) + 1;
-        if (symbol_published(sym) && symbol_global(sym) >= vm->published_global_top)
-            vm->published_global_top = symbol_global(sym) + 1;
+        if (symbol_published(sym) && symbol_cell(sym) >= vm->program->published_top)
+            vm->program->published_top = symbol_cell(sym) + 1;
+        if (symbol_published(sym) && symbol_global(sym) >= vm->program->published_global_top)
+            vm->program->published_global_top = symbol_global(sym) + 1;
     }
     /* The numbers no symbol holds are free. */
-    unsigned char *held = calloc(vm->nglobals, 1);
+    unsigned char *held = calloc(vm->program->nglobals, 1);
     if (!held)
         goto fail;
     for (uint64_t *s = p->base; s < p->symbols_next; s += SYM_WORDS)
-        if (s[0] && symbol_global(tagged(s, TAG_SYMBOL)) < vm->nglobals)
+        if (s[0] && symbol_global(tagged(s, TAG_SYMBOL)) < vm->program->nglobals)
             held[symbol_global(tagged(s, TAG_SYMBOL))] = 1;
-    for (size_t n = 1; n < vm->nglobals; n++) {
+    for (size_t n = 1; n < vm->program->nglobals; n++) {
         if (held[n])
             continue;
-        if (vm->nfree_globals == vm->free_globals_cap) {
-            size_t cap = 2 * vm->free_globals_cap + 64;
-            size_t *list = realloc(vm->free_globals, cap * sizeof *list);
+        if (vm->program->nfree_globals == vm->program->free_globals_cap) {
+            size_t cap = 2 * vm->program->free_globals_cap + 64;
+            size_t *list = realloc(vm->program->free_globals, cap * sizeof *list);
             if (!list) {
                 free(held);
                 goto fail;
             }
-            vm->free_globals = list;
-            vm->free_globals_cap = cap;
+            vm->program->free_globals = list;
+            vm->program->free_globals_cap = cap;
         }
-        vm->free_globals[vm->nfree_globals++] = n;
+        vm->program->free_globals[vm->program->nfree_globals++] = n;
     }
     free(held);
-    vm->nsymbols = vm->published.count + vm->own.count;
+    vm->nsymbols = vm->program->published.count + vm->own.count;
     /* The code objects take their constant slots again (heap.c), those of the program for good. */
     for (uint64_t *s = vm->space; s < vm->live_end; s += is_header(*s) ? obj_words(*s) : 2)
         if (is_header(*s) && hdr_type(*s) == T_CODE)
@@ -393,7 +401,7 @@ VM *image_load(const char *path, size_t min_semispace_words, size_t stack_words,
     for (uint64_t *s = p->objects; s < p->objects_next; s += is_header(*s) ? obj_words(*s) : 2)
         if (is_header(*s) && hdr_type(*s) == T_CODE && vm_track_code(vm, tagged(s, TAG_OBJECT)) &&
             s[CODE_NCONST] + s[CODE_NCODE])
-            memset(vm->owned + s[CODE_CBASE], PROGRAM, s[CODE_NCONST] + s[CODE_NCODE]);
+            memset(vm->program->owned + s[CODE_CBASE], PROGRAM, s[CODE_NCONST] + s[CODE_NCODE]);
     vm_find_free_consts(vm);
     fclose(f);
     return vm;

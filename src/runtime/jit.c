@@ -184,7 +184,7 @@ static size_t chain_names(VM *vm, uint32_t chain, V *names, size_t n, size_t max
 {
     if (!chain)
         return n;
-    const size_t *c = vm->jit->chains + chain - 1;
+    const size_t *c = vm->program->jit->chains + chain - 1;
     for (size_t k = 0; k < c[0]; k++, n++)
         if (n < max)
             names[n] = cell_symbol(vm, c[1 + k]);
@@ -232,7 +232,7 @@ static void emit_patch_nop(struct sljit_compiler *c)
 static void patch_put(VM *vm, void *native, size_t cell, sljit_uw at, sljit_uw target)
 {
 #if PATCH_SELF
-    Jit *jit = vm->jit;
+    Jit *jit = vm->program->jit;
     Patch p = {(uintptr_t)native, cell, (uint8_t *)at, 0, {0}};
 #if (defined SLJIT_CONFIG_ARM_64 && SLJIT_CONFIG_ARM_64)
     uint32_t insn;
@@ -304,8 +304,8 @@ static void patches_drop(Jit *jit, bool redefined, uintptr_t key)
 
 static void redefine(VM *vm, size_t cell)
 {
-    if (vm->jit->npatches)
-        patches_drop(vm->jit, true, cell);
+    if (vm->program->jit->npatches)
+        patches_drop(vm->program->jit, true, cell);
 }
 
 /* The names of the frames on the stack, innermost first: from vm->fp, each
@@ -322,14 +322,14 @@ size_t jit_backtrace(VM *vm, V *names, size_t max, bool *evaluated)
 {
     size_t n = 0;
     *evaluated = false;
-    if (!vm->jit)
+    if (!vm->program->jit)
         return 0;
     V *floor = vm->trace_floor == SIZE_MAX ? vm->stack : vm->stack + vm->trace_floor + 1;
     /* Each frame's code may have inlined bodies where it is: at the site of
        the C helper that raised, for the innermost, and at its call for the
        others. Their names come first. */
     uint32_t window, chain = 0;
-    if (!vm->site || !site_get(vm->jit, (uintptr_t)vm->site, &window, &chain))
+    if (!vm->site || !site_get(vm->program->jit, (uintptr_t)vm->site, &window, &chain))
         chain = 0;
     for (V *fp = vm->fp; fp >= floor && fp + 1 < vm->stack + vm->stack_words;) {
         V proc = fp[1];
@@ -350,7 +350,7 @@ size_t jit_backtrace(VM *vm, V *names, size_t max, bool *evaluated)
         if (n < max)
             names[n] = name;
         n++;
-        if (!site_get(vm->jit, (uintptr_t)fp[0], &window, &chain) || window == 0 ||
+        if (!site_get(vm->program->jit, (uintptr_t)fp[0], &window, &chain) || window == 0 ||
             window > (size_t)(fp - vm->stack))
             break;
         fp -= window;
@@ -738,7 +738,7 @@ static void load_for_label(Emit *e, uint32_t label)
 
 static void to_unwind(Emit *e, struct sljit_jump *jump)
 {
-    sljit_set_target(jump, (sljit_uw)e->vm->jit->unwind);
+    sljit_set_target(jump, (sljit_uw)e->vm->program->jit->unwind);
 }
 
 /* Slot n where the code keeps it: its register in a loop that keeps its
@@ -761,7 +761,7 @@ static sljit_sw slot_offset(const Emit *e, uint32_t n)
    never moves. OPND gives SLJIT's operand pair. */
 static V *operand_cell(const Emit *e, uint32_t x)
 {
-    return ra_at(&e->vm->consts, e->cbase + (x & ~OPERAND_CONST));
+    return ra_at(&e->vm->program->consts, e->cbase + (x & ~OPERAND_CONST));
 }
 
 static sljit_s32 operand_kind(const Emit *e, uint32_t x)
@@ -890,7 +890,7 @@ static uint32_t inline_chain(Emit *e)
 {
     if (!e->ninl || e->chain)
         return e->ninl ? e->chain : 0;
-    Jit *jit = e->vm->jit;
+    Jit *jit = e->vm->program->jit;
     if (jit->nchains + 1 + e->ninl > jit->chains_cap) {
         size_t cap = jit->chains_cap ? 2 * jit->chains_cap : 256;
         size_t *chains = realloc(jit->chains, cap * sizeof *chains);
@@ -932,7 +932,7 @@ static int self_tail_call(const Emit *e, const uint32_t *p)
     uint32_t op = p[0], n = op == OP_TAIL_CALL_VALUE ? p[2] : p[3];
     if (n != e->arity || op == OP_TAIL_CALL_VALUE)
         return OTHER_CALLEE;
-    V self = op == OP_TAIL_CALL_SEALED ? *ra_at(&e->vm->consts, p[2]) : V_NIL;
+    V self = op == OP_TAIL_CALL_SEALED ? *ra_at(&e->vm->program->consts, p[2]) : V_NIL;
     if (is_proc(self) && hdr_type(ptr(self)[0]) == T_CLOSURE && ptr(self)[CLO_CODE] == e->code)
         return SEALED_SELF;
     if (op == OP_TAIL_CALL_SEALED && self == ptr(e->code)[CODE_NAME])
@@ -1625,7 +1625,7 @@ static void load_callee(Emit *e, uint32_t op, uint32_t target, uint32_t window)
     if (op == OP_CALL || op == OP_TAIL_CALL)
         sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM0(), (sljit_sw)cell_function(e->vm, target));
     else if (op == OP_CALL_SEALED || op == OP_TAIL_CALL_SEALED) {
-        V *slot = ra_at(&e->vm->consts, target);
+        V *slot = ra_at(&e->vm->program->consts, target);
         if (is_symbol(*slot) && is_proc(*cell_function(e->vm, symbol_cell(*slot))))
             *slot = *cell_function(e->vm, symbol_cell(*slot)); /* defined since */
         sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM0(), (sljit_sw)slot);
@@ -2554,7 +2554,8 @@ static void emit_prim(Emit *e, const uint32_t *p)
         sljit_emit_op2(c, SLJIT_SHL, R1, R1, IMM(1)); /* the function entry, 2 * index */
         sljit_emit_op2(c, SLJIT_LSHR, R2, R1, IMM(RA_CHUNK_BITS));
         sljit_emit_op2(c, SLJIT_AND, R1, R1, IMM(RA_CHUNK - 1));
-        sljit_emit_op1(c, SLJIT_MOV, R3, SLJIT_MEM1(VMR), (sljit_sw)offsetof(VM, cells.chunks));
+        sljit_emit_op1(c, SLJIT_MOV, R3, SLJIT_MEM1(VMR), (sljit_sw)offsetof(VM, program));
+        sljit_emit_op1(c, SLJIT_MOV, R3, SLJIT_MEM1(SLJIT_R3), (sljit_sw)offsetof(Program, cells.chunks));
         sljit_emit_op1(c, SLJIT_MOV, R3, SLJIT_MEM2(SLJIT_R3, SLJIT_R2), 3);
         sljit_emit_op1(c, SLJIT_MOV, R0, SLJIT_MEM2(SLJIT_R3, SLJIT_R1), 3);
         slow->from[1] = tag_cmp(c, SLJIT_NOT_EQUAL, R1, SLJIT_R0, 0, TAG_PROC);
@@ -3610,7 +3611,7 @@ static void *compile_code(VM *vm, V code)
             if (words[i] == OP_LABEL || words[i] == OP_LOOP)
                 label_pos[words[i + 1]] = i;
 
-    Emit e = {.vm = vm, .c = sljit_create_compiler(NULL), .slow_prims = vm->jit->slow_prims,
+    Emit e = {.vm = vm, .c = sljit_create_compiler(NULL), .slow_prims = vm->program->jit->slow_prims,
               .frame = co[CODE_FRAME],
               .arity = co[CODE_ARITY] & UINT32_MAX, .cbase = co[CODE_CBASE], .nconst = co[CODE_NCONST],
               .code = code, .cached = NONE, .post = NONE, .kept = {NONE, NONE}, .kept_post = {NONE, NONE},
@@ -3642,7 +3643,7 @@ static void *compile_code(VM *vm, V code)
     struct sljit_jump *one = NULL;
     if (all) {
         one = sljit_emit_cmp(c, SLJIT_EQUAL, R2, IMM(e.arity));
-        sljit_set_target(sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R2, IMM(all)), (sljit_uw)vm->jit->arity);
+        sljit_set_target(sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R2, IMM(all)), (sljit_uw)vm->program->jit->arity);
         sljit_emit_op2(c, SLJIT_ADD, R0, FP, 0, IMM((e.frame + LEAF_FRAME) * sizeof(V)));
         Slow *s = slow_path(&e, SLOW_GROW, sljit_emit_cmp(c, SLJIT_GREATER, R0, VMF(check_limit)));
         s->words = all;
@@ -3652,7 +3653,7 @@ static void *compile_code(VM *vm, V code)
         sljit_set_label(one, sljit_emit_label(c));
     } else {
         sljit_set_target(sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R2, IMM(e.arity)),
-                         (sljit_uw)vm->jit->arity);
+                         (sljit_uw)vm->program->jit->arity);
     }
     /* Every frame that calls reserves a leaf's frame beyond its own, so code
        that calls nothing, with a frame no larger, needs no check: it runs
@@ -3713,7 +3714,7 @@ static void *compile_code(VM *vm, V code)
             put_result(&e, p[1], OPND(&e, p[2]));
             break;
         case OP_CONST: {
-            V *cell = ra_at(&vm->consts, e.cbase + p[2]);
+            V *cell = ra_at(&vm->program->consts, e.cbase + p[2]);
             if (is_ptr(*cell))
                 put_result(&e, p[1], SLJIT_MEM0(), (sljit_sw)cell);
             else
@@ -3736,12 +3737,12 @@ static void *compile_code(VM *vm, V code)
             alloc->back = restart;
             sljit_emit_op1(c, SLJIT_MOV, HP, R1);
             sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0), 0, IMM(HEADER(T_CLOSURE, n)));
-            V *code_cell = ra_at(&vm->consts, e.cbase + e.nconst + p[2]);
+            V *code_cell = ra_at(&vm->program->consts, e.cbase + e.nconst + p[2]);
             sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM0(), (sljit_sw)code_cell);
             sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0), CLO_CODE * sizeof(V), R1);
             sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM1(SLJIT_R1), CODE_NATIVE * sizeof(V) - TAG_OBJECT);
             struct sljit_jump *compiled = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(0));
-            sljit_emit_op1(c, SLJIT_MOV, R1, IMM(vm->compile_stub));
+            sljit_emit_op1(c, SLJIT_MOV, R1, IMM(vm->program->compile_stub));
             sljit_set_label(compiled, sljit_emit_label(c));
             sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0), PROC_ENTRY * sizeof(V), R1);
             for (uint32_t i = 0; i < n; i++) {
@@ -3955,7 +3956,7 @@ static void *compile_code(VM *vm, V code)
         fprintf(stderr, "shen-jit: SLJIT error %d\n", sljit_get_compiler_error(c));
     else if ((generated = sljit_generate_code(c, 0, NULL))) {
         native = (void *)sljit_get_label_addr(entry);
-        vm->jit->ncompiled++;
+        vm->program->jit->ncompiled++;
         /* The entry starts the code, so a collection can free it once the
            code object is dead. */
         if (native == generated)
@@ -3963,10 +3964,10 @@ static void *compile_code(VM *vm, V code)
     }
     if (native)
         for (size_t i = 0; i < e.ncalls; i++)
-            site_put(vm->jit, (uintptr_t)sljit_get_label_addr(e.calls[i].back), e.calls[i].window,
+            site_put(vm->program->jit, (uintptr_t)sljit_get_label_addr(e.calls[i].back), e.calls[i].window,
                      e.calls[i].chain);
     for (size_t i = 0; native && i < e.nraises; i++)
-        site_put(vm->jit, (uintptr_t)sljit_get_label_addr(e.raises[i].ret), 0, e.raises[i].chain);
+        site_put(vm->program->jit, (uintptr_t)sljit_get_label_addr(e.raises[i].ret), 0, e.raises[i].chain);
     for (size_t i = 0; native && i < e.nselfs; i++)
         patch_put(vm, native, symbol_cell(co[CODE_NAME]), JUMP_INSN(e.selfs[i].jump),
                   sljit_get_label_addr(e.selfs[i].other));
@@ -3977,10 +3978,10 @@ static void *compile_code(VM *vm, V code)
         V name = ptr(co[CODE_NAME])[SYM_NAME];
         size_t size = sljit_get_generated_code_size(c);
         profile_code(native, size, string_bytes(name), string_length(name));
-        if (vm->jit->perf_map) {
-            fprintf(vm->jit->perf_map, "%llx %llx %.*s\n", (unsigned long long)(uintptr_t)native, (unsigned long long)size,
+        if (vm->program->jit->perf_map) {
+            fprintf(vm->program->jit->perf_map, "%llx %llx %.*s\n", (unsigned long long)(uintptr_t)native, (unsigned long long)size,
                     (int)string_length(name), string_bytes(name));
-            fflush(vm->jit->perf_map);
+            fflush(vm->program->jit->perf_map);
         }
     }
 
@@ -4110,17 +4111,17 @@ void *jit_foreign_stub(Jit *jit) { return jit->foreign; }
    profiler and the perf map. */
 static void free_native(VM *vm, uint64_t *code)
 {
-    if (vm->jit->perf_map || profile_running())
+    if (vm->program->jit->perf_map || profile_running())
         return;
-    patches_drop(vm->jit, false, (uintptr_t)code[CODE_NATIVE]);
+    patches_drop(vm->program->jit, false, (uintptr_t)code[CODE_NATIVE]);
     sljit_free_code((void *)(uintptr_t)code[CODE_NATIVE], NULL);
-    vm->jit->nfreed++;
+    vm->program->jit->nfreed++;
 }
 
 void jit_stats(VM *vm, size_t *compiled, size_t *freed)
 {
-    *compiled = vm->jit ? vm->jit->ncompiled : 0;
-    *freed = vm->jit ? vm->jit->nfreed : 0;
+    *compiled = vm->program->jit ? vm->program->jit->ncompiled : 0;
+    *freed = vm->program->jit ? vm->program->jit->nfreed : 0;
 }
 
 static void uncompile(VM *vm, uint64_t *from, uint64_t *to)
@@ -4131,7 +4132,7 @@ static void uncompile(VM *vm, uint64_t *from, uint64_t *to)
             continue;
         }
         if (hdr_type(*s) == T_CLOSURE)
-            s[PROC_ENTRY] = (uint64_t)(uintptr_t)vm->compile_stub;
+            s[PROC_ENTRY] = (uint64_t)(uintptr_t)vm->program->compile_stub;
         else if (hdr_type(*s) == T_CODE)
             s[CODE_NATIVE] = 0;
         s += obj_words(*s);
@@ -4142,8 +4143,8 @@ void jit_recompile(VM *vm)
 {
     vm_collect(vm, 0); /* so that the heap can be walked */
     uncompile(vm, vm->space, vm->live_end);
-    uncompile(vm, vm->program.objects, vm->program.objects_next);
-    vm->nnatives = 0; /* never freed: frames may be running it */
+    uncompile(vm, vm->program->space.objects, vm->program->space.objects_next);
+    vm->program->nnatives = 0; /* never freed: frames may be running it */
 }
 
 void jit_attach(VM *vm, Jit *jit)
@@ -4156,11 +4157,11 @@ void jit_attach(VM *vm, Jit *jit)
         jit->perf_map = sj_fopen(path, "w");
     }
     jit->slow_prims = getenv("SHEN_JIT_SLOW_PRIMS") != NULL;
-    vm->jit = jit;
-    vm->compile_stub = jit->compile;
-    vm->foreign_stub = jit->foreign;
-    vm->free_native = free_native;
-    vm->redefine = redefine;
+    vm->program->jit = jit;
+    vm->program->compile_stub = jit->compile;
+    vm->program->foreign_stub = jit->foreign;
+    vm->program->free_native = free_native;
+    vm->program->redefine = redefine;
 }
 
 bool jit_init(VM *vm)
@@ -4173,14 +4174,14 @@ bool jit_init(VM *vm)
 
 void jit_destroy(VM *vm)
 {
-    if (vm->jit) {
-        for (size_t i = 0; i < vm->nnatives; i++)
-            sljit_free_code((void *)(uintptr_t)ptr(vm->natives[i])[CODE_NATIVE], NULL);
-        vm->nnatives = 0;
-        vm->free_native = NULL;
-        vm->redefine = NULL;
-        jit_dispose(vm->jit);
-        vm->jit = NULL;
+    if (vm->program->jit) {
+        for (size_t i = 0; i < vm->program->nnatives; i++)
+            sljit_free_code((void *)(uintptr_t)ptr(vm->program->natives[i])[CODE_NATIVE], NULL);
+        vm->program->nnatives = 0;
+        vm->program->free_native = NULL;
+        vm->program->redefine = NULL;
+        jit_dispose(vm->program->jit);
+        vm->program->jit = NULL;
     }
 }
 
@@ -4215,7 +4216,7 @@ V jit_call(VM *vm, V proc, size_t n, const V *args)
     vm->count = n;
     vm->top = base + n + 2;
     size_t handlers = vm->nhandlers;
-    V result = vm->jit->adapter(vm);
+    V result = vm->program->jit->adapter(vm);
     vm->nhandlers = handlers;
     /* The stack may have moved while guest code ran. */
     vm->top = vm->stack + offset;

@@ -311,6 +311,13 @@ the isolate a program starts as, defines: it alone installs code, records aritie
 globals their numbers, and in any other VM `eval`, `eval-kl`, installing, foreign definitions
 and recording an arity raise an error.
 
+The runtime is split the same way. What every isolate will share is a `Program`: the program space,
+the published symbols, function cells with arities, constant slots, global numbering, and the JIT
+with its native code. A `VM` is one context, pointing at its program: heap, stack, handlers, global
+slots and dictionary, its own symbols and C roots. Emitted code reads only the context through the
+VM register, and reaches cells and constants at addresses that never move. The program's roots may
+point into one heap, its owner's, the builder's, whose collections alone scan and sweep them.
+
 What a running program needs without the builder's state is program, outside the heap: code and
 symbols in the program space, arities beside function cells, and global numbers. `fn` makes a
 name's lambda form when first asked, from the arity, and keeps it in the property vector: the

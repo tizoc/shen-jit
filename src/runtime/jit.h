@@ -10,7 +10,7 @@ typedef struct Jit Jit;
 Jit *jit_create(void);
 void *jit_compile_stub(Jit *jit);
 void *jit_foreign_stub(Jit *jit);
-/* Uses those stubs for a VM, setting vm->compile_stub and vm->foreign_stub. */
+/* Uses those stubs for a VM, setting vm->program->compile_stub and vm->program->foreign_stub. */
 void jit_attach(VM *vm, Jit *jit);
 /* Both, for a fresh VM. */
 bool jit_init(VM *vm);

@@ -37,20 +37,65 @@ typedef struct Guard {
    holding every symbol, in fixed slots at its start, and after them the installed definitions
    with what they reach. Nothing in it points into the heap except the names of symbols that
    are not published yet, and nothing in it moves. */
-typedef struct Program {
+typedef struct Space {
     uint64_t *base;      /* the range: symbols from base, objects from objects, up to end */
     size_t bytes;
     uint64_t *objects, *end;
     uint64_t *symbols_next, *symbols_committed; /* symbol slots used, and committed */
     uint64_t *objects_next, *objects_committed;
     size_t free_symbol;  /* the first free symbol slot, as its index plus one; 0 for none */
-} Program;
+} Space;
 
 /* An open-addressing hash set of symbols, outside the heap: 0 marks an empty entry. */
 typedef struct SymbolTable {
     V *slots;
     size_t cap, count;
 } SymbolTable;
+
+struct VM;
+
+/* The program (docs/design.md, "The builder and isolates"): what every VM running it shares,
+   which only the builder changes. A VM is a context of its own: heap, stack, global slots and
+   the rest. The program's roots, its cells and constant slots, may point into the heap of one
+   context, its owner, the builder's, whose collections scan and sweep them. */
+typedef struct Program {
+    struct VM *owner;
+    Space space;
+    SymbolTable published;
+    size_t published_top; /* one past the highest cell of a published symbol */
+    /* Roots: function cells, with the function's arity beside each (two entries per symbol),
+       and constant slots. They grow by adding chunks, so none ever moves. */
+    RootArray cells;
+    RootArray consts;
+    size_t *free_cells; /* cells of dropped symbols, for new symbols */
+    size_t nfree_cells, free_cells_cap;
+    size_t max_frame; /* largest frame size of any code object */
+    /* Global numbers (objects.c): each VM has a slot for each, by number. Number 0 is none.
+       Numbers of dropped symbols are reused, and those above the last one kept leave the
+       range that collections walk, as cells do. */
+    size_t nglobals;           /* one past the highest number in use, at least 1 */
+    size_t *free_globals;
+    size_t nfree_globals, free_globals_cap;
+    size_t published_global_top; /* one past the highest number of a published symbol */
+    /* Constant slots owned by code objects (heap.c): owned[i] marks a slot
+       that the collector copies with its code object rather than as a root;
+       free_consts holds the ranges of dead code, for reuse. */
+    unsigned char *owned;
+    size_t owned_cap;
+    struct { size_t start, len; } *free_consts;
+    size_t nfree_consts, free_consts_cap;
+    /* Code objects with native code, held weakly: a collection hands
+       those that nothing else reaches to free_native, which the JIT sets. */
+    V *natives;
+    size_t nnatives, natives_cap;
+    void (*free_native)(struct VM *vm, uint64_t *code);
+    /* Called with a name's cell before a new definition replaces it. */
+    void (*redefine)(struct VM *vm, size_t cell);
+    /* Process-specific addresses restored when an image loads. */
+    void *compile_stub;
+    void *foreign_stub;
+    struct Jit *jit;
+} Program;
 
 /* What a thread keeps of its own (thread.c). The running thread's stack and
    handlers are in the VM's fields; these hold them while it waits. */
@@ -116,13 +161,10 @@ typedef struct VM {
     V *stack;
     size_t stack_words;
     size_t stack_max_words;
-    size_t max_frame; /* largest frame size of any code object */
 
-    /* Roots: function cells, with the function's arity beside each (two entries per
-       symbol), constant slots, C locals and a few runtime values. Global values are in
-       `globals`, at the end. */
-    RootArray cells;
-    RootArray consts;
+    /* Roots: the program's (see Program), C locals and a few runtime values. Global values are
+       in `globals`, at the end. */
+    struct Program *program;
     V **croots;
     size_t ncroots, croots_cap;
     ForeignRoot **foreign_roots; /* chunks of FOREIGN_ROOT_CHUNK */
@@ -130,12 +172,10 @@ typedef struct VM {
     ForeignRoot *free_foreign_roots;
     ForeignRoot *deleted_foreign_roots; /* deleted from any thread; this VM drains them */
     V exception; /* the exception being raised or handled */
-    /* The program space, and the symbols: published ones, which stay, and the others, which a
-       collection drops once nothing else needs them (objects.c). An entry of the second
-       table may be a symbol published since, until the next collection rebuilds it. */
-    Program program;
-    SymbolTable published, own;
-    size_t published_top; /* one past the highest global cell of a published symbol */
+    /* The symbols that are not published, which a collection drops once nothing else needs
+       them (objects.c). An entry may be a symbol published since, until the next collection
+       rebuilds the table. */
+    SymbolTable own;
     V fail;      /* shen.fail!, which fills new absvectors; [] until first used */
     V chars;     /* the 256 one-byte strings; [] until first used */
     /* The strings of C error messages, which are literals, cached by address:
@@ -166,17 +206,10 @@ typedef struct VM {
        (docs/design.md, "The builder and isolates"). Every VM is one until an isolate starts in it. */
     bool builder;
     size_t nsymbols;
-    size_t *free_cells; /* global cells of dropped symbols, for new symbols */
-    size_t nfree_cells, free_cells_cap;
     /* Open file streams, held weakly: a collection closes those that nothing
        else reaches. */
     V *files;
     size_t nfiles, files_cap;
-    /* Code objects with native code, held weakly too: a collection hands
-       those that nothing else reaches to free_native, which the JIT sets. */
-    V *natives;
-    size_t nnatives, natives_cap;
-    void (*free_native)(struct VM *vm, uint64_t *code);
     /* Guarded pointers (shen-jit.pointer-guard), held weakly, each with a value held strongly.
        Once nothing else reaches the pointer, a collection puts its value on the list `dead`,
        for Shen to take. */
@@ -192,39 +225,20 @@ typedef struct VM {
     /* All threads, the running one included, and the running one: NULL until
        the first (thread F). */
     Thread *threads, *thread;
-    /* Called with a name's cell before a new definition replaces it. */
-    void (*redefine)(struct VM *vm, size_t cell);
-    /* Constant slots owned by code objects (heap.c): owned[i] marks a slot
-       that the collector copies with its code object rather than as a root;
-       free_consts holds the ranges of dead code, for reuse. */
-    unsigned char *owned;
-    size_t owned_cap;
-    struct { size_t start, len; } *free_consts;
-    size_t nfree_consts, free_consts_cap;
 
     /* What C written for Shen is given a pointer to (include/shen.h), so that it links against
        nothing: its first word is the table of functions, and ffi.c finds the VM from it. */
     const struct shen_api *api;
 
-    /* Process-specific addresses restored when an image loads. */
-    void *compile_stub;
-    void *foreign_stub;
-    struct Jit *jit;
 
     /* Worker scopes (src/runtime/worker.c). Ordinary emitted code never reads these. */
     struct WorkerScope *worker_scope; /* the host's open scope */
     struct Worker *worker_owner;      /* the worker this VM runs, on its own OS thread */
 
     /* Global values, by the number a symbol gets once code names it as a global or it is set
-       (objects.c): the slots lie in the VM's own block of address space, committed as numbers
-       grow, so emitted code reads one at a fixed offset from the VM's register. Number 0 is
-       none. Numbers of dropped symbols are reused, and those above the last one kept leave the
-       range that collections walk, as cells do. */
-    size_t nglobals;           /* one past the highest number in use, at least 1 */
+       (objects.c, Program): the slots lie in the VM's own block of address space, committed as
+       numbers grow, so emitted code reads one at a fixed offset from the VM's register. */
     size_t globals_committed;  /* slots committed, all holding a value or V_CLEARED */
-    size_t *free_globals;
-    size_t nfree_globals, free_globals_cap;
-    size_t published_global_top; /* one past the highest number of a published symbol */
     /* In a VM that is not the builder, which cannot number symbols, the values of globals
        that have none, by symbol: open addressing, 0 for an empty entry (objects.c). */
     V *local_keys, *local_values;
@@ -279,21 +293,22 @@ void thread_note_worker_stack(VM *vm);
 void vm_destroy(VM *vm);
 V *ra_at(RootArray *ra, size_t i);
 bool ra_push(RootArray *ra, V v, size_t *index);
-static inline V *cell_function(VM *vm, size_t cell) { return ra_at(&vm->cells, 2 * cell); }
+static inline V *cell_function(VM *vm, size_t cell) { return ra_at(&vm->program->cells, 2 * cell); }
 /* A name's arity, a fixnum, or V_CLEARED for none: program, as functions are. */
-static inline V *cell_arity(VM *vm, size_t cell) { return ra_at(&vm->cells, 2 * cell + 1); }
+static inline V *cell_arity(VM *vm, size_t cell) { return ra_at(&vm->program->cells, 2 * cell + 1); }
 
 /* program.c */
 static inline bool in_program(const VM *vm, const void *at)
 {
-    return (uintptr_t)at - (uintptr_t)vm->program.base < vm->program.bytes;
+    return (uintptr_t)at - (uintptr_t)vm->program->space.base < vm->program->space.bytes;
 }
 static inline bool in_symbols(const VM *vm, const void *at)
 {
-    return (uintptr_t)at - (uintptr_t)vm->program.base < (uintptr_t)vm->program.objects - (uintptr_t)vm->program.base;
+    const Space *p = &vm->program->space;
+    return (uintptr_t)at - (uintptr_t)p->base < (uintptr_t)p->objects - (uintptr_t)p->base;
 }
-bool program_init(Program *p);
-void program_release(Program *p);
+bool program_init(Space *p);
+void program_release(Space *p);
 uint64_t *program_alloc(VM *vm, size_t words);
 uint64_t *program_symbol_slot(VM *vm);
 void program_free_symbol(VM *vm, uint64_t *slot);
@@ -324,7 +339,7 @@ bool vm_stack_reserve(VM *vm, size_t need_words);
 size_t vm_consts_alloc(VM *vm, size_t n, bool *ok);
 void vm_consts_release(VM *vm, size_t start, size_t n);
 bool vm_track_code(VM *vm, V code);
-/* vm->owned: 0 for a root or free slot, OWNED for one in the range of a code object in the
+/* vm->program->owned: 0 for a root or free slot, OWNED for one in the range of a code object in the
    heap, REACHED while a collection has copied that code object, and PROGRAM for one of code
    in the program space, which collections neither scan nor free. */
 enum { OWNED = 1, REACHED = 2, PROGRAM = 3 };
