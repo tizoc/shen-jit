@@ -661,11 +661,11 @@ else
     fail=$((fail + 1))
     echo "FAIL constant-reuse: $(slots "$dir/slots-start.out") slots at start, $(slots "$dir/slots-end.out") after"
 fi
-# The native code of code objects that died goes back to the JIT
-#: redefining a function 2000
-# times and calling each version once compiles 2000 of them, and a few
-# hundred at most stay.
-printf '(define new 0 -> done N -> (do (eval [define g (protect X) -> [+ (protect X) N]]) (do (g 1) (new (- N 1)))))\n(new 2000)\n' \
+# The native code of code objects that died goes back to the JIT: evaluating
+# 2000 expressions, each calling a lambda of its own, compiles 2000 of them,
+# and a few hundred at most stay. A definition's code stays, in the program
+# space, so redefining one keeps every version.
+printf '(define new 0 -> done N -> (do (eval-kl [[lambda x [+ x N]] 1]) (new (- N 1))))\n(new 2000)\n' \
     > "$dir/new.shen"
 SHEN_JIT_STATS=1 SHEN_JIT_GC_STRESS=100000 "$SHEN" script "$dir/new.shen" > "$dir/native.out" 2>&1
 native() { sed -n "s/.*native code: \([0-9]*\) code objects compiled, \([0-9]*\) freed$/\\$1/p" "$dir/native.out"; }

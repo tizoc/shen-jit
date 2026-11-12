@@ -194,6 +194,10 @@ static void print_stats(void)
                     t + 1 < T_LIMIT ? "," : "");
     fprintf(stderr, "\nshen-jit: roots: %zu symbols, %zu global cells, %zu constant slots\n",
             stats_vm->nsymbols, stats_vm->cells.count / 2, stats_vm->consts.count);
+    const Program *p = &stats_vm->program;
+    fprintf(stderr, "shen-jit: program space: %zu KB of objects, %zu symbols published, %zu KB of symbol slots\n",
+            (size_t)(p->objects_next - p->objects) * sizeof(uint64_t) / 1024, stats_vm->published.count,
+            (size_t)(p->symbols_next - p->base) * sizeof(uint64_t) / 1024);
     size_t compiled, freed;
     jit_stats(stats_vm, &compiled, &freed);
     fprintf(stderr, "shen-jit: native code: %zu code objects compiled, %zu freed\n", compiled, freed);

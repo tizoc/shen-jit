@@ -436,6 +436,37 @@ Nothing in the runtime changes for it alone.
   collection on short lists at 4 MB took about 217 µs instead of 330, where a fifth was hoped for: reading 700 KB through
   cold caches is bound by memory as well. Reverted.
 
+### The program space (2026-11-12, Apple M3 Max, against 0.7)
+
+Step 1 of the parallelism redesign, on the `new-parallelism` branch, to evaluate it. Every symbol has a slot of a
+reserved range per VM that never moves, in one of two tables, published or not, and an installed definition is copied
+there with all it reaches. A pointer into the range is one test in the copier and is not followed, and the constant
+slots of code there are neither scanned nor freed. `program.c` is 450 lines with its comments, and about 490 lines
+changed elsewhere, images included.
+
+- **How it differs from the image region tried twice** (above): no barrier and no scan. Only what cannot change is
+  copied, so nothing there points into the heap; a definition that reaches anything else, such as a grammar loop's
+  byte table, stays in the heap, and a check before copying makes sure it leaves nothing behind.
+- **Live heap at startup** 824 to 149 KB; 595 KB of objects and 1,713 published symbols in the space.
+- **Collection time,** median of 7, alternating: kernel suite 17.0 to 13.0 ms (wall 181.4 to 180.7 ms); loading
+  `lib/datalog.shen` 6.0 to 3.0 ms (79.1 to 77.6); startup 4.4 to 4.0 ms.
+- **Workloads never used for tuning,** 7 rounds: startup 0.87, kernel suite 0.98, extension tests 0.95, stlib install
+  1.01, contract examples 0.97, THORN set 1.03, L 0.90, schubert 0.94, ec 0.92. A symbol reached is marked in place
+  instead of copied, which the provers' terms are full of.
+- **Benchmark suite,** best of 12 samples each: 0.98 overall, median 0.99; `vector create (big)` 0.81 and `absvector
+  create (big)` 0.80, the rows whose collections copied the program most often; nothing above 1.02 but the equality
+  group's control loop, 1.08, which runs nothing.
+- **Given up, as decided:** code replaced there is never freed. `tests/cli.sh`'s check that native code goes back to the
+  JIT now evaluates expressions instead of redefining a function. A small definition's inline body names its
+  parameters, so those symbols are published with it, bounded by the code kept.
+- **A bug on the way.** A promotion that failed halfway left copies of nested code in the space, naming the slots of the
+  heap code they came from. An image then marked those slots as the program's, so collections stopped scanning a live
+  heap definition's constants, and a grammar loop's byte table moved under it. `make test-lib-stress` caught it, in the
+  JSON image test. The check before copying keeps it from happening, and a copy that still fails, out of memory, names
+  no slots and puts back those it changed.
+- **Found in passing:** `tests/cli.sh`'s constant-reuse check fails to run on `main` too: its script stops on a free
+  variable, `X`, so the check passes without testing anything.
+
 ### Copying (2026-11-02, M3 Max, against the build before)
 
 - **No `memcpy` per object,** about 10 lines. `memmove` was 61% of a run that spent 63.5% collecting. Kernel suite

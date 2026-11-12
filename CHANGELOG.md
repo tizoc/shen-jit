@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- Installed definitions, with what their code reaches, and every symbol now live in a program space that
+  collections neither copy nor scan, so collections no longer copy the program. A redefined function's old
+  versions stay there. `SHEN_JIT_STATS` reports the program space.
+
 ## [0.7] - 2026-11-10
 
 ### Added

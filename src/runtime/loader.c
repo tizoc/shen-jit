@@ -429,6 +429,7 @@ bool load_stage0_sealed(VM *vm, const char *text, size_t len, size_t seal_until,
         V closure = build_closure(&l, nth(form, 2));
         if (closure == V_CLEARED)
             break;
+        closure = program_promote(vm, closure);
         if (vm->redefine)
             vm->redefine(vm, symbol_cell(nth(form, 1)));
         *cell_function(vm, symbol_cell(nth(form, 1))) = closure;
@@ -469,6 +470,7 @@ V sj_install(VM *vm, V form)
     if (!l.error)
         bind_sealed(&l, true);
     if (!l.error && defun) {
+        result = program_promote(vm, result);
         if (vm->redefine)
             vm->redefine(vm, symbol_cell(nth(form, 1)));
         *cell_function(vm, symbol_cell(nth(form, 1))) = result;

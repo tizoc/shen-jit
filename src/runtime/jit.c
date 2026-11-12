@@ -4086,10 +4086,9 @@ void jit_stats(VM *vm, size_t *compiled, size_t *freed)
     *freed = vm->jit ? vm->jit->nfreed : 0;
 }
 
-void jit_recompile(VM *vm)
+static void uncompile(VM *vm, uint64_t *from, uint64_t *to)
 {
-    vm_collect(vm, 0); /* so that the heap can be walked */
-    for (uint64_t *s = vm->space; s < vm->live_end;) {
+    for (uint64_t *s = from; s < to;) {
         if (!is_header(*s)) {
             s += 2;
             continue;
@@ -4100,6 +4099,13 @@ void jit_recompile(VM *vm)
             s[CODE_NATIVE] = 0;
         s += obj_words(*s);
     }
+}
+
+void jit_recompile(VM *vm)
+{
+    vm_collect(vm, 0); /* so that the heap can be walked */
+    uncompile(vm, vm->space, vm->live_end);
+    uncompile(vm, vm->program.objects, vm->program.objects_next);
     vm->nnatives = 0; /* never freed: frames may be running it */
 }
 

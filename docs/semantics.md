@@ -66,11 +66,12 @@ states which fields hold values:
 There is no partial-application object: KLambda named calls are saturated (see
 section 9), so only closures and foreign functions are ever applied.
 
-Symbols are ordinary heap objects. The hash is computed from the name bytes when
-the symbol is created, so it never depends on an address. The intern table is a
-heap object that holds symbols weakly: a collection drops a symbol that nothing
-else reaches, that has no value or function, and that no compiled code calls by
-name, and its cell is reused. Interning the name again makes a new symbol, which
+Symbols live in the program space ([design.md](design.md), "Collection"), in
+slots that never move. The hash is computed from the name bytes when the symbol is
+created. A symbol that code installed there refers to is published, and stays.
+The others are held weakly: a collection drops a symbol that nothing else reaches,
+that has no value or function, and that no compiled code calls by name, and its
+slot and cell are reused. Interning the name again makes a new symbol, which
 nothing can tell from the old one. `(intern "true")` and `(intern "false")`
 return the Boolean specials.
 
@@ -369,19 +370,23 @@ come before those arguments.
 An image is a header followed by sections and a trailer, all little-endian:
 
 - **Header:** magic `SJHI`, format version, the executable's build identifier
-  (an image loads only into the build that wrote it), word size, heap size, the
-  sizes of the root sections, the symbol count, the intern table's relative address,
-  and the primitive table's size and a checksum of its names, so an image cannot
-  load against a different primitive table.
-- **Heap:** the live heap after a final collection, with every pointer stored
-  relative to the heap base and every raw native field stored as 0.
+  (an image loads only into the build that wrote it), word size, the sizes of the
+  program space's symbol slots and objects, of the heap and of the root sections,
+  the program space's first free symbol slot, and the primitive table's size and a
+  checksum of its names, so an image cannot load against a different primitive table.
+- **Program space:** its symbol slots, then its objects, as they lie there.
+- **Heap:** the live heap after a final collection.
+
+  Every pointer in these is stored relative to the start of the program space,
+  with bit 62 set, or of the heap, and every raw native field is stored as 0.
 - **Roots:** the global-cell and constant-slot arrays, with relative pointers.
 - **Trailer:** the image's length in bytes and the magic `SJHI-END`. A loader
   reads it from the end of the file, so an image can be appended to another
   file: the executable carries its image this way.
 
-Loading reads the heap into a region at least five times its size, adds the base
-to every pointer in one linear pass over objects and pairs, does the same for
-the root arrays, and then applies the reconstruction rules in
+Loading reads the program space into a new one and the heap into a region at
+least five times its size, adds the bases to every pointer in one linear pass
+over each, does the same for the root arrays, rebuilds the symbol tables from
+the slots, and then applies the reconstruction rules in
 [design.md](design.md): native entries from each procedure's kind, the standard streams
 rebound in place, and file streams left closed.
