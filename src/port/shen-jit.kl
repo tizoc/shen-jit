@@ -9,11 +9,30 @@ definition."
 
 (defun shen-jit.eval-kl (X)
   (if (cons? X)
-      (let Lowered (shen-jit.lower.toplevel X ())
-        (if (= (hd Lowered) defun)
-            (shen-jit.install Lowered)
-            (let Result ((shen-jit.install Lowered)) Result)))
+      (if (shen-jit.builder?)
+          (let Lowered (shen-jit.lower.toplevel X ())
+            (if (= (hd Lowered) defun)
+                (shen-jit.install Lowered)
+                (let Result ((shen-jit.install Lowered)) Result)))
+          (shen-jit.not-builder eval-kl))
       X))
+
+"Only the builder evaluates and defines (docs/design.md, The builder and isolates). An isolate
+sets shen-jit.*isolate* as it starts (shen-jit.start-isolate), so eval and
+eval-kl refuse there at once, before they would reach the builder's globals,
+which it has not got; the runtime refuses to install anything there too."
+
+(defun shen-jit.builder? () (trap-error (not (value shen-jit.*isolate*)) (lambda E true)))
+
+(defun shen-jit.not-builder (F)
+  (simple-error (cn (str F) ": only the builder can evaluate or define code")))
+
+"The kernel's eval, refusing in an isolate."
+
+(defun eval (X)
+  (if (shen-jit.builder?)
+      (eval-kl (shen.shen->kl (shen.process-applications (macroexpand X) (shen.find-types X))))
+      (shen-jit.not-builder eval)))
 
 "The kernel calls input+ but leaves its definition to the port (41.3)."
 
@@ -61,34 +80,98 @@ argument, as Shen/Scheme does; the kernel's main only reports it."
           (shen-jit.exit 1)
           Shown))))
 
-"fn reads F's property list once, where the kernel's looks F up twice,
-through arity and get; the results and errors are the same."
+"Arities are program, so they are kept beside function cells, outside the
+heap and the property vector, which an isolate starts without
+(docs/design.md, The builder and isolates). These are the kernel's, with that table for the
+property."
+
+(defun arity (F) (shen-jit.arity F))
+
+(defun shen.initialise-arity-table (L)
+  (cond ((= () L) ())
+        ((and (cons? L) (cons? (tl L)))
+         (do (shen-jit.set-arity (hd L) (hd (tl L))) (shen.initialise-arity-table (tl (tl L)))))
+        (true (simple-error "implementation error in shen.initialise-arity-table"))))
+
+(defun shen.execute-store-arity (F N)
+  (if (= 0 N)
+      (shen-jit.set-arity F 0)
+      (do (shen-jit.set-arity F N) (shen.update-lambdatable F N))))
+
+"A lambda form left from before would be stale: fn makes its closure from the
+arity, so the form goes, as the kernel's takes it away for a name of arity 0
+or none."
+
+(defun update-lambda-table (F N)
+  (do (shen-jit.set-arity F N) (do (unput F shen.lambda-form (value *property-vector*)) F)))
+
+(defun shen.update-lambda-table/precompiled (F N Lambda Precompiled)
+  (if Precompiled
+      (do (shen-jit.set-arity F N) (do (thaw Lambda) (update-lambda-table F N)))
+      (update-lambda-table F N)))
+
+"fn makes its curried closure the first time it is asked for a name, and keeps
+it as the name's lambda form. The builder compiles one that calls the name, as
+the kernel's fn does when a definition is read; an isolate, which cannot
+evaluate, makes one from a template (shen-jit.template), which needs only the
+arity. A name with no arity but a lambda form keeps that form."
 
 (defun fn (F)
-  (let Plist (trap-error (shen.<-dict (value *property-vector*) F) (lambda E ()))
-    (let Arity (trap-error (assoc arity Plist) (lambda E ()))
-      (if (and (cons? Arity) (= (tl Arity) 0))
-          (F)
-          (let Form (trap-error (assoc shen.lambda-form Plist) (lambda E ()))
-            (if (cons? Form)
-                (shen-jit.lambda-form F (tl Form))
-                (simple-error (cn "fn: " (shen.app F " is undefined
-" shen.a)))))))))
+  (let Arity (shen-jit.arity F)
+    (if (= Arity 0)
+        (F)
+        (let Form (trap-error (get F shen.lambda-form (value *property-vector*)) (lambda E ()))
+          (if (= Form ())
+              (if (> Arity 0)
+                  (shen-jit.make-form F Arity)
+                  (simple-error (cn "fn: " (shen.app F " is undefined
+" shen.a))))
+              (shen-jit.lambda-form F Form))))))
 
-"Lambda forms are made when fn first asks for them. Reading a definition
-stores F's arity and its lambda form, which the kernel makes by evaluating
-a curried lambda: one compilation per definition, about a fifth of loading
-a file of definitions, for a closure that fn rarely needs. The port stores
-[shen-jit.lazy-form N] instead, and fn replaces it with the real form the
-first time. The kernel's shen.lambda-function calls gensym once per
-argument, so the counter still moves by N, and later gensyms are the same;
-the lambda made later names its parameters without gensym, after F, as F/1
-and so on: a fixed name would be captured by a function of that name."
+(defun shen-jit.make-form (F N)
+  (let Form (if (shen-jit.builder?) (eval-kl (shen-jit.curried (cons F ()) N)) (shen-jit.template F N))
+    (do (put F shen.lambda-form Form (value *property-vector*)) Form)))
+
+"A template's last call goes through the name's function cell, which
+shen-jit.function reads inline, so a redefinition is seen, as with a lambda
+form's named call. Up to four arguments the call is direct; past that the
+arguments are listed and shen-jit.apply makes it. The templates of two to four
+are defined as the image is built (shen-jit.initialise), lowered then, so that
+they take all their arguments at once too, which stage 0 code cannot."
+
+(defun shen-jit.template (F N)
+  (cond ((= N 1) (lambda A ((shen-jit.function F) A)))
+        ((= N 2) (shen-jit.template-2 F))
+        ((= N 3) (shen-jit.template-3 F))
+        ((= N 4) (shen-jit.template-4 F))
+        (true (shen-jit.template-list F N ()))))
+
+(defun shen-jit.template-defun (Name Vars)
+  (cons defun (cons Name (cons (cons f ()) (cons (shen-jit.template-body Vars Vars) ())))))
+
+(defun shen-jit.template-body (All Rest)
+  (if (= Rest ())
+      (cons (cons shen-jit.function (cons f ())) All)
+      (cons lambda (cons (hd Rest) (cons (shen-jit.template-body All (tl Rest)) ())))))
+
+(defun shen-jit.template-list (F N Args)
+  (lambda X
+    (if (= N 1)
+        (shen-jit.apply F (reverse (cons X Args)))
+        (shen-jit.template-list F (- N 1) (cons X Args)))))
+
+"Reading a definition stores F's arity and its lambda form, which the kernel
+makes by evaluating a curried lambda: one compilation per definition, about a
+fifth of loading a file of definitions. fn makes the form the first time it is
+asked, so a definition only takes away any form made for its old arity. The
+kernel's shen.lambda-function calls gensym once per argument, so the counter
+still moves by N, and later gensyms are the same. A form made later names its
+parameters after F, as F/1 and so on: a fixed name would be captured by a
+function of that name."
 
 (defun shen.update-lambdatable (F N)
   (do (set shen.*gensym* (+ (value shen.*gensym*) N))
-      (do (shen.set-lambda-form-entry (cons F (shen-jit.absvector3 shen-jit.lazy-form N 0)))
-          N)))
+      (do (unput F shen.lambda-form (value *property-vector*)) N)))
 
 (defun shen-jit.lambda-form (F Form)
   (if (shen-jit.tagged? Form shen-jit.lazy-form)
@@ -382,9 +465,65 @@ below)."
 "Byte buffers and bit operations are primitives that Shen code calls by name and
 may use as values, as (fn shen-jit.u8)."
 
-(defun shen-jit.primitive (F N)
-  (do (shen.initialise-arity-table (cons F (cons N ())))
-      (shen.set-lambda-form-entry (cons F (shen-jit.absvector3 shen-jit.lazy-form N 0)))))
+(defun shen-jit.primitive (F N) (shen-jit.set-arity F N))
+
+"A primitive has no definition of its own, as compiled code calls it in line,
+so fn's templates could not call it by name. Each gets one, made from a code
+object whose body is the primitive. The special forms and eval-kl are not
+primitives, and stay as they are."
+
+(defun shen-jit.primitive-procedures ()
+  (shen.for-each (lambda Group (if (number? (hd Group))
+                                   (shen.for-each (lambda F (shen-jit.primitive-procedure F (hd Group)))
+                                                  (hd (tl Group)))
+                                   shen.skip))
+                 (shen-jit.lower.fixed-names)))
+
+(defun shen-jit.primitive-procedure (F N)
+  (if (shen-jit.arity? F N)
+      shen.skip
+      (trap-error
+        (shen-jit.install
+          (cons defun (cons F (cons (cons code (cons F (cons N (cons (+ N 3) (cons ()
+            (cons (cons (cons prim (cons (+ N 2) (cons F (shen-jit.slots 2 N))))
+                        (cons (cons return (cons (+ N 2) ())) ()))
+              (cons () ())))))))
+                                  ()))))
+        (lambda E shen.skip))))
+
+(defun shen-jit.slots (From N)
+  (if (= N 0) () (cons From (shen-jit.slots (+ From 1) (- N 1)))))
+
+"An isolate starts as a program does (docs/design.md, The builder and isolates): the runtime
+puts back the program's constants and makes the standard streams, then this
+sets what running code reads, with the kernel's starting values: nothing of
+the builder's or of the isolate that started it, whose globals are unbound
+here. Its gensyms count from Base, so that names made in two isolates never
+meet. The builder's own globals, macros, datatypes, the typechecker's, stay
+unbound: only the builder defines."
+
+(defun shen-jit.start-isolate (Base)
+  (do (set shen-jit.*isolate* true)
+  (do (set *property-vector* (shen.dict 64))
+  (do (set shen.*gensym* Base)
+  (do (set *hush* false)
+  (do (set *maximum-print-sequence-size* 20)
+  (do (set *absolute* ())
+  (do (set shen.*call* 0)
+  (do (set shen.*infs* 0)
+  (do (set shen.*step* false)
+  (do (set shen.*spy* false)
+  (do (set shen.*tracking* ())
+  (do (set shen.*profiled* ())
+  (do (set shen.*it* "")
+  (do (set shen.*residue* ())
+  (do (set shen.*occurs* true)
+  (do (set shen.*maxinferences* 1000000)
+  (do (set shen.*names* ())
+  (do (set shen.*empty-absvector* (absvector 0))
+  (do (set shen.*tc* false)
+  (do (set shen-jit.*free-prolog-vectors* ())
+      (prolog-memory 10000))))))))))))))))))))))
 
 (defun shen-jit.register-primitives ()
   (do (shen-jit.primitive shen-jit.fixnum? 1)
@@ -451,7 +590,9 @@ may use as values, as (fn shen-jit.u8)."
     (do (shen-jit.primitive shen-jit.worker-index 0)
     (do (shen-jit.primitive shen-jit.worker-live 0)
     (do (shen-jit.primitive shen-jit.worker-cancelled? 0)
-    (do (shen-jit.primitive shen-jit.worker-shared-view 0) shen.skip))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+    (do (shen-jit.primitive shen-jit.worker-shared-view 0)
+    (do (shen-jit.primitive shen-jit.arity 1) (do (shen-jit.primitive shen-jit.function 1)
+    (do (shen-jit.primitive shen-jit.set-arity 2) (do (shen-jit.primitive shen-jit.apply 2) shen.skip))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
 
 "Cleanup, as a library that holds something outside the heap needs it.
 (shen-jit.finally Body Cleanup) thaws Body, then Cleanup however Body ended,
@@ -485,8 +626,12 @@ thread at a time holding a lock (thread.c). It is defined here, once sealing has
 ended, since programs may define their own thread."
 
 (defun shen-jit.initialise ()
+  (do (eval-kl (shen-jit.template-defun shen-jit.template-2 (cons a (cons b ()))))
+  (do (eval-kl (shen-jit.template-defun shen-jit.template-3 (cons a (cons b (cons c ())))))
+  (do (eval-kl (shen-jit.template-defun shen-jit.template-4 (cons a (cons b (cons c (cons d ()))))))
   (do (shen-jit.struct.initialise)
   (do (shen-jit.register-primitives)
+  (do (shen-jit.primitive-procedures)
   (do (eval-kl (cons defun (cons thread (cons (cons x ()) (cons (cons shen-jit.thread (cons x ())) ())))))
   (do (shen.initialise-arity-table
         (cons thread (cons 1 (cons shen-jit.seal (cons 1 (cons shen-jit.backtrace (cons 0
@@ -512,7 +657,7 @@ ended, since programs may define their own thread."
           (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.exit))
               (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.code))
                   (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.save-executable))
-                      (set shen-jit.defined ()))))))))))))))))
+                      (set shen-jit.defined ()))))))))))))))))))))
 
 "Definitions are factorised as they are evaluated, as Shen/Scheme's compiler
 does: the kernel's shen.factor binds each selector once and shares the tests

@@ -145,6 +145,7 @@ static VM *vm_block(void)
     memset(vm, 0, offsetof(VM, globals)); /* fresh pages are zero; this says so */
     vm->block_bytes = bytes;
     vm->nglobals = 1;
+    vm->builder = true;
     return vm;
 }
 
@@ -220,6 +221,8 @@ void vm_destroy(VM *vm)
     free(vm->guards);
     free(vm->free_cells);
     free(vm->free_globals);
+    free(vm->local_keys);
+    free(vm->local_values);
     free(vm->owned);
     free(vm->free_consts);
 #ifdef _WIN32
@@ -724,7 +727,7 @@ static void sweep_symbols(VM *vm, Copy *c)
        they leave the array: every collection walks it, and a burst of new symbols would
        otherwise slow them all for good. */
     trim_free(vm->free_cells, &vm->nfree_cells, top);
-    vm->cells.count = top;
+    vm->cells.count = 2 * top;
     trim_free(vm->free_globals, &vm->nfree_globals, global_top);
     vm->nglobals = global_top;
     drain(c, mark);
@@ -769,6 +772,12 @@ static void collect_into(VM *vm, uint64_t *to)
     copy_root_array(&c, &vm->cells);
     for (size_t n = 1; n < vm->nglobals; n++)
         copy_slot(&c, &vm->globals[n]);
+    /* A symbol's hash comes from its name, so the dictionary needs no rehashing. */
+    for (size_t i = 0; i < vm->local_cap; i++)
+        if (vm->local_keys[i]) {
+            copy_slot(&c, &vm->local_keys[i]);
+            copy_slot(&c, &vm->local_values[i]);
+        }
     ffi_drain_roots(vm);
     for (size_t i = 0; i < vm->nforeign_roots; i++)
         copy_slot(&c, &vm->foreign_roots[i / FOREIGN_ROOT_CHUNK][i % FOREIGN_ROOT_CHUNK].value);

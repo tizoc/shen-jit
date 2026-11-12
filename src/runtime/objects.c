@@ -204,7 +204,7 @@ void symbol_mark_called(V sym) { ptr(sym)[SYM_CELL] |= UINT64_C(1) << CALLED_BIT
 bool symbol_needed(VM *vm, V sym)
 {
     return (ptr(sym)[SYM_CELL] >> CALLED_BIT) & 1 || global_value(vm, sym) != V_CLEARED ||
-           *cell_function(vm, symbol_cell(sym)) != V_CLEARED;
+           *cell_function(vm, symbol_cell(sym)) != V_CLEARED || *cell_arity(vm, symbol_cell(sym)) != V_CLEARED;
 }
 
 /* The kind of a symbol named s: 0 if the kernel's symbol? rejects it, 1 for
@@ -306,12 +306,15 @@ static V intern_name(VM *vm, V name)
     uint64_t *p = program_symbol_slot(vm);
     if (!p)
         return FAILED;
-    size_t cell;
+    size_t cell, entry, entry2;
     if (vm->nfree_cells)
-        cell = vm->free_cells[--vm->nfree_cells]; /* it is cleared */
-    else if (vm->cells.count > CELL_MASK || !ra_push(&vm->cells, V_CLEARED, &cell)) {
+        cell = vm->free_cells[--vm->nfree_cells]; /* both entries are cleared */
+    else if (vm->cells.count / 2 > CELL_MASK || !ra_push(&vm->cells, V_CLEARED, &entry) ||
+             !ra_push(&vm->cells, V_CLEARED, &entry2)) {
         program_free_symbol(vm, p);
         return FAILED;
+    } else {
+        cell = entry / 2;
     }
     p[0] = HEADER(T_SYMBOL, 0);
     p[SYM_NAME] = name;
@@ -327,13 +330,67 @@ static V intern_name(VM *vm, V name)
     return sym;
 }
 
-/* The builder numbers a global when code names it or it is set (vm.h). Nothing here
-   allocates in the heap. */
+static size_t local_index(VM *vm, V sym)
+{
+    size_t i = ptr(sym)[SYM_HASH] & (vm->local_cap - 1);
+    while (vm->local_keys[i] && vm->local_keys[i] != sym)
+        i = (i + 1) & (vm->local_cap - 1);
+    return i;
+}
+
+V *local_global(VM *vm, V sym)
+{
+    size_t i = local_index(vm, sym);
+    return vm->local_keys[i] ? &vm->local_values[i] : NULL;
+}
+
+/* A value for a symbol with no number, in a VM that may not number it. Entries are never
+   taken out, so a symbol given a value stays while the VM runs. */
+static V *local_global_new(VM *vm, V sym)
+{
+    if (vm->local_cap) {
+        V *slot = local_global(vm, sym);
+        if (slot)
+            return slot;
+    }
+    if (2 * (vm->local_count + 1) > vm->local_cap) {
+        size_t cap = vm->local_cap ? 2 * vm->local_cap : 64;
+        V *keys = calloc(cap, sizeof *keys), *values = malloc(cap * sizeof *values);
+        if (!keys || !values) {
+            free(keys);
+            free(values);
+            return NULL;
+        }
+        V *old_keys = vm->local_keys, *old_values = vm->local_values;
+        size_t old_cap = vm->local_cap;
+        vm->local_keys = keys;
+        vm->local_values = values;
+        vm->local_cap = cap;
+        for (size_t i = 0; i < old_cap; i++)
+            if (old_keys[i]) {
+                size_t j = local_index(vm, old_keys[i]);
+                keys[j] = old_keys[i];
+                values[j] = old_values[i];
+            }
+        free(old_keys);
+        free(old_values);
+    }
+    size_t i = local_index(vm, sym);
+    vm->local_keys[i] = sym;
+    vm->local_values[i] = V_CLEARED;
+    vm->local_count++;
+    return &vm->local_values[i];
+}
+
+/* The builder numbers a global when code names it or it is set (vm.h); another VM keeps the
+   value of a global with no number in its dictionary. Nothing here allocates in the heap. */
 V *global_slot_new(VM *vm, V sym)
 {
     size_t n = symbol_global(sym);
     if (n)
         return &vm->globals[n];
+    if (!vm->builder)
+        return local_global_new(vm, sym);
     if (vm->nfree_globals)
         n = vm->free_globals[--vm->nfree_globals];
     else if (vm->nglobals > CELL_MASK || !vm_globals_commit(vm, vm->nglobals + 1))
@@ -344,6 +401,11 @@ V *global_slot_new(VM *vm, V sym)
     if (symbol_published(sym) && n >= vm->published_global_top)
         vm->published_global_top = n + 1;
     return &vm->globals[n];
+}
+
+V *global_slot_numbered(VM *vm, V sym)
+{
+    return symbol_global(sym) || vm->builder ? global_slot_new(vm, sym) : NULL;
 }
 
 /* Interns bytes that are outside the heap. Shen strings must be interned with

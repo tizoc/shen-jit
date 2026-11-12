@@ -391,10 +391,49 @@ static void self_host(const char *stage0)
     printf("self-hosting: %zu defuns lowered in shen-jit in %.3f s, %zu differ\n", n, t, differ);
 }
 
+/* An isolate started in a VM that was the builder (prims.c, sj_start_isolate): the builder loads a
+   program, which then runs in the isolate with none of the builder's globals or properties.
+   Its main returns how many of its checks failed. */
+static int isolate_test(const char *image, const char *program)
+{
+    Jit *jit = jit_create();
+    vm = jit ? image_load(image, 1 << 22, 1 << 16, jit_compile_stub(jit), jit_foreign_stub(jit)) : NULL;
+    if (!vm) {
+        fprintf(stderr, "cannot load %s\n", image);
+        return 1;
+    }
+    jit_attach(vm, jit);
+    thread_note_main_stack(vm);
+    const char *stress = getenv("SHEN_JIT_GC_STRESS");
+    vm->stress = stress ? strtoul(stress, NULL, 10) : 0;
+    V path = make_string(vm, program, strlen(program));
+    if (path == V_CLEARED || jit_call(vm, function("load"), 1, &path) == V_CLEARED) {
+        sj_report(vm, "loading the program");
+        return 1;
+    }
+    if (!sj_start_isolate(vm, fix(1000000))) {
+        sj_report(vm, "starting the isolate");
+        return 1;
+    }
+    V failed = jit_call(vm, function("start-test.main"), 0, NULL);
+    if (failed == V_CLEARED) {
+        sj_report(vm, "start-test.main");
+        return 1;
+    }
+    jit_destroy(vm);
+    vm_destroy(vm);
+    if (failed != fix(0))
+        return 1;
+    puts("isolate tests passed");
+    return 0;
+}
+
 int main(int argc, char **argv)
 {
+    if (argc == 4 && strcmp(argv[1], "--isolate") == 0)
+        return isolate_test(argv[2], argv[3]);
     if (argc < 3) {
-        fprintf(stderr, "usage: test_kl STAGE0-DIR CASES\n");
+        fprintf(stderr, "usage: test_kl STAGE0-DIR CASES, or test_kl --isolate IMAGE PROGRAM\n");
         return 2;
     }
     vm = vm_create(1 << 22, 1 << 16);

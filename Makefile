@@ -297,8 +297,10 @@ check-lowerer: $(BUILD)/stage0/.done $(BUILD)/tools/native.shen $(BUILD)/tools/n
 $(BUILD)/test_kl: tests/test_kl.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(RUNTIME_HDR)
 	$(CC) $(CFLAGS) $(SLJIT_FLAGS) -o $@ tests/test_kl.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(LDLIBS)
 
-test-kl: $(BUILD)/test_kl $(BUILD)/stage0/.done
+test-kl: $(BUILD)/test_kl $(BUILD)/stage0/.done $(BUILD)/shen-jit.img
 	cd $(BUILD) && ./test_kl stage0 ../tests/kl/eval-cases.kl
+	cd $(BUILD) && ./test_kl --isolate shen-jit.img ../tests/isolate-start.shen > isolate.log 2>&1 || { cat isolate.log; exit 1; }
+	tail -1 $(BUILD)/isolate.log
 
 # The eval-kl cases with a collection before every allocation (slow).
 test-kl-stress: $(BUILD)/test_kl $(BUILD)/stage0/.done

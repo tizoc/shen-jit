@@ -2506,7 +2506,7 @@ static void emit_prim(Emit *e, const uint32_t *p)
         sljit_s32 cell = SLJIT_MEM1(VMR);
         sljit_sw at = 0;
         V *slot = (arg[0] & OPERAND_CONST) && is_symbol(*operand_cell(e, arg[0]))
-                      ? global_slot_new(e->vm, *operand_cell(e, arg[0])) : NULL;
+                      ? global_slot_numbered(e->vm, *operand_cell(e, arg[0])) : NULL;
         if (slot) {
             at = (sljit_sw)((char *)slot - (char *)e->vm);
         } else {
@@ -2539,6 +2539,26 @@ static void emit_prim(Emit *e, const uint32_t *p)
         }
         if (slow)
             slow->catch_label = quiet_catch(e);
+        store_result(e, dst);
+        break;
+    }
+    case P_FUNCTION: {
+        /* The procedure in a symbol's function cell, through its index and the chunk
+           directory, which may move: fn's templates make their last call with it, so that a
+           redefinition is seen. Anything else, or a cell with no procedure, goes to C, which
+           raises. */
+        sljit_s32 r = operand_reg(e, arg[0]);
+        slow = slow_path(e, SLOW_PRIM, tag_cmp(c, SLJIT_NOT_EQUAL, R1, r, 0, TAG_SYMBOL));
+        sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM1(r), SYM_CELL * sizeof(V) - TAG_SYMBOL);
+        sljit_emit_op2(c, SLJIT_AND, R1, R1, IMM(CELL_MASK));
+        sljit_emit_op2(c, SLJIT_SHL, R1, R1, IMM(1)); /* the function entry, 2 * index */
+        sljit_emit_op2(c, SLJIT_LSHR, R2, R1, IMM(RA_CHUNK_BITS));
+        sljit_emit_op2(c, SLJIT_AND, R1, R1, IMM(RA_CHUNK - 1));
+        sljit_emit_op1(c, SLJIT_MOV, R3, SLJIT_MEM1(VMR), (sljit_sw)offsetof(VM, cells.chunks));
+        sljit_emit_op1(c, SLJIT_MOV, R3, SLJIT_MEM2(SLJIT_R3, SLJIT_R2), 3);
+        sljit_emit_op1(c, SLJIT_MOV, R0, SLJIT_MEM2(SLJIT_R3, SLJIT_R1), 3);
+        slow->from[1] = tag_cmp(c, SLJIT_NOT_EQUAL, R1, SLJIT_R0, 0, TAG_PROC);
+        slow->catch_label = quiet_catch(e);
         store_result(e, dst);
         break;
     }
@@ -3791,17 +3811,29 @@ static void *compile_code(VM *vm, V code)
             emit_raw(&e, p);
             break;
         case OP_JUMP_UNLESS_ENTRY: {
-            /* Falls through only for a closure whose code takes p[2]
-               arguments at once (OP_ENTRY). */
+            /* Falls through only for a procedure that takes p[2] arguments at once: a
+               closure whose code has (entry p[2] _), or whose code takes exactly that many,
+               which only a definition's does, and a foreign function of that arity. Applied
+               one argument at a time, the last two would fail: fn's templates call them so
+               (shen-jit.function). */
             sljit_emit_op1(c, SLJIT_MOV, R0, OPND(&e, p[1]));
             to_label(&e, tag_cmp(c, SLJIT_NOT_EQUAL, R1, R0, TAG_PROC), p[3]);
             sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM1(SLJIT_R0), -TAG_PROC);
             sljit_emit_op2(c, SLJIT_AND, R1, R1, IMM(0xFF));
+            struct sljit_jump *foreign = sljit_emit_cmp(c, SLJIT_EQUAL, R1, IMM(T_FOREIGN << 3 | TAG_HEADER));
             to_label(&e, sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(T_CLOSURE << 3 | TAG_HEADER)), p[3]);
             sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM1(SLJIT_R0), CLO_CODE * sizeof(V) - TAG_PROC);
             sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM1(SLJIT_R1), CODE_ARITY * sizeof(V) - TAG_OBJECT);
+            struct sljit_jump *exact = sljit_emit_cmp(c, SLJIT_EQUAL, R1, IMM(p[2]));
             sljit_emit_op2(c, SLJIT_LSHR, R1, R1, IMM(32));
             to_label(&e, sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(p[2])), p[3]);
+            struct sljit_jump *done = sljit_emit_jump(c, SLJIT_JUMP);
+            sljit_set_label(foreign, sljit_emit_label(c));
+            sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM1(SLJIT_R0), FOREIGN_ARITY * sizeof(V) - TAG_PROC);
+            to_label(&e, sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(p[2])), p[3]);
+            struct sljit_label *taken = sljit_emit_label(c);
+            sljit_set_label(exact, taken);
+            sljit_set_label(done, taken);
             break;
         }
         case OP_JUMP_IF_FALSE: {
