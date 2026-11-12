@@ -59,8 +59,8 @@ stays out: `make stlib` loads the kernel's precompiled `stlib.kl` into a running
 - **Procedures:** a closure's native entry is a cache, set on load to the compile-on-first-call stub. A foreign
   function's is set to its stub, and its address is cleared, so it is found again at its first call.
 - **Code objects** load with no native code: no emitted code is saved.
-- **Root cells** are referred to from the heap by index, so nothing in the heap needs rebinding. Only emitted
-  code holds their addresses.
+- **Root cells and global slots** are referred to from the heap by index or number, so nothing in the heap needs
+  rebinding. Only emitted code holds their addresses or offsets.
 - **Streams:** the standard stream objects are kept and rebound to the process's handles, so every reference stays
   good. File streams load closed.
 - **Pointers from C** load with address 0, which is dead.
@@ -149,7 +149,7 @@ other entry addresses, and call sites need no checks of that kind.
 
 ```text
 call f (arguments already in slots A+2..A+n+1):
-  load P from f's global cell
+  load P from f's function cell
   check that P is a procedure, else jump to the not-a-procedure path
   store P at [FP+A+1] and the return label at [FP+A]
   FP += A; COUNT = n
@@ -240,7 +240,9 @@ from an object: every other object starts with a header word whose low bits no v
 either a header, which gives its size and which fields hold values, or the head of a pair.
 
 Symbols live in the program space (see "Collection"), in slots that never move, so a symbol is its address. Each stores
-a hash computed from its name. A symbol refers to its global cell by index. Cells and constant slots
+a hash computed from its name. A symbol refers to its function cell by index, and to its global's slot by a number
+that it gets once code names it as a global or it is set. The slots lie after the VM in its own block of address space,
+so emitted code reads one at a fixed offset from the VM's register ([semantics.md](semantics.md), section 2). Function cells and constant slots
 live outside the heap, in root arrays that grow by adding chunks, so none ever moves, and emitted code embeds their addresses and never a
 heap address. Native code lives in SLJIT's executable memory, and a collection frees that of code objects it did not reach, except under a profiler, and what was compiled before everything compiled again, which frames may still be running.
 
@@ -266,8 +268,8 @@ collection copies at most a word for every four allocated. With its own area the
   copied, the pairs of its tail are copied right after it.
 - **Large objects:** vectors, strings and byte buffers of 32K words or more are allocated apart and copied only into an image. Collections mark
   them, scan them in place and free the dead ones, whose blocks wait one collection for an object of the same size.
-- **Weak things:** symbols that are not published are held weakly, and those nothing needs are dropped, their slots and global cells
-  reused, and cells above the last one kept taken out of the array that collections walk; streams nothing reaches are closed; the
+- **Weak things:** symbols that are not published are held weakly, and those nothing needs are dropped, their slots, cells and
+  global numbers reused, and those above the last one kept taken out of the ranges that collections walk; streams nothing reaches are closed; the
   constant slots of dead code are reused; and a guarded pointer nothing reaches has its value put on a list for Shen. That value is a root until then, so nothing has to come back
   from the dead, and what one value uses outlasts it. The list's pair takes less to-space than the pointer, which is not copied, leaves free.
 - **Repeated pointers** are skipped while scanning, which matters for the Prolog engine's big vectors.
@@ -286,7 +288,7 @@ Reals are boxed, each a 16-byte object, and native code does their arithmetic an
 test for fixnums fails, loading each operand into a float register and allocating the result in line. Code written by hand can keep them unboxed
 in real registers, and 64-bit integers in word registers, which the collector never sees ([bytecode.md](bytecode.md), "Real and word registers").
 
-The roots are the scanned extent of each thread's guest stack, the global cells and constants, what C holds, and a few VM
+The roots are the scanned extent of each thread's guest stack, the global slots, function cells and constants, what C holds, and a few VM
 fields. C holds values in explicitly registered locals, per thread, and in the roots that outlive a call (`shen_root_new`), which a
 thread with no lock may delete, so a collection first drains its VM's list of those deleted.
 

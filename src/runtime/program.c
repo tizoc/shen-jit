@@ -151,6 +151,8 @@ bool program_publish(VM *vm, V sym)
     s[SYM_CELL] = (s[SYM_CELL] & ~(UINT64_C(1) << MARK_BIT)) | UINT64_C(1) << PUBLISHED_BIT;
     if (symbol_cell(sym) >= vm->published_top)
         vm->published_top = symbol_cell(sym) + 1;
+    if (symbol_global(sym) >= vm->published_global_top)
+        vm->published_global_top = symbol_global(sym) + 1;
     return true;
 }
 

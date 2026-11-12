@@ -270,14 +270,14 @@ static void test_symbols(void)
     /* The table is weak: a collection keeps a symbol that something else
        reaches, has a value or function, or that code calls by name. */
     V valued = intern_cstr(vm, "valued");
-    *cell_value(vm, symbol_cell(valued)) = fix(7);
+    *global_slot_new(vm, valued) = fix(7);
     symbol_mark_called(intern_cstr(vm, "called"));
     vm_collect(vm, 0);
     CHECK(vm->nsymbols == 3);
     CHECK(vm->nfree_cells > 0);
     CHECK(intern_cstr(vm, "abc") == s[0]);
     CHECK(ptr(s[0])[SYM_HASH] == hash);
-    CHECK(*cell_value(vm, symbol_cell(intern_cstr(vm, "valued"))) == fix(7));
+    CHECK(global_value(vm, intern_cstr(vm, "valued")) == fix(7));
     size_t cell = symbol_cell(intern_cstr(vm, "called"));
     vm_collect(vm, 0);
     CHECK(symbol_cell(intern_cstr(vm, "called")) == cell);
@@ -300,7 +300,7 @@ static void test_symbol_cells_trimmed(void)
         snprintf(name, sizeof name, "dies-%d", i);
         intern_cstr(vm, name);
     }
-    CHECK(vm->cells.count == base + 2 * 5000);
+    CHECK(vm->cells.count == base + 5000);
     vm_collect(vm, 0);
     CHECK(vm->cells.count == base);
     CHECK(vm->nfree_cells == 0);
@@ -311,15 +311,15 @@ static void test_symbol_cells_trimmed(void)
     }
     V high = intern_cstr(vm, "high");
     size_t cell = symbol_cell(high);
-    CHECK(2 * cell >= base + 2 * 5000);
-    *cell_value(vm, cell) = fix(7);
+    CHECK(cell >= base + 5000);
+    *global_slot_new(vm, high) = fix(7);
     vm_collect(vm, 0);
-    CHECK(vm->cells.count == 2 * (cell + 1));
+    CHECK(vm->cells.count == cell + 1);
     CHECK(vm->nfree_cells == 5000);
-    CHECK(*cell_value(vm, symbol_cell(intern_cstr(vm, "high"))) == fix(7));
+    CHECK(global_value(vm, intern_cstr(vm, "high")) == fix(7));
     V reused = intern_cstr(vm, "reused");
     CHECK(symbol_cell(reused) < cell);
-    CHECK(*cell_value(vm, symbol_cell(reused)) == V_CLEARED);
+    CHECK(global_value(vm, reused) == V_CLEARED);
     vm_destroy(vm);
 }
 
@@ -334,12 +334,13 @@ static void test_symbol_cell_while_collecting(void)
     vm_collect(vm, 0);
     CHECK(vm->nfree_cells == 0);
     vm->stress = 1;
-    size_t a = symbol_cell(intern_string(vm, s[0]));
-    *cell_value(vm, a) = fix(1);
-    size_t b = symbol_cell(intern_string(vm, s[1]));
-    *cell_value(vm, b) = fix(2);
-    CHECK(a != b);
-    CHECK(*cell_value(vm, a) == fix(1));
+    V a = intern_string(vm, s[0]);
+    *global_slot_new(vm, a) = fix(1);
+    V b = intern_string(vm, s[1]);
+    *global_slot_new(vm, b) = fix(2);
+    CHECK(symbol_cell(a) != symbol_cell(b));
+    CHECK(symbol_global(a) != symbol_global(b));
+    CHECK(global_value(vm, a) == fix(1));
     vm_destroy(vm);
 }
 
@@ -370,7 +371,7 @@ static void test_image_round_trip(void)
     build_world(vm, s);
     size_t k;
     CHECK(ra_push(&vm->consts, s[0], &k) && k == 0);
-    *cell_value(vm, symbol_cell(s[4])) = s[0];
+    *global_slot_new(vm, s[4]) = s[0];
     *cell_function(vm, symbol_cell(s[4])) = ptr(s[0])[6];
     char *before = render(s[0]);
     vm->top = vm->stack; /* nothing on the stack at a dump */
@@ -386,7 +387,7 @@ static void test_image_round_trip(void)
     CHECK(strcmp(before, after) == 0);
     V sym = intern_cstr(loaded, "world-symbol");
     CHECK(sym == ptr(world)[4]);
-    CHECK(*cell_value(loaded, symbol_cell(sym)) == world);
+    CHECK(global_value(loaded, sym) == world);
     CHECK(*cell_function(loaded, symbol_cell(sym)) == ptr(world)[6]);
     CHECK(ptr(ptr(world)[6])[PROC_ENTRY] == (uint64_t)(uintptr_t)&stub);
     CHECK(ptr(ptr(world)[5])[CODE_NATIVE] == 0);

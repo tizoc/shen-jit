@@ -14,7 +14,7 @@
 #define SJ_BUILD_ID "development"
 #endif
 
-enum { IMAGE_VERSION = 3 };
+enum { IMAGE_VERSION = 4 };
 
 typedef struct {
     char magic[4];
@@ -26,6 +26,7 @@ typedef struct {
     uint64_t heap_words;
     uint64_t cell_entries;
     uint64_t const_entries;
+    uint64_t global_entries; /* global slots, number 0 included */
     uint64_t free_symbol;
     uint64_t primitive_count;
     uint64_t primitive_checksum;
@@ -41,7 +42,8 @@ typedef struct {
 static uint64_t image_length(const ImageHeader *h)
 {
     return sizeof(ImageHeader) +
-           (h->symbol_words + h->program_words + h->heap_words + h->cell_entries + h->const_entries) *
+           (h->symbol_words + h->program_words + h->heap_words + h->cell_entries + h->const_entries +
+            h->global_entries) *
                sizeof(V) +
            sizeof(ImageTrailer);
 }
@@ -178,6 +180,16 @@ static bool write_root_array(FILE *f, VM *vm, RootArray *ra)
     return true;
 }
 
+static bool write_globals(FILE *f, VM *vm)
+{
+    for (size_t n = 0; n < vm->nglobals; n++) {
+        V v = to_image(vm, vm->globals[n]);
+        if (fwrite(&v, sizeof v, 1, f) != 1)
+            return false;
+    }
+    return true;
+}
+
 static bool write_image(VM *vm, const char *path, const char *mode)
 {
     /* An image holds what the cells, constants and symbol table reach. Drop
@@ -221,8 +233,8 @@ static bool write_image(VM *vm, const char *path, const char *mode)
     rebase_objects(vm, heap, words, to_image, clear_raw);
 
     ImageHeader h = {{'S', 'J', 'H', 'I'}, IMAGE_VERSION, {0}, sizeof(V), symbol_words, program_words,
-                     words, vm->cells.count, vm->consts.count, p->free_symbol, primitive_count,
-                     primitive_checksum()};
+                     words, vm->cells.count, vm->consts.count, vm->nglobals, p->free_symbol,
+                     primitive_count, primitive_checksum()};
     strncpy(h.build, SJ_BUILD_ID, sizeof h.build - 1);
     ImageTrailer t = {image_length(&h), {0}};
     memcpy(t.magic, "SJHI-END", sizeof t.magic);
@@ -231,7 +243,8 @@ static bool write_image(VM *vm, const char *path, const char *mode)
     bool ok = f && fwrite(&h, sizeof h, 1, f) == 1 &&
               fwrite(copy, sizeof(uint64_t), all, f) == all &&
               write_root_array(f, vm, &vm->cells) &&
-              write_root_array(f, vm, &vm->consts) && fwrite(&t, sizeof t, 1, f) == 1;
+              write_root_array(f, vm, &vm->consts) && write_globals(f, vm) &&
+              fwrite(&t, sizeof t, 1, f) == 1;
     if (f && fclose(f) != 0)
         ok = false;
     free(copy);
@@ -330,8 +343,13 @@ VM *image_load(const char *path, size_t min_semispace_words, size_t stack_words,
     rebase_objects(vm, p->objects, h.program_words, from_image, restore_raw);
     rebase_objects(vm, vm->space, h.heap_words, from_image, restore_raw);
     if (!read_root_array(f, vm, &vm->cells, h.cell_entries) ||
-        !read_root_array(f, vm, &vm->consts, h.const_entries))
+        !read_root_array(f, vm, &vm->consts, h.const_entries) || h.global_entries < 1 ||
+        !vm_globals_commit(vm, h.global_entries) ||
+        fread(vm->globals, sizeof(V), h.global_entries, f) != h.global_entries)
         goto fail;
+    vm->nglobals = h.global_entries;
+    for (size_t n = 0; n < vm->nglobals; n++)
+        vm->globals[n] = from_image(vm, vm->globals[n]);
     /* The symbol tables, again. */
     for (uint64_t *s = p->base; s < p->symbols_next; s += SYM_WORDS) {
         V sym = tagged(s, TAG_SYMBOL);
@@ -341,7 +359,32 @@ VM *image_load(const char *path, size_t min_semispace_words, size_t stack_words,
             goto fail;
         if (symbol_published(sym) && symbol_cell(sym) >= vm->published_top)
             vm->published_top = symbol_cell(sym) + 1;
+        if (symbol_published(sym) && symbol_global(sym) >= vm->published_global_top)
+            vm->published_global_top = symbol_global(sym) + 1;
     }
+    /* The numbers no symbol holds are free. */
+    unsigned char *held = calloc(vm->nglobals, 1);
+    if (!held)
+        goto fail;
+    for (uint64_t *s = p->base; s < p->symbols_next; s += SYM_WORDS)
+        if (s[0] && symbol_global(tagged(s, TAG_SYMBOL)) < vm->nglobals)
+            held[symbol_global(tagged(s, TAG_SYMBOL))] = 1;
+    for (size_t n = 1; n < vm->nglobals; n++) {
+        if (held[n])
+            continue;
+        if (vm->nfree_globals == vm->free_globals_cap) {
+            size_t cap = 2 * vm->free_globals_cap + 64;
+            size_t *list = realloc(vm->free_globals, cap * sizeof *list);
+            if (!list) {
+                free(held);
+                goto fail;
+            }
+            vm->free_globals = list;
+            vm->free_globals_cap = cap;
+        }
+        vm->free_globals[vm->nfree_globals++] = n;
+    }
+    free(held);
     vm->nsymbols = vm->published.count + vm->own.count;
     /* The code objects take their constant slots again (heap.c), those of the program for good. */
     for (uint64_t *s = vm->space; s < vm->live_end; s += is_header(*s) ? obj_words(*s) : 2)

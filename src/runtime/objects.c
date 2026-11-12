@@ -183,13 +183,14 @@ V make_stream(VM *vm, uint64_t flags, void *handle)
 
 uint64_t hash_bytes(const void *bytes, size_t len) { return XXH3_64bits(bytes, len); }
 
-/* The word at SYM_CELL holds the global cell index. Above it (vm.h): the
+/* The word at SYM_CELL holds the function cell's index, and the global's
+   number above it. Above those (vm.h): the
    symbol's kind for shen-jit.symbol-kind (bits 56-57), whether the function
    it names is sealed (bit 58): calls to it may be bound once, and it cannot
    be redefined; whether compiled code calls it by name (bit 59), through its
    cell's index rather than the symbol; whether it is published (bit 60); and
    the collector's mark (bit 61). */
-size_t symbol_cell(V sym) { return (size_t)(ptr(sym)[SYM_CELL] & ((UINT64_C(1) << KIND_SHIFT) - 1)); }
+size_t symbol_cell(V sym) { return (size_t)(ptr(sym)[SYM_CELL] & CELL_MASK); }
 
 bool symbol_sealed(V sym) { return (ptr(sym)[SYM_CELL] >> SEALED_BIT) & 1; }
 
@@ -202,9 +203,8 @@ void symbol_mark_called(V sym) { ptr(sym)[SYM_CELL] |= UINT64_C(1) << CALLED_BIT
    name holds its cell. Any other can go, and come back as a new symbol. */
 bool symbol_needed(VM *vm, V sym)
 {
-    size_t cell = symbol_cell(sym);
-    return (ptr(sym)[SYM_CELL] >> CALLED_BIT) & 1 || *cell_value(vm, cell) != V_CLEARED ||
-           *cell_function(vm, cell) != V_CLEARED;
+    return (ptr(sym)[SYM_CELL] >> CALLED_BIT) & 1 || global_value(vm, sym) != V_CLEARED ||
+           *cell_function(vm, symbol_cell(sym)) != V_CLEARED;
 }
 
 /* The kind of a symbol named s: 0 if the kernel's symbol? rejects it, 1 for
@@ -306,18 +306,18 @@ static V intern_name(VM *vm, V name)
     uint64_t *p = program_symbol_slot(vm);
     if (!p)
         return FAILED;
-    size_t cell, cell2;
+    size_t cell;
     if (vm->nfree_cells)
-        cell = 2 * vm->free_cells[--vm->nfree_cells]; /* both entries are cleared */
-    else if (!ra_push(&vm->cells, V_CLEARED, &cell) || !ra_push(&vm->cells, V_CLEARED, &cell2)) {
+        cell = vm->free_cells[--vm->nfree_cells]; /* it is cleared */
+    else if (vm->cells.count > CELL_MASK || !ra_push(&vm->cells, V_CLEARED, &cell)) {
         program_free_symbol(vm, p);
         return FAILED;
     }
     p[0] = HEADER(T_SYMBOL, 0);
     p[SYM_NAME] = name;
     p[SYM_HASH] = hash;
-    p[SYM_CELL] = cell / 2 | name_kind((const unsigned char *)string_bytes(name),
-                                       string_length(name)) << KIND_SHIFT;
+    p[SYM_CELL] = cell | name_kind((const unsigned char *)string_bytes(name),
+                                   string_length(name)) << KIND_SHIFT;
     V sym = tagged(p, TAG_SYMBOL);
     if (!symbol_table_put(&vm->own, sym)) {
         program_free_symbol(vm, p);
@@ -325,6 +325,25 @@ static V intern_name(VM *vm, V name)
     }
     vm->nsymbols++;
     return sym;
+}
+
+/* The builder numbers a global when code names it or it is set (vm.h). Nothing here
+   allocates in the heap. */
+V *global_slot_new(VM *vm, V sym)
+{
+    size_t n = symbol_global(sym);
+    if (n)
+        return &vm->globals[n];
+    if (vm->nfree_globals)
+        n = vm->free_globals[--vm->nfree_globals];
+    else if (vm->nglobals > CELL_MASK || !vm_globals_commit(vm, vm->nglobals + 1))
+        return NULL;
+    else
+        n = vm->nglobals++;
+    ptr(sym)[SYM_CELL] |= (uint64_t)n << CELL_BITS;
+    if (symbol_published(sym) && n >= vm->published_global_top)
+        vm->published_global_top = n + 1;
+    return &vm->globals[n];
 }
 
 /* Interns bytes that are outside the heap. Shen strings must be interned with

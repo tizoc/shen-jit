@@ -467,6 +467,25 @@ changed elsewhere, images included.
 - **Found in passing:** `tests/cli.sh`'s constant-reuse check fails to run on `main` too: its script stops on a free
   variable, `X`, so the check passes without testing anything.
 
+### Global slots in the VM (2026-11-12, Apple M3 Max, against the program space above)
+
+Step 2 of the parallelism redesign, on the same branch. A global's value leaves the root array for a slot inline after
+the VM, in its own block of address space, committed as numbers grow. A symbol gets a number when code names it as a
+global or it is set, and a dropped symbol's number is reused, with those above the last one kept trimmed as cells are.
+Function cells stay in the root array, one per symbol instead of two entries. So a constant global is one load at a
+fixed offset from the VM's register, and each VM has its own values, which isolates will need.
+
+- **Roots:** 60 global slots at startup, where every one of 1,719 symbols had a value cell.
+- **Reading and writing a global,** 50M iterations, 5 runs alternating: a constant global read 47 ms either way, a set
+  26.9 against 27.7 ms, under 0.02 ns an iteration. A read through a symbol known only at run time was 54 to 60 ms with a
+  test for a symbol with no number; slot 0 is always unbound, so a read needs no such test and goes to C as an unbound
+  one does, and without it 54 either way. Only a store tests.
+- **Workloads never used for tuning,** 7 rounds: 0.97 to 1.02 (THORN 1.01 to 1.02, kernel suite 1.00). Benchmark suite,
+  best of 12 samples: 1.00. Neutral, as the design expected.
+- **Left for the step that adds isolates,** as they do nothing without them: a dictionary for an isolate's own symbols,
+  which have no number, the port's isolate start, empty property lists with the arity table moved into the program
+  space, and the proposed `fn` templates, guards on installing and `gensym` ranges.
+
 ### Copying (2026-11-02, M3 Max, against the build before)
 
 - **No `memcpy` per object,** about 10 lines. `memmove` was 61% of a run that spent 63.5% collecting. Kernel suite

@@ -52,7 +52,7 @@ states which fields hold values:
 | --- | --- |
 | String | Byte length and bytes; immutable. |
 | Byte buffer | Byte length and bytes, which can be stored to, and which the collector does not scan. |
-| Symbol | Name string, name hash, global cell index. |
+| Symbol | Name string, name hash; its function cell's index and its global's number, with flags. |
 | Real | IEEE double. |
 | Absvector | Length and that many values. |
 | Closure | Code object and captured values; a `defun` is a closure with no captures. Raw native entry. |
@@ -75,11 +75,17 @@ slot and cell are reused. Interning the name again makes a new symbol, which
 nothing can tell from the old one. `(intern "true")` and `(intern "false")`
 return the Boolean specials.
 
-Global cells (a value word and a function word per symbol) and constant slots
-live in root arrays outside the heap. The arrays grow by adding fixed-size
-chunks, so no cell moves. The heap refers to cells only by index; emitted code
-embeds cell addresses. A code object owns its range of constant slots: the
-collector copies them with it, and reuses them once it is dead (heap.c).
+Function cells (one per symbol) and constant slots live in root arrays outside
+the heap. The arrays grow by adding fixed-size chunks, so no cell moves. The heap
+refers to cells only by index; emitted code embeds cell addresses. A code object
+owns its range of constant slots: the collector copies them with it, and reuses
+them once it is dead (heap.c).
+
+A global's value is in a slot of the VM's own, by a number that a symbol gets
+once code names it as a global or it is `set`: a symbol never set and never named
+so takes none, and reads as unbound. The slots follow the VM in one block of
+address space, committed as numbers grow, so emitted code reads one at a fixed
+offset from the VM's register. A dropped symbol's number is reused.
 
 ## 3. Numbers
 

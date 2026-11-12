@@ -901,7 +901,7 @@ static char *home_path(VM *vm)
     V home_symbol = intern_cstr(vm, "*home-directory*");
     if (home_symbol == V_CLEARED)
         return NULL;
-    V home = *cell_value(vm, symbol_cell(home_symbol)), path = vm->args[0];
+    V home = global_value(vm, home_symbol), path = vm->args[0];
     size_t lh = is_type(home, T_STRING) ? string_length(home) : 0, lp = string_length(path);
     char *name = malloc(lh + lp + 1);
     if (!name)
@@ -948,23 +948,29 @@ static V save_executable(VM *vm)
     char *name = home_path(vm), *temporary = name ? malloc(strlen(name) + 5) : NULL;
     if (temporary)
         sprintf(temporary, "%s.tmp", name);
-    size_t home = symbol_cell(intern_cstr(vm, "*home-directory*"));
-    size_t hush = symbol_cell(intern_cstr(vm, "*hush*"));
-    size_t argv = symbol_cell(intern_cstr(vm, "*argv*"));
+    /* Symbols never move, and these have values, so nothing drops them. */
+    V *home = global_slot_new(vm, intern_cstr(vm, "*home-directory*"));
+    V *hush = global_slot_new(vm, intern_cstr(vm, "*hush*"));
+    V *argv = global_slot_new(vm, intern_cstr(vm, "*argv*"));
     V empty = make_string(vm, "", 0);
-    if (!temporary || empty == V_CLEARED || !image_copy_runtime(vm->self, temporary)) {
+    if (!temporary || !home || !hush || !argv || empty == V_CLEARED || !image_copy_runtime(vm->self, temporary)) {
         free(name);
         free(temporary);
         return sj_raise_value(vm, "save-executable: cannot write ~S", vm->args[0]);
     }
-    *cell_value(vm, home) = empty; /* where it was built means nothing where it runs */
+    *home = empty; /* where it was built means nothing where it runs */
     /* Nothing else keeps this symbol alive, so its value is set before anything can
-       collect: a cell kept across an allocation may be freed and used again. */
-    size_t entry_cell = symbol_cell(intern_cstr(vm, "shen-jit.*entry*"));
-    *cell_value(vm, entry_cell) = vm->args[1]; /* after the intern, which may move it */
+       collect, which would drop it. */
+    V *entry_slot = global_slot_new(vm, intern_cstr(vm, "shen-jit.*entry*"));
+    if (!entry_slot) {
+        free(name);
+        free(temporary);
+        return sj_raise(vm, "out of memory");
+    }
+    *entry_slot = vm->args[1];
     V *base = vm->stack + vm->launch_base; /* as the launcher's caller keeps them */
-    *cell_value(vm, hush) = base[0];
-    *cell_value(vm, argv) = base[1];
+    *hush = base[0];
+    *argv = base[1];
     vm->fp = vm->top = base;
     /* The old file is replaced only by a whole new one. */
     bool written = image_append(vm, temporary) && chmod(temporary, 0755) == 0;
@@ -1308,14 +1314,15 @@ bool sj_init_host(VM *vm)
         vm_root(vm, &s); /* interning may collect */
         V g = intern_cstr(vm, std[i].global);
         vm_unroot(vm, 1);
-        if (g == V_CLEARED)
+        V *slot = g == V_CLEARED ? NULL : global_slot_new(vm, g);
+        if (!slot)
             return false;
-        *cell_value(vm, symbol_cell(g)) = s;
+        *slot = s;
     }
     V home = intern_cstr(vm, "*home-directory*");
     if (home == V_CLEARED)
         return false;
-    if (*cell_value(vm, symbol_cell(home)) == V_CLEARED) {
+    if (global_value(vm, home) == V_CLEARED) {
         V empty = make_string(vm, "", 0);
         if (empty == V_CLEARED)
             return false;
@@ -1324,9 +1331,10 @@ bool sj_init_host(VM *vm)
         vm_root(vm, &empty);
         home = intern_cstr(vm, "*home-directory*");
         vm_unroot(vm, 1);
-        if (home == V_CLEARED)
+        V *slot = home == V_CLEARED ? NULL : global_slot_new(vm, home);
+        if (!slot)
             return false;
-        *cell_value(vm, symbol_cell(home)) = empty;
+        *slot = empty;
     }
     return true;
 }
@@ -1658,16 +1666,18 @@ V sj_primitive(VM *vm, size_t index)
                                         : sj_raise_value(vm, "address->: ~S is not an absvector", a);
         ptr(a)[1 + fixval(b)] = vm->args[2];
         return a;
-    case P_SET:
+    case P_SET: {
         if (!is_symbol(a))
             return sj_raise_value(vm, "set: ~S is not a symbol", a);
-        return *cell_value(vm, symbol_cell(a)) = b;
+        V *slot = global_slot_new(vm, a);
+        return slot ? (*slot = b) : sj_raise(vm, "out of memory");
+    }
     case P_VALUE:
         if (!is_symbol(a))
             return sj_raise_value(vm, "value: ~S is not a symbol", a);
-        if (*cell_value(vm, symbol_cell(a)) == V_CLEARED)
+        if (global_value(vm, a) == V_CLEARED)
             return sj_raise_value(vm, "~S has no value", a);
-        return *cell_value(vm, symbol_cell(a));
+        return global_value(vm, a);
     case P_SIMPLE_ERROR:
         if (!is_type(a, T_STRING))
             return sj_raise_value(vm, "simple-error: ~S is not a string", a);
