@@ -694,10 +694,12 @@
   F [X | Xs] -> (apply (F X) Xs))
 
 \\ By a loop's first call, the functions a class's guard calls exist: a guard that depends only on
-\\ its byte, as a class's must, is evaluated once for each byte. One that raises stays a test.
+\\ its byte, as a class's must, is evaluated once for each byte. One that raises stays a test. The
+\\ table is a string, which never changes, so the loop's code can be shared with isolates.
 (define tables
   [in-class _ B Guard] ->
-    (let Table (trap-error (fill (eval [/. B Guard]) (shen-jit.bytes 256) 0) (/. E none))
+    (let Table (trap-error (shen-jit.bytes->string (fill (eval [/. B Guard]) (shen-jit.bytes 256) 0) 0 256)
+                           (/. E none))
       (if (= Table none) Guard [= [shen-jit.u8 Table B] 1]))
   [X | Y] -> (map (function tables) [X | Y])
   X -> X)

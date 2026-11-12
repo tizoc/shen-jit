@@ -278,8 +278,9 @@ collection copies at most a word for every four allocated. With its own area the
 a pointer into it is recognised by one range test and left as it is. Every symbol has a slot at its start. A definition,
 once installed, is copied there with all it reaches: its code objects, bytecode, constants and inline body. Only what
 cannot change is copied: pairs, strings, reals, code and the definition's closure, which captures nothing. A definition
-that reaches anything else, such as a byte table, stays in the heap, and a check before copying makes sure such a
-definition leaves nothing behind. So nothing in the space points into the heap, and the constant slots of its code are
+that reaches anything else, such as a byte buffer, stays in the heap, and a check before copying makes sure such a
+definition leaves nothing behind. A foreign function goes there too, with its description: a vector, but one only the
+FFI library makes and only the runtime reads. Grammar loops keep their byte tables as strings for the same reason. So nothing in the space points into the heap, and the constant slots of its code are
 neither scanned nor freed. What it holds stays, a redefined function's old version included. A symbol that it refers to
 is published: its name moves there too, and it is never dropped. A collection marks the other symbols it reaches, which
 are the only things in the space it writes to, and frees the slots of those nothing needs. Each VM has its own space.

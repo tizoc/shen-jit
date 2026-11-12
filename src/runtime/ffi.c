@@ -496,6 +496,7 @@ static V define_foreign(VM *vm)
     V proc = make_foreign(vm, desc, arity);
     if (proc == V_CLEARED)
         return sj_raise(vm, "out of memory");
+    proc = program_promote_foreign(vm, proc);
     name = vm->args[0]; /* it may have moved */
     size_t cell = symbol_cell(name);
     if (vm->program->redefine)

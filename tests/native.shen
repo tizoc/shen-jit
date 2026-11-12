@@ -1047,7 +1047,7 @@
   M I N Acc -> (native-test.maybe-read M (+ I 1) N (+ Acc (shen-jit.u8 M I))))
 (native-test.check "not memory, and not read" 0 (freeze (native-test.maybe-read a 0 0 0)))
 (native-test.check "not memory, and read" error (freeze (hd (native-test.result (freeze (native-test.maybe-read a 0 1 0))))))
-(native-test.check "a string, and read" error (freeze (hd (native-test.result (freeze (native-test.maybe-read "abc" 0 1 0))))))
+(native-test.check "a string, which is read only memory, and read" 97 (freeze (native-test.maybe-read "abc" 0 1 0)))
 (native-test.check "past the end, in a loop" [error "bytes: 2 is not a valid index"]
   (freeze (native-test.result (freeze (native-test.maybe-read (shen-jit.bytes 2) 0 3 0)))))
 
