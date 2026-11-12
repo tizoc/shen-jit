@@ -131,7 +131,7 @@ static bool sealed_slot(Loader *l, V sym, size_t *slot)
         l->sealed_cap = cap;
     }
     if (l->sealed_slot[cell] == SIZE_MAX &&
-        !ra_push(&l->vm->consts, sym, &l->sealed_slot[cell]))
+        !ra_push(&l->vm->program->consts, sym, &l->sealed_slot[cell]))
         return fail(l, "out of memory");
     *slot = l->sealed_slot[cell];
     return true;
@@ -318,13 +318,13 @@ static V build_code(Loader *l, V form)
     /* Nothing here allocates, so the list stays where it is. */
     V consts = nth(form, 4);
     for (size_t i = 0; i < nconst; i++, consts = ptr(consts)[1])
-        *ra_at(&vm->consts, cbase + i) = ptr(consts)[0];
+        *ra_at(&vm->program->consts, cbase + i) = ptr(consts)[0];
     l->stats->constants += nconst;
     for (size_t i = 0; i < ncode; i++) {
         V nested = build_code(l, nth(nth(form, 6), i));
         if (nested == V_CLEARED)
             goto done;
-        *ra_at(&vm->consts, cbase + nconst + i) = nested;
+        *ra_at(&vm->program->consts, cbase + nconst + i) = nested;
     }
 
     l->len = 0;
@@ -355,8 +355,8 @@ static V build_code(Loader *l, V form)
                        n == 8 ? nth(form, 7) : V_NIL);
     if (result != V_CLEARED)
         vm_track_code(vm, result); /* its slots go with it from now on */
-    if (frame > vm->max_frame)
-        vm->max_frame = frame;
+    if (frame > vm->program->max_frame)
+        vm->program->max_frame = frame;
     l->stats->codes++;
 done:
     vm_unroot(vm, 1);
@@ -394,7 +394,7 @@ static void bind_sealed(Loader *l, bool forward)
             continue;
         V target = *cell_function(l->vm, cell);
         if (is_proc(target))
-            *ra_at(&l->vm->consts, l->sealed_slot[cell]) = target;
+            *ra_at(&l->vm->program->consts, l->sealed_slot[cell]) = target;
         else if (!forward)
             fail(l, "sealed call to a function that is not defined");
     }
@@ -430,8 +430,8 @@ bool load_stage0_sealed(VM *vm, const char *text, size_t len, size_t seal_until,
         if (closure == V_CLEARED)
             break;
         closure = program_promote(vm, closure);
-        if (vm->redefine)
-            vm->redefine(vm, symbol_cell(nth(form, 1)));
+        if (vm->program->redefine)
+            vm->program->redefine(vm, symbol_cell(nth(form, 1)));
         *cell_function(vm, symbol_cell(nth(form, 1))) = closure;
         if (at < seal_until)
             symbol_seal(nth(form, 1));
@@ -473,8 +473,8 @@ V sj_install(VM *vm, V form)
         bind_sealed(&l, true);
     if (!l.error && defun) {
         result = program_promote(vm, result);
-        if (vm->redefine)
-            vm->redefine(vm, symbol_cell(nth(form, 1)));
+        if (vm->program->redefine)
+            vm->program->redefine(vm, symbol_cell(nth(form, 1)));
         *cell_function(vm, symbol_cell(nth(form, 1))) = result;
         if (vm->seal_user)
             symbol_seal(nth(form, 1));

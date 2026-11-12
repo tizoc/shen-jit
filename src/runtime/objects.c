@@ -89,7 +89,7 @@ V make_closure(VM *vm, V code, size_t ncaps, const V *caps)
     if (!p)
         return FAILED;
     p[0] = HEADER(T_CLOSURE, ncaps);
-    p[PROC_ENTRY] = (uint64_t)(uintptr_t)vm->compile_stub;
+    p[PROC_ENTRY] = (uint64_t)(uintptr_t)vm->program->compile_stub;
     p[CLO_CODE] = code;
     for (size_t i = 0; i < ncaps; i++)
         p[CLO_CAPS + i] = caps[i];
@@ -104,7 +104,7 @@ V make_foreign(VM *vm, V desc, size_t arity)
     if (!p)
         return FAILED;
     p[0] = HEADER(T_FOREIGN, 0);
-    p[PROC_ENTRY] = (uint64_t)(uintptr_t)vm->foreign_stub;
+    p[PROC_ENTRY] = (uint64_t)(uintptr_t)vm->program->foreign_stub;
     p[FOREIGN_DESC] = desc;
     p[FOREIGN_ADDRESS] = 0; /* found on the first call */
     p[FOREIGN_ARITY] = arity;
@@ -277,7 +277,7 @@ static V table_find(SymbolTable *t, uint64_t hash, const char *bytes, size_t len
 /* The symbol of that name, published or not, or 0. */
 static V find(VM *vm, uint64_t hash, const char *bytes, size_t len)
 {
-    V s = table_find(&vm->published, hash, bytes, len);
+    V s = table_find(&vm->program->published, hash, bytes, len);
     return s ? s : table_find(&vm->own, hash, bytes, len);
 }
 
@@ -285,7 +285,7 @@ static V find(VM *vm, uint64_t hash, const char *bytes, size_t len)
    tables, for error messages. */
 V cell_symbol(VM *vm, size_t cell)
 {
-    SymbolTable *tables[2] = {&vm->published, &vm->own};
+    SymbolTable *tables[2] = {&vm->program->published, &vm->own};
     for (int k = 0; k < 2; k++)
         for (size_t i = 0; i < tables[k]->cap; i++) {
             V s = tables[k]->slots[i];
@@ -307,10 +307,10 @@ static V intern_name(VM *vm, V name)
     if (!p)
         return FAILED;
     size_t cell, entry, entry2;
-    if (vm->nfree_cells)
-        cell = vm->free_cells[--vm->nfree_cells]; /* both entries are cleared */
-    else if (vm->cells.count / 2 > CELL_MASK || !ra_push(&vm->cells, V_CLEARED, &entry) ||
-             !ra_push(&vm->cells, V_CLEARED, &entry2)) {
+    if (vm->program->nfree_cells)
+        cell = vm->program->free_cells[--vm->program->nfree_cells]; /* both entries are cleared */
+    else if (vm->program->cells.count / 2 > CELL_MASK || !ra_push(&vm->program->cells, V_CLEARED, &entry) ||
+             !ra_push(&vm->program->cells, V_CLEARED, &entry2)) {
         program_free_symbol(vm, p);
         return FAILED;
     } else {
@@ -391,15 +391,15 @@ V *global_slot_new(VM *vm, V sym)
         return &vm->globals[n];
     if (!vm->builder)
         return local_global_new(vm, sym);
-    if (vm->nfree_globals)
-        n = vm->free_globals[--vm->nfree_globals];
-    else if (vm->nglobals > CELL_MASK || !vm_globals_commit(vm, vm->nglobals + 1))
+    if (vm->program->nfree_globals)
+        n = vm->program->free_globals[--vm->program->nfree_globals];
+    else if (vm->program->nglobals > CELL_MASK || !vm_globals_commit(vm, vm->program->nglobals + 1))
         return NULL;
     else
-        n = vm->nglobals++;
+        n = vm->program->nglobals++;
     ptr(sym)[SYM_CELL] |= (uint64_t)n << CELL_BITS;
-    if (symbol_published(sym) && n >= vm->published_global_top)
-        vm->published_global_top = n + 1;
+    if (symbol_published(sym) && n >= vm->program->published_global_top)
+        vm->program->published_global_top = n + 1;
     return &vm->globals[n];
 }
 

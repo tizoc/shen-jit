@@ -390,9 +390,12 @@ An image is a header followed by sections and a trailer, all little-endian:
 - **Program space:** its symbol slots, then its objects, as they lie there.
 - **Heap:** the live heap after a final collection.
 
-  Every pointer in these is stored relative to the start of the program space,
-  with bit 62 set, or of the heap, and every raw native field is stored as 0.
-- **Roots:** the global-cell and constant-slot arrays, with relative pointers.
+  Every pointer in these is stored relative to the start of the program space's
+  symbol slots, with bit 62 set, of its objects, with bit 61 set, or of the heap,
+  and every raw native field is stored as 0. The objects start where the address
+  space a process reserves puts them, which a limit on it can change.
+- **Roots:** the function cells with their arities, the constant slots and the global slots, with relative
+  pointers.
 - **Trailer:** the image's length in bytes and the magic `SJHI-END`. A loader
   reads it from the end of the file, so an image can be appended to another
   file: the executable carries its image this way.

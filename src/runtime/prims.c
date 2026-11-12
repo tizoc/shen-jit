@@ -1380,7 +1380,7 @@ bool sj_start_isolate(VM *vm, V gensym_base)
         vm_root(vm, &value[i]);
     }
     vm->builder = false;
-    for (size_t n = 1; n < vm->nglobals; n++)
+    for (size_t n = 1; n < vm->program->nglobals; n++)
         vm->globals[n] = V_CLEARED;
     for (size_t i = 0; i < vm->local_cap; i++)
         vm->local_keys[i] = 0;

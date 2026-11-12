@@ -36,7 +36,7 @@ static bool commit(uint64_t *at, size_t words)
 #endif
 }
 
-bool program_init(Program *p)
+bool program_init(Space *p)
 {
     memset(p, 0, sizeof *p);
     for (size_t bytes = PROGRAM_BYTES; bytes >= LEAST_BYTES; bytes /= 2)
@@ -51,7 +51,7 @@ bool program_init(Program *p)
     return false;
 }
 
-void program_release(Program *p)
+void program_release(Space *p)
 {
     if (!p->base)
         return;
@@ -83,7 +83,7 @@ static bool commit_to(uint64_t **committed, uint64_t *want, uint64_t *limit)
 
 uint64_t *program_alloc(VM *vm, size_t words)
 {
-    Program *p = &vm->program;
+    Space *p = &vm->program->space;
     if (words > (size_t)(p->end - p->objects_next) ||
         !commit_to(&p->objects_committed, p->objects_next + words, p->end))
         return NULL;
@@ -95,7 +95,7 @@ uint64_t *program_alloc(VM *vm, size_t words)
 /* A free slot holds 0, then the next free slot's index plus one. */
 uint64_t *program_symbol_slot(VM *vm)
 {
-    Program *p = &vm->program;
+    Space *p = &vm->program->space;
     if (p->free_symbol) {
         uint64_t *slot = p->base + (p->free_symbol - 1) * SYM_WORDS;
         p->free_symbol = (size_t)slot[1];
@@ -111,7 +111,7 @@ uint64_t *program_symbol_slot(VM *vm)
 
 void program_free_symbol(VM *vm, uint64_t *slot)
 {
-    Program *p = &vm->program;
+    Space *p = &vm->program->space;
     slot[0] = 0;
     slot[1] = p->free_symbol;
     slot[2] = slot[3] = 0;
@@ -121,7 +121,7 @@ void program_free_symbol(VM *vm, uint64_t *slot)
 /* For an image: room for what it holds, used. */
 bool program_reserve(VM *vm, size_t symbol_words, size_t object_words)
 {
-    Program *p = &vm->program;
+    Space *p = &vm->program->space;
     if (!commit_to(&p->symbols_committed, p->base + symbol_words, p->objects) ||
         !commit_to(&p->objects_committed, p->objects + object_words, p->end))
         return false;
@@ -146,13 +146,13 @@ bool program_publish(VM *vm, V sym)
         memcpy(q, ptr(name), words * sizeof(uint64_t));
         s[SYM_NAME] = tagged(q, TAG_OBJECT);
     }
-    if (!symbol_table_put(&vm->published, sym))
+    if (!symbol_table_put(&vm->program->published, sym))
         return false;
     s[SYM_CELL] = (s[SYM_CELL] & ~(UINT64_C(1) << MARK_BIT)) | UINT64_C(1) << PUBLISHED_BIT;
-    if (symbol_cell(sym) >= vm->published_top)
-        vm->published_top = symbol_cell(sym) + 1;
-    if (symbol_global(sym) >= vm->published_global_top)
-        vm->published_global_top = symbol_global(sym) + 1;
+    if (symbol_cell(sym) >= vm->program->published_top)
+        vm->program->published_top = symbol_cell(sym) + 1;
+    if (symbol_global(sym) >= vm->program->published_global_top)
+        vm->program->published_global_top = symbol_global(sym) + 1;
     return true;
 }
 
@@ -306,7 +306,7 @@ static V promote_code(Promote *pr, V v)
        they get the copies of their values, and once all is copied they belong to the program. */
     size_t base = (size_t)q[CODE_CBASE], n = (size_t)(q[CODE_NCONST] + q[CODE_NCODE]);
     for (size_t i = 0; i < n && !pr->failed; i++) {
-        V *slot = ra_at(&vm->consts, base + i);
+        V *slot = ra_at(&vm->program->consts, base + i);
         V copy = promote(pr, *slot);
         if (pr->failed || copy == *slot)
             continue;
@@ -410,7 +410,7 @@ static bool promotable(Promote *seen, V v)
                 return false;
             size_t n = (size_t)(p[CODE_NCONST] + p[CODE_NCODE]);
             for (size_t i = 0; i < n; i++)
-                if (!promotable(seen, *ra_at(&vm->consts, (size_t)p[CODE_CBASE] + i)))
+                if (!promotable(seen, *ra_at(&vm->program->consts, (size_t)p[CODE_CBASE] + i)))
                     return false;
             return true;
         }
@@ -423,7 +423,7 @@ static bool promotable(Promote *seen, V v)
    when it cannot go there. */
 V program_promote(VM *vm, V closure)
 {
-    if (!vm->program.base)
+    if (!vm->program->space.base)
         return closure;
     Promote check = {.vm = vm};
     bool ok = promotable(&check, closure);
@@ -436,10 +436,10 @@ V program_promote(VM *vm, V closure)
     /* Slots the owned table cannot mark stay roots, which costs a scan and nothing else. */
     if (!pr.failed)
         for (size_t i = 0; i < pr.nranges; i += 2)
-            if (pr.ranges[i] + pr.ranges[i + 1] <= vm->owned_cap)
-                memset(vm->owned + pr.ranges[i], PROGRAM, pr.ranges[i + 1]);
+            if (pr.ranges[i] + pr.ranges[i + 1] <= vm->program->owned_cap)
+                memset(vm->program->owned + pr.ranges[i], PROGRAM, pr.ranges[i + 1]);
     for (size_t i = pr.nundo; pr.failed && i-- > 0;)
-        *ra_at(&vm->consts, pr.undo_slot[i]) = pr.undo_value[i];
+        *ra_at(&vm->program->consts, pr.undo_slot[i]) = pr.undo_value[i];
     for (size_t i = 0; pr.failed && i < pr.ncodes; i++)
         pr.codes[i][CODE_NCONST] = pr.codes[i][CODE_NCODE] = 0;
     free(pr.codes);
