@@ -16,6 +16,9 @@ All notable changes to this project are documented in this file. The format is b
   are unchanged. A primitive's function cell now holds a definition, so it is a procedure as any function is.
 - Calling a definition's procedure, as `shen-jit.function` gives it, with all its arguments at once now works, where
   it applied them one at a time and failed.
+- The byte primitives read strings as they read byte buffers, and refuse to store into one. `shen-jit.bytes?` is
+  still false for a string, `buffer.wrap` still refuses one as storage, and the FFI's `bytes` arguments take byte
+  buffers alone.
 
 ## [0.7] - 2026-11-10
 

@@ -1587,10 +1587,11 @@ static V bytes_primitive(VM *vm, unsigned prim)
             return sj_raise_value(vm, "bytes: ~S is not a byte buffer", a);
         if (!bytes_range(length, b, c))
             return sj_raise_value(vm, "shen-jit.bytes->string: ~S is not a valid range", b);
-        /* substring reads the buffer again after allocating, which may move it. A pointer's
-           memory stays where it is. */
-        return is_type(a, T_BYTES) ? substring(vm, (size_t)fixval(b), (size_t)fixval(c))
-                                   : made(vm, make_string(vm, base + fixval(b), (size_t)fixval(c)));
+        /* substring reads the buffer or string again after allocating, which may move it. A
+           pointer's memory stays where it is. */
+        return is_type(a, T_BYTES) || is_type(a, T_STRING)
+                   ? substring(vm, (size_t)fixval(b), (size_t)fixval(c))
+                   : made(vm, make_string(vm, base + fixval(b), (size_t)fixval(c)));
     default: /* P_COPY_BYTES: to, its start, from, its start, how many */
         if (!memory_of(a, &base, &length))
             return sj_raise_value(vm, "bytes: ~S is not a byte buffer", a);

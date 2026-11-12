@@ -536,6 +536,28 @@ context's collections scan and sweep them. About 300 references changed, mechani
   functions, whose descriptor is a vector, which promotion refuses as mutable. A JSON parse then compiles grammar
   loops, and four stay, each for its byte table. Both need a way to be shared before isolates can call them.
 
+### Foreign functions and byte tables in the program space (2026-11-12, Apple M3 Max, against the split above)
+
+So that isolates can call them, the two kinds of definition that stayed in the heap go into the program space.
+
+- **Foreign functions:** `shen-jit.foreign` copies the procedure and its description there. The description is a
+  vector, which promotion refuses in general, but the FFI library makes it fresh, fills it once and keeps nothing
+  (`ffi.define`), and only the runtime reads it. The address found at the first call is a raw field.
+- **Byte tables:** the byte primitives read strings, and refuse to store into one, and the grammar library makes each
+  table a string. A string is laid out as a byte buffer, so the inline read tests the type through a mask that lets
+  both through, with no more instructions; stores keep the exact test. Considered: an immutable vector type, which
+  would duplicate shared storage, step 5's way to make any value immutable; and read-only byte buffers, which would add
+  a test to every store.
+- **Result:** with the I/O, socket, JSON and Datalog libraries loaded and a JSON parse run, none of 2,611 definitions
+  stays in the heap.
+- **A bug on the way:** the read compared the masked header with the unmasked constant, so every inline read went to
+  C. Strings and buffers still read right, slowly; `tests/native.shen` caught it, where a slow path assumed a failure.
+- **Parsing:** 30 parses of 270 KB of JSON, five runs alternating, 3.93 to 3.96 s with tables as strings against 3.95
+  to 4.14 s with byte buffers, a first run of 5.5 s left out.
+- **Elsewhere,** alternating against the split: workloads never used for tuning 0.97 to 1.02 over 11 rounds, where a
+  first run of 7, with the machine at a load of 3, read 1.04 to 1.06 on three rows; the kernel suite alone 0.99;
+  benchmark suite 1.00.
+
 ### Copying (2026-11-02, M3 Max, against the build before)
 
 - **No `memcpy` per object,** about 10 lines. `memmove` was 61% of a run that spent 63.5% collecting. Kernel suite

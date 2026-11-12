@@ -315,6 +315,7 @@ void program_free_symbol(VM *vm, uint64_t *slot);
 bool program_reserve(VM *vm, size_t symbol_words, size_t object_words);
 bool program_publish(VM *vm, V sym);
 V program_promote(VM *vm, V closure);
+V program_promote_foreign(VM *vm, V proc);
 
 /* C locals that hold values across an allocation must be registered. */
 void vm_root(VM *vm, V *slot);
@@ -419,14 +420,15 @@ static inline bool symbol_named(V v, const char *name)
     return string_length(s) == n && memcmp(string_bytes(s), name, n) == 0;
 }
 
-/* What the byte primitives read and write: a byte buffer, or the memory a pointer was given
-   a length for. A pointer that has none, or is dead, has length 0, so that the ordinary
-   bounds check refuses it. A buffer's base lasts until the next allocation. */
+/* What the byte primitives read and write: a byte buffer, a string, which they only read, or
+   the memory a pointer was given a length for. A pointer that has none, or is dead, has length
+   0, so that the ordinary bounds check refuses it. A buffer's or string's base lasts until the
+   next allocation. */
 static inline bool memory_of(V v, char **base, size_t *length)
 {
     if (!is_object(v))
         return false;
-    if (obj_type(v) == T_BYTES) {
+    if (obj_type(v) == T_BYTES || obj_type(v) == T_STRING) {
         *base = string_bytes(v);
         *length = string_length(v);
         return true;
@@ -444,10 +446,12 @@ static inline bool memory_of(V v, char **base, size_t *length)
     return false;
 }
 
-/* Whether stores to v are refused: a shared view, or a pointer marked so, by the size in its header. */
+/* Whether stores to v are refused: a string, which never changes, a shared view, or a pointer
+   marked so, by the size in its header. */
 static inline bool is_read_only(V v)
 {
-    return obj_type(v) == T_SHARED_BYTES || (obj_type(v) == T_POINTER && hdr_size(ptr(v)[0]));
+    return obj_type(v) == T_STRING || obj_type(v) == T_SHARED_BYTES ||
+           (obj_type(v) == T_POINTER && hdr_size(ptr(v)[0]));
 }
 
 static inline double real_value(V r)

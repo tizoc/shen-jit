@@ -419,6 +419,39 @@ static bool promotable(Promote *seen, V v)
     }
 }
 
+/* A foreign function, copied into the program space when it is defined, so isolates share it.
+   Its description is a vector, which promotion refuses as anything may store into one; but only
+   the FFI library makes it, once, and nothing reaches it again but the runtime, which only reads
+   it. The address found at the first call is a raw field: two isolates finding it at once store
+   the same word. */
+V program_promote_foreign(VM *vm, V proc)
+{
+    V desc = ptr(proc)[FOREIGN_DESC];
+    size_t n = (size_t)hdr_size(ptr(desc)[0]);
+    Promote check = {.vm = vm};
+    bool ok = true;
+    for (size_t i = 0; ok && i < n; i++)
+        ok = promotable(&check, ptr(desc)[1 + i]);
+    free(check.keys);
+    free(check.values);
+    if (!ok)
+        return proc;
+    Promote pr = {.vm = vm};
+    uint64_t *d = copy_object(&pr, desc);
+    for (size_t i = 0; d && i < n; i++)
+        d[1 + i] = promote(&pr, d[1 + i]);
+    uint64_t *f = d && !pr.failed ? copy_object(&pr, proc) : NULL;
+    if (f)
+        f[FOREIGN_DESC] = tagged(d, TAG_OBJECT);
+    free(pr.keys);
+    free(pr.values);
+    free(pr.ranges);
+    free(pr.undo_slot);
+    free(pr.undo_value);
+    free(pr.codes);
+    return f && !pr.failed ? tagged(f, TAG_PROC) : proc;
+}
+
 /* The closure of a definition being installed, in the program space; or the closure itself
    when it cannot go there. */
 V program_promote(VM *vm, V closure)

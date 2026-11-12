@@ -229,9 +229,16 @@ inline for both; the others call C for both. `f64` allocates where it reads, and
 is in memory, so it takes no floating point. `f64!` takes a real inline, and leaves an integer to C. A read-only
 pointer differs in its header, which a store tests whole, so no other access pays for it.
 
+A string is memory too, which they only read: it is laid out as a byte buffer, so a read takes
+either inline, the type tested through a mask with no more instructions, and a store into a
+string raises that it is read only. A string never changes, so a definition holding one as a
+constant, such as a grammar loop's byte table, can go into the program space. `bytes?` stays
+false for a string, and the FFI's `bytes` arguments take byte buffers alone, so C is never given
+a string to write into.
+
 Code that loops, calls nothing and has no handlers, and reads or stores through a parameter it never changes, works out that memory's base and lengths once, on the way in, for any code,
 written by hand or not, however many loops it has, for eight parameters at most where integer registers are many, as on arm64, and four
-where they are few, as on x86-64. They hold until C runs, as only C can collect or kill a pointer, and they are worked out again each time it has. What is not memory gets length 0, so that its first access raises as it would have, and a read-only pointer gets 0 for stores. Memory reached at one width, and only at word indices, keeps limits in place of lengths, the first index without room for that width, so that an access is one comparison, and what is in registers is used where it is.
+where they are few, as on x86-64. They hold until C runs, as only C can collect or kill a pointer, and they are worked out again each time it has. What is not memory gets length 0, so that its first access raises as it would have, and a read-only pointer or a string gets 0 for stores. Memory reached at one width, and only at word indices, keeps limits in place of lengths, the first index without room for that width, so that an access is one comparison, and what is in registers is used where it is.
 
 | Form | Result |
 | --- | --- |

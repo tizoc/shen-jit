@@ -1136,6 +1136,7 @@ static void emit_memory_caches(Emit *e)
         sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R1), -TAG_OBJECT);
         sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));
         struct sljit_jump *bytes = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(T_BYTES << 3 | TAG_HEADER));
+        struct sljit_jump *string = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(T_STRING << 3 | TAG_HEADER));
         struct sljit_jump *pointer = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(T_POINTER << 3 | TAG_HEADER));
         struct sljit_jump *shared = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(T_SHARED_BYTES << 3 | TAG_HEADER));
         sljit_emit_op1(c, SLJIT_MOV, R1, IMM(0));
@@ -1154,6 +1155,11 @@ static void emit_memory_caches(Emit *e)
         sljit_set_label(bytes, sljit_emit_label(c));
         sljit_emit_op2(c, SLJIT_LSHR, R3, R2, IMM(8));
         sljit_emit_op1(c, SLJIT_MOV, R4, R3);
+        struct sljit_jump *based = sljit_emit_jump(c, SLJIT_JUMP);
+        sljit_set_label(string, sljit_emit_label(c)); /* read only: no store length */
+        sljit_emit_op2(c, SLJIT_LSHR, R3, R2, IMM(8));
+        sljit_emit_op1(c, SLJIT_MOV, R4, IMM(0));
+        sljit_set_label(based, sljit_emit_label(c));
         sljit_emit_op2(c, SLJIT_ADD, R1, R1, IMM(WORD - TAG_OBJECT));
         struct sljit_label *store = sljit_emit_label(c);
         sljit_set_label(done, store);
@@ -2005,8 +2011,13 @@ static Slow *emit_memory_base(Emit *e, uint32_t memory, SlowKind kind, bool stor
     sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, memory));
     Slow *slow = slow_path(e, kind, tag_cmp(c, SLJIT_NOT_EQUAL, R2, R0, TAG_OBJECT));
     sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), -TAG_OBJECT);
-    sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));
-    Slow *pointer = slow_path(e, SLOW_POINTER, sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM(T_BYTES << 3 | TAG_HEADER)));
+    /* A read takes a string too, laid out as a byte buffer: the mask leaves the type bits in
+       which the two differ, and of the four types it lets through, only those two are ever
+       objects. A store takes a byte buffer alone; a string goes to C, which refuses it. */
+    uint64_t mask = store ? 0xFF : 0xE7;
+    sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(mask));
+    Slow *pointer = slow_path(e, SLOW_POINTER,
+                              sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM((T_BYTES << 3 | TAG_HEADER) & mask)));
     pointer->prim = slow;
     pointer->store = store;
     sljit_emit_op2(c, SLJIT_LSHR, R2, R2, IMM(8)); /* the length */
@@ -3230,9 +3241,12 @@ static void emit_slow_paths(Emit *e)
                 sljit_set_label(s->from[j], here);
         switch (s->kind) {
         case SLOW_POINTER: {
-            /* Not a byte buffer, with its header in R2 and that's low byte in R3. A pointer goes
-               back to the byte primitive with its length and base, and the rest to raise. A store
-               tests the whole header, which a read-only pointer's differs in. */
+            /* Not a byte buffer, nor for a read a string, with its header in R2, and its low byte
+               in R3 for a store; a read masked it, so it is taken again. A pointer goes back to
+               the byte primitive with its length and base, and the rest to raise. A store tests
+               the whole header, which a read-only pointer's differs in. */
+            if (!s->store)
+                sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));
             struct sljit_jump *other = sljit_emit_cmp(c, SLJIT_NOT_EQUAL,
                 s->store ? SLJIT_R2 : SLJIT_R3, 0, IMM(T_POINTER << 3 | TAG_HEADER));
             if (s->store)
