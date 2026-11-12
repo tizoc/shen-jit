@@ -295,14 +295,53 @@ V cell_symbol(VM *vm, size_t cell)
     return V_NIL;
 }
 
+V published_find(VM *vm, const char *bytes, size_t len)
+{
+    return table_find(&vm->program->published, hash_bytes(bytes, len), bytes, len);
+}
+
+/* An isolate's own symbol is in its heap, with cell 0, which no definition ever takes, and no
+   number: its global's value goes in the isolate's dictionary. A collection drops it once
+   nothing reaches it (heap.c). */
+static V intern_in_heap(VM *vm, V name, uint64_t hash)
+{
+    vm_root(vm, &name);
+    uint64_t *p = vm_alloc(vm, SYM_WORDS);
+    vm_unroot(vm, 1);
+    if (!p)
+        return FAILED;
+    p[0] = HEADER(T_SYMBOL, 0);
+    p[SYM_NAME] = name;
+    p[SYM_HASH] = hash;
+    p[SYM_CELL] = name_kind((const unsigned char *)string_bytes(name), string_length(name)) << KIND_SHIFT;
+    V sym = tagged(p, TAG_SYMBOL);
+    if (!symbol_table_put(&vm->own, sym))
+        return FAILED;
+    vm->nsymbols++;
+    return sym;
+}
+
 /* A new symbol takes a slot of the program space and keeps its name where it is; publishing
-   it moves the name there too. Nothing here allocates in the heap. */
+   it moves the name there too. Nothing here allocates in the heap. In an isolate, which does
+   not own the program, it goes in the heap instead. */
 static V intern_name(VM *vm, V name)
 {
+    if (vm->program->owner != vm && vm->program->isolates) {
+        vm_root(vm, &name);
+        isolate_fixup(vm); /* a name published since this isolate last looked has one symbol */
+        vm_unroot(vm, 1);
+    }
     uint64_t hash = hash_bytes(string_bytes(name), string_length(name));
     V found = find(vm, hash, string_bytes(name), string_length(name));
     if (found)
         return found;
+    if (vm->program->owner != vm)
+        return intern_in_heap(vm, name, hash);
+    /* Cell 0 is none's: an isolate's own symbols have it. */
+    size_t reserved;
+    if (vm->program->cells.count == 0 &&
+        (!ra_push(&vm->program->cells, V_CLEARED, &reserved) || !ra_push(&vm->program->cells, V_CLEARED, &reserved)))
+        return FAILED;
     uint64_t *p = program_symbol_slot(vm);
     if (!p)
         return FAILED;
@@ -395,8 +434,11 @@ V *global_slot_new(VM *vm, V sym)
         n = vm->program->free_globals[--vm->program->nfree_globals];
     else if (vm->program->nglobals > CELL_MASK || !vm_globals_commit(vm, vm->program->nglobals + 1))
         return NULL;
-    else
-        n = vm->program->nglobals++;
+    else {
+        n = vm->program->nglobals;
+        isolates_commit_globals(vm->program, n + 1); /* before any code can use it */
+        vm->program->nglobals = n + 1;
+    }
     ptr(sym)[SYM_CELL] |= (uint64_t)n << CELL_BITS;
     if (symbol_published(sym) && n >= vm->program->published_global_top)
         vm->program->published_global_top = n + 1;

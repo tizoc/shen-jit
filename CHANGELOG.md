@@ -5,6 +5,17 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- Isolates: `(shen-jit.spawn F X)` runs a function the program defined on an OS thread of its own, with its own
+  heap, globals and property list, so isolates run on several cores at once. They talk through channels
+  (`shen-jit.channel`, `shen-jit.sender`, `shen-jit.send`, `shen-jit.receive`, `shen-jit.receive-any`,
+  `shen-jit.close` and `shen-jit.end?`), which copy what is sent; `shen-jit.monitor` and `shen-jit.kill` watch and stop
+  them. Only the first isolate, the builder, defines, and the others stop for each definition. `thread` raises an
+  error once an isolate has started.
+- Grammars work in isolates: before each spawn the builder compiles their loops and prepares the streaming reads that
+  code names, through `shen-jit.on-publish`, and `shen-jit.publish` does it at other times.
+
 ### Changed
 
 - Installed definitions, with what their code reaches, and every symbol now live in a program space that

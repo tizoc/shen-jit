@@ -525,6 +525,65 @@ unbound: only the builder defines."
   (do (set shen-jit.*free-prolog-vectors* ())
       (prolog-memory 10000))))))))))))))))))))))
 
+"Isolates (docs/design.md, The builder and isolates): each runs a function of
+one argument that the builder defined, on an OS thread of its own, and they talk
+through channels. These pass an operation's number to the primitive behind them,
+shen-jit.isolate (isolate.c). A channel's receive endpoint stays with its
+receiver, unless shen-jit.give marks it to move to an isolate being spawned; send
+endpoints and isolates copy freely."
+
+"Publication: a library that compiles at a first call registers a function of no
+arguments, which the builder runs before it spawns, so that what isolates call
+is compiled; an isolate cannot compile. (shen-jit.publish) runs them at other
+times, such as after defining more while isolates run."
+
+(defun shen-jit.on-publish (F)
+  (set shen-jit.*publication-hooks* (adjoin F (shen-jit.publication-hooks))))
+
+(defun shen-jit.publication-hooks ()
+  (trap-error (value shen-jit.*publication-hooks*) (lambda E ())))
+
+(defun shen-jit.publish ()
+  (if (shen-jit.builder?) (shen-jit.run-hooks (reverse (shen-jit.publication-hooks))) shen.skip))
+
+(defun shen-jit.run-hooks (Hooks)
+  (if (= Hooks ()) shen.skip (do (shen-jit.apply (hd Hooks) ()) (shen-jit.run-hooks (tl Hooks)))))
+
+(defun shen-jit.spawn (F X) (do (shen-jit.publish) (shen-jit.isolate 0 F X)))
+
+(defun shen-jit.channel (Capacity) (shen-jit.isolate 1 Capacity ()))
+
+(defun shen-jit.sender (Receiver) (shen-jit.isolate 2 Receiver ()))
+
+(defun shen-jit.send (Sender X) (shen-jit.isolate 3 Sender X))
+
+(defun shen-jit.receive (Receiver) (shen-jit.isolate 4 Receiver ()))
+
+(defun shen-jit.receive-any (Receivers) (shen-jit.isolate 5 Receivers ()))
+
+(defun shen-jit.close (Endpoint) (shen-jit.isolate 6 Endpoint ()))
+
+(defun shen-jit.give (Receiver) (shen-jit.isolate 7 Receiver ()))
+
+(defun shen-jit.monitor (Isolate) (shen-jit.isolate 8 Isolate ()))
+
+(defun shen-jit.kill (Isolate) (shen-jit.isolate 9 Isolate ()))
+
+(defun shen-jit.self () (shen-jit.isolate 10 () ()))
+
+(defun shen-jit.end? (X) (= X shen-jit.end-of-stream))
+
+"An isolate or an endpoint is an absvector whose first element is one of these,
+which the printer calls."
+
+(defun shen-jit.print-isolate (V) (cn "<isolate " (cn (str (<-address V 1)) ">")))
+
+(defun shen-jit.print-receiver (V) (cn "<receive endpoint " (cn (str (<-address V 1)) ">")))
+
+(defun shen-jit.print-sender (V) (cn "<send endpoint " (cn (str (<-address V 1)) ">")))
+
+(defun shen-jit.print-given (V) (cn "<given endpoint " (cn (str (<-address V 1)) ">")))
+
 (defun shen-jit.register-primitives ()
   (do (shen-jit.primitive shen-jit.fixnum? 1)
   (do (shen-jit.primitive shen-jit.tagged? 2)
@@ -592,7 +651,7 @@ unbound: only the builder defines."
     (do (shen-jit.primitive shen-jit.worker-cancelled? 0)
     (do (shen-jit.primitive shen-jit.worker-shared-view 0)
     (do (shen-jit.primitive shen-jit.arity 1) (do (shen-jit.primitive shen-jit.function 1)
-    (do (shen-jit.primitive shen-jit.set-arity 2) (do (shen-jit.primitive shen-jit.apply 2) shen.skip))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+    (do (shen-jit.primitive shen-jit.set-arity 2) (do (shen-jit.primitive shen-jit.apply 2) (do (shen-jit.primitive shen-jit.isolate 3) shen.skip)))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
 
 "Cleanup, as a library that holds something outside the heap needs it.
 (shen-jit.finally Body Cleanup) thaws Body, then Cleanup however Body ended,
@@ -626,6 +685,15 @@ thread at a time holding a lock (thread.c). It is defined here, once sealing has
 ended, since programs may define their own thread."
 
 (defun shen-jit.initialise ()
+  (do (shen.initialise-arity-table
+        (cons shen-jit.spawn (cons 2 (cons shen-jit.channel (cons 1 (cons shen-jit.sender (cons 1
+          (cons shen-jit.send (cons 2 (cons shen-jit.receive (cons 1 (cons shen-jit.receive-any (cons 1
+            (cons shen-jit.close (cons 1 (cons shen-jit.give (cons 1 (cons shen-jit.monitor (cons 1
+              (cons shen-jit.kill (cons 1 (cons shen-jit.self (cons 0 (cons shen-jit.end? (cons 1
+                (cons shen-jit.on-publish (cons 1 (cons shen-jit.publish (cons 0
+                (cons shen-jit.print-isolate (cons 1 (cons shen-jit.print-receiver (cons 1
+                  (cons shen-jit.print-sender (cons 1 (cons shen-jit.print-given (cons 1
+                    ())))))))))))))))))))))))))))))))))))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-2 (cons a (cons b ()))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-3 (cons a (cons b (cons c ())))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-4 (cons a (cons b (cons c (cons d ()))))))
@@ -657,7 +725,7 @@ ended, since programs may define their own thread."
           (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.exit))
               (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.code))
                   (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.save-executable))
-                      (set shen-jit.defined ()))))))))))))))))))))
+                      (set shen-jit.defined ())))))))))))))))))))))
 
 "Definitions are factorised as they are evaluated, as Shen/Scheme's compiler
 does: the kernel's shen.factor binds each selector once and shares the tests

@@ -44,12 +44,15 @@ static void fill_cleared(V *from, V *to)
    much. The area lies between the spaces, so that one range holds what a
    collection may move, and not where it copies to: the collector need not know. */
 #define RESERVED_WORDS ((size_t)1 << 33) /* 64 GiB for each region */
+/* An isolate's (isolate.c): reserving and releasing the builder's took about 200 us of each
+   spawn, and this about 30 (measured on macOS, 2026-11-12). */
+#define ISOLATE_RESERVED_WORDS ((size_t)1 << 30) /* 8 GiB */
 #define STAGGER_WORDS (((size_t)33 << 17) + (1 << 13)) /* 33 MiB and 64 KiB, so whole pages */
 #define HEAP_BYTES(words) ((3 * (words) + 2 * STAGGER_WORDS) * sizeof(uint64_t))
 
-static uint64_t *reserve_heap(size_t min_words, size_t *words)
+static uint64_t *reserve_heap(size_t min_words, size_t most_words, size_t *words)
 {
-    for (*words = min_words > RESERVED_WORDS ? min_words : RESERVED_WORDS; *words >= min_words; *words /= 2) {
+    for (*words = min_words > most_words ? min_words : most_words; *words >= min_words; *words /= 2) {
 #ifdef _WIN32
         void *p = win_reserve(HEAP_BYTES(*words));
         if (p)
@@ -148,23 +151,14 @@ static VM *vm_block(void)
     return vm;
 }
 
-VM *vm_create(size_t semispace_words, size_t stack_words)
+/* The heap and stack of a new VM, whose program is set. */
+static VM *vm_heap(VM *vm, size_t semispace_words, size_t stack_words, size_t reserved_words)
 {
-    VM *vm = vm_block();
-    if (!vm)
-        return NULL;
-    /* A VM made here owns a program of its own, as the builder does. */
-    if (!(vm->program = calloc(1, sizeof *vm->program))) {
-        vm_destroy(vm);
-        return NULL;
-    }
-    vm->program->owner = vm;
-    vm->program->nglobals = 1;
-    vm->space = reserve_heap(semispace_words, &vm->reserved_words);
+    vm->space = reserve_heap(semispace_words, reserved_words, &vm->reserved_words);
     vm->area = vm->space ? vm->space + vm->reserved_words + STAGGER_WORDS : NULL;
     vm->other = vm->space ? vm->area + vm->reserved_words + STAGGER_WORDS : NULL;
     vm->stack = vm_cleared_stack(stack_words);
-    if (!vm->space || !vm->stack || !program_init(&vm->program->space) || !vm_globals_commit(vm, 1) ||
+    if (!vm->space || !vm->stack || !vm_globals_commit(vm, vm->program->nglobals) ||
         !commit_space(vm->space, semispace_words) ||
         !commit_space(vm->area, semispace_words) || !commit_space(vm->other, semispace_words)) {
         vm_destroy(vm);
@@ -188,11 +182,41 @@ VM *vm_create(size_t semispace_words, size_t stack_words)
     return vm;
 }
 
+VM *vm_create(size_t semispace_words, size_t stack_words)
+{
+    VM *vm = vm_block();
+    if (!vm)
+        return NULL;
+    /* A VM made here owns a program of its own, as the builder does. */
+    if (!(vm->program = calloc(1, sizeof *vm->program)) || !program_init(&vm->program->space)) {
+        vm_destroy(vm);
+        return NULL;
+    }
+    vm->program->owner = vm;
+    vm->program->nglobals = 1;
+    return vm_heap(vm, semispace_words, stack_words, RESERVED_WORDS);
+}
+
+/* A context of a program another VM owns: an isolate's (isolate.c). It may not define. */
+VM *vm_create_context(Program *program, size_t semispace_words, size_t stack_words)
+{
+    VM *vm = vm_block();
+    if (!vm)
+        return NULL;
+    vm->program = program;
+    vm->builder = false;
+    vm->interruptible = true; /* what it compiles is the builder's too, whose Ctrl-C its loops must see */
+    return vm_heap(vm, semispace_words, stack_words, ISOLATE_RESERVED_WORDS);
+}
+
 static void ra_free(RootArray *ra)
 {
     for (size_t i = 0; i < ra->nchunks; i++)
         free(ra->chunks[i]);
     free(ra->chunks);
+    for (size_t i = 0; i < ra->nretired; i++)
+        free(ra->retired[i]);
+    free(ra->retired);
 }
 
 void vm_destroy(VM *vm)
@@ -247,14 +271,29 @@ V *ra_at(RootArray *ra, size_t i)
     return &ra->chunks[i >> RA_CHUNK_BITS][i & (RA_CHUNK - 1)];
 }
 
+/* A full directory is replaced by one twice its size and kept: an isolate may be reading it
+   (cell_function, or emitted code through the program), and it holds the same chunks. */
 bool ra_push(RootArray *ra, V v, size_t *index)
 {
     if (ra->count == ra->nchunks * RA_CHUNK) {
-        V **chunks = realloc(ra->chunks, (ra->nchunks + 1) * sizeof *chunks);
-        if (!chunks)
-            return false;
-        ra->chunks = chunks;
-        if (!(chunks[ra->nchunks] = malloc(RA_CHUNK * sizeof(V))))
+        if (ra->nchunks == ra->chunks_cap) {
+            size_t cap = ra->chunks_cap ? 2 * ra->chunks_cap : 8;
+            V **chunks = malloc(cap * sizeof *chunks);
+            V ***retired = ra->chunks ? realloc(ra->retired, (ra->nretired + 1) * sizeof *retired) : ra->retired;
+            if (!chunks || (ra->chunks && !retired)) {
+                free(chunks);
+                return false;
+            }
+            if (ra->nchunks)
+                memcpy(chunks, ra->chunks, ra->nchunks * sizeof *chunks);
+            if (ra->chunks) {
+                retired[ra->nretired++] = ra->chunks;
+                ra->retired = retired;
+            }
+            __atomic_store_n(&ra->chunks, chunks, __ATOMIC_RELEASE);
+            ra->chunks_cap = cap;
+        }
+        if (!(ra->chunks[ra->nchunks] = malloc(RA_CHUNK * sizeof(V))))
             return false;
         ra->nchunks++;
     }
@@ -509,9 +548,25 @@ static V reach_large(Copy *c, V v)
 static V reach_program(VM *vm, V v)
 {
     uint64_t *p = ptr(v);
-    if (in_symbols(vm, p) && !((p[SYM_CELL] >> PUBLISHED_BIT) & 1))
+    if (in_symbols(vm, p) && !((p[SYM_CELL] >> PUBLISHED_BIT) & 1) && vm->program->owner == vm)
         p[SYM_CELL] |= UINT64_C(1) << MARK_BIT;
     return v;
+}
+
+/* In an isolate's fix-up (isolate.c), one of its own symbols whose name has been published
+   since becomes the published symbol, everywhere the collection finds it. */
+static V fix_symbol(Copy *c, V v)
+{
+    uint64_t *p = ptr(v);
+    V name = p[SYM_NAME];
+    if (is_ptr(name) && ptr(name)[0] == V_FORWARD)
+        name = ptr(name)[1];
+    V published = published_find(c->vm, string_bytes(name), string_length(name));
+    if (!published)
+        return 0;
+    p[0] = V_FORWARD;
+    p[1] = published;
+    return published;
 }
 
 static V copy_value(Copy *c, V v)
@@ -527,6 +582,11 @@ static V copy_value(Copy *c, V v)
     }
     if (p[0] == V_FORWARD)
         return p[1];
+    if (c->vm->fixup && tag3(v) == TAG_SYMBOL) {
+        V published = fix_symbol(c, v);
+        if (published)
+            return published;
+    }
     /* Every object has at least two words, and most are pairs: copy those
        two directly, since a call to memcpy per object costs more than the
        copy. */
@@ -704,7 +764,8 @@ static void sweep_symbols(VM *vm, Copy *c)
     if (!slots)
         return; /* everything stays until a collection has room */
     SymbolTable t = {slots, m, 0};
-    size_t top = vm->program->published_top; /* one past the highest cell kept */
+    /* Cell 0 is none's, kept once it is made. */
+    size_t top = vm->program->published_top > 1 ? vm->program->published_top : vm->program->cells.count ? 1 : 0;
     size_t global_top = vm->program->published_global_top > 1 ? vm->program->published_global_top : 1;
     uint64_t *mark = c->next;
     for (size_t i = 0; i < old->cap; i++) {
@@ -744,6 +805,36 @@ static void sweep_symbols(VM *vm, Copy *c)
     free(old->slots);
     *old = t;
     vm->nsymbols = vm->program->published.count + t.count;
+}
+
+/* An isolate's own symbols are in its heap, with no cell or number (objects.c), and its table
+   holds them weakly: a collection keeps those it copied, and a value in the dictionary keeps
+   its symbol, as the dictionary is a root. A symbol that the fix-up replaced takes its value
+   to the published symbol's slot, if it has one. */
+static void sweep_heap_symbols(VM *vm, Copy *c)
+{
+    SymbolTable *old = &vm->own;
+    SymbolTable t = {NULL, 0, 0};
+    for (size_t i = 0; i < old->cap; i++) {
+        V s = old->slots[i];
+        if (!s || in_program(vm, ptr(s)))
+            continue;
+        if (ptr(s)[0] == V_FORWARD && !in_program(vm, ptr(ptr(s)[1])))
+            symbol_table_put(&t, ptr(s)[1]);
+    }
+    free(old->slots);
+    *old = t;
+    vm->nsymbols = vm->program->published.count + t.count;
+    (void)c;
+    if (!vm->local_count)
+        return;
+    for (size_t i = 0; i < vm->local_cap; i++) {
+        V k = vm->local_keys[i];
+        if (k && in_program(vm, ptr(k)) && symbol_global(k)) {
+            vm->globals[symbol_global(k)] = vm->local_values[i];
+            vm->local_values[i] = V_CLEARED; /* kept as an entry, never read: a number goes first */
+        }
+    }
 }
 
 /* Slots above the published top are dead by the call-window invariants.
@@ -832,6 +923,8 @@ static void collect_into(VM *vm, uint64_t *to)
     vm->nguards = guarded;
     if (owner)
         sweep_symbols(vm, &c);
+    else
+        sweep_heap_symbols(vm, &c);
     free(c.pending);
     sweep_large(vm);
     if (owner)
@@ -853,6 +946,8 @@ static void collect_into(VM *vm, uint64_t *to)
     /* The native code of code objects that nothing reached goes back to the
        JIT. */
     kept = 0;
+    if (owner)
+        program_compile_lock(vm); /* an isolate may be compiling, and adding to the list */
     for (size_t i = 0; owner && i < vm->program->nnatives; i++) {
         uint64_t *o = ptr(vm->program->natives[i]);
         if (o[0] == V_FORWARD)
@@ -862,8 +957,10 @@ static void collect_into(VM *vm, uint64_t *to)
         else if (vm->program->free_native)
             vm->program->free_native(vm, o);
     }
-    if (owner)
+    if (owner) {
         vm->program->nnatives = kept;
+        program_compile_unlock(vm);
+    }
 
     vm->space = to;
     vm->live_end = c.next;

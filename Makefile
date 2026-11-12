@@ -52,7 +52,7 @@ VERSION := $(shell cat VERSION)
 RUNTIME_SRC := src/runtime/heap.c src/runtime/objects.c src/runtime/image.c src/runtime/prims.c \
                src/runtime/reader.c src/runtime/loader.c src/runtime/jit.c src/runtime/dict.c \
                src/runtime/profile.c src/runtime/thread.c src/runtime/ffi.c src/runtime/win32.c \
-               src/runtime/worker.c src/runtime/program.c
+               src/runtime/worker.c src/runtime/program.c src/runtime/isolate.c
 RUNTIME_HDR := src/runtime/value.h src/runtime/vm.h src/runtime/ops.h src/runtime/reader.h src/runtime/jit.h src/runtime/win32.h src/runtime/file.h src/runtime/worker.h include/shen.h
 SLJIT_OBJ := $(BUILD)/sljitLir.o
 RUNTIME_OBJ := $(patsubst src/runtime/%.c,$(BUILD)/%.o,$(RUNTIME_SRC))
@@ -327,7 +327,7 @@ test-kernel: all $(FFI_TEST_LIB)
 	SHEN_JIT_GC_STRESS=$(GC_STRESS) sh tests/cli.sh $(SHEN_JIT)
 
 # The same with a collection after every 1000 words allocated (about 2 minutes).
-test-kernel-stress:
+test-kernel-stress: test-isolates-stress
 	$(MAKE) test-kernel GC_STRESS=1000
 	$(MAKE) test-stlib GC_STRESS=1000
 	$(MAKE) test-native GC_STRESS=1000
@@ -336,13 +336,20 @@ test-kernel-stress:
 
 # What a change to the runtime, the JIT, the lowerer or the port must pass (about 20 s).
 test-core: test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn \
-  test-native test-ffi test-overrides test-structs test-workers
+  test-native test-ffi test-overrides test-structs test-workers test-isolates
+
+# Isolates (src/runtime/isolate.c), and the same with a collection at every allocation.
+test-isolates: $(BUILD)/shen-jit
+	$(BUILD)/shen-jit eval -l tests/isolates.shen | $(FFI_RESULT)
+
+test-isolates-stress: $(BUILD)/shen-jit
+	SHEN_JIT_GC_STRESS=1 $(BUILD)/shen-jit eval -l tests/isolates.shen | $(FFI_RESULT)
 
 # Every library's suite, without the collections test-lib-stress adds (about 30 s).
 test-libs: test-buffer test-json test-io test-fs test-process test-parallel test-tree-sitter test-http test-datalog test-curl test-namespaces
 
 # Worker scopes: the runtime (test-workers) and lib/parallel.shen (test-parallel).
-.PHONY: test-workers test-workers-stress test-workers-san test-parallel test-parallel-stress
+.PHONY: test-workers test-workers-stress test-workers-san test-parallel test-parallel-stress test-isolates test-isolates-stress
 test-parallel: $(BUILD)/shen-jit
 	sh tests/parallel.sh $(SHEN_JIT)
 test-parallel-stress: $(BUILD)/shen-jit
@@ -437,6 +444,7 @@ test-buffer: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen -l tests/buffer.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/grammar.shen -l tests/grammar.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -l tests/grammar_stream.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -l tests/grammar_isolates.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -e '(tc +)' -l tests/grammar_typed.shen | $(FFI_RESULT)
 	sh tests/grammar_typed.sh $(SHEN_JIT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen \
@@ -654,6 +662,8 @@ test-san: $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stage0/.done 
 	$(CC) $(SAN_FLAGS) $(SLJIT_SRC_FLAGS) -DSJ_BUILD_ID='"$(BUILD_ID)"' -DSJ_VERSION='"$(VERSION)"' -o $(BUILD)/shen-jit-san src/runtime/main.c $(RUNTIME_SRC) vendor/sljit/sljit_src/sljitLir.c $(LDLIBS)
 	cd $(BUILD) && ./shen-jit-san --stage1 stage0 shen-jit-san.img && \
 	  $(call FFI_SUITES,ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=shen-jit-san.img ./shen-jit-san)
+	cd $(BUILD) && ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=shen-jit-san.img \
+	  ./shen-jit-san eval -l ../tests/isolates.shen | $(FFI_RESULT)
 	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=$(abspath $(BUILD)/shen-jit-san.img) \
 	  CC="$(CC)" CFLAGS="$(SAN_FLAGS)" sh tests/curl.sh $(BUILD)/shen-jit-san$(EXE)
 	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=$(abspath $(BUILD)/shen-jit-san.img) \

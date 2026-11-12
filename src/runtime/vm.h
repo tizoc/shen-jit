@@ -8,14 +8,17 @@
 #include <string.h>
 
 /* Root arrays: values outside the heap whose cells never move. They grow by
-   adding chunks; the chunk directory may move, the chunks never do. */
+   adding chunks; the chunk directory is replaced when it fills, and the old one
+   is kept, since another isolate may still read it (heap.c). */
 #define RA_CHUNK_BITS 12
 #define RA_CHUNK (1u << RA_CHUNK_BITS)
 
 typedef struct {
     V **chunks;
-    size_t nchunks;
+    size_t nchunks, chunks_cap;
     size_t count;
+    V ***retired; /* directories replaced, freed with the array */
+    size_t nretired;
 } RootArray;
 
 /* Roots C keeps beyond a call (ffi.c), where they never move: what include/shen.h calls a
@@ -95,6 +98,9 @@ typedef struct Program {
     void *compile_stub;
     void *foreign_stub;
     struct Jit *jit;
+    /* The isolates running it, their channels and the locks they share (isolate.c): NULL until
+       the first spawn. */
+    struct Isolates *isolates;
 } Program;
 
 /* What a thread keeps of its own (thread.c). The running thread's stack and
@@ -205,6 +211,12 @@ typedef struct VM {
     /* Whether this VM is the builder, which alone defines functions and numbers globals
        (docs/design.md, "The builder and isolates"). Every VM is one until an isolate starts in it. */
     bool builder;
+    /* The isolate this VM runs (isolate.c), the builder's included once isolates exist, or NULL;
+       the publication it has seen, and whether a collection replaces its own symbols whose
+       names have been published since by the published ones. */
+    struct Isolate *isolate;
+    uint64_t epoch_seen;
+    bool fixup;
     size_t nsymbols;
     /* Open file streams, held weakly: a collection closes those that nothing
        else reaches. */
@@ -247,7 +259,7 @@ typedef struct VM {
     V globals[];
 } VM;
 
-enum { INTERRUPT = 1, PREEMPT = 2 }; /* vm->interrupted */
+enum { INTERRUPT = 1, PREEMPT = 2, ATTEND = 3 }; /* vm->interrupted; ATTEND: the isolate's turn (isolate.c) */
 
 typedef struct Handler {
     /* Frame of the trap-error, as an offset in the stack, shifted left by 1;
@@ -316,6 +328,22 @@ bool program_reserve(VM *vm, size_t symbol_words, size_t object_words);
 bool program_publish(VM *vm, V sym);
 V program_promote(VM *vm, V closure);
 V program_promote_foreign(VM *vm, V proc);
+
+/* isolate.c: isolates over one program (docs/design.md, "The builder and isolates"). */
+VM *vm_create_context(Program *program, size_t semispace_words, size_t stack_words);
+V sj_isolate(VM *vm, V op, V a, V b);
+V isolate_attend(VM *vm);
+void isolate_block(VM *vm);
+void isolate_unblock(VM *vm);
+void isolates_commit_globals(Program *program, size_t n);
+bool isolates_running(Program *program);
+bool program_stop(VM *vm);
+void program_go(VM *vm);
+void program_compile_lock(VM *vm);
+void program_compile_unlock(VM *vm);
+void isolate_fixup(VM *vm);
+V published_find(VM *vm, const char *bytes, size_t len);
+V program_copy_string(VM *vm, V string);
 
 /* C locals that hold values across an allocation must be registered. */
 void vm_root(VM *vm, V *slot);

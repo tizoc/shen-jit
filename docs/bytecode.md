@@ -201,6 +201,9 @@ plus:
   startup. `fn`'s templates make their last call with it.
 - `shen-jit.apply` (arity 2): calls a name's procedure, or a procedure, with the elements
   of a list at once, through a nested call: `fn`'s templates past four arguments.
+- `shen-jit.isolate` (arity 3): an operation's number and two operands, for the port's
+  `shen-jit.spawn`, channels, monitors and `kill` (docs/design.md, "The builder and
+  isolates").
 - `shen-jit.bit-and`, `shen-jit.bit-or`, `shen-jit.bit-xor`, `shen-jit.shift-left`,
   `shen-jit.shift-right`, `shen-jit.rotate32` (2), `shen-jit.bit-not`,
   `shen-jit.bswap32`, `shen-jit.popcount`, `shen-jit.clz` and `shen-jit.ctz` (1): bit

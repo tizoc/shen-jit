@@ -290,7 +290,25 @@
   H Def -> (let Params (parameters Def)
                 _ (shen.shendef->kldef H (tl (tl Def)))
                 _ (put H loop Def)
+                _ (add-pending loops H)
              (eval (append [define H | Params] [-> [compile H (list Params)]]))))
+
+\\ What compiles at a first call, kept for publication (shen-jit.on-publish), which compiles it
+\\ before isolates start, since an isolate cannot: the loops not compiled yet, and the rules that
+\\ reads name, whose streaming variants it prepares. On the builder's property list.
+(define pending
+  Key -> (trap-error (get pending Key) (/. E [])))
+
+(define add-pending
+  Key X -> (put pending Key (adjoin X (pending Key))))
+
+(define publish-pending
+  -> (let Loops (pending loops)
+          _ (put pending loops [])
+          _ (map (/. H (compile-loop H)) Loops)
+       (map (/. R (trap-error (prepare R) (/. E skip))) (pending reads))))
+
+(shen-jit.on-publish publish-pending)
 
 \\ A byte class, B where Guard and nothing else, is tested in place by the rules read after it.
 (define class
@@ -687,7 +705,12 @@
   [X | Xs] -> [cons X (list Xs)])
 
 (define compile
-  H Args -> (do (eval (tables (get H loop))) (apply (fn H) Args)))
+  H Args -> (if (shen-jit.builder?)
+                (do (compile-loop H) (put pending loops (remove H (pending loops))) (apply (fn H) Args))
+                (error "grammar: ~A was defined after isolates started: (shen-jit.publish) compiles it" H)))
+
+(define compile-loop
+  H -> (eval (tables (get H loop))))
 
 (define apply
   F [] -> F
@@ -731,7 +754,8 @@
 
 (define read-form
   Rule Reader Limit Fail ->
-    [read-from (rule-name Rule) (list (rule-args Rule)) Reader Limit Fail])
+    (do (add-pending reads (rule-name Rule))
+        [read-from (rule-name Rule) (list (rule-args Rule)) Reader Limit Fail]))
 
 \\ Typed code calls a typed rule's own functions, which have types.
 (define client
@@ -863,6 +887,17 @@
 \\ that the compiling happens before a parse, and outside any deadline. A variant compiled for
 \\ the current definition is left as it is.
 (define prepare
+  F -> (if (shen-jit.builder?) (prepare-variant F) (prepared F (intern (cn (str F) "/stream")))))
+
+(define prepared
+  F G -> (if (= (shen-jit.arity G) -1) (unprepared F) G))
+
+(define unprepared
+  F -> (error "grammar: ~A was not prepared before isolates started: read it in a read form, or call (grammar.prepare ~A), in the builder" F F))
+
+\\ In an isolate, a variant is the one the builder prepared, found by name: its property list is
+\\ not the builder's.
+(define prepare-variant
   F -> (let G (stream F)
          (if (shen-jit.same? (trap-error (get G compiled) (/. E [])) (source F))
              G
@@ -876,7 +911,9 @@
   X [Y | Ys] -> [Y | (before X Ys)])
 
 (define compile-stream
-  G F Args -> (do (install G F) (apply (fn G) Args)))
+  G F Args -> (if (shen-jit.builder?)
+                  (do (install G F) (apply (fn G) Args))
+                  (unprepared F)))
 
 \\ Defines G from F's code rewritten, and gives the rules whose streaming variants it calls.
 (define install
