@@ -33,6 +33,25 @@ typedef struct Guard {
     V pointer, value;
 } Guard;
 
+/* The program space (program.c): one reserved range that collections neither copy nor scan,
+   holding every symbol, in fixed slots at its start, and after them the installed definitions
+   with what they reach. Nothing in it points into the heap except the names of symbols that
+   are not published yet, and nothing in it moves. */
+typedef struct Program {
+    uint64_t *base;      /* the range: symbols from base, objects from objects, up to end */
+    size_t bytes;
+    uint64_t *objects, *end;
+    uint64_t *symbols_next, *symbols_committed; /* symbol slots used, and committed */
+    uint64_t *objects_next, *objects_committed;
+    size_t free_symbol;  /* the first free symbol slot, as its index plus one; 0 for none */
+} Program;
+
+/* An open-addressing hash set of symbols, outside the heap: 0 marks an empty entry. */
+typedef struct SymbolTable {
+    V *slots;
+    size_t cap, count;
+} SymbolTable;
+
 /* What a thread keeps of its own (thread.c). The running thread's stack and
    handlers are in the VM's fields; these hold them while it waits. */
 typedef struct Thread {
@@ -110,8 +129,12 @@ typedef struct VM {
     ForeignRoot *free_foreign_roots;
     ForeignRoot *deleted_foreign_roots; /* deleted from any thread; this VM drains them */
     V exception; /* the exception being raised or handled */
-    V intern;    /* intern table: an open-addressing vector of symbols, held weakly
-                    (vm_collect drops symbols nothing else needs) */
+    /* The program space, and the symbols: published ones, which stay, and the others, which a
+       collection drops once nothing else needs them (objects.c). An entry of the second
+       table may be a symbol published since, until the next collection rebuilds it. */
+    Program program;
+    SymbolTable published, own;
+    size_t published_top; /* one past the highest global cell of a published symbol */
     V fail;      /* shen.fail!, which fills new absvectors; [] until first used */
     V chars;     /* the 256 one-byte strings; [] until first used */
     /* The strings of C error messages, which are literals, cached by address:
@@ -238,6 +261,24 @@ bool ra_push(RootArray *ra, V v, size_t *index);
 static inline V *cell_value(VM *vm, size_t cell) { return ra_at(&vm->cells, 2 * cell); }
 static inline V *cell_function(VM *vm, size_t cell) { return ra_at(&vm->cells, 2 * cell + 1); }
 
+/* program.c */
+static inline bool in_program(const VM *vm, const void *at)
+{
+    return (uintptr_t)at - (uintptr_t)vm->program.base < vm->program.bytes;
+}
+static inline bool in_symbols(const VM *vm, const void *at)
+{
+    return (uintptr_t)at - (uintptr_t)vm->program.base < (uintptr_t)vm->program.objects - (uintptr_t)vm->program.base;
+}
+bool program_init(Program *p);
+void program_release(Program *p);
+uint64_t *program_alloc(VM *vm, size_t words);
+uint64_t *program_symbol_slot(VM *vm);
+void program_free_symbol(VM *vm, uint64_t *slot);
+bool program_reserve(VM *vm, size_t symbol_words, size_t object_words);
+bool program_publish(VM *vm, V sym);
+V program_promote(VM *vm, V closure);
+
 /* C locals that hold values across an allocation must be registered. */
 void vm_root(VM *vm, V *slot);
 static inline void vm_unroot(VM *vm, size_t n) { vm->ncroots -= n; }
@@ -261,6 +302,10 @@ bool vm_stack_reserve(VM *vm, size_t need_words);
 size_t vm_consts_alloc(VM *vm, size_t n, bool *ok);
 void vm_consts_release(VM *vm, size_t start, size_t n);
 bool vm_track_code(VM *vm, V code);
+/* vm->owned: 0 for a root or free slot, OWNED for one in the range of a code object in the
+   heap, REACHED while a collection has copied that code object, and PROGRAM for one of code
+   in the program space, which collections neither scan nor free. */
+enum { OWNED = 1, REACHED = 2, PROGRAM = 3 };
 void vm_find_free_consts(VM *vm);
 void vm_set_limit(VM *vm, V *mark);
 
@@ -294,6 +339,13 @@ bool symbol_sealed(V sym);
 void symbol_seal(V sym);
 void symbol_mark_called(V sym);
 bool symbol_needed(VM *vm, V sym);
+/* The word at SYM_CELL holds the global cell index below bit 56, and flags above it
+   (objects.c). A published symbol is never dropped, and its name is in the program space; a
+   collection marks the others it reaches. */
+enum { KIND_SHIFT = 56, SEALED_BIT = 58, CALLED_BIT = 59, PUBLISHED_BIT = 60, MARK_BIT = 61 };
+static inline bool symbol_published(V sym) { return (ptr(sym)[SYM_CELL] >> PUBLISHED_BIT) & 1; }
+bool symbol_table_put(SymbolTable *t, V sym);
+V *symbol_table_slot(SymbolTable *t, uint64_t hash, const char *bytes, size_t len);
 uint64_t hash_bytes(const void *bytes, size_t len);
 
 static inline size_t string_length(V s) { return (size_t)hdr_size(ptr(s)[0]); }

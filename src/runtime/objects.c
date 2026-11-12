@@ -176,19 +176,19 @@ V make_stream(VM *vm, uint64_t flags, void *handle)
 }
 
 /* Symbols. The hash is computed from the name once, so it never depends on an
-   address. The intern table is a vector used as an open-addressing hash set,
-   held weakly: a collection drops the symbols that nothing else reaches and
-   that symbol_needed does not keep (heap.c). */
+   address. Every symbol has a slot of the program space, where it never moves
+   (program.c), and is in one of two tables: the published ones, which stay,
+   and the others, held weakly: a collection drops those that nothing else
+   reaches and that symbol_needed does not keep (heap.c). */
 
 uint64_t hash_bytes(const void *bytes, size_t len) { return XXH3_64bits(bytes, len); }
 
-/* The word at SYM_CELL holds the global cell index. Its top byte holds the
+/* The word at SYM_CELL holds the global cell index. Above it (vm.h): the
    symbol's kind for shen-jit.symbol-kind (bits 56-57), whether the function
    it names is sealed (bit 58): calls to it may be bound once, and it cannot
-   be redefined; and whether compiled code calls it by name (bit 59), through
-   its cell's index rather than the symbol. */
-enum { KIND_SHIFT = 56, SEALED_BIT = 58, CALLED_BIT = 59 };
-
+   be redefined; whether compiled code calls it by name (bit 59), through its
+   cell's index rather than the symbol; whether it is published (bit 60); and
+   the collector's mark (bit 61). */
 size_t symbol_cell(V sym) { return (size_t)(ptr(sym)[SYM_CELL] & ((UINT64_C(1) << KIND_SHIFT) - 1)); }
 
 bool symbol_sealed(V sym) { return (ptr(sym)[SYM_CELL] >> SEALED_BIT) & 1; }
@@ -197,7 +197,7 @@ void symbol_seal(V sym) { ptr(sym)[SYM_CELL] |= UINT64_C(1) << SEALED_BIT; }
 
 void symbol_mark_called(V sym) { ptr(sym)[SYM_CELL] |= UINT64_C(1) << CALLED_BIT; }
 
-/* Whether a symbol stays although only the intern table reaches it: interning
+/* Whether a symbol stays although only the table reaches it: interning
    its name again must find its value and function, and code that calls it by
    name holds its cell. Any other can go, and come back as a new symbol. */
 bool symbol_needed(VM *vm, V sym)
@@ -229,96 +229,100 @@ static uint64_t name_kind(const unsigned char *s, size_t n)
     return s[0] >= 'A' && s[0] <= 'Z' ? 2 : 1;
 }
 
-static size_t table_size(VM *vm) { return (size_t)hdr_size(ptr(vm->intern)[0]); }
-
-static V *table_slot(VM *vm, uint64_t hash, const char *bytes, size_t len)
+/* The entry of the symbol with this name, or the empty entry where it would go. */
+V *symbol_table_slot(SymbolTable *t, uint64_t hash, const char *bytes, size_t len)
 {
-    size_t n = table_size(vm);
-    V *slots = (V *)(ptr(vm->intern) + 1);
-    for (size_t i = hash & (n - 1);; i = (i + 1) & (n - 1)) {
-        V s = slots[i];
-        if (s == V_NIL)
-            return &slots[i];
+    if (!t->cap)
+        return NULL;
+    for (size_t i = hash & (t->cap - 1);; i = (i + 1) & (t->cap - 1)) {
+        V s = t->slots[i];
+        if (!s)
+            return &t->slots[i];
         V name = ptr(s)[SYM_NAME];
         if (ptr(s)[SYM_HASH] == hash && string_length(name) == len &&
             memcmp(string_bytes(name), bytes, len) == 0)
-            return &slots[i];
+            return &t->slots[i];
     }
 }
 
-/* The symbol whose cell is `cell`, or [] if none: a search of the symbol
-   table, for error messages. */
-V cell_symbol(VM *vm, size_t cell)
+/* Adds a symbol that is not in the table, growing it past half full. */
+bool symbol_table_put(SymbolTable *t, V sym)
 {
-    size_t n = vm->intern == V_NIL ? 0 : table_size(vm);
-    for (size_t i = 0; i < n; i++) {
-        V s = ptr(vm->intern)[1 + i];
-        if (s != V_NIL && symbol_cell(s) == cell)
-            return s;
+    if (2 * (t->count + 1) > t->cap) {
+        size_t cap = t->cap ? 2 * t->cap : 1024;
+        V *slots = calloc(cap, sizeof *slots);
+        if (!slots)
+            return false;
+        SymbolTable grown = {slots, cap, 0};
+        for (size_t i = 0; i < t->cap; i++)
+            if (t->slots[i])
+                symbol_table_put(&grown, t->slots[i]);
+        free(t->slots);
+        *t = grown;
     }
-    return V_NIL;
-}
-
-/* The new table goes in the semispace even when it is large: every collection builds the next
-   one in to-space, in the room the old one leaves there. */
-static bool table_grow(VM *vm)
-{
-    size_t n = vm->intern == V_NIL ? 0 : table_size(vm), m = n ? 2 * n : 1024;
-    uint64_t *p = vm_alloc(vm, 1 + m);
-    if (!p)
-        return false;
-    p[0] = HEADER(T_VECTOR, m);
-    for (size_t i = 0; i < m; i++)
-        p[1 + i] = V_NIL;
-    /* The allocation may have collected, and the collection shrunk the table. */
-    V old = vm->intern;
-    n = old == V_NIL ? 0 : table_size(vm);
-    vm->intern = tagged(p, TAG_OBJECT);
-    for (size_t i = 0; i < n; i++) {
-        V s = ((V *)(ptr(old) + 1))[i];
-        if (s != V_NIL) {
-            V name = ptr(s)[SYM_NAME];
-            *table_slot(vm, ptr(s)[SYM_HASH], string_bytes(name), string_length(name)) = s;
-        }
-    }
+    size_t i = ptr(sym)[SYM_HASH] & (t->cap - 1);
+    while (t->slots[i])
+        i = (i + 1) & (t->cap - 1);
+    t->slots[i] = sym;
+    t->count++;
     return true;
 }
 
+static V table_find(SymbolTable *t, uint64_t hash, const char *bytes, size_t len)
+{
+    V *slot = symbol_table_slot(t, hash, bytes, len);
+    return slot ? *slot : 0;
+}
+
+/* The symbol of that name, published or not, or 0. */
+static V find(VM *vm, uint64_t hash, const char *bytes, size_t len)
+{
+    V s = table_find(&vm->published, hash, bytes, len);
+    return s ? s : table_find(&vm->own, hash, bytes, len);
+}
+
+/* The symbol whose cell is `cell`, or [] if none: a search of the symbol
+   tables, for error messages. */
+V cell_symbol(VM *vm, size_t cell)
+{
+    SymbolTable *tables[2] = {&vm->published, &vm->own};
+    for (int k = 0; k < 2; k++)
+        for (size_t i = 0; i < tables[k]->cap; i++) {
+            V s = tables[k]->slots[i];
+            if (s && symbol_cell(s) == cell)
+                return s;
+        }
+    return V_NIL;
+}
+
+/* A new symbol takes a slot of the program space and keeps its name where it is; publishing
+   it moves the name there too. Nothing here allocates in the heap. */
 static V intern_name(VM *vm, V name)
 {
     uint64_t hash = hash_bytes(string_bytes(name), string_length(name));
-    V found = vm->intern == V_NIL ? V_NIL : *table_slot(vm, hash, string_bytes(name), string_length(name));
-    if (found != V_NIL)
+    V found = find(vm, hash, string_bytes(name), string_length(name));
+    if (found)
         return found;
-    /* Only a new symbol can take the table past half full. */
-    if (vm->intern == V_NIL || 2 * (vm->nsymbols + 1) > table_size(vm)) {
-        vm_root(vm, &name);
-        bool grown = table_grow(vm);
-        vm_unroot(vm, 1);
-        if (!grown)
-            return FAILED;
-    }
-
-    vm_root(vm, &name);
-    uint64_t *p = vm_alloc(vm, SYM_WORDS);
-    vm_unroot(vm, 1);
+    uint64_t *p = program_symbol_slot(vm);
     if (!p)
         return FAILED;
-    /* After the allocation: a collection frees the cells of symbols not in the table,
-       and this one is not in it yet. */
     size_t cell, cell2;
     if (vm->nfree_cells)
         cell = 2 * vm->free_cells[--vm->nfree_cells]; /* both entries are cleared */
-    else if (!ra_push(&vm->cells, V_CLEARED, &cell) || !ra_push(&vm->cells, V_CLEARED, &cell2))
+    else if (!ra_push(&vm->cells, V_CLEARED, &cell) || !ra_push(&vm->cells, V_CLEARED, &cell2)) {
+        program_free_symbol(vm, p);
         return FAILED;
+    }
     p[0] = HEADER(T_SYMBOL, 0);
     p[SYM_NAME] = name;
     p[SYM_HASH] = hash;
     p[SYM_CELL] = cell / 2 | name_kind((const unsigned char *)string_bytes(name),
                                        string_length(name)) << KIND_SHIFT;
     V sym = tagged(p, TAG_SYMBOL);
-    /* The allocation may have moved the table, so find the slot again. */
-    *table_slot(vm, hash, string_bytes(name), string_length(name)) = sym;
+    if (!symbol_table_put(&vm->own, sym)) {
+        program_free_symbol(vm, p);
+        return FAILED;
+    }
     vm->nsymbols++;
     return sym;
 }
@@ -327,11 +331,9 @@ static V intern_name(VM *vm, V name)
    intern_string, which reuses the string as the name. */
 V intern(VM *vm, const char *bytes, size_t len)
 {
-    if (vm->intern != V_NIL) {
-        V found = *table_slot(vm, hash_bytes(bytes, len), bytes, len);
-        if (found != V_NIL)
-            return found;
-    }
+    V found = find(vm, hash_bytes(bytes, len), bytes, len);
+    if (found)
+        return found;
     V name = make_string(vm, bytes, len);
     return name == FAILED ? FAILED : intern_name(vm, name);
 }
@@ -341,7 +343,8 @@ V intern_string(VM *vm, V string) { return intern_name(vm, string); }
 /* The symbol of that name if there is one, or []: this makes nothing. */
 V symbol_find(VM *vm, const char *bytes, size_t len)
 {
-    return vm->intern == V_NIL ? V_NIL : *table_slot(vm, hash_bytes(bytes, len), bytes, len);
+    V s = find(vm, hash_bytes(bytes, len), bytes, len);
+    return s ? s : V_NIL;
 }
 
 V intern_cstr(VM *vm, const char *s) { return intern(vm, s, strlen(s)); }

@@ -52,7 +52,7 @@ VERSION := $(shell cat VERSION)
 RUNTIME_SRC := src/runtime/heap.c src/runtime/objects.c src/runtime/image.c src/runtime/prims.c \
                src/runtime/reader.c src/runtime/loader.c src/runtime/jit.c src/runtime/dict.c \
                src/runtime/profile.c src/runtime/thread.c src/runtime/ffi.c src/runtime/win32.c \
-               src/runtime/worker.c
+               src/runtime/worker.c src/runtime/program.c
 RUNTIME_HDR := src/runtime/value.h src/runtime/vm.h src/runtime/ops.h src/runtime/reader.h src/runtime/jit.h src/runtime/win32.h src/runtime/file.h src/runtime/worker.h include/shen.h
 SLJIT_OBJ := $(BUILD)/sljitLir.o
 RUNTIME_OBJ := $(patsubst src/runtime/%.c,$(BUILD)/%.o,$(RUNTIME_SRC))

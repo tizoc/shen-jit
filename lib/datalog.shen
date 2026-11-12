@@ -2849,7 +2849,7 @@
                                     (index-all Slots Rec From To)))
 
 \\ What was added becomes the new tuples. Gives whether there were any.
-\\ Each merge has a number, larger than any before it in this process, and a relation keeps those
+\\ Each merge has a number, larger than any before it in this isolate, and a relation keeps those
 \\ its tuples came in, as [[Number | First] ...], the newest first: a round derives only from tuples
 \\ merged before it, so these order every derivation, which datalog.explain follows.
 (set *merges* 0)

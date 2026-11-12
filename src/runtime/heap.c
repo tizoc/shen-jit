@@ -106,7 +106,7 @@ VM *vm_create(size_t semispace_words, size_t stack_words)
     vm->area = vm->space ? vm->space + vm->reserved_words + STAGGER_WORDS : NULL;
     vm->other = vm->space ? vm->area + vm->reserved_words + STAGGER_WORDS : NULL;
     vm->stack = vm_cleared_stack(stack_words);
-    if (!vm->space || !vm->stack || !commit_space(vm->space, semispace_words) ||
+    if (!vm->space || !vm->stack || !program_init(&vm->program) || !commit_space(vm->space, semispace_words) ||
         !commit_space(vm->area, semispace_words) || !commit_space(vm->other, semispace_words)) {
         vm_destroy(vm);
         return NULL;
@@ -120,7 +120,6 @@ VM *vm_create(size_t semispace_words, size_t stack_words)
     vm_set_limit(vm, vm->stack);
     vm->exception = V_NIL;
     vm->api = ffi_api();
-    vm->intern = V_NIL;
     vm->fail = V_NIL;
     vm->chars = V_NIL;
     vm->messages = V_NIL;
@@ -151,6 +150,9 @@ void vm_destroy(VM *vm)
 #endif
     }
     free(vm->stack);
+    program_release(&vm->program);
+    free(vm->published.slots);
+    free(vm->own.slots);
     for (size_t i = 0; i < vm->nlarge; i++)
         free(vm->large[i].object);
     free(vm->large);
@@ -268,10 +270,6 @@ size_t vm_consts_alloc(VM *vm, size_t n, bool *ok)
     return start;
 }
 
-/* owned[i]: 0 for a root or free slot, OWNED for one in a code object's
-   range, and REACHED while a collection has copied that code object. */
-enum { OWNED = 1, REACHED = 2 };
-
 /* Slots that code which could not be built took: cleared, so that what they held can go, and free. */
 void vm_consts_release(VM *vm, size_t start, size_t n)
 {
@@ -306,6 +304,9 @@ bool vm_track_code(VM *vm, V code)
 
 static bool owned_slot(VM *vm, size_t i) { return i < vm->owned_cap && vm->owned[i]; }
 
+/* Owned by code in the heap, whose collection copies them. */
+static bool heap_slot(VM *vm, size_t i) { return owned_slot(vm, i) && vm->owned[i] != PROGRAM; }
+
 /* After an image loads, whose code objects vm_track_code has taken: the
    runs of cleared slots that no code owns are the ranges freed before it was
    written. Sealed-call slots always hold a symbol or a procedure. */
@@ -335,7 +336,8 @@ static void sweep_code(VM *vm)
     size_t freed = 0, n = vm->owned_cap < vm->consts.count ? vm->owned_cap : vm->consts.count;
     for (size_t i = 0; i < n;) {
         if (vm->owned[i] != OWNED) {
-            vm->owned[i] = vm->owned[i] == REACHED ? OWNED : 0;
+            if (vm->owned[i] == REACHED)
+                vm->owned[i] = OWNED;
             i++;
             continue;
         }
@@ -432,13 +434,27 @@ static V reach_large(Copy *c, V v)
     return v;
 }
 
+/* What is in the program space stays where it is, and is not scanned: nothing there points
+   into the heap. A symbol that is not published is marked, so that the sweep keeps it. */
+static V reach_program(VM *vm, V v)
+{
+    uint64_t *p = ptr(v);
+    if (in_symbols(vm, p) && !((p[SYM_CELL] >> PUBLISHED_BIT) & 1))
+        p[SYM_CELL] |= UINT64_C(1) << MARK_BIT;
+    return v;
+}
+
 static V copy_value(Copy *c, V v)
 {
     if (!is_ptr(v))
         return v;
     uint64_t *p = ptr(v);
-    if ((p < c->from || p >= c->from + c->from_words) && !c->vm->copy_large)
-        return reach_large(c, v);
+    if (p < c->from || p >= c->from + c->from_words) {
+        if (in_program(c->vm, p))
+            return reach_program(c->vm, v);
+        if (!c->vm->copy_large)
+            return reach_large(c, v);
+    }
     if (p[0] == V_FORWARD)
         return p[1];
     /* Every object has at least two words, and most are pairs: copy those
@@ -508,7 +524,7 @@ static void scan(Copy *c, uint64_t *s)
         if (is_header(w)) {
             scan_values(c, s, w);
             /* A code object's constant slots go with it, when it owns them. */
-            if (hdr_type(w) == T_CODE && owned_slot(c->vm, s[CODE_CBASE]))
+            if (hdr_type(w) == T_CODE && heap_slot(c->vm, s[CODE_CBASE]))
                 for (size_t i = 0; i < s[CODE_NCONST] + s[CODE_NCODE]; i++) {
                     V *slot = ra_at(&c->vm->consts, s[CODE_CBASE] + i);
                     c->vm->owned[s[CODE_CBASE] + i] = REACHED;
@@ -574,63 +590,56 @@ static void free_spares(VM *vm)
     vm->nlarge = kept;
 }
 
-static bool in_from(const Copy *c, V v)
-{
-    return is_ptr(v) && ptr(v) >= c->from && ptr(v) < c->from + c->from_words;
-}
-
-/* The intern table is weak (objects.c): after everything else is copied, a
-   new table gets the symbols that were reached or that symbol_needed keeps,
-   and the others give their cells back. The new table is built the same way
-   from any layout of the same symbols, and the symbols it alone keeps are
-   copied in its order, so that collecting a heap twice lays it out the same
-   way: an image written from a loaded image is identical to it, unless what
-   was written held objects that only guards, pointers' owners or roots held
-   by C reached (image.c). */
+/* The table of symbols that are not published is weak (objects.c): after everything else is
+   copied, a new table gets the symbols that were reached, as marked, or that symbol_needed
+   keeps, with their names; the others give back their cells and slots. Symbols published
+   since the last collection leave the table. */
 static void sweep_symbols(VM *vm, Copy *c)
 {
-    uint64_t *old = ptr(vm->intern);
-    size_t n = (size_t)hdr_size(old[0]), live = 0, start = 0;
-    for (size_t i = 0; i < n; i++) {
-        V s = old[1 + i];
-        if (s == V_NIL)
-            start = i + 1; /* no cluster runs past an empty slot */
-        else if (ptr(s)[0] == V_FORWARD || symbol_needed(vm, s))
+    SymbolTable *old = &vm->own;
+    size_t live = 0;
+    for (size_t i = 0; i < old->cap; i++) {
+        V s = old->slots[i];
+        if (s && !symbol_published(s) && ((ptr(s)[SYM_CELL] >> MARK_BIT) & 1 || symbol_needed(vm, s)))
             live++;
     }
-    size_t m = n;
+    size_t m = old->cap;
     while (m > 1024 && 4 * live < m)
         m /= 2;
-    uint64_t *t = c->next;
-    c->next += 1 + m;
-    t[0] = HEADER(T_VECTOR, m);
-    for (size_t i = 0; i < m; i++)
-        t[1 + i] = V_NIL;
-    size_t top = 0; /* one past the highest cell kept */
-    for (size_t k = 0; k < n; k++) {
-        V s = old[1 + (start + k) % n];
-        if (s == V_NIL)
+    V *slots = calloc(m ? m : 1, sizeof *slots);
+    if (!slots)
+        return; /* everything stays until a collection has room */
+    SymbolTable t = {slots, m, 0};
+    size_t top = vm->published_top; /* one past the highest cell kept */
+    uint64_t *mark = c->next;
+    for (size_t i = 0; i < old->cap; i++) {
+        V s = old->slots[i];
+        if (!s || symbol_published(s))
             continue;
-        if (ptr(s)[0] != V_FORWARD && !symbol_needed(vm, s)) {
+        uint64_t *p = ptr(s);
+        if (!((p[SYM_CELL] >> MARK_BIT) & 1) && !symbol_needed(vm, s)) {
             if (vm->nfree_cells == vm->free_cells_cap) {
                 size_t cap = vm->free_cells_cap ? 2 * vm->free_cells_cap : 1024;
                 size_t *cells = realloc(vm->free_cells, cap * sizeof *cells);
-                if (!cells)
-                    continue; /* the cell is lost, nothing else */
-                vm->free_cells = cells;
-                vm->free_cells_cap = cap;
+                if (cells) {
+                    vm->free_cells = cells;
+                    vm->free_cells_cap = cap;
+                }
             }
-            vm->free_cells[vm->nfree_cells++] = symbol_cell(s);
-            continue;
+            if (vm->nfree_cells < vm->free_cells_cap) {
+                vm->free_cells[vm->nfree_cells++] = symbol_cell(s);
+                program_free_symbol(vm, p);
+                continue;
+            }
+            /* Kept, rather than lose its cell. */
         }
+        p[SYM_CELL] &= ~(UINT64_C(1) << MARK_BIT);
         if (symbol_cell(s) >= top)
             top = symbol_cell(s) + 1;
-        size_t j = ptr(s)[SYM_HASH] & (m - 1);
-        while (t[1 + j] != V_NIL)
-            j = (j + 1) & (m - 1);
-        t[1 + j] = s;
+        copy_slot(c, &p[SYM_NAME]);
+        symbol_table_put(&t, s);
     }
-    /* Every cell in use has a symbol in the table, so those above the last one kept are free, and
+    /* Every cell in use has a symbol in a table, so those above the last one kept are free, and
        they leave the array: every collection walks it, and a burst of new symbols would
        otherwise slow them all for good. */
     size_t free_kept = 0;
@@ -639,13 +648,10 @@ static void sweep_symbols(VM *vm, Copy *c)
             vm->free_cells[free_kept++] = vm->free_cells[i];
     vm->nfree_cells = free_kept;
     vm->cells.count = 2 * top;
-    uint64_t *mark = c->next;
-    for (size_t i = 0; i < m; i++)
-        if (in_from(c, t[1 + i]))
-            copy_slot(c, &t[1 + i]);
     drain(c, mark);
-    vm->intern = tagged(t, TAG_OBJECT);
-    vm->nsymbols = live;
+    free(old->slots);
+    *old = t;
+    vm->nsymbols = vm->published.count + t.count;
 }
 
 /* Slots above the published top are dead by the call-window invariants.
@@ -720,8 +726,7 @@ static void collect_into(VM *vm, uint64_t *to)
         }
     }
     vm->nguards = guarded;
-    if (vm->intern != V_NIL)
-        sweep_symbols(vm, &c);
+    sweep_symbols(vm, &c);
     free(c.pending);
     sweep_large(vm);
     sweep_code(vm);
@@ -746,6 +751,8 @@ static void collect_into(VM *vm, uint64_t *to)
         uint64_t *o = ptr(vm->natives[i]);
         if (o[0] == V_FORWARD)
             vm->natives[kept++] = o[1];
+        else if (in_program(vm, o))
+            vm->natives[kept++] = vm->natives[i];
         else if (vm->free_native)
             vm->free_native(vm, o);
     }

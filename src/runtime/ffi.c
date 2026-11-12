@@ -648,7 +648,7 @@ static void misuse(VM *vm, const char *who, const char *what)
 
 static void check_pointer(VM *vm, V v, const char *who)
 {
-    if (is_ptr(v) && !vm_in_heap(vm, ptr(v)))
+    if (is_ptr(v) && !vm_in_heap(vm, ptr(v)) && !in_program(vm, ptr(v)))
         misuse(vm, who, "a value from before a collection: see rule 1 in shen.h");
 }
 

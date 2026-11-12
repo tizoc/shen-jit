@@ -53,7 +53,8 @@ The build appends the image to the runtime to make `build/shen-jit`, a single fi
 stays out: `make stlib` loads the kernel's precompiled `stlib.kl` into a running image and writes a binary with
 `shen-jit.save-executable`.
 
-**Startup** reads the image from the end of the executable's file, relocates its pointers and applies these rules:
+**Startup** reads the image from the end of the executable's file: the program space's symbols and objects, then the heap
+(see "Collection"). It relocates their pointers and applies these rules:
 
 - **Procedures:** a closure's native entry is a cache, set on load to the compile-on-first-call stub. A foreign
   function's is set to its stub, and its address is cleared, so it is found again at its first call.
@@ -238,8 +239,8 @@ Pairs stay at two words, so the collector's linear scan and the image's relocati
 from an object: every other object starts with a header word whose low bits no value has. A word at the start of an object is then
 either a header, which gives its size and which fields hold values, or the head of a pair.
 
-Symbols are ordinary heap objects, so the image is a single heap. Each stores a hash computed from its name, so
-hashing never depends on an address that moves. A symbol refers to its global cell by index. Cells and constant slots
+Symbols live in the program space (see "Collection"), in slots that never move, so a symbol is its address. Each stores
+a hash computed from its name. A symbol refers to its global cell by index. Cells and constant slots
 live outside the heap, in root arrays that grow by adding chunks, so none ever moves, and emitted code embeds their addresses and never a
 heap address. Native code lives in SLJIT's executable memory, and a collection frees that of code objects it did not reach, except under a profiler, and what was compiled before everything compiled again, which frames may still be running.
 
@@ -264,12 +265,22 @@ collection copies at most a word for every four allocated. With its own area the
 - **Lists stay contiguous.** Cheney's breadth-first order scatters a list's pairs among everything else live, so when a pair is
   copied, the pairs of its tail are copied right after it.
 - **Large objects:** vectors, strings and byte buffers of 32K words or more are allocated apart and copied only into an image. Collections mark
-  them, scan them in place and free the dead ones, whose blocks wait one collection for an object of the same size. The intern table is
-  allocated in the semispace at any size: every collection builds the next one in to-space, in the room the old one leaves there.
-- **Weak things:** the intern table holds symbols weakly, and symbols nothing needs are dropped, their global cells reused, and those above the last one kept taken out of the array that collections walk; streams nothing reaches are closed; the
+  them, scan them in place and free the dead ones, whose blocks wait one collection for an object of the same size.
+- **Weak things:** symbols that are not published are held weakly, and those nothing needs are dropped, their slots and global cells
+  reused, and cells above the last one kept taken out of the array that collections walk; streams nothing reaches are closed; the
   constant slots of dead code are reused; and a guarded pointer nothing reaches has its value put on a list for Shen. That value is a root until then, so nothing has to come back
   from the dead, and what one value uses outlasts it. The list's pair takes less to-space than the pointer, which is not copied, leaves free.
 - **Repeated pointers** are skipped while scanning, which matters for the Prolog engine's big vectors.
+
+**The program space** is a range of reserved address space, committed as it fills, that collections neither copy nor scan:
+a pointer into it is recognised by one range test and left as it is. Every symbol has a slot at its start. A definition,
+once installed, is copied there with all it reaches: its code objects, bytecode, constants and inline body. Only what
+cannot change is copied: pairs, strings, reals, code and the definition's closure, which captures nothing. A definition
+that reaches anything else, such as a byte table, stays in the heap, and a check before copying makes sure such a
+definition leaves nothing behind. So nothing in the space points into the heap, and the constant slots of its code are
+neither scanned nor freed. What it holds stays, a redefined function's old version included. A symbol that it refers to
+is published: its name moves there too, and it is never dropped. A collection marks the other symbols it reaches, which
+are the only things in the space it writes to, and frees the slots of those nothing needs. Each VM has its own space.
 
 Reals are boxed, each a 16-byte object, and native code does their arithmetic and comparisons on its slow path, after the
 test for fixnums fails, loading each operand into a float register and allocating the result in line. Code written by hand can keep them unboxed
