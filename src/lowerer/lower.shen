@@ -336,7 +336,7 @@
        shen-jit.pvar shen-jit.pvar? shen-jit.pvar-offset shen-jit.thread
        shen-jit.pointer? shen-jit.pointer-kind shen-jit.pointer-address
        shen-jit.pointer->string shen-jit.pointer-kill shen-jit.pointer-owner
-       shen-jit.pointer-read-only]]
+       shen-jit.pointer-read-only shen-jit.arity shen-jit.function]]
    [2 [+ - * / < > <= >= = cons cn pos <-address set open write-byte
        write-string shen-jit.hash shen-jit.filled-vector
        shen-jit.save-executable shen-jit.foreign
@@ -346,7 +346,7 @@
        shen-jit.bit-and shen-jit.bit-or shen-jit.bit-xor
        shen-jit.shift-left shen-jit.shift-right shen-jit.rotate32
        shen-jit.decimal shen-jit.s32 shen-jit.s64 shen-jit.f32 shen-jit.f64
-       shen-jit.pointer-sized shen-jit.pointer-guard shen-jit.worker-batch]]
+       shen-jit.pointer-sized shen-jit.pointer-guard shen-jit.worker-batch shen-jit.set-arity shen-jit.apply]]
    [3 [address-> shen-jit.dict-put shen-jit.absvector3 shen-jit.deref
        shen-jit.u8! shen-jit.u16! shen-jit.u32! shen-jit.bytes->string
        shen-jit.bytes->pointer shen-jit.pointer->bytes

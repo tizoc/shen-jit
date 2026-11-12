@@ -484,7 +484,40 @@ fixed offset from the VM's register, and each VM has its own values, which isola
   best of 12 samples: 1.00. Neutral, as the design expected.
 - **Left for the step that adds isolates,** as they do nothing without them: a dictionary for an isolate's own symbols,
   which have no number, the port's isolate start, empty property lists with the arity table moved into the program
-  space, and the proposed `fn` templates, guards on installing and `gensym` ranges.
+  space, and the proposed `fn` templates, guards on installing and `gensym` ranges. The owner asked for them at once,
+  below.
+
+### What an isolate needs without the builder (2026-11-12, Apple M3 Max, against the global slots above)
+
+The rest of step 2, built before isolates exist, so `test_kl --isolate` starts one in a VM
+that was the builder: its globals cleared, the program's constants put back, `sj_start_isolate` and the port's
+`shen-jit.start-isolate` setting the run state. Twenty checks run a program there: printing, Prolog, `gensym` counting
+from the isolate's base, `fn` at one, two and five arguments and on a primitive, arities, a property list and globals
+of its own (one through the dictionary), and `eval`, `eval-kl` and installing refused. They pass, under a collection
+at every allocation too.
+
+- **The builder flag and guards:** a VM is the builder until an isolate starts in it. Installing, foreign definitions and
+  recording an arity refuse elsewhere, in C; `eval` and `eval-kl` refuse first, in the port, on `shen-jit.*isolate*`,
+  which only an isolate sets, so the builder needs nothing set before its startup evaluates.
+- **The dictionary:** where only the builder numbers globals, an isolate keeps the value of a global with no number by
+  symbol, in an open-addressing table that collections walk, needing no rehash as a symbol's hash comes from its name.
+- **Arities beside function cells:** two entries per symbol again, function and arity, with `shen-jit.arity` and
+  `shen-jit.set-arity`; six kernel functions read or wrote the property.
+- **`fn`.** Templates over the arity, whose last call reads the name's function cell inline (`shen-jit.function`),
+  were tried first, in place of lambda forms. 20M calls through a one-argument closure took 46 ms against 27, as a
+  compiled form inlines a small callee, and through a two-argument one 117 against 49, as stage 0 code has no
+  `entry`. Lowering the templates of two to four at startup brought that to 84. A template made per `fn` call also
+  allocated, and the kernel suite read 1.04 alone, with a collection more. So `fn` makes the form when first asked
+  and keeps it, as the port did before: compiled in the builder, from a template in an isolate. The builder is back to
+  27 and 49; making 2M closures through `fn` takes 36 ms against 31, a lookup more.
+- **Two things a template needed.** Calling a symbol's value does not call its function, so `shen-jit.function` reads
+  the cell; a primitive's cell was empty, as compiled code calls it in line, so each gets a definition made from a code
+  object at startup. And a value call with several arguments went one at a time unless the closure had an `entry`, which
+  a definition's never has, so it failed: `jump-unless-entry` now also lets through a closure whose code takes exactly
+  that many, and a foreign function of that arity. Past four arguments a template uses `shen-jit.apply`, a nested call.
+- **Workloads never used for tuning,** 7 rounds against the global slots above: 0.96 to 1.01. Benchmark suite, best
+  of 12 samples: 1.00, median 1.00; `symbol equality (true)`, `shen.sysfunc? (false)` and a control loop at 1.05
+  to 1.06, rows that move with placement. The machine had a load of 4 to 5 from other work; the runs alternated.
 
 ### Copying (2026-11-02, M3 Max, against the build before)
 

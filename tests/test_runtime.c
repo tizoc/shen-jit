@@ -300,7 +300,7 @@ static void test_symbol_cells_trimmed(void)
         snprintf(name, sizeof name, "dies-%d", i);
         intern_cstr(vm, name);
     }
-    CHECK(vm->cells.count == base + 5000);
+    CHECK(vm->cells.count == base + 2 * 5000);
     vm_collect(vm, 0);
     CHECK(vm->cells.count == base);
     CHECK(vm->nfree_cells == 0);
@@ -311,10 +311,10 @@ static void test_symbol_cells_trimmed(void)
     }
     V high = intern_cstr(vm, "high");
     size_t cell = symbol_cell(high);
-    CHECK(cell >= base + 5000);
+    CHECK(2 * cell >= base + 2 * 5000);
     *global_slot_new(vm, high) = fix(7);
     vm_collect(vm, 0);
-    CHECK(vm->cells.count == cell + 1);
+    CHECK(vm->cells.count == 2 * (cell + 1));
     CHECK(vm->nfree_cells == 5000);
     CHECK(global_value(vm, intern_cstr(vm, "high")) == fix(7));
     V reused = intern_cstr(vm, "reused");

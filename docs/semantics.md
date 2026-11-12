@@ -52,7 +52,7 @@ states which fields hold values:
 | --- | --- |
 | String | Byte length and bytes; immutable. |
 | Byte buffer | Byte length and bytes, which can be stored to, and which the collector does not scan. |
-| Symbol | Name string, name hash; its function cell's index and its global's number, with flags. |
+| Symbol | Name string, name hash; its cell's index and its global's number, with flags. |
 | Real | IEEE double. |
 | Absvector | Length and that many values. |
 | Closure | Code object and captured values; a `defun` is a closure with no captures. Raw native entry. |
@@ -75,8 +75,8 @@ slot and cell are reused. Interning the name again makes a new symbol, which
 nothing can tell from the old one. `(intern "true")` and `(intern "false")`
 return the Boolean specials.
 
-Function cells (one per symbol) and constant slots live in root arrays outside
-the heap. The arrays grow by adding fixed-size chunks, so no cell moves. The heap
+Function cells, with the function's arity beside each, two entries per symbol,
+and constant slots live in root arrays outside the heap. The arrays grow by adding fixed-size chunks, so no cell moves. The heap
 refers to cells only by index; emitted code embeds cell addresses. A code object
 owns its range of constant slots: the collector copies them with it, and reuses
 them once it is dead (heap.c).
@@ -284,10 +284,17 @@ its name; any other form returns its value. Malformed forms raise an error.
 returned without lowering.
 
 A definition's lambda form, which `fn` returns, is made the first time `fn`
-asks for it, not when the definition is read; `shen.*gensym*` still moves as
-if it had been made then. *Deviation:* until then, reading the
-`shen.lambda-form` property directly gives a placeholder, an absvector tagged
-`shen-jit.lazy-form`, where other ports give the closure.
+asks for it, from F's arity, not when the definition is read;
+`shen.*gensym*` still moves as if it had been made then. In an isolate, which
+cannot evaluate, it is a curried closure from a template whose last call reads
+F's function cell, so it sees a redefinition as a compiled form does.
+*Deviation:* arities are kept beside function cells, not in the property
+vector, so `(get F arity)` finds none, and until `fn` asks, reading the
+`shen.lambda-form` property finds none either; use `arity` and `fn`.
+
+Only the builder, the isolate a program starts as, evaluates or defines: in
+another isolate `eval`, `eval-kl` and installing raise an error ([design.md](design.md),
+"The builder and isolates").
 
 ## 12. Streams, files and time
 

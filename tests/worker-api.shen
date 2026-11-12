@@ -1,10 +1,9 @@
 \\ Verify the normal image bootstrap before any worker fixture/library loads.
-\\ Check lambda metadata too, and currying for primitives taking arguments.
+\\ Check their arities too, and currying for primitives taking arguments.
 (map (/. Entry
         (let Name (hd Entry) N (hd (tl Entry))
           (if (= (arity Name) N)
-              (do (get Name shen.lambda-form)
-                  (if (= N 0) true (do (fn Name) true)))
+              (if (= N 0) true (do (fn Name) true))
               (error "worker bootstrap: ~A must have arity ~A" Name N))))
      [[shen-jit.worker-scope 5]
       [shen-jit.worker-batch 2]

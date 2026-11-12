@@ -454,6 +454,8 @@ V h_foreign(VM *vm)
 static V define_foreign(VM *vm)
 {
     V name = vm->args[0], desc = vm->args[1];
+    if (!vm->builder)
+        return sj_raise(vm, "only the builder can define functions");
     if (!is_symbol(name))
         return sj_raise_value(vm, "shen-jit.foreign: ~S is not a symbol", name);
     if (symbol_sealed(name))

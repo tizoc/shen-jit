@@ -97,7 +97,7 @@ Boolean) as an immediate, and reads any other from its constant cell.
 | `(pop-handler)` | Remove the innermost handler. |
 | `(exception D)` | D := the exception being handled; the first instruction at a handler label. |
 | `(entry N L)` | First, in a `lambda` that returns lambdas: a call with N arguments, more than the arity, continues at L with them in slots 2..N+1. |
-| `(jump-unless-entry S N L)` | Continue at L unless slot S holds a closure whose code has `(entry N _)`. |
+| `(jump-unless-entry S N L)` | Continue at L unless slot S holds a procedure that takes N arguments at once: a closure whose code has `(entry N _)` or takes exactly N, which only a definition's does, or a foreign function of N. Applied one argument at a time, the last two would fail. |
 | `(inline F N)` | The next N instructions are a body of F inlined here: no code, but backtraces name F for errors raised in them. Not in stage 0 code. |
 
 Primitive names are the 39 KLambda primitives, except `eval-kl` (see below),
@@ -193,6 +193,14 @@ plus:
   The port's file reading uses it.
 - `shen-jit.append`: arity 2, the port's `append` for a non-empty first list.
 - `shen-jit.arity?` and `shen-jit.inlined?`: arity 2, the tests in the rules below.
+- `shen-jit.arity` (arity 1) and `shen-jit.set-arity` (2): a name's arity, or -1, and
+  recording it, which only the builder may do. Arities are kept beside function cells,
+  outside the heap; the port's `arity` reads them.
+- `shen-jit.function` (arity 1): the procedure a name has now, read inline, or an error
+  for a name with none. A primitive's is a definition made from a code object at
+  startup. `fn`'s templates make their last call with it.
+- `shen-jit.apply` (arity 2): calls a name's procedure, or a procedure, with the elements
+  of a list at once, through a nested call: `fn`'s templates past four arguments.
 - `shen-jit.bit-and`, `shen-jit.bit-or`, `shen-jit.bit-xor`, `shen-jit.shift-left`,
   `shen-jit.shift-right`, `shen-jit.rotate32` (2), `shen-jit.bit-not`,
   `shen-jit.bswap32`, `shen-jit.popcount`, `shen-jit.clz` and `shen-jit.ctz` (1): bit

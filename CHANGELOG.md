@@ -12,6 +12,10 @@ All notable changes to this project are documented in this file. The format is b
   versions stay there. `SHEN_JIT_STATS` reports the program space.
 - A global's value is kept in a slot of the runtime's own, which a symbol gets once code names it as a global or it
   is set; `SHEN_JIT_STATS` reports function cells and global slots.
+- Arities are kept beside function cells, not in the property vector: `(get F arity)` finds none. `arity` and `fn`
+  are unchanged. A primitive's function cell now holds a definition, so it is a procedure as any function is.
+- Calling a definition's procedure, as `shen-jit.function` gives it, with all its arguments at once now works, where
+  it applied them one at a time and failed.
 
 ## [0.7] - 2026-11-10
 

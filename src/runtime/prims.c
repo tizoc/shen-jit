@@ -135,6 +135,10 @@ const Primitive primitive_table[] = {
     {"shen-jit.worker-live", 0, NULL},
     {"shen-jit.worker-cancelled?", 0, NULL},
     {"shen-jit.worker-shared-view", 0, NULL},
+    {"shen-jit.arity", 1, NULL},
+    {"shen-jit.set-arity", 2, NULL},
+    {"shen-jit.function", 1, NULL},
+    {"shen-jit.apply", 2, NULL},
 };
 
 const size_t primitive_count = sizeof primitive_table / sizeof primitive_table[0];
@@ -1339,6 +1343,58 @@ bool sj_init_host(VM *vm)
     return true;
 }
 
+/* (shen-jit.apply F Args): F's procedure, or F if it is one, called with the elements of a
+   list, through a nested call. fn's templates use it for arities above those they spell out. */
+static V apply_function(VM *vm, V f, V list)
+{
+    V proc = is_symbol(f) ? *cell_function(vm, symbol_cell(f)) : f;
+    if (!is_proc(proc))
+        return is_symbol(f) ? sj_raise_value(vm, "undefined function ~S", f)
+                            : sj_raise_value(vm, "~S is not a function", f);
+    V args[256];
+    size_t n = 0;
+    for (; is_pair(list); list = ptr(list)[1]) {
+        if (n == 256)
+            return sj_raise(vm, "shen-jit.apply: more than 256 arguments");
+        args[n++] = ptr(list)[0];
+    }
+    if (list != V_NIL)
+        return sj_raise_value(vm, "shen-jit.apply: ~S is not a list", vm->args[1]);
+    return jit_call_nested(vm, proc, n, args);
+}
+
+/* An isolate starts as a program does (docs/design.md, "The builder and isolates"): nothing of the builder or
+   of its parent, but the program's constants, the standard streams and the run state the
+   port's shen-jit.start-isolate sets, its gensyms numbered from gensym_base. Here it starts
+   in a VM that was the builder, as a test: its globals are cleared, constants put back as
+   the builder would publish them, and it can no longer define. */
+bool sj_start_isolate(VM *vm, V gensym_base)
+{
+    static const char *const constants[] = {"*language*", "*implementation*", "*release*", "*port*",
+                                            "*porters*", "*os*", "*version*"};
+    enum { N = sizeof constants / sizeof constants[0] };
+    V sym[N], value[N];
+    for (size_t i = 0; i < N; i++) {
+        sym[i] = symbol_find(vm, constants[i], strlen(constants[i]));
+        value[i] = sym[i] == V_NIL ? V_CLEARED : global_value(vm, sym[i]);
+        vm_root(vm, &value[i]);
+    }
+    vm->builder = false;
+    for (size_t n = 1; n < vm->nglobals; n++)
+        vm->globals[n] = V_CLEARED;
+    for (size_t i = 0; i < vm->local_cap; i++)
+        vm->local_keys[i] = 0;
+    vm->local_count = 0;
+    bool ok = true;
+    for (size_t i = 0; i < N; i++)
+        if (sym[i] != V_NIL && value[i] != V_CLEARED)
+            *global_slot_new(vm, sym[i]) = value[i]; /* numbered, so a slot */
+    vm_unroot(vm, N);
+    V start = symbol_find(vm, "shen-jit.start-isolate", 22);
+    V proc = start == V_NIL ? V_CLEARED : *cell_function(vm, symbol_cell(start));
+    return ok && sj_init_host(vm) && is_proc(proc) && jit_call(vm, proc, 1, &gensym_base) != V_CLEARED;
+}
+
 static bool vector_index(V v, V i)
 {
     return is_type(v, T_VECTOR) && is_fix(i) && fixval(i) >= 0 &&
@@ -1888,6 +1944,27 @@ V sj_primitive(VM *vm, size_t index)
     case P_POINTER_SIZED: case P_SET_POINTER: case P_POINTER_GUARD: case P_POINTER_OWNER: case P_POINTERS_DEAD:
     case P_POINTER_READ_ONLY:
         return ffi_primitive(vm, (unsigned)index);
+    case P_ARITY: {
+        V n = is_symbol(a) ? *cell_arity(vm, symbol_cell(a)) : V_CLEARED;
+        return n == V_CLEARED ? fix(-1) : n;
+    }
+    case P_SET_ARITY:
+        if (!vm->builder)
+            return sj_raise(vm, "only the builder can define functions");
+        if (!is_symbol(a))
+            return sj_raise_value(vm, "shen-jit.set-arity: ~S is not a symbol", a);
+        if (!is_fix(b) || fixval(b) < -1 || fixval(b) > 255)
+            return sj_raise_value(vm, "shen-jit.set-arity: ~S is not an arity", b);
+        *cell_arity(vm, symbol_cell(a)) = fixval(b) < 0 ? V_CLEARED : b;
+        return b;
+    case P_FUNCTION: {
+        V f = is_symbol(a) ? *cell_function(vm, symbol_cell(a)) : V_CLEARED;
+        if (is_proc(f))
+            return f;
+        return is_symbol(a) ? sj_raise_value(vm, "undefined function ~S", a)
+                            : sj_raise_value(vm, "~S is not a symbol", a);
+    }
+    case P_APPLY: return apply_function(vm, a, b);
     case P_COLLECT:
         vm_collect(vm, 0);
         return V_TRUE;

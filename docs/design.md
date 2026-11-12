@@ -303,6 +303,30 @@ The stack is scanned linearly, from its base to the published top, which three r
 Under `SHEN_JIT_GC_STRESS` the collector also overwrites where objects were, and new objects go past those words for as long as they
 fit, so that a stale pointer fails at once. `SHEN_JIT_SLOW_PRIMS` compiles every primitive as a call to C, so that `make test-differential` can compare what the JIT inlines with the C versions.
 
+## The builder and isolates
+
+Parallelism is being redesigned around isolates over one program: an isolate runs the program's
+definitions with its own heap, globals and property list, and inherits nothing. Only the builder,
+the isolate a program starts as, defines: it alone installs code, records arities and gives
+globals their numbers, and in any other VM `eval`, `eval-kl`, installing, foreign definitions
+and recording an arity raise an error.
+
+What a running program needs without the builder's state is program, outside the heap: code and
+symbols in the program space, arities beside function cells, and global numbers. `fn` makes a
+name's lambda form when first asked, from the arity, and keeps it in the property vector: the
+builder compiles it, as before, and an isolate, which cannot evaluate, makes it from a template
+whose last call reads the name's function cell inline. A primitive's cell holds a definition
+made from a code object at startup, so a template can call primitives too. An isolate gives a value to a global
+with no number in a dictionary of its own, since only the builder numbers.
+
+An isolate starts as a program does (`sj_start_isolate`): its globals are cleared, the
+program's constants put back, the standard streams made, and the port's
+`shen-jit.start-isolate` sets the run state with the kernel's starting values: a new
+property vector, Prolog's memory and counters, the printer's settings, and `gensym`
+counting from a base of its own, so that names made in two isolates never meet. Until
+isolates exist, `test_kl --isolate` starts one in a VM that was the builder and runs a
+program there.
+
 ## Threads
 
 `thread` makes real threads, of which one runs at a time, holding a global lock. A timer asks for a switch every 10 ms if another

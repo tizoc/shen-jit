@@ -118,8 +118,9 @@ typedef struct VM {
     size_t stack_max_words;
     size_t max_frame; /* largest frame size of any code object */
 
-    /* Roots: function cells (one per symbol), constant slots, C locals and a
-       few runtime values. Global values are in `globals`, at the end. */
+    /* Roots: function cells, with the function's arity beside each (two entries per
+       symbol), constant slots, C locals and a few runtime values. Global values are in
+       `globals`, at the end. */
     RootArray cells;
     RootArray consts;
     V **croots;
@@ -161,6 +162,9 @@ typedef struct VM {
     uintptr_t c_stack_limit; /* nested calls stop before the C stack reaches this; 0: never */
     bool interruptible; /* the REPL catches SIGINT: loops test interrupted */
     bool seal_user; /* definitions installed now are sealed (shen-jit.seal) */
+    /* Whether this VM is the builder, which alone defines functions and numbers globals
+       (docs/design.md, "The builder and isolates"). Every VM is one until an isolate starts in it. */
+    bool builder;
     size_t nsymbols;
     size_t *free_cells; /* global cells of dropped symbols, for new symbols */
     size_t nfree_cells, free_cells_cap;
@@ -221,6 +225,10 @@ typedef struct VM {
     size_t *free_globals;
     size_t nfree_globals, free_globals_cap;
     size_t published_global_top; /* one past the highest number of a published symbol */
+    /* In a VM that is not the builder, which cannot number symbols, the values of globals
+       that have none, by symbol: open addressing, 0 for an empty entry (objects.c). */
+    V *local_keys, *local_values;
+    size_t local_cap, local_count;
     size_t block_bytes;        /* the reserved block the VM lies in */
     V globals[];
 } VM;
@@ -271,7 +279,9 @@ void thread_note_worker_stack(VM *vm);
 void vm_destroy(VM *vm);
 V *ra_at(RootArray *ra, size_t i);
 bool ra_push(RootArray *ra, V v, size_t *index);
-static inline V *cell_function(VM *vm, size_t cell) { return ra_at(&vm->cells, cell); }
+static inline V *cell_function(VM *vm, size_t cell) { return ra_at(&vm->cells, 2 * cell); }
+/* A name's arity, a fixnum, or V_CLEARED for none: program, as functions are. */
+static inline V *cell_arity(VM *vm, size_t cell) { return ra_at(&vm->cells, 2 * cell + 1); }
 
 /* program.c */
 static inline bool in_program(const VM *vm, const void *at)
@@ -358,12 +368,15 @@ enum { CELL_BITS = 28, KIND_SHIFT = 56, SEALED_BIT = 58, CALLED_BIT = 59, PUBLIS
 #define CELL_MASK ((UINT64_C(1) << CELL_BITS) - 1)
 static inline bool symbol_published(V sym) { return (ptr(sym)[SYM_CELL] >> PUBLISHED_BIT) & 1; }
 static inline size_t symbol_global(V sym) { return (size_t)(ptr(sym)[SYM_CELL] >> CELL_BITS & CELL_MASK); }
-/* A global's slot, or NULL when it has no number and so no value; global_slot_new numbers it
-   first, and is NULL only when it cannot. */
+/* A global's slot, or NULL when it has none and so no value; global_slot_new makes one first,
+   and is NULL only when it cannot. In a VM that is not the builder, a symbol with no number has
+   its value in the dictionary, whose entries move as it grows. global_slot_numbered is NULL
+   there instead: a slot that stays, for emitted code. */
+V *local_global(VM *vm, V sym);
 static inline V *global_slot(VM *vm, V sym)
 {
     size_t n = symbol_global(sym);
-    return n ? &vm->globals[n] : NULL;
+    return n ? &vm->globals[n] : vm->local_count ? local_global(vm, sym) : NULL;
 }
 static inline V global_value(VM *vm, V sym)
 {
@@ -371,6 +384,7 @@ static inline V global_value(VM *vm, V sym)
     return slot ? *slot : V_CLEARED;
 }
 V *global_slot_new(VM *vm, V sym);
+V *global_slot_numbered(VM *vm, V sym);
 bool vm_globals_commit(VM *vm, size_t n);
 bool symbol_table_put(SymbolTable *t, V sym);
 V *symbol_table_slot(SymbolTable *t, uint64_t hash, const char *bytes, size_t len);

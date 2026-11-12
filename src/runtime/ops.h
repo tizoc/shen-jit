@@ -234,6 +234,11 @@ enum Prim {
     P_COLLECT, /* shen-jit.collect */
     P_WRITE_BYTES, /* shen-jit.write-bytes: a range of a buffer to a stream, at once */
     P_WORKER_SCOPE, P_WORKER_BATCH, P_WORKER_INDEX, P_WORKER_LIVE, P_WORKER_CANCELLED, P_WORKER_SHARED_VIEW,
+    /* Arities, which are program, and calls by name, for fn (docs/design.md, "The builder and isolates"). */
+    P_ARITY,     /* shen-jit.arity: a name's arity, or -1 */
+    P_SET_ARITY, /* shen-jit.set-arity: records a name's arity, -1 for none; the builder's alone */
+    P_FUNCTION,  /* shen-jit.function: the procedure a name has now, inline (jit.c) */
+    P_APPLY,     /* shen-jit.apply: calls a name's procedure, or a procedure, with a list */
     P_COUNT
 };
 #define PRIM_RAISE_COND P_COUNT
@@ -249,5 +254,6 @@ V sj_dict_remove(VM *vm);
 V sj_dict_entries(VM *vm);
 V sj_primitive(VM *vm, size_t index);
 bool sj_init_host(VM *vm);
+bool sj_start_isolate(VM *vm, V gensym_base);
 
 #endif
