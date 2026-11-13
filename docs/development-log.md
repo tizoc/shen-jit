@@ -1983,6 +1983,39 @@ What the review of the branch had left as low, and what reading the documents ag
   collector, the copier and the channel table, for a leak that closing the endpoint, or the receiver ending, avoids.
   It stays a documented limit.
 
+### What two more reviews found (2026-11-13, Apple M3 Max, against the commit before)
+
+A review by another model, which traced each finding through the code without reproducing the races, and the
+experiments of a Fable review that was cut short, which reproduced two. Eleven, all fixed:
+
+- **Races.** `isolate.share` took room in the program space under the shared lock and filled it after letting go, so
+  a save or the REPL's walk of the space, which hold that lock, could meet half-made objects; it fills it under the
+  lock now. `h_compile` read the native entry it returns after letting go of the compile lock, which the REPL's
+  recompiling, as it starts catching Ctrl-C, could clear in between; it is read under the lock. A spawn read the
+  child's generation after letting go of the isolates' lock, so a child that ended at once could have its record
+  reused and the parent a handle on another isolate; it is taken under the lock. A monitor made while an isolate was
+  ending was told at once, while the isolate still counted as running, so defining at once could fail; such monitors
+  wait for its end now. And the lookups of the isolate's start and end functions, and the C API's, could miss a name
+  while another isolate grew the symbol table, which the reading protocol allows; the two are found once at the first
+  spawn, and a miss is looked up again under the lock.
+- **Handles released at an isolate's end in dependency order.** All counted dead at once, the oldest first, so a
+  release that used another handle could run after that one's: in rounds now, as collections order them, and what is
+  left newest first. A case where the outer handle's release uses the inner one gave `[inner outer]` and now
+  `[outer inner]`.
+- **Monitors close after their message.** `isolate.stop-each` waited for ever on a monitor already read, as its one
+  message was gone and nothing closed it; a monitor is closed once told, so a second receive raises "channel closed".
+  Reproduced by the cut-short review; a case now.
+- **Printing in isolates.** `shen.tuple`, `shen.pvar` and `shen.dictionary`, the kernel's printers, had lambda forms
+  in the property vector but no arity, so an isolate, whose `fn` makes forms from templates, could not print a tuple, a
+  Prolog variable or a dictionary. Their arities are recorded; a case prints a tuple and a dictionary.
+- **Smaller:** destroying the builder while isolates ran left its record pointing at the freed context, which the
+  next global's commit wrote to; the record lets go of it, and the program of its owner. The `sqlite-http` owner
+  dropped every error of a reply's send, a kill too, and so outlived a Ctrl-C; it drops only "channel closed". A
+  `parallel.map` or Datalog run whose spawn failed left the channels it had made for replies, and for joins the grid,
+  until the builder ended; they are closed then.
+- **Left as it is:** in an isolate, `read-from-string` fails with "shen.*source-form-handlers* has no value" rather than
+  saying it is the builder's; that reader expands, which only the builder does.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on

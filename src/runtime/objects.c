@@ -310,17 +310,30 @@ V cell_symbol(VM *vm, size_t cell)
     return V_NIL;
 }
 
-V published_find(VM *vm, const char *bytes, size_t len)
-{
-    return table_find(&vm->program->published, hash_bytes(bytes, len), bytes, len);
-}
-
 /* New symbols and global numbers, once isolates exist: any isolate makes them. */
 static pthread_mutex_t shared_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* For a walk of the program space that must not meet an object half made (jit.c). */
 void program_shared_lock(void) { pthread_mutex_lock(&shared_lock); }
 void program_shared_unlock(void) { pthread_mutex_unlock(&shared_lock); }
+
+/* For a lookup that makes nothing and must not miss: a miss while another isolate grows the
+   published table is looked up again under the lock that growth takes. */
+static V published_sure(VM *vm, V found, uint64_t hash, const char *bytes, size_t len)
+{
+    if (found || !vm->program->isolates)
+        return found;
+    pthread_mutex_lock(&shared_lock);
+    found = table_find(&vm->program->published, hash, bytes, len);
+    pthread_mutex_unlock(&shared_lock);
+    return found;
+}
+
+V published_find(VM *vm, const char *bytes, size_t len)
+{
+    uint64_t hash = hash_bytes(bytes, len);
+    return published_sure(vm, table_find(&vm->program->published, hash, bytes, len), hash, bytes, len);
+}
 
 /* A new cell, both entries cleared, or SIZE_MAX. */
 static size_t new_cell(VM *vm)
@@ -336,16 +349,6 @@ static size_t new_cell(VM *vm)
         !ra_push(&vm->program->cells, V_CLEARED, &entry2))
         return SIZE_MAX;
     return entry / 2;
-}
-
-/* Room in the program space for data any isolate shares (isolate.c, isolate.share), under the
-   lock that guards it while isolates make symbols there. */
-uint64_t *program_alloc_shared(VM *vm, size_t words)
-{
-    pthread_mutex_lock(&shared_lock);
-    uint64_t *at = program_alloc(vm, words);
-    pthread_mutex_unlock(&shared_lock);
-    return at;
 }
 
 /* Once isolates exist, a new symbol is published as it is made, its name copied into the program
@@ -462,7 +465,8 @@ V intern_string(VM *vm, V string) { return intern_name(vm, string); }
 /* The symbol of that name if there is one, or []: this makes nothing. */
 V symbol_find(VM *vm, const char *bytes, size_t len)
 {
-    V s = find(vm, hash_bytes(bytes, len), bytes, len);
+    uint64_t hash = hash_bytes(bytes, len);
+    V s = published_sure(vm, find(vm, hash, bytes, len), hash, bytes, len);
     return s ? s : V_NIL;
 }
 

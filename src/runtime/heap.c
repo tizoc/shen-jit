@@ -336,8 +336,8 @@ bool vm_guard(VM *vm, V pointer, V value)
 }
 
 /* Every guard counts as dead: its value goes on the list that shen-jit.pointers-dead gives, as when a
-   collection finds its pointer unreached. An isolate does this as it ends. A collection made here
-   may move some there itself, which then go once. */
+   collection finds its pointer unreached, the newest first. An isolate does this as it ends. A
+   collection made here may move some there itself, which then go once. */
 bool vm_guards_all_dead(VM *vm)
 {
     while (vm->nguards) {
@@ -350,6 +350,14 @@ bool vm_guards_all_dead(VM *vm)
         ptr(pair)[1] = vm->dead;
         vm->dead = pair;
     }
+    V newest = V_NIL; /* the list holds the oldest first: turned around in place */
+    for (V l = vm->dead; l != V_NIL;) {
+        V next = ptr(l)[1];
+        ptr(l)[1] = newest;
+        newest = l;
+        l = next;
+    }
+    vm->dead = newest;
     return true;
 }
 

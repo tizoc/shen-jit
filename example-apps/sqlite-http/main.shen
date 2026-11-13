@@ -88,13 +88,17 @@
 (define counter-app.serve-jobs
   Db Requests -> (counter-app.serve-job Db Requests (channel.next Requests)))
 
-\\ A reply to a handler that has gone, as a killed connection's, is dropped.
+\\ A reply to a handler that has gone, as a killed connection's, is dropped; a kill of the owning
+\\ isolate, which the send raises if one came during the job, ends it, closing the database.
 (define counter-app.serve-job
   _ _ [closed] -> done
   Db Requests [ok [Job Reply]] ->
     (let Result (trap-error [ok (counter-app.job Db Job)] (/. X [error (error-to-string X)]))
-         _ (trap-error (channel.send Reply Result) (/. X skip))
+         _ (trap-error (channel.send Reply Result) (function counter-app.gone))
       (counter-app.serve-jobs Db Requests)))
+
+(define counter-app.gone
+  X -> (if (= (error-to-string X) "channel closed") skip (simple-error (error-to-string X))))
 
 \\ Starts the owning isolate: [Db Monitor], Db for the handlers and Monitor for the owning isolate's end.
 (define counter-app.open

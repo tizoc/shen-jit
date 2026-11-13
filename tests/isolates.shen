@@ -494,6 +494,27 @@
   [(pt.message (freeze (isolate.share [(/. X X)])))
    (pt.suffix (pt.message (freeze (isolate.share (channel.new 1)))) 44)])
 
+\\ A monitor is closed once its one message is queued: a receive after that raises rather than
+\\ waits, and stop-each passes over a monitor already read. An isolate prints what the kernel's
+\\ printers print, whose lambda forms it has not got.
+(define pt.id
+  X -> X)
+
+(define pt.printed
+  [_ Out] -> (channel.send Out [(make-string "~S" (@p 1 2)) (make-string "~S" (shen.dict 2))]))
+
+(pt.check "a monitor's second receive raises rather than waits" "channel closed"
+  (let M (isolate.monitor (isolate.spawn pt.id 1))
+       _ (channel.receive M)
+    (pt.message (freeze (channel.receive M)))))
+
+(pt.check "stop-each passes over a monitor already read" true
+  (let Started (isolate.spawn-each pt.id [1 2 3])
+       _ (channel.receive (tl (hd Started)))
+    (isolate.stop-each Started)))
+
+(pt.check "an isolate prints tuples and dictionaries" ["(@p 1 2)" "(dict ...)"] (pt.ask pt.printed []))
+
 \\ ---------------------------------------------------------------------------------------------
 \\ Many at once, and many in turn.
 

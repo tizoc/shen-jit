@@ -60,9 +60,14 @@
   [X | Xs] N Run Ns -> (split-run Xs (- N 1) [X | Run] Ns))
 
 \\ An isolate for each run, with a channel for its reply and a monitor for its end: [Reply Down P].
+\\ If a spawn fails, spawn-each stops those it started, and the replies' channels are closed here.
 (define launch
   F Runs -> (let Replies (replies Runs)
-              (launched Replies (isolate.spawn-each map-run (run-args F Runs Replies)))))
+              (launched Replies (shen-jit.on-error (freeze (isolate.spawn-each map-run (run-args F Runs Replies)))
+                                                   (freeze (close-replies Replies))))))
+
+(define close-replies
+  Replies -> (map (/. R (trap-error (channel.close R) (/. E skip))) Replies))
 
 (define replies
   [] -> []

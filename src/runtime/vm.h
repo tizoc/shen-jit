@@ -278,7 +278,6 @@ static inline bool in_symbols(const VM *vm, const void *at)
 bool program_init(Space *p);
 void program_release(Space *p);
 uint64_t *program_alloc(VM *vm, size_t words);
-uint64_t *program_alloc_shared(VM *vm, size_t words);
 uint64_t *program_symbol_slot(VM *vm);
 void program_free_symbol(VM *vm, uint64_t *slot);
 bool program_reserve(VM *vm, size_t symbol_words, size_t object_words);

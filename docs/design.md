@@ -376,7 +376,8 @@ next run. At the end of a stream the primitive gives a marker,
 time limit for `channel.wait-any`, which looks at several receive endpoints without receiving,
 so that a supervisor can wake for whichever of its connections ends and still look at a socket
 or a clock now and then. A monitor is a channel of capacity 1 that gets `[down I Reason]` when I
-ends. `kill` marks the isolate, which raises "killed", once, at its next channel operation or
+ends, and is closed then, so that what reads it again does not wait for ever; one made while I is
+ending waits for it to have ended, as the isolate counts as running until then. `kill` marks the isolate, which raises "killed", once, at its next channel operation or
 `isolate.check-kill`, even if the kill came before it started, so that its handlers clean up
 what its argument holds, and wakes it if it waits on a channel: an isolate needs no safe points,
 and code compiled for one is what any program runs. What waits on
@@ -384,9 +385,11 @@ something else, as the I/O library's socket waits do in slices of 100 ms, calls
 `isolate.check-kill` between them; in the builder, or before isolates exist, it does nothing. An isolate that
 cannot start, for want of memory for its context, tells its monitors too, with a message laid out by hand, as it has
 no heap to make one in; so does one whose down message cannot be made, and if even that cannot be, the monitor is
-closed, so that nothing waits on it for ever. An isolate that ends first counts every guard as dead, as a
-collection that reached none would, and runs what it registered with `shen-jit.at-end`, so that the handle library
-releases what its handles hold; then it tells its monitors, closes its files
+closed, so that nothing waits on it for ever. An isolate that ends first runs what it registered with
+`shen-jit.at-end`, so that the handle library releases what its handles hold, in rounds: a collection
+finds dead what nothing reaches, as a release may use another handle, which then outlives it, and
+what those releases leave unreached dies in the next; then every guard left counts as dead, the newest
+first. Then it tells its monitors, closes its files
 and the channels it receives on, and frees its context; its record keeps why it ended, as a symbol
 or an error's text, so that a monitor that comes after, as one made just after a spawn can, is
 told at once with the same reason, until the record is used again with a new generation. Then,
@@ -430,8 +433,9 @@ once that it asked to stop. Once the grace has passed it kills the connections l
 kill reaches in their next socket wait.
 
 **Shared storage.** `isolate.share` copies a value into a fragment as a send does, refusing
-what a send refuses, then lays the fragment out in one run of the program space, taken under
-the lock that guards making symbols there, and marks each vector and byte buffer in it shared,
+what a send refuses, then lays the fragment out in one run of the program space, taken and filled
+under the lock that guards making symbols there, which an image's save and the REPL's walk of the
+space hold too, and marks each vector and byte buffer in it shared,
 by bit 7 of its header. Nothing in it points into a heap, so collections neither scan nor move
 it, any isolate reads it by pointer, and an image saves it with the program. Nothing changes
 it: code that stores into a vector or buffer tests the header's whole low byte, which a shared

@@ -132,6 +132,7 @@ typedef struct Isolates {
     uint64_t spawned;
     uint32_t seed; /* where generations start, so that an endpoint saved in an image matches nothing */
     V tag_isolate, tag_receiver, tag_sender, tag_given, end, down, normal, killed, ended;
+    V start, ending; /* the port's shen-jit.start-isolate and shen-jit.isolate-ending, found once */
     V constant_symbols[8], constant_values[8];
     size_t nconstants;
     size_t stress, max_words; /* the builder's settings, for every isolate, read here rather than in
@@ -488,6 +489,8 @@ static Isolates *isolates_start(VM *vm)
     ps->normal = publish(vm, "normal");
     ps->killed = publish(vm, "killed");
     ps->ended = publish(vm, "ended");
+    ps->start = published_find(vm, "shen-jit.start-isolate", 22);
+    ps->ending = published_find(vm, "shen-jit.isolate-ending", 23);
     for (size_t i = 0; i < sizeof constant_names / sizeof constant_names[0]; i++) {
         V s = publish(vm, constant_names[i]);
         V value = s == V_CLEARED ? V_CLEARED : global_value(vm, s);
@@ -603,9 +606,13 @@ bool isolates_free(Program *program)
     bool running = false;
     for (size_t i = 1; i < ps->n; i++)
         running = running || ps->table[i]->vm || !ps->table[i]->ended;
+    if (running) /* the builder's context goes, as an embedder may end it first: nothing must use it */
+        ps->table[0]->vm = NULL;
     pthread_mutex_unlock(&ps->lock);
-    if (running)
+    if (running) {
+        program->owner = NULL;
         return false;
+    }
     for (size_t i = 0; i < ps->nchannels; i++) {
         Channel *c = &ps->channels[i];
         for (size_t k = 0; c->used && k < c->count; k++)
@@ -691,8 +698,9 @@ static Fragment *down_fragment(Isolates *ps, Isolate *p)
     return f;
 }
 
-/* With the lock held: tells a monitor that p ended, with f, or else [down P ended], or else by
-   closing it, so that what waits on it never waits for ever. */
+/* With the lock held: tells a monitor that p ended, with f, or else [down P ended], and closes it,
+   so that what waits on it never waits for ever: a receive after its one message, or after none if
+   neither could be made, raises channel closed. */
 static void tell_monitor(Isolates *ps, Isolate *p, Channel *c, Fragment *f)
 {
     if (!c) {
@@ -701,9 +709,8 @@ static void tell_monitor(Isolates *ps, Isolate *p, Channel *c, Fragment *f)
     }
     if (!f && p)
         f = down_fragment(ps, p);
-    if (f && enqueue(c, f))
-        return;
-    fragment_free(f);
+    if (!f || !enqueue(c, f))
+        fragment_free(f);
     c->closed = true;
     wake_senders(c);
     if (c->receiver_waiting)
@@ -752,6 +759,24 @@ static void isolate_end(Isolate *p, V reason)
     for (size_t i = 0; i < n; i++)
         tell_monitor(ps, p, channel_at(ps, (size_t)(monitors[i] >> 32), (uint32_t)monitors[i]),
                      fragments ? fragments[i] : NULL);
+    /* Monitors made since it began to end wait for it to have ended: told the same way, in the
+       lock under which it then counts as ended. Making their messages allocates nothing in the
+       heap, so down stays where it is. */
+    while (p->nmonitors) {
+        uint64_t *late = p->monitors;
+        size_t m = p->nmonitors;
+        p->monitors = NULL;
+        p->nmonitors = p->monitors_cap = 0;
+        pthread_mutex_unlock(&ps->lock);
+        Fragment **told = calloc(m, sizeof *told);
+        for (size_t i = 0; told && down != V_CLEARED && i < m; i++)
+            told[i] = message(vm, down);
+        pthread_mutex_lock(&ps->lock);
+        for (size_t i = 0; i < m; i++)
+            tell_monitor(ps, p, channel_at(ps, (size_t)(late[i] >> 32), (uint32_t)late[i]), told ? told[i] : NULL);
+        free(told);
+        free(late);
+    }
     for (size_t i = 0; i < ps->nchannels; i++)
         if (ps->channels[i].used && ps->channels[i].receiver == p)
             channel_free(ps, &ps->channels[i]);
@@ -807,8 +832,7 @@ static void *isolate_main(void *argument)
         if (slot)
             *slot = ps->constant_values[i];
     }
-    V start = published_find(vm, "shen-jit.start-isolate", 22);
-    V proc = start ? *cell_function(vm, symbol_cell(start)) : V_CLEARED;
+    V proc = ps->start ? *cell_function(vm, symbol_cell(ps->start)) : V_CLEARED;
     V base = fix((int64_t)p->gensym_base);
     bool ok = sj_init_host(vm) && is_proc(proc) && jit_call(vm, proc, 1, &base) != V_CLEARED;
     if (ok) {
@@ -835,13 +859,22 @@ static void *isolate_main(void *argument)
             reason = text == V_CLEARED ? ps->ended : text;
         }
     }
-    /* What it holds through guards, as the handle library's handles, is released as it ends: every
-       guard counts as dead, and the port runs what the isolate registered to run then. An error
-       there is dropped, as nothing is left to tell. */
-    V ending = published_find(vm, "shen-jit.isolate-ending", 23);
-    V run = ending ? *cell_function(vm, symbol_cell(ending)) : V_CLEARED;
-    if (vm_guards_all_dead(vm) && is_proc(run))
-        jit_call(vm, run, 0, NULL);
+    /* What it holds through guards, as the handle library's handles, is released as it ends, by
+       what the isolate registered to run then, which the port runs. In rounds: a collection finds
+       dead what nothing reaches, whose releases may leave more unreached, as a release may use
+       another handle, which outlives it; then what is left, as through a global, newest first, as
+       such a handle was made before. An error there is dropped, as nothing is left to tell. */
+    V run = ps->ending ? *cell_function(vm, symbol_cell(ps->ending)) : V_CLEARED;
+    if (is_proc(run)) {
+        for (size_t before = vm->nguards; before; before = vm->nguards) {
+            vm_collect(vm, 0);
+            jit_call(vm, run, 0, NULL);
+            if (vm->nguards == before)
+                break;
+        }
+        if (vm->nguards && vm_guards_all_dead(vm))
+            jit_call(vm, run, 0, NULL);
+    }
     vm_unroot(vm, 2);
     isolate_end(p, reason);
     return NULL;
@@ -960,16 +993,19 @@ static V spawn(VM *vm, Isolates *ps, V name, V argument)
         }
     }
     Isolate *p = new_isolate(ps, vm->program);
+    uint32_t index = 0, generation = 0; /* taken now: one that ends at once can have its record reused */
     if (p) {
         p->entry = f;
         p->argument = fragment;
+        index = p->index;
+        generation = p->generation;
         for (size_t i = 0; i < ngiven; i++)
             ps->channels[given[i] >> 32].receiver = p;
     }
     pthread_mutex_unlock(&ps->lock);
     if (p && start_thread(p)) {
         free(given);
-        return made(vm, handle(vm, ps->tag_isolate, p->index, p->generation)); /* it runs even so */
+        return made(vm, handle(vm, ps->tag_isolate, index, generation)); /* it runs even so */
     }
     pthread_mutex_lock(&ps->lock);
     if (p) {
@@ -1187,7 +1223,7 @@ static V monitor(VM *vm, Isolates *ps, V isolate)
     Isolate *p = isolate_at(ps, isolate);
     size_t i = channel_new(ps, 1, vm->isolate);
     uint32_t generation = i == SIZE_MAX ? 0 : ps->channels[i].generation;
-    bool ended = !p || p->ended || p->ending;
+    bool ended = !p || p->ended; /* one ending tells this too, once it has ended */
     /* One that has ended gives its reason, if its record says it, and otherwise ended. */
     V reason = ended && p && !p->end_text && p->end_symbol != V_CLEARED ? p->end_symbol : ps->ended;
     char *text = NULL;
@@ -1243,8 +1279,12 @@ static V share(VM *vm, V v)
         return raise_copy(vm, error, offender);
     V root = f->root;
     if (is_ptr(root) && !in_program(vm, ptr(root))) {
-        uint64_t *to = program_alloc_shared(vm, f->words);
+        /* Under the lock that guards the program space while isolates make symbols there, until
+           what it takes is whole, as a save or the REPL's walk reads the space under it. */
+        program_shared_lock();
+        uint64_t *to = program_alloc(vm, f->words);
         root = to ? copy_fragment(vm, f, to, true, false) : V_CLEARED;
+        program_shared_unlock();
     }
     fragment_free(f);
     return root == V_CLEARED ? sj_raise(vm, "out of memory") : root;

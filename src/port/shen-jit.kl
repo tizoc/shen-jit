@@ -869,7 +869,10 @@ the process with status N; it is not named exit, since port definitions are
 sealed and programs may define their own exit. (shen-jit.save-executable Path
 Entry) writes a binary and ends the process. shen-jit.finally and
 shen-jit.on-error are typed, and can be given one argument. The others are for native.shen,
-which would otherwise compile its calls to them as look-ups with fn."
+which would otherwise compile its calls to them as look-ups with fn. The kernel's printers
+shen.tuple, shen.pvar and shen.dictionary get arities here too: the kernel keeps only their
+lambda forms, in the property vector, which an isolate starts without, so that fn makes theirs
+from a template, which needs the arity."
 
 (defun shen-jit.initialise ()
   (do (shen.initialise-arity-table
@@ -880,9 +883,10 @@ which would otherwise compile its calls to them as look-ups with fn."
               (cons channel.wait-any (cons 2 (cons isolate.check-kill (cons 0 (cons isolate.share (cons 1
                 (cons isolate.spawn-each (cons 2 (cons isolate.stop-each (cons 1
                 (cons shen-jit.after-form (cons 1 (cons shen-jit.loading? (cons 0 (cons shen-jit.at-end (cons 1
+                (cons shen.tuple (cons 1 (cons shen.pvar (cons 1 (cons shen.dictionary (cons 1
                 (cons shen-jit.print-isolate (cons 1 (cons shen-jit.print-receiver (cons 1
                   (cons shen-jit.print-sender (cons 1 (cons shen-jit.print-given (cons 1
-                    ())))))))))))))))))))))))))))))))))))))))))))))))))
+                    ())))))))))))))))))))))))))))))))))))))))))))))))))))))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-2 (cons a (cons b ()))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-3 (cons a (cons b (cons c ())))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-4 (cons a (cons b (cons c (cons d ()))))))

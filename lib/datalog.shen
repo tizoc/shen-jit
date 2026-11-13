@@ -5030,7 +5030,9 @@
 \\ An isolate for each part, with a channel for its database and a monitor for its end.
 (define launch-parts
   Shared Split K -> (let Replies (part-replies 0 K)
-                      (with-replies Replies (isolate.spawn-each run-part (part-args Shared Split Replies 0)))))
+                      (with-replies Replies
+                        (shen-jit.on-error (freeze (isolate.spawn-each run-part (part-args Shared Split Replies 0)))
+                                           (freeze (close-quietly Replies))))))
 
 (define part-replies
   K K -> []
@@ -5125,7 +5127,9 @@
   -> (let Shared (joins-shared Name)
           Grid (join-grid 0 N (absvector N))
           Reply (channel.new N)
-          Isolates (isolate.spawn-each join-isolate (joined-args Shared Facts Grid (channel.sender Reply) 0 N))
+          Isolates (shen-jit.on-error
+                     (freeze (isolate.spawn-each join-isolate (joined-args Shared Facts Grid (channel.sender Reply) 0 N)))
+                     (freeze (close-quietly [Reply | (grid-channels Grid 0 0 N)])))
           Monitors (map (function tl) Isolates)
           Got (shen-jit.on-error (freeze (gather-joined Reply Monitors (map (function hd) Isolates) [] []))
                                  (freeze (do (isolate.stop-each Isolates) (close-quietly [Reply]))))
@@ -5204,6 +5208,14 @@
 (define join-grid
   N N Grid -> Grid
   J N Grid -> (do (address-> Grid J (join-row 0 J N (absvector N))) (join-grid (+ J 1) N Grid)))
+
+\\ The grid's channels, for a spawn that fails: those given to isolates it started are theirs, and
+\\ end with them, and closing one raises, which close-quietly drops.
+(define grid-channels
+  _ N _ N -> []
+  Grid J N N -> (grid-channels Grid (+ J 1) 0 N)
+  Grid J I N -> (let C (<-address (<-address Grid J) I)
+                  (if (= C none) (grid-channels Grid J (+ I 1) N) [C | (grid-channels Grid J (+ I 1) N)])))
 
 (define join-row
   N _ N Row -> Row

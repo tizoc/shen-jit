@@ -319,7 +319,7 @@ are other programs.
   apply to each isolate's heap, and `SHEN_JIT_SEMISPACE` to the builder's alone.
 - **The end:** an isolate ends when its function returns, or raises an error that nothing catches, which is printed to
   stderr. `(isolate.monitor I)` returns a receive endpoint that gets `[down I Reason]` when `I` ends, or at once if it
-  has, the reason being `normal`, the error's message, `killed`, or `ended` for one that could not start or ended long
+  has, and is then closed, so that a second receive raises "channel closed", the reason being `normal`, the error's message, `killed`, or `ended` for one that could not start or ended long
   enough ago that its record was used again. `(isolate.kill I)` raises "killed" at `I`'s next channel operation,
   waking it if it waits on a channel, so that its handlers can clean up; an isolate busy elsewhere goes on until then,
   or until it calls `(isolate.check-kill)`, as socket waits do every 100 ms at most. Killing the builder, or an
