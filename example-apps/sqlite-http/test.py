@@ -48,11 +48,11 @@ def server(executable, database):
     program = f'''(counter-app.initialize {shen_string(database.as_posix())})
       (define counter-test.handle
         Q -> (cases (= (http.target Q) "/__test_stop")
-                     (do (http.stop (value counter-test.server)) (counter-app.json 202 [object]))
+                     (do (http.stop (http.current-server)) (counter-app.json 202 [object]))
                     (= (http.target Q) "/__test_fail") (error "test application failure")
                     true (counter-app.handle {shen_string(database.as_posix())} Q)))
       (set counter-test.server
-        (http.listen "127.0.0.1" {port} (function counter-test.handle)
+        (http.listen "127.0.0.1" {port} counter-test.handle
           [[max-connections 4] [shutdown-grace 100] [head-timeout 1000]
            [body-timeout 1000] [body-limit 4096] [response-body-limit 65536]]))
       (counter-app.await (value counter-test.server))
@@ -165,6 +165,21 @@ def main():
             finally:
                 connection.close()
 
+            # A connection waiting on its socket is killed once the grace has passed.
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as stalled:
+                stalled.sendall(b"POST /counters/x HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4\r\n\r\na")
+                time.sleep(0.1)
+                # Context exit requests shutdown while this connection remains open below.
+                held = stalled.dup()
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as stalled_chunk:
+                stalled_chunk.sendall(b"PUT /counters/x HTTP/1.1\r\nHost: localhost\r\n"
+                                      b"Transfer-Encoding: chunked\r\nContent-Type: application/json\r\n\r\n3;x=\"a")
+                time.sleep(0.1)
+                held_chunk = stalled_chunk.dup()
+        for peer in (held, held_chunk):
+            peer.settimeout(2)
+            assert peer.recv(1) == b""
+            peer.close()
 
         with sqlite3.connect(database) as db:
             assert db.execute("SELECT name, value FROM counters").fetchall() == [("shared", 32)]
@@ -172,7 +187,7 @@ def main():
             assert request(port, "GET", "/counters/shared") == {"value": 32}
         check_batched_export(executable, Path(directory) / "export.db")
         check_cli_shutdown(executable, database)
-        print(f"Counter API, 32 increments from concurrent clients, persistence and shutdown passed ({elapsed:.3f}s for increments)")
+        print(f"Counter API, 32 concurrent increments, persistence and shutdown passed ({elapsed:.3f}s for increments)")
 
 
 def check_batched_export(executable, database):
@@ -222,11 +237,16 @@ def check_cli_shutdown(executable, database):
                 except ConnectionRefusedError:
                     assert process.poll() is None and time.monotonic() < deadline, "CLI did not start"
                     time.sleep(0.02)
-            assert request(port, "POST", "/shutdown", status=202) == {"stopping": True}
-            process.wait(timeout=8)
-            errors.seek(0)
-            error = errors.read()
-            assert process.returncode == 0, error
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as stalled:
+                stalled.sendall(b"GET /")
+                time.sleep(0.1)
+                assert request(port, "POST", "/shutdown", status=202) == {"stopping": True}
+                process.wait(timeout=8)
+                errors.seek(0)
+                error = errors.read()
+                assert process.returncode == 0, error
+                stalled.settimeout(2)
+                assert stalled.recv(1) == b"", "shutdown did not clean up the stalled connection"
         finally:
             if process.poll() is None:
                 process.kill()

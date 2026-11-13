@@ -552,6 +552,17 @@ endpoints and isolates copy freely."
 
 (defun shen-jit.self () (shen-jit.isolate 10 () ()))
 
+"(shen-jit.wait-any Rs Ms) gives the first of the receive endpoints Rs that has a
+message or is closed, waiting at most Ms milliseconds, or () if none has; it
+receives nothing."
+
+(defun shen-jit.wait-any (Receivers Milliseconds) (shen-jit.isolate 11 Receivers Milliseconds))
+
+"What waits on something other than a channel, such as a socket, calls this now
+and then, so that a kill reaches it: it raises killed if one is pending."
+
+(defun shen-jit.check-kill () (shen-jit.isolate 12 () ()))
+
 (defun shen-jit.end? (X) (= X shen-jit.end-of-stream))
 
 "After each form a load evaluates. A library can do then what needs the forms
@@ -696,10 +707,11 @@ which would otherwise compile its calls to them as look-ups with fn."
           (cons shen-jit.send (cons 2 (cons shen-jit.receive (cons 1 (cons shen-jit.receive-any (cons 1
             (cons shen-jit.close (cons 1 (cons shen-jit.give (cons 1 (cons shen-jit.monitor (cons 1
               (cons shen-jit.kill (cons 1 (cons shen-jit.self (cons 0 (cons shen-jit.end? (cons 1
+              (cons shen-jit.wait-any (cons 2 (cons shen-jit.check-kill (cons 0
                 (cons shen-jit.after-form (cons 1 (cons shen-jit.loading? (cons 0
                 (cons shen-jit.print-isolate (cons 1 (cons shen-jit.print-receiver (cons 1
                   (cons shen-jit.print-sender (cons 1 (cons shen-jit.print-given (cons 1
-                    ())))))))))))))))))))))))))))))))))))))
+                    ())))))))))))))))))))))))))))))))))))))))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-2 (cons a (cons b ()))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-3 (cons a (cons b (cons c ())))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-4 (cons a (cons b (cons c (cons d ()))))))

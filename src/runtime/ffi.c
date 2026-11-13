@@ -230,7 +230,8 @@ static void *resolve(VM *vm, uint64_t *f)
         sj_raise_text(vm, text);
         return NULL;
     }
-    f[FOREIGN_ADDRESS] = (uint64_t)(uintptr_t)address;
+    /* Isolates may find it at once: they store the same address. */
+    __atomic_store_n(&f[FOREIGN_ADDRESS], (uint64_t)(uintptr_t)address, __ATOMIC_RELAXED);
     return address;
 }
 #endif
@@ -355,7 +356,7 @@ V h_foreign(VM *vm)
     size_t n = vm->count;
     if (n != f[FOREIGN_ARITY])
         return sj_raise_arity(vm, desc[DESC_NAME], (size_t)f[FOREIGN_ARITY], n);
-    void *function = (void *)(uintptr_t)f[FOREIGN_ADDRESS];
+    void *function = (void *)(uintptr_t)__atomic_load_n(&f[FOREIGN_ADDRESS], __ATOMIC_RELAXED);
     if (!function && !(function = resolve(vm, f)))
         return V_CLEARED;
     int64_t flags = fixval(desc[DESC_FLAGS]);

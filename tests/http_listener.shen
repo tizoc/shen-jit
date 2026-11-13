@@ -12,9 +12,6 @@
 (define listener-test.raises?
   F -> (trap-error (do (thaw F) false) (/. X true)))
 
-(define listener-test.handler
-  Q -> (http.response 200 [] (buffer.from-string "ok")))
-
 (define listener-test.available
   -> (trap-error (do (clock.monotonic) true)
        (/. X (if (= (error-to-string X) "foreign: this static build cannot load libraries")
@@ -24,43 +21,81 @@
     (do (output "0 passed, 0 failed (static build: native listener unavailable)~%") (shen-jit.exit 0)))
 
 (define listener-test.listen
-  Options -> (http.listen "127.0.0.1" 0 (function listener-test.handler) Options))
+  Options -> (http.listen "127.0.0.1" 0 listener-test.handler Options))
 
 (define listener-test.client
   S -> (socket.connect "127.0.0.1" (http.port S)))
 
-(define listener-test.request
-  S Target ->
-    (let C (listener-test.client S)
-         _ (socket.closing-on-error C
-             (freeze (socket.send C (make-string "GET ~A HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Connection: closec#13;c#10;c#13;c#10;" Target))))
-      C))
+(define listener-test.two
+  X Q -> Q)
 
-(define listener-test.reply
-  C -> (listener-test.body (io.with-endpoint (io.socket C "listener test client")
-                             (/. Peer (io.read-all (io.reader Peer []) 4096)))))
+\\ Handlers run in the connections' isolates. /stop stops the server, /fail fails, and /tag, /port
+\\ and /stats give the handler's argument, its server's port and what its server's stats raise.
+(define listener-test.handler
+  Q -> (listener-test.tagged "ok" Q))
 
-(define listener-test.body
-  [ok V] ->
-    (let B (buffer.owner V)
-         N (buffer.length V)
-      (shen-jit.bytes->string B (- N 2) 2))
+(define listener-test.tagged
+  Tag Q -> (let Target (http.target Q)
+             (cases (= Target "/stop") (do (http.stop (http.current-server)) (listener-test.text "ok"))
+                    (= Target "/fail") (error "handler failed")
+                    (= Target "/tag") (listener-test.text Tag)
+                    (= Target "/port") (listener-test.text (str (http.port (http.current-server))))
+                    (= Target "/stats") (listener-test.text (trap-error (str (http.stats (http.current-server)))
+                                                              (/. X (error-to-string X))))
+                    true (listener-test.text "ok"))))
+
+(define listener-test.text
+  Text -> (http.response 200 [] (buffer.from-string Text)))
+
+\\ A client, in an isolate of its own while the caller of http.run serves: each step is a connection,
+\\ taken in turn, and it sends back what each gave. [get Target] gives [Status Body]; [stall Target]
+\\ opens a connection that sends half a head and waits, takes [get Target], then reads what the
+\\ first connection gets until it ends.
+(define listener-test.client-isolate
+  [Port Steps Out] -> (shen-jit.send Out (map (/. Step (trap-error (listener-test.step Port Step)
+                                                         (/. X [raised (error-to-string X)])))
+                                              Steps)))
+
+(define listener-test.step
+  Port [get Target] -> (listener-test.get Port Target)
+  Port [stall Target] -> (let A (socket.connect "127.0.0.1" Port)
+                              _ (socket.send A "GET / HTTP/1.1c#13;c#10;")
+                              Reply (listener-test.get Port Target)
+                           [Reply (listener-test.read A)]))
+
+(define listener-test.get
+  Port Target ->
+    (let C (socket.connect "127.0.0.1" Port)
+         _ (socket.send C (make-string "GET ~A HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Connection: closec#13;c#10;c#13;c#10;" Target))
+      (listener-test.read C)))
+
+\\ Everything until the end: [Status Body], or [] if there was nothing.
+(define listener-test.read
+  C -> (listener-test.parse (io.with-endpoint (io.socket C "listener test client")
+                              (/. Peer (io.read-all (io.reader Peer []) 4096)))))
+
+(define listener-test.parse
+  [ok V] -> (let B (shen-jit.string->bytes (buffer.string V))
+                 N (shen-jit.bytes-length B)
+              (if (= N 0) [] (listener-test.split B N 0)))
   [error Error] -> (error "client read: ~A" (io.error-message Error)))
 
-\\ The server a handler stops, once it has answered Count requests.
-(set listener-test.server [])
-(set listener-test.count 0)
+(define listener-test.split
+  B N At -> (cond ((> (+ At 4) N) [(shen-jit.bytes->string B 9 3) ""])
+                  ((and (= (shen-jit.u8 B At) 13) (= (shen-jit.u8 B (+ At 1)) 10)
+                        (= (shen-jit.u8 B (+ At 2)) 13) (= (shen-jit.u8 B (+ At 3)) 10))
+                    [(shen-jit.bytes->string B 9 3) (shen-jit.bytes->string B (+ At 4) (- N (+ At 4)))])
+                  (true (listener-test.split B N (+ At 1)))))
 
-(define listener-test.stop-after
-  Count Q -> (do (set listener-test.count (+ 1 (value listener-test.count)))
-                 (if (= (value listener-test.count) Count) (http.stop (value listener-test.server)) true)
-                 (if (= (http.target Q) "/fail") (error "handler failed") (listener-test.handler Q))))
-
-(define listener-test.serving
-  Count Options -> (let _ (set listener-test.count 0)
-                        S (http.listen "127.0.0.1" 0 (/. Q (listener-test.stop-after Count Q)) Options)
-                        _ (set listener-test.server S)
-                     S))
+\\ Runs S while a client takes Steps, and gives [Result Stats Replies] once the client has ended.
+(define listener-test.serve
+  S Steps -> (let R (shen-jit.channel 1)
+                  P (shen-jit.spawn listener-test.client-isolate [(http.port S) Steps (shen-jit.sender R)])
+                  M (shen-jit.monitor P)
+                  Result (http.run S)
+                  Got (shen-jit.receive-any [R M])
+                  _ (if (= (hd Got) R) (shen-jit.receive M) true)
+               [Result (http.stats S) (if (= (hd Got) R) (hd (tl Got)) [client (hd (tl Got))])]))
 
 (map (/. Options
        (listener-test.check "invalid options rejected" true
@@ -70,6 +105,11 @@
    [[body-limit -1]] [[head-limit 3]] [[max-connections nope]]
    [[read-buffer-size 0]] [[read-buffer-size 65537]] [[read-buffer-size -1]]
    [[read-buffer-size 1] [read-buffer-size 2]]])
+
+(map (/. Handler
+       (listener-test.check "invalid handlers rejected" true
+         (freeze (listener-test.raises? (freeze (http.listen "127.0.0.1" 0 Handler []))))))
+  [(/. Q Q) (function listener-test.handler) [] [1 2] "f" listener-test.two [listener-test.handler 1]])
 
 (let S (listener-test.listen [[shutdown-grace 0]])
      Before (http.wait S 0)
@@ -85,26 +125,35 @@
       (listener-test.check "listener port is closed" true
         (freeze (listener-test.raises? (freeze (listener-test.client S)))))))
 
-\\ Connections queued before the run are served one at a time, in order.
-(let S (listener-test.serving 3 [[max-connections 2]])
-     A (listener-test.request S "/a")
-     B (listener-test.request S "/b")
-     C (listener-test.request S "/c")
-     Result (http.run S)
-  (do (listener-test.check "connections served in turn" [ok] (freeze Result))
-      (listener-test.check "served in turn, one at a time" [0 3 3 0 0 1] (freeze (http.stats S)))
-      (listener-test.check "every reply is complete" ["ok" "ok" "ok"]
-        (freeze (map (function listener-test.reply) [A B C])))))
+\\ A connection waiting for its head does not hold the next one back, and is killed once the grace
+\\ has passed: counted as failed and as cancelled.
+(let Run (listener-test.serve (listener-test.listen [[shutdown-grace 0]]) [[stall "/stop"]])
+  (do (listener-test.check "a stalled connection stops nothing" [ok] (freeze (hd Run)))
+      (listener-test.check "the next is served meanwhile" [[["200" "ok"] []]] (freeze (nth 3 Run)))
+      (listener-test.check "the stalled one is killed" [0 2 2 1 1 2] (freeze (nth 2 Run)))))
 
-(let S (listener-test.serving 2 [])
-     Bad (listener-test.request S "/fail")
-     Good (listener-test.request S "/ok")
-     Result (http.run S)
-     Reply (listener-test.reply Good)
-     _ (socket.close Bad)
-  (do (listener-test.check "handler failure does not stop admission" "ok" (freeze Reply))
-      (listener-test.check "server survives a failed connection" [ok] (freeze Result))
-      (listener-test.check "request failure is counted separately" [0 2 2 1 0 1] (freeze (http.stats S)))))
+\\ At most max-connections at once: the next waits until the stalled one times out, with a 408.
+(let Run (listener-test.serve (listener-test.listen [[max-connections 1] [head-timeout 300]])
+           [[stall "/stop"]])
+  (do (listener-test.check "a full listener waits" [[["200" "ok"] ["408" ""]]] (freeze (nth 3 Run)))
+      (listener-test.check "one connection at a time" [0 2 2 1 0 1] (freeze (nth 2 Run)))))
+
+(let Run (listener-test.serve (listener-test.listen []) [[get "/fail"] [get "/ok"] [get "/stop"]])
+  (do (listener-test.check "handler failure does not stop admission" [["500" ""] ["200" "ok"] ["200" "ok"]]
+        (freeze (nth 3 Run)))
+      (listener-test.check "server survives a failed connection" [ok] (freeze (hd Run)))
+      (listener-test.check "request failure is counted separately" [0 3 3 1 0]
+        (freeze (reverse (tl (reverse (nth 2 Run))))))))
+
+(let S (http.listen "127.0.0.1" 0 [listener-test.tagged "tagged"] [])
+     Run (listener-test.serve S [[get "/tag"] [get "/port"] [get "/stats"] [get "/stop"]])
+  (listener-test.check "a handler's arguments and its server"
+    [["200" "tagged"] ["200" (str (http.port S))]
+     ["200" "http: a handler's server gives only its port, and stops"] ["200" "ok"]]
+    (freeze (nth 3 Run))))
+
+(listener-test.check "no handler runs in the caller" [raised "http: no handler runs here"]
+  (freeze (http.current-server)))
 
 (define listener-test.progress
   [error Error N] -> [(io.error-domain Error) N (io.error-progress Error)])

@@ -1572,6 +1572,52 @@ The owner's decisions after step 3 (design D's spec, "Simplifications"), each ta
   to 52, a small message's round trip 4.1 µs against 4.2 to 4.3, a 40,000-element list's 3.17 to 3.20 ms against 3.37
   to 3.45.
 
+### The HTTP listener on isolates (2026-11-12, Apple M3 Max with 16 cores, against the listener serving in turn)
+
+Step 4 of design D. `http.run` supervises, in its caller, an isolate for each connection, at most `max-connections`,
+given the accepted descriptor, which it alone then uses. A handler goes by name, `f` or `[f Arg ...]`, as closures do
+not cross, and stops its server with `(http.stop (http.current-server))`, a copy that holds the supervisor's channel.
+The supervisor asks a connection to stop by closing a channel the connection looks at, and kills those left once the
+grace has passed. The runtime gained `shen-jit.wait-any`, a wait on several receive endpoints with a time limit that
+receives nothing, and `shen-jit.check-kill`, which the I/O library's socket waits call between their slices of
+100 ms, so that a kill reaches a connection waiting on its socket. The listener has 387 lines, against 327 over
+threads in 0.7 and 233 in turn; `isolate.c` 77 more.
+
+- **Requests:** 64 from 8 Python clients, each on a connection of its own, in milliseconds, three runs each:
+
+  | Handler | In turn | One connection at a time | 8 at once |
+  | --- | --- | --- | --- |
+  | `GET /health` of the `sqlite-http` example | 9 to 13 | 10 to 15 | 12 to 13 |
+  | A handler computing `fib 25`, about 0.5 ms | 35 to 37 | 39 to 41 | 12 to 13 |
+  | `POST /counters/x`, a SQLite write | 26 to 29 | 32 to 35 | 75 to 150 |
+
+  A connection costs about 30 µs more, its isolate's spawn. Concurrent writes to one SQLite database wait for each
+  other in SQLite's busy handler, which sleeps between its attempts; that is the application's to arrange, with WAL or
+  one writer. Serving in turn, a client that stalls holds every other back until its own timeout.
+- **Found on the way: a supervisor that sleeps when full.** Waiting 50 ms between looks once `max-connections` were
+  open, as the listener over threads did, made each request at one connection at a time cost 52 ms, 3.3 s for the 64,
+  as the next connection waited for the sleep to end. So the supervisor waits on its channel and the connections'
+  monitors with `wait-any`, which returns as soon as one ends or tells, and polls the listener only while there is
+  room.
+- **Rejected: an acceptor isolate** feeding the supervisor accepted descriptors through a channel, which would let the
+  supervisor wait on channels alone and never poll: one more isolate, and the descriptor would cross twice, for no
+  gain in latency, as the poll returns as soon as a connection arrives.
+- **Rejected: the supervisor in an isolate of its own**, so that `http.listen` returns with the server running, as in
+  0.7. `http.state`, `http.stats` and `http.wait` would become requests and replies, and the program beside it could
+  not define anyway, as the program is fixed while isolates run.
+- **Rejected: counting failures from the monitors' reasons.** A connection that fails would have to end with an error,
+  which an isolate prints on stderr; it tells the supervisor's channel once instead, before it ends, so the
+  supervisor takes the messages after the ends it has seen.
+- **Foreign functions:** their address, found at the first call, is stored and read atomically, as connections in
+  several isolates may find it at once; they store the same value.
+- **`lib/handle.shen`** counts what its handles hold in globals, unbound in an isolate: it now starts each isolate's
+  count from nothing.
+- **Known:** a connection killed before its function has started leaves its descriptor open; only a grace of 0 can
+  kill one that young.
+- **Checks:** 43 listener cases, 15 runs in a row and 24 at once on a loaded machine, and under ThreadSanitizer with
+  the 42 isolate cases, which reports nothing. The listener's saved image passes under a collection at every
+  allocation. The `sqlite-http` example's test has its stalled connections back.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on

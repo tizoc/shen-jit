@@ -225,7 +225,7 @@ Unknown, duplicate and invalid options raise before ownership transfers. Each ph
 deadline spanning short progress, capped by the total connection budget. Handler execution cannot be
 interrupted; its elapsed time is charged to that total and checked before output. This convenience
 does not accept a second request or add an accept loop. The [listener](http-listener.md) uses
-the persistent variant below, serving connections in turn until stopped.
+the persistent variant below, serving each connection in an isolate of its own until stopped.
 The [streaming response reference](http-streaming.md) covers source ownership and output chunk limits.
 
 `read-buffer-size` bounds the connection's input reader and the chunks its reads borrow. It is independent

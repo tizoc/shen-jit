@@ -356,11 +356,15 @@ copied. Closures in a heap, streams, pointers, code and the end of a stream are 
 queue of fragments, copied into the receiver's heap as it receives, its receiver, and the
 senders waiting while it is full. An endpoint is an absvector `[Tag Index Generation]`, whose
 tag is a port function that prints it; freeing a channel raises its slot's generation, so a
-stale endpoint raises "channel closed". Each isolate waits on a condition of its own. A
-monitor is a channel of capacity 1 that gets `[down P Reason]` when P ends. `kill` marks the
-isolate, which raises "killed", once, at its next channel operation, or before it starts, and
-wakes it if it waits on a channel: an isolate needs no safe points, and code compiled for one is
-what any program runs. An isolate that ends tells its monitors, closes its files
+stale endpoint raises "channel closed". Each isolate waits on a condition of its own, with a
+time limit for `shen-jit.wait-any`, which looks at several receive endpoints without receiving,
+so that a supervisor can wake for whichever of its connections ends and still look at a socket
+or a clock now and then. A monitor is a channel of capacity 1 that gets `[down P Reason]` when P
+ends. `kill` marks the isolate, which raises "killed", once, at its next channel operation or
+`shen-jit.check-kill`, or before it starts, and wakes it if it waits on a channel: an isolate
+needs no safe points, and code compiled for one is what any program runs. What waits on
+something else, as the I/O library's socket waits do in slices of 100 ms, calls
+`shen-jit.check-kill` between them; in the builder, or before isolates exist, it does nothing. An isolate that ends tells its monitors, closes its files
 and the channels it receives on, and frees its context; its record is used again with a new
 generation.
 
@@ -389,7 +393,17 @@ variants of the rules that reads name. Outside a load, it compiles at once. In a
 variant is found by its name, and one never prepared is refused.
 
 A function goes to an isolate by its name, a published symbol, and the isolate gets it with
-`fn`; what `fn` makes is a closure in a heap, which does not cross.
+`fn`; what `fn` makes is a closure in a heap, which does not cross. A foreign function found at
+its first call in one isolate is found for all: they store the same address.
+
+**The HTTP listener** (`lib/http-listener.shen`) is a supervisor in the program that calls
+`http.run`, and an isolate for each connection, given the accepted descriptor, the handler's name
+and its arguments, the request options, a sender to the supervisor's channel, and the receive
+endpoint of a channel of its own, which the supervisor closes to ask it to stop. While there is
+room it polls the listener in slices of 50 ms; otherwise it waits on its channel and the
+connections' monitors. A connection tells it once that it failed, before it ends, and a handler
+once that it asked to stop. Once the grace has passed it kills the connections left, which a
+kill reaches in their next socket wait.
 
 **Not yet.** A channel whose receive endpoint is dropped stays until its receiver ends.
 

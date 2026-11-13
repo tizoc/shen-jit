@@ -1,11 +1,9 @@
-\\ The libraries are already loaded in the saved image. Every allocation collects. The handler stops
-\\ the server, which then closes the connection after its response.
-(set listener-gc.server [])
+\\ The libraries are already loaded in the saved image. Every allocation collects. The handler, in
+\\ the connection's isolate, stops the server, which then closes the connection after its response.
+(define listener-gc.handler
+  Q -> (do (http.stop (http.current-server)) (http.response 200 [] (buffer.from-string "ok"))))
 
-(let S (http.listen "127.0.0.1" 0
-          (/. Q (do (http.stop (value listener-gc.server)) (http.response 200 [] (buffer.from-string "ok"))))
-          [[shutdown-grace 0]])
-     _ (set listener-gc.server S)
+(let S (http.listen "127.0.0.1" 0 listener-gc.handler [[shutdown-grace 0]])
      C (socket.connect "127.0.0.1" (http.port S))
      _ (socket.send C "GET / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;")
      Result (http.run S)

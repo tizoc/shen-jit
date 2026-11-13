@@ -10,18 +10,21 @@ All notable changes to this project are documented in this file. The format is b
 - Isolates: `(shen-jit.spawn F X)` runs a function the program defined on an OS thread of its own, with its own
   heap, globals and property list, so isolates run on several cores at once. They talk through channels
   (`shen-jit.channel`, `shen-jit.sender`, `shen-jit.send`, `shen-jit.receive`, `shen-jit.receive-any`,
-  `shen-jit.close` and `shen-jit.end?`), which copy what is sent; `shen-jit.monitor` watches them, and `shen-jit.kill`
-  stops one at its next send or receive. Only the first isolate, the builder, defines, and the program is fixed while
-  other isolates run: defining raises until they have ended. Symbols are the same in every isolate.
+  `shen-jit.wait-any`, `shen-jit.close` and `shen-jit.end?`), which copy what is sent; `shen-jit.monitor` watches them,
+  and `shen-jit.kill` stops one at its next channel operation or `shen-jit.check-kill`, which the I/O library's socket
+  waits call. Only the first isolate, the builder, defines, and the program is fixed while other isolates run:
+  defining raises until they have ended. Symbols are the same in every isolate.
 - Grammars work in isolates: a load compiles a rule's loops after the form defining it, and prepares the streaming
   reads that code names. `shen-jit.after-form` registers a function to run after each form of a load.
 
 ### Changed
 
-- The HTTP listener serves its connections one at a time, in the program that calls the new `http.run`, until a
-  handler calls `http.stop`; `http.listen` binds and returns the server without serving. `http.wait` gives the result
-  once `http.run` has returned. `max-connections` and `shutdown-grace` are still checked but have no effect, until
-  connections are served in isolates. The `sqlite-http` example serves in turn too.
+- The HTTP listener serves each connection in an isolate of its own, in parallel, supervised by the program that calls
+  the new `http.run` until the server is stopped; `http.listen` binds and returns the server without serving, and
+  `http.wait` gives the result once `http.run` has returned. A handler goes by name, as `f` or `[f Arg ...]`, which
+  is called with the arguments and then the request, rather than as a closure, and stops its server with
+  `(http.stop (http.current-server))`. Connections left once `shutdown-grace` has passed are killed. The
+  `sqlite-http` example passes its database path as a handler argument.
 - A `blocking` foreign call passes byte buffers where they are, rather than copies, and the flag changes nothing now.
 - A definition whose code holds a value with no syntax, such as a vector put into a form given to `eval`, or a
   native `(const E)` whose value is one, is refused when it is defined.

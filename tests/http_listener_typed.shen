@@ -10,7 +10,7 @@
 
 (define listener-typed.run
   {--> boolean}
-  -> (let S (http.listen "127.0.0.1" 0 (function listener-typed.handler)
+  -> (let S (http.listen "127.0.0.1" 0 listener-typed.handler
               [[max-connections 2] [shutdown-grace 0] [body-limit 1024]])
           _ (http.stop S)
        (listener-typed.finished? (http.run S))))
