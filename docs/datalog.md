@@ -262,12 +262,14 @@ shen-jit eval -l lib/native.shen -l lib/datalog.shen -l lib/ffi.shen -l lib/buff
   sends its database back, which has the tuples and rounds `datalog.run` gives, and answers everything, `add`, `remove`,
   `explain` and `stats` too; its derivations differ by a few, as a plan whose relation grows derives some again. What is
   not recursive runs in every isolate, and every isolate adds every new tuple, so the gain is in rounds that derive many
-  more tuples than they keep: a closure that keeps most of what it derives, as a call graph's does, is slower so than
-  run whole, and so is a run of a few milliseconds, as starting the isolates and each round's exchange cost more with
-  more of them. Time both. Each run shares the program again if the builder has made plans since, so run it in the
-  builder first, on facts like these, and start it there while no other isolate runs; the isolates then join in the
-  orders the sizes choose.
-- **Any other program,** or a count `N` below 2, runs as `datalog.run` does.
+  more tuples than they keep, and each round's exchange costs more with each isolate. So `run-parallel` goes by the
+  program's last run on facts, by `datalog.run` or in isolates: it runs the joins only if that run's recursive rounds,
+  all that isolates share, derived four times the tuples they kept, in as many isolates as get 50,000 derivations a
+  round each, at most `N`, and otherwise runs the program whole, as a call graph's closure, which keeps most of what it
+  derives, is faster run. With no run to go by, it takes `N`. Each run shares the program again if the builder has made
+  plans since, so run it in the builder first, on facts like these, and start it there while no other isolate runs; the
+  isolates then join in the orders the sizes choose, in as many isolates as pay.
+- **Any other program,** or a count `N` of 1, runs as `datalog.run` does; `N` that is not a positive integer raises.
 - **Saving:** a program saved with `--save` runs in the saved image, and one saved as an executable runs on its own:
   [example-apps/depends](https://github.com/tizoc/shen-jit/blob/main/example-apps/depends/README.md) is a dependency analyser
   over Shen and KL sources, built so, which uses most of the above.

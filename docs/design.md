@@ -468,7 +468,10 @@ runs every component, and in each round of a recursive one takes only the new tu
 hash to it, by a test on the outer loop of each variant's plan, which the builder makes again for that (`owned`
 sources). Each then sends every other the tuples it derived, as bytes on a channel for each pair, and adds theirs with a
 native loop, so all start the next round with the same tuples, choose the same plans and stop together; the first
-sends its database back. Interned values agree only if no rule makes a string, so such programs run whole.
+sends its database back. Interned values agree only if no rule makes a string, so such programs run whole. Every
+isolate adds every new tuple, so `run-parallel` uses as many isolates as the program's last run says pay: none
+unless its recursive rounds derived four times the tuples they kept, and only as many as get 50,000 derivations a
+round.
 
 A negated atom counts as a dependency too, so its relation's component comes first, and the checker refuses a program where a relation depends
 on the negation of one in its own component. A negated atom is then a condition, like a comparison, placed as soon as its variables are bound:
