@@ -591,17 +591,27 @@ with a monitor, and gives [[I | Monitor] ...]; if one cannot start, it stops
 those it started, and raises. (isolate.stop-each Started) kills them all, as
 a call's cleanup does, waits for each to end, and closes the monitors. A kill
 of an isolate that has ended does nothing, and a monitor already read or closed
-is passed over; a Ctrl-C ends the wait, as it ends any."
+is passed over; a Ctrl-C ends the wait, as it ends any. What spawn-each started
+is in a vector made first, [Started I Monitor], by stores, which do not
+allocate, so that a failure to allocate anywhere after a spawn stops it too."
 
-(defun isolate.spawn-each (F Args) (shen-jit.spawn-each-h F Args ()))
+(defun isolate.spawn-each (F Args)
+  (let Cell (address-> (address-> (address-> (absvector 3) 0 ()) 1 ()) 2 ())
+    (shen-jit.on-error (freeze (shen-jit.spawn-each-h F Args Cell)) (freeze (shen-jit.stop-cell Cell)))))
 
-(defun shen-jit.spawn-each-h (F Args Started)
+(defun shen-jit.spawn-each-h (F Args Cell)
   (if (= () Args)
-      (reverse Started)
-      (let I (shen-jit.on-error (freeze (isolate.spawn F (hd Args))) (freeze (isolate.stop-each Started)))
-        (let Monitor (shen-jit.on-error (freeze (isolate.monitor I))
-                                        (freeze (do (isolate.kill I) (isolate.stop-each Started))))
-          (shen-jit.spawn-each-h F (tl Args) (cons (cons I Monitor) Started))))))
+      (reverse (<-address Cell 0))
+      (do (address-> Cell 1 (isolate.spawn F (hd Args)))
+          (do (address-> Cell 2 (isolate.monitor (<-address Cell 1)))
+              (do (address-> Cell 0 (cons (cons (<-address Cell 1) (<-address Cell 2)) (<-address Cell 0)))
+                  (do (address-> (address-> Cell 1 ()) 2 ())
+                      (shen-jit.spawn-each-h F (tl Args) Cell)))))))
+
+(defun shen-jit.stop-cell (Cell)
+  (do (if (= () (<-address Cell 1)) true (isolate.kill (<-address Cell 1)))
+      (do (isolate.stop-each (<-address Cell 0))
+          (if (= () (<-address Cell 2)) true (shen-jit.await (<-address Cell 2))))))
 
 (defun isolate.stop-each (Started)
   (do (shen-jit.kill-each Started) (shen-jit.await-each Started)))
@@ -614,8 +624,10 @@ is passed over; a Ctrl-C ends the wait, as it ends any."
 (defun shen-jit.await-each (Started)
   (if (= () Started)
       true
-      (do (trap-error (do (channel.receive (tl (hd Started))) (channel.close (tl (hd Started)))) (lambda E skip))
-          (shen-jit.await-each (tl Started)))))
+      (do (shen-jit.await (tl (hd Started))) (shen-jit.await-each (tl Started)))))
+
+(defun shen-jit.await (Monitor)
+  (trap-error (do (channel.receive Monitor) (channel.close Monitor)) (lambda E skip)))
 
 "Types for typed programs, and the two namespaces' exports, so that a client
 can write (use channel => c). An isolate is of type isolate, and endpoints of

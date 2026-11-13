@@ -15,8 +15,13 @@
   N F Xs -> (let _ (check N F Xs)
               (if (empty? Xs)
                   []
-                  (let Launched (launch F (split Xs (sizes (length Xs) (smaller N (length Xs)))))
-                    (shen-jit.on-error (freeze (gather Launched [] [])) (freeze (stop Launched)))))))
+                  (let Runs (split Xs (sizes (length Xs) (smaller N (length Xs))))
+                       Replies (replies Runs)
+                       Cell (address-> (absvector 1) 0 [])
+                    (shen-jit.on-error
+                      (freeze (gather (launched Replies (started Cell (isolate.spawn-each map-run (run-args F Runs Replies))))
+                                      [] []))
+                      (freeze (stop Cell Replies)))))))
 
 (define check
   N F Xs ->
@@ -60,11 +65,11 @@
   [X | Xs] N Run Ns -> (split-run Xs (- N 1) [X | Run] Ns))
 
 \\ An isolate for each run, with a channel for its reply and a monitor for its end: [Reply Down P].
-\\ If a spawn fails, spawn-each stops those it started, and the replies' channels are closed here.
-(define launch
-  F Runs -> (let Replies (replies Runs)
-              (launched Replies (shen-jit.on-error (freeze (isolate.spawn-each map-run (run-args F Runs Replies)))
-                                                   (freeze (close-replies Replies))))))
+\\ What spawn-each gives is stored in Cell at once, a store allocating nothing, so that whatever
+\\ fails after it, even making the list, stops the isolates. If a spawn fails, spawn-each stops
+\\ those it started.
+(define started
+  Cell Started -> (do (address-> Cell 0 Started) Started))
 
 (define close-replies
   [] -> true
@@ -82,21 +87,10 @@
   [] [] -> []
   [Reply | Replies] [[P | Down] | Started] -> [[Reply Down P] | (launched Replies Started)])
 
-\\ Kills each isolate, waits for it to end, and closes its channels, some of which a wait may have
-\\ closed already.
+\\ Kills each isolate, waits for it to end, which closes its monitor, and closes the replies'
+\\ channels, some of which a wait may have closed already.
 (define stop
-  Launched -> (do (isolate.stop-each (map-pairs Launched))
-                  (close-all Launched)))
-
-(define map-pairs
-  [] -> []
-  [[_ Down P] | Launched] -> [[P | Down] | (map-pairs Launched)])
-
-(define close-all
-  [] -> true
-  [[Reply Down _] | Launched] -> (do (trap-error (channel.close Reply) (/. E skip))
-                                    (trap-error (channel.close Down) (/. E skip))
-                                    (close-all Launched)))
+  Cell Replies -> (do (isolate.stop-each (<-address Cell 0)) (close-replies Replies)))
 
 (define map-run
   [F Run Out] ->

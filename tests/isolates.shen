@@ -520,6 +520,12 @@
        _ (channel.receive (tl (hd Started)))
     (isolate.stop-each Started)))
 
+\\ The two that started wait for ever, so the program could not change unless they were stopped.
+(pt.check "spawn-each stops those it started when one cannot start" [refused done]
+  (let Why (pt.message (freeze (isolate.spawn-each pt.block [1 2 (/. X X)])))
+       _ (eval [define pt.after-each -> done])
+    [(if (string? Why) refused Why) (pt.after-each)]))
+
 (pt.check "an isolate prints tuples and dictionaries" ["(@p 1 2)" "(dict ...)"] (pt.ask pt.printed []))
 
 \\ What an isolate registers with shen-jit.at-end runs once as it ends. A shared exception formats

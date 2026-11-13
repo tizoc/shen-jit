@@ -2105,6 +2105,22 @@ connection starts, which no test makes.
   twice when making the endpoint fails, as `io.socket` closes it then, and the number could by then be another
   isolate's.
 
+### What a seventh review found (2026-11-13, Apple M3 Max, against the commit before)
+
+Two. One was the sixth's HTTP fix closing a socket twice, corrected in that fix, whose entry says what stayed.
+
+- **Isolates a call started, lost to a failed allocation.** `isolate.spawn-each` kept what it had started in its
+  arguments, so a failure to allocate after a spawn, making the monitor's pair, linking it or reversing the list, lost
+  the isolate, and so did `parallel.map` and Datalog's parts and joins between `spawn-each` returning and their
+  cleanup taking hold. Isolates that wait on each other would then run for ever and keep the program fixed. Each now
+  keeps what it started in a vector made before the first spawn, by stores, which do not allocate, under one cleanup
+  that also covers the result's making. A new case checks that the two of three that started are stopped when the
+  third cannot start; that path passed before too.
+- **Tried: a test that lands an allocation failure in that gap.** Filling the heap under `SHEN_JIT_MAX_HEAP`, then
+  freeing a pair at a time and trying `spawn-each` again, failed four times, none after a spawn: the reserve kept
+  for the error, and the collection after it, move the failure further than a pair. A hook to fail the Nth
+  allocation would do it, and is not worth its code for this.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on
