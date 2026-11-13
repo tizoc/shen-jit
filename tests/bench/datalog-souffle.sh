@@ -3,6 +3,7 @@
 # souffle and a C++ compiler, and is not part of any suite. Times are milliseconds, best of three: of
 # datalog.run with facts as a list, and of Soufflé's process, reading facts and printing sizes, less the
 # same process with no facts, which is its startup. Homebrew's bottle has no OpenMP, so one thread.
+# PARALLEL=N adds datalog.run-parallel in N isolates, as column pN.
 # Usage: tests/bench/datalog-souffle.sh SHEN_JIT [CASE ...]
 SHEN=$1
 shift
@@ -33,7 +34,7 @@ for c in closure-sparse closure-dense nonlinear same-generation mutual triangles
     mkdir -p "$base/$c"
 done
 "$SHEN" eval -l lib/native.shen -l lib/datalog.shen -l tests/bench/datalog.shen -l tests/bench/datalog-orders.shen \
-    -l tests/bench/datalog-souffle.shen -e "(sf.main \"$base\")" > "$base/ours.log" 2>&1 < /dev/null
+    -l tests/bench/datalog-souffle.shen -e "(set sf.*parallel* ${PARALLEL:-0})" -e "(sf.main \"$base\")" > "$base/ours.log" 2>&1 < /dev/null
 if ! grep -aq '^OURS points-to-large-c' "$base/ours.log"; then
     tail -8 "$base/ours.log" | cut -c1-160
     exit 1
@@ -57,6 +58,7 @@ best() {
 }
 
 printf '%-20s %9s' case ours
+[ -n "$PARALLEL" ] && printf ' %9s' "p$PARALLEL"
 for j in $THREADS; do printf ' %9s' "j$j"; done
 printf ' %9s %9s %9s %s\n' interpreted start build-ms results
 for c in $CASES; do
@@ -81,6 +83,9 @@ for c in $CASES; do
     fi
     start=$(best "$d/prog" -F "$d/empty")
     printf '%-20s %9s' "$c" "$ours"
+    if [ -n "$PARALLEL" ]; then
+        printf ' %9s' "$(grep -a "^PARALLEL $c " "$base/ours.log" | awk '{print ($4 == "same") ? $3 : "DIFFER"}')"
+    fi
     for j in $THREADS; do
         t=$(best "$d/prog" -F "$d" -j "$j")
         printf ' %9s' "$(python3 -c "print('over' if '$t'=='over' else '%.1f' % ($t-$start))")"

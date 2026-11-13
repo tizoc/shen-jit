@@ -4548,6 +4548,64 @@ Raw outputs, the small native claim adapter, instrumented runtimes and reports r
 `build/`. Timings from different campaigns are identified above; no code gain is claimed from merely
 removing a diagnostic GC. All normal core/library checks passed before these source-identical trials.
 
+### Joins in isolates, for programs that do not run in parts (2026-11-13, Apple M3 Max with 16 cores, against `datalog.run` and the Soufflé 2.5 timings above)
+
+Runs in parts need every rule to keep its key, so a nonlinear closure, same generation or points-to ran whole,
+which left Soufflé's parallel runs ahead on them. `datalog.run-parallel` now runs such a program's joins in its
+isolates, when it has a recursive rule and only relations of symbols, strings and integers, with no equivalence,
+relation of one tuple a key or rule that makes a string, as interned values must agree; `datalog.partition` gives
+`[joins Reason]` for it. About 230 lines of code.
+
+- **How:** each of N isolates holds the whole database and runs every component, as `datalog.run` does. A
+  variant's plan, made again in the builder, reads only the new tuples an isolate owns: its outer loop, which reads
+  them, tests a hash of some of their columns, inline. After each round an isolate sends the tuples it derived,
+  each relation's as bytes, to every other, on a channel for each pair, and adds theirs with a native loop; all then
+  have the same tuples, if in another order, so they choose the same plans and stop together. The first sends its
+  database back, with every isolate's derivations in rounds added, so the result has the tuples and rounds of
+  `datalog.run`, and answers `add`, `remove`, `explain` and `stats` too. Its derivations differ by a few: a plan
+  whose relation grows derives its outer tuple's again, and each isolate grows at other times.
+- **Own by the next lookup's key, not the whole tuple.** With a hash of every column, derivations divided exactly
+  (points-to order a, on other facts than below: 11.4 million in one isolate, 5.7 in each of two, 2.85 in each of four), but each took longer:
+  22 ns in one isolate, 29 in two, 38 in four and 48 in eight, as each isolate read every key's tuples. Whole runs
+  side by side cost 1.10 times at two and 1.38 at eight, so contention was not most of it. Owning by the columns
+  the following lookup reads gives an isolate a key's tuples, and only its keys' part of the other relations: on
+  those facts, an isolate's compute at 8 went 110 → 81 ms, and at 12 103 → 56, and the whole call at 8 193 → 160.
+- **Adding what others derived, natively.** A KL loop calling the insert kernel took 85 of an isolate's 225 ms on
+  points-to at 8; a kernel looping over the bytes, as the insert kernel does one tuple, takes 49. It reads each
+  column from the bytes where it is used: read into registers first, as it was at first, a relation of 7 columns
+  or more needed more than the 16 word registers a kernel has, and every run of a program with one raised. Points-to
+  order c at 8 is the same either way, medians of six alternating runs 146 and 148 ms.
+- **Times** on the facts of `make bench-datalog-souffle`, whose `PARALLEL=N` now adds a column, best of three
+  after a run, ms; every result the same as `datalog.run`'s. Soufflé's are its 12 threads from "Against Soufflé"
+  above, on the same facts, dated and on a machine then loaded 3 to 4:
+
+  | Joins | `datalog.run` | 2 | 4 | 8 | 12 | Soufflé, 12 threads |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | Nonlinear closure | 130.9 | 74.2 | 44.9 | 30.6 | 26.8 | 62 |
+  | Points-to large, order a | 320.3 | 234.5 | 177.4 | 146.9 | 149.3 | 1,491 |
+  | Points-to large, order b | 409.3 | 266.6 | 195.8 | 155.3 | 152.0 | over 100 s on one |
+  | Points-to large, order c | 316.4 | 235.2 | 177.6 | 146.3 | 144.6 | 168 |
+  | Points-to small, order c | 83.7 | 64.0 | 44.5 | 38.5 | 36.0 | 40.5 |
+  | Same generation | 9.1 | 7.8 | 7.6 | 8.7 | 11.7 | 9.2 |
+  | The call graph | 6.6 | 8.5 | 9.9 | 15.3 | 24.1 | 29.2 |
+  | Mutual recursion | 0.2 | 1.0 | 1.7 | 3.7 | 6.9 | |
+
+  The nonlinear closure is 4.9 times faster at 12, and points-to 2.2 to 2.7, so both are ahead of Soufflé's 12
+  threads. Same generation gains little, and the call graph, which keeps 126,304 of 282,967 derivations over 49
+  rounds, and mutual recursion lose, more with more isolates: each round is a send to and a receive from every
+  other. Starting the isolates is not it: the call graph with no facts takes 0.1, 0.4 and 0.7 ms at 2, 4 and 8.
+
+- **Left:** every isolate adds every new tuple, and the isolates' parts overlap, 1.58 times the distinct tuples on
+  points-to; at 8 that was about 49 of 160 ms. Sending each derived tuple first to the isolate that owns it, which
+  adds it once and sends on the new ones, would add each about once, for a second exchange each round. What is not
+  recursive runs in every isolate.
+- **Checks:** joins against `datalog.run` in 2, 3, 6 and 8 isolates, with the same rounds and plans, and
+  derivations to within 1%; two components with negation between them, of symbols and strings; mutual recursion;
+  tuples of 8 columns, with a variant that hashes them all;
+  `add`, `remove` and `explain` on the result; an error raised in the isolates, as `datalog.run` raises it; and 100
+  generated programs, 35 of which ran their joins in isolates, once a declared record type that no relation uses
+  no longer kept a program from them.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.

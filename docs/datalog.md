@@ -58,9 +58,9 @@ false
 | `(datalog.plans Name)`, `(datalog.code Name)` | Each rule's order of joins with no sizes to go by, and the code that gives: each kernel as written for `lib/native.shen`, and the KL that calls it |
 | `(datalog.stats Db)` | The rounds, how many plans were made, and each relation's tuples, the derivations that made them and its indexes |
 | `(datalog.run-naive Name Facts)` | The same result by the plain definition, slowly: what the rest is tested against |
-| `(datalog.share Name)`, `(datalog.use Shared)` | A program prepared and shared, for [isolates](#isolates), and taken up in one, which gives its name |
-| `(datalog.run-parallel N Name Facts)` | The same as `datalog.run`, in at most `N` isolates, each running the rules for some of the keys, for a program that [runs in parts](#isolates); a database of the parts, which answers `count`, `holds?`, `ask`, `match`, `tuples` and `sorted` |
-| `(datalog.partition Name)` | `[parallel KeyType DerivedRelations]` if the program runs in parts, or `[sequential Reason]` |
+| `(datalog.share Name)`, `(datalog.use Shared)` | A program prepared and shared, for isolates (below), and taken up in one, which gives its name |
+| `(datalog.run-parallel N Name Facts)` | The same as `datalog.run`, in at most `N` isolates: for a program that runs in parts (below), each runs the rules for some of the keys, and it gives a database of the parts, which answers `count`, `holds?`, `ask`, `match`, `tuples` and `sorted`; for one whose joins run in isolates (below), they share each round of its recursive rules, and it gives a database as `datalog.run` does |
+| `(datalog.partition Name)` | `[parts KeyType DerivedRelations]` if the program runs in parts, `[joins Reason]` if its joins run in isolates, with why it does not run in parts, or `[sequential Reason]` |
 
 - **Columns** are `symbol`, `string`, `integer` or a declared type, and a value of another type raises when it is given. An integer
   is 32 bits, signed: from -2147483648 to 2147483647.
@@ -251,8 +251,23 @@ shen-jit eval -l lib/native.shen -l lib/datalog.shen -l lib/ffi.shen -l lib/buff
   isolates in turn, each running a copy of the program whose rules hold only for its keys, on every input fact and the
   derived facts of its keys, and keeps the databases they send back. Counts, membership and queries read them all, or the
   first for an input relation, which each has whole; `add`, `remove`, `explain` and `stats` raise, and `datalog.run` makes a
-  database that answers them. A program that does not run in parts, or one with fewer than two keys, runs as `datalog.run`
-  does. The first run in parts defines and shares the copy, so it is made in the builder, while no other isolate runs.
+  database that answers them. A program with fewer than two keys runs as `datalog.run` does. The first run in parts
+  defines and shares the copy, so it is made in the builder, while no other isolate runs.
+- **Joins in isolates:** a program that does not run in parts, but has a recursive rule, and only relations of symbols,
+  strings and integers, with no equivalence or relation of one tuple a key, and no rule that makes a string, runs its
+  joins in isolates instead: a nonlinear closure, say, or a points-to analysis. Each of `N` isolates holds the whole
+  database and runs every rule, and in each round of a recursive component takes only some of the new tuples, by a hash
+  of the columns the rule looks the next relation up by, so that one isolate reads a key's tuples; it then sends the
+  tuples it derived to every other and adds theirs, so that all start the next round with the same tuples. The first
+  sends its database back, which has the tuples and rounds `datalog.run` gives, and answers everything, `add`, `remove`,
+  `explain` and `stats` too; its derivations differ by a few, as a plan whose relation grows derives some again. What is
+  not recursive runs in every isolate, and every isolate adds every new tuple, so the gain is in rounds that derive many
+  more tuples than they keep: a closure that keeps most of what it derives, as a call graph's does, is slower so than
+  run whole, and so is a run of a few milliseconds, as starting the isolates and each round's exchange cost more with
+  more of them. Time both. Each run shares the program again if the builder has made plans since, so run it in the
+  builder first, on facts like these, and start it there while no other isolate runs; the isolates then join in the
+  orders the sizes choose.
+- **Any other program,** or a count `N` below 2, runs as `datalog.run` does.
 - **Saving:** a program saved with `--save` runs in the saved image, and one saved as an executable runs on its own:
   [example-apps/depends](https://github.com/tizoc/shen-jit/blob/main/example-apps/depends/README.md) is a dependency analyser
   over Shen and KL sources, built so, which uses most of the above.
