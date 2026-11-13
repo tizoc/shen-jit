@@ -1689,6 +1689,31 @@ channel for its reply and a monitor for its end, so that an isolate ending witho
 - **Left for later in step 6:** Datalog in isolates, which compiles plans and kernels as it runs and keeps state in
   globals and property lists, and with it parallel Datalog and the `source-deps` batches.
 
+### Fixed or adaptive join orders, for Datalog in isolates (2026-11-13, Apple M3 Max, `make bench-datalog`)
+
+An isolate cannot compile, and Datalog chooses join orders as relations grow, compiling a plan for each, so the plans a
+run needs depend on its data. Measured before deciding how isolates get theirs: the same build, `*adaptive*` on and
+off, two rounds of the main workloads and one of the ordering cases.
+
+- **The main workloads do not care:** closures, same generation, mutual recursion, triangles, the skewed join, the
+  kernel's call graph and analysis, and the demand queries are within run-to-run noise both ways, the sparse closure
+  74 to 79 ms adaptive and 76 to 88 fixed, with 2 plans fixed against 11 adaptive. Their rules have little to
+  reorder.
+- **Rules with many atoms do, in their bad written order:**
+
+  | ms | Fixed | Adaptive |
+  | --- | --- | --- |
+  | Chain, order a / b | 4.8 / 6.8 | 4.9 / 4.9 |
+  | Points-to small, order a / b | 277 / 112 | 85 / 112 |
+  | Points-to large, order a / b | 5,189 / 506 | 372 / 424 |
+
+  Fixed orders cost up to 14 times as much, as on 2026-11-07, when the order a rule was written in is the bad one;
+  adaptive runs compiled 46 and 61 plans for points-to.
+- **So:** fixed orders alone would cost isolates up to that on such programs. Any order of a rule's atoms gives the
+  same tuples, so an isolate can choose among the plans compiled for it and fall back to one of them, at worst the
+  fixed order, when the one it would choose is missing: correct always, adaptive when the builder has met the plans,
+  and fixed at worst.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on
