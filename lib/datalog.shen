@@ -32,6 +32,9 @@
 \\ datalog.plans       (datalog.plans Name), the order of each rule's joins and the indexes they use
 \\ datalog.code        (datalog.code Name), the KL those give
 \\ datalog.stats       (datalog.stats Db), rounds, and per relation tuples and derivations
+\\ datalog.share       (datalog.share Name), the program prepared for isolates, which cannot compile,
+\\                     as a shared value
+\\ datalog.use         (datalog.use Shared) in an isolate, which gives the name to run it by
 \\
 \\ A column is a symbol, a string or an integer of 32 bits, signed. A variable in a head, a
 \\ comparison or a negated atom must appear in a positive atom of the body, or be bound by =.
@@ -64,7 +67,7 @@
   (shadow atom? bound? index log2 nth run some? sort subset?)
   (export add ask bytes->facts code datalog.count => count datalog.define => define demand-db
     explain holds? match datalog.plans => plans query read-facts relation->bytes
-    datalog.remove => remove run run-naive solve sorted stats tuples write-facts defdatalog)
+    datalog.remove => remove run run-naive share solve sorted stats tuples use write-facts defdatalog)
 
 (set *adaptive* true)
 (set *plans* 0)
@@ -1267,13 +1270,40 @@
 (eval-kl [defun dict-find [d k] [shen-jit.dict-find d k]])
 (shen.store-arity dict-find 2)
 
-\\ A generated kernel, once, under its name. Kernels depend only on the shape of a tuple.
+\\ A generated kernel, once, under its name. Kernels depend only on the shape of a tuple. An isolate,
+\\ which cannot install one, finds those the builder made as it prepared the program (datalog.share).
 (define kernel
-  Name Make -> (if (cons? (dict-find (value *kernels*) Name))
-                   Name
-                   (do (shen-jit.install-code [defun Name (thaw Make)])
-                       (shen.dict-> (value *kernels*) Name true)
-                       Name)))
+  Name Make -> (cases (cons? (dict-find (value *kernels*) Name)) Name
+                      (and (not (shen-jit.builder?)) (defined? Name))
+                        (do (shen.dict-> (value *kernels*) Name true) Name)
+                      true (do (builder-only Name)
+                               (shen-jit.install-code [defun Name (thaw Make)])
+                               (shen.dict-> (value *kernels*) Name true)
+                               Name)))
+
+(define defined?
+  F -> (trap-error (do (shen-jit.function F) true) (/. E false)))
+
+(define builder-only
+  Name -> (if (shen-jit.builder?)
+              skip
+              (error "datalog: ~A was not prepared: share the program, after running it as it will be run (datalog.share)" Name)))
+
+\\ A closure of a function of Params made once under Name, with its arity, so that fn makes the
+\\ closure, in an isolate too, which finds it made.
+(define made
+  Name Params Body
+  -> (let Known (dict-find (value *kernels*) Name)
+       (if (cons? Known)
+           (tl Known)
+           (let _ (if (and (not (shen-jit.builder?)) (defined? Name))
+                      skip
+                      (do (builder-only Name)
+                          (eval-kl [defun Name Params (thaw Body)])
+                          (shen.store-arity Name (length Params))))
+                F (fn Name)
+                _ (shen.dict-> (value *kernels*) Name F)
+             F))))
 
 (define kernel-name
   Prefix N Keys -> (intern (name-with Keys (cn Prefix (str N)))))
@@ -2052,9 +2082,9 @@
           _ (put Name counter (+ N 1))
        (cn "datalog." (cn (str Name) (cn ".p" (str N))))))
 
-\\ Generated functions are called from here as closures, which need no arity or lambda table entry.
+\\ Generated functions are called from here as closures, which fn makes once their arity is known.
 (define callable
-  Name -> (eval-kl [lambda x [Name x]]))
+  Name -> (do (shen.store-arity Name 1) (fn Name)))
 
 \\ A kernel's form shows what it was written as; it is installed already.
 (define install
@@ -2068,7 +2098,8 @@
           Entry (dict-find Cache Steps)
        (if (cons? Entry)
            (tl Entry)
-           (let Ctx [Relations Constants (get Name indexes)]
+           (let _ (builder-only (cn (str Name) " plans"))
+                Ctx [Relations Constants (get Name indexes)]
                 _ (set *constructors* (nth 7 (datalog.program Name)))
                 _ (set *keyed* (nth 9 (datalog.program Name)))
                 _ (set *equivalences* (nth 8 (datalog.program Name)))
@@ -2077,7 +2108,7 @@
                 Fn (gen-either Steps Ctx Prefix)
                 Forms (reverse (value *forms*))
                 _ (install Forms)
-                Code [(callable Fn) | Forms]
+                Code [(callable Fn) Fn | Forms]
                 _ (shen.dict-> Cache Steps Code)
              Code))))
 
@@ -2788,7 +2819,7 @@
   [Steps | More] Name Relations Constants
   -> (let _ (put Name indexes (steps-indexes Steps Relations (get Name indexes)))
           Code (compiled Name Steps Relations Constants)
-       (append (tl Code) (code-h More Name Relations Constants))))
+       (append (tl (tl Code)) (code-h More Name Relations Constants))))
 
 \\ ---------------------------------------------------------------------------
 \\ Running.
@@ -3167,7 +3198,7 @@
        (if (cons? Known)
            (tl Known)
            (let Find (find-kernel 5 [1])
-                F (eval-kl [lambda c [lambda v [Find [classes.table c] [classes.layout c] [classes.mask c] v]]])
+                F (made Name [c v] (freeze [Find [classes.table c] [classes.layout c] [classes.mask c] v]))
                 _ (shen.dict-> (value *kernels*) Name F)
              F))))
 
@@ -3289,7 +3320,7 @@
 \\ A closure of an index's kernel, for calling it from here.
 (define index-function
   N Keys -> (let K (index-kernel N Keys)
-              (eval-kl [lambda a [lambda b [lambda c [lambda d [lambda e [lambda f [K a b c d e f]]]]]]])))
+              (made (intern (cn "datalog.indexer." (str K))) [a b c d e f] (freeze [K a b c d e f]))))
 
 (define new-index
   N Keys Count
@@ -3323,13 +3354,32 @@
 
 (define first-functions
   [] _ _ -> []
-  [R | Rs] Est Run -> (let F (steps-function (plan-rule R Est) Run)
-                        [F | (first-functions Rs Est Run)]))
+  [R | Rs] Est Run
+  -> (let F (steps-function (prepared-steps (plan-rule R Est) (freeze (plan-rule R [])) (freeze (plan-rule R [])) Run) Run)
+       [F | (first-functions Rs Est Run)]))
 
 (define variant-functions
   [] _ _ -> []
-  [[R P Old] | Vs] Est Run -> (let F (steps-function (plan-variant R P Old Est) Run)
-                            [F | (variant-functions Vs Est Run)]))
+  [[R P Old] | Vs] Est Run
+  -> (let F (steps-function (prepared-steps (plan-variant R P Old Est) (freeze (plan-variant R P Old []))
+                                            (freeze (plan-rule R [])) Run)
+                            Run)
+       [F | (variant-functions Vs Est Run)]))
+
+\\ An isolate cannot compile, so it takes the plan the sizes choose if the builder compiled it, then
+\\ the same with no sizes to go by, and otherwise the whole rule's plan with none, over all the
+\\ tuples, which the builder always compiled (datalog.share). Any order of a rule's atoms gives the
+\\ same tuples, and so does the whole rule where a variant would read only the new ones, with more
+\\ derivations.
+(define prepared-steps
+  Steps Fixed Whole [Name | _]
+  -> (cases (shen-jit.builder?) Steps
+            (compiled? Name Steps) Steps
+            (compiled? Name (thaw Fixed)) (thaw Fixed)
+            true (thaw Whole)))
+
+(define compiled?
+  Name Steps -> (cons? (dict-find (get Name compiled) Steps)))
 
 \\ Sizes to within a power of two: a new plan when one has moved that far.
 (define signature
@@ -3408,8 +3458,8 @@
          (if (cons? Known)
              (tl Known)
              (let Find (find-kernel N (upto 1 (- N 1)))
-                  F (eval-kl [lambda r [lambda l
-                               [Find [<-address r 8] [<-address r 2] [shen-jit.u32 [<-address r 4] 8] | (list-forms (- N 1) l)]]])
+                  F (made Name [r l]
+                      (freeze [Find [<-address r 8] [<-address r 2] [shen-jit.u32 [<-address r 4] 8] | (list-forms (- N 1) l)]))
                   _ (shen.dict-> (value *kernels*) Name F)
                F))))
 
@@ -3450,7 +3500,7 @@
                  Known (dict-find (value *kernels*) Name)
               (if (cons? Known)
                   (tl Known)
-                  (let F (eval-kl [lambda r [lambda l (insert-form N (list-forms N l) Mode)]])
+                  (let F (made Name [r l] (freeze (insert-form N (list-forms N l) Mode)))
                        _ (shen.dict-> (value *kernels*) Name F)
                     F))))
 
@@ -3460,8 +3510,8 @@
          (if (cons? Known)
              (tl Known)
              (let Find (find-kernel N (upto 1 N))
-                  F (eval-kl [lambda r [lambda l
-                               [Find [<-address r 3] [<-address r 2] [shen-jit.u32 [<-address r 4] 8] | (list-forms N l)]]])
+                  F (made Name [r l]
+                      (freeze [Find [<-address r 3] [<-address r 2] [shen-jit.u32 [<-address r 4] 8] | (list-forms N l)]))
                   _ (shen.dict-> (value *kernels*) Name F)
                F))))
 
@@ -3555,7 +3605,7 @@
          (if (cons? Known)
              (tl Known)
              (let K (intern-kernel N)
-                  F (eval-kl [lambda r [lambda l [K [<-address r 3] [<-address r 2] [<-address r 4] | (list-forms N l)]]])
+                  F (made Name [r l] (freeze [K [<-address r 3] [<-address r 2] [<-address r 4] | (list-forms N l)]))
                   _ (shen.dict-> (value *kernels*) Name F)
                F))))
 
@@ -3942,7 +3992,12 @@
   -> (let Keys (key-columns Terms 1 [])
        (cases (or (empty? Keys) (has-classes? (relation-of Db Rel))) (tuples Db Rel)
               (= (length Keys) (length Terms)) (if (holds? Db [Rel | Terms]) [Terms] [])
+              (not (index-ready? Db Rel Keys)) (tuples Db Rel)
               true (tuples-at Db Rel Keys (map (/. K (nth K Terms)) Keys)))))
+
+\\ In an isolate, an index can be started only on columns the builder made one on.
+(define index-ready?
+  [db Name | _] Rel Keys -> (or (shen-jit.builder?) (defined? (index-finder-name (length (types-of Name Rel)) Keys))))
 
 (define match-tuples
   [] _ Acc -> Acc
@@ -4257,9 +4312,20 @@
 
 (define solve
   Name Facts [Rel | Terms]
-  -> (let Asked (asked Name [Rel | Terms])
-          Db (run (hd Asked) [(hd (tl Asked)) | Facts])
-       (match-tuples (tuples Db (hd (tl (tl Asked)))) Terms [])))
+  -> (if (demand-ready? Name [Rel | Terms])
+         (let Asked (asked Name [Rel | Terms])
+              Db (run (hd Asked) [(hd (tl Asked)) | Facts])
+           (match-tuples (tuples Db (hd (tl (tl Asked)))) Terms []))
+         (match (run Name Facts) [Rel | Terms])))
+
+\\ An isolate cannot make the program a query's demand needs, so it has only those the builder made.
+(define demand-ready?
+  Name [Rel | Terms] -> (or (shen-jit.builder?)
+                            (element? (demand-name Name Rel (map (/. T (if (known? T []) b f)) Terms))
+                                      (get Name demands))))
+
+(define demand-name
+  Name Rel Adorn -> (intern (cn (str Name) (cn "@" (str (adorned-name Rel Adorn))))))
 
 \\ For a query: the program rewritten for its adornment, the fact that asks it, and the relation that
 \\ answers.
@@ -4280,6 +4346,12 @@
                   [demand Name (demand-store.make Facts (shen.dict 8))]))
 
 (define match-demand
+  Name Kept [Rel | Terms]
+  -> (let Entry (dict-find (demand-store.dbs Kept) Name)
+          Db (if (cons? Entry) (tl Entry) (run Name (demand-store.facts Kept)))
+          _ (shen.dict-> (demand-store.dbs Kept) Name Db)
+       (match Db [Rel | Terms]))
+     where (not (demand-ready? Name [Rel | Terms]))
   Name Kept [Rel | Terms]
   -> (let Asked (asked Name [Rel | Terms])
           Seed (hd (tl Asked))
@@ -4313,14 +4385,17 @@
        [(tuple-at (<-address Rec 2) (* (- P 1) (<-address Rec 7)) Types Records) | Acc]))
 
 \\ A closure of the find kernel for an index on Keys, given the index, the tuples and the values.
+(define index-finder-name
+  Arity Keys -> (intern (make-string "datalog.index-finder.~A.~A" Arity Keys)))
+
 (define index-finder
   Arity Keys
-  -> (let Name (intern (make-string "datalog.index-finder.~A.~A" Arity Keys))
+  -> (let Name (index-finder-name Arity Keys)
           Known (dict-find (value *kernels*) Name)
        (if (cons? Known)
            (tl Known)
            (let Find (find-kernel Arity Keys)
-                F (eval-kl [lambda i [lambda t [lambda l [Find [index.table i] t [index.mask i] | (list-forms (length Keys) l)]]]])
+                F (made Name [i t l] (freeze [Find [index.table i] t [index.mask i] | (list-forms (length Keys) l)]))
                 _ (shen.dict-> (value *kernels*) Name F)
              F))))
 
@@ -4330,7 +4405,7 @@
 
 (define datalog.demand
   Name Rel Adorn
-  -> (let D (intern (cn (str Name) (cn "@" (str (adorned-name Rel Adorn)))))
+  -> (let D (demand-name Name Rel Adorn)
           Known (get Name demands)
        (if (element? D Known)
            D
@@ -4557,6 +4632,109 @@
   [cons H T] -> [(unbracket-term H) | (unbracket-term T)]
   [X | Xs] -> (map (function unbracket-term) [X | Xs])
   X -> X)
+
+\\ ---------------------------------------------------------------------------
+\\ Isolates. An isolate cannot compile or install, so the builder prepares a program and shares it:
+\\ (datalog.share Name) gives a value outside every heap, which an isolate takes up with
+\\ (datalog.use Shared), which gives the name, after which the rest works there as in the builder.
+\\ Preparing runs the program on no facts with no sizes to go by, which compiles every rule's plan in
+\\ that order, and makes the closures that facts, queries, records and keyed relations call; plans
+\\ the builder made as it ran before come too. An isolate takes the plan the sizes choose if it was
+\\ made, and that order otherwise (prepared-steps); a query by columns no prepared index has reads
+\\ every tuple; and a query by demand the builder did not ask runs the whole program.
+
+(define share
+  Name -> (let _ (prepare-program Name)
+            (shen-jit.share [datalog-program Name (value *adaptive*) (value *native*)
+                             (map (function program-snapshot) [Name | (all-demands Name)])])))
+
+(define all-demands
+  Name -> (mapcan (/. D [D | (all-demands D)]) (get Name demands)))
+
+(define prepare-program
+  Name -> (let Adaptive (value *adaptive*)
+               _ (shen-jit.finally (freeze (do (set *adaptive* false) (run Name [])))
+                                   (freeze (set *adaptive* Adaptive)))
+               Program (datalog.program Name)
+               Relations (nth 3 Program)
+               _ (map (/. R (prepare-steps Name (plan-rule R []) Relations (nth 5 Program))) (nth 4 Program))
+               _ (prepare-relations Relations (nth 9 Program) (nth 8 Program))
+               _ (map (/. C (prepare-record (nth 6 C))) (nth 7 Program))
+               _ (map (/. E (map (/. Keys (index-finder (arity-in (hd E) Relations) Keys)) (tl E)))
+                      (get Name indexes))
+               _ (map (function prepare-program) (get Name demands))
+            Name))
+
+\\ A plan, with the kernels and closures of the indexes it looks up.
+(define prepare-steps
+  Name Steps Relations Constants
+  -> (do (put Name indexes (steps-indexes Steps Relations (get Name indexes)))
+         (compiled Name Steps Relations Constants)
+         (map (/. Step (let I (step-index Step Relations)
+                         (if (= I none) skip (index-function (arity-in (hd I) Relations) (hd (tl I))))))
+              Steps)))
+
+(define prepare-relations
+  [] _ _ -> true
+  [[Rel | Types] | Rs] Keyed Equivalences
+  -> (let N (length Types)
+          Mode (assoc Rel Keyed)
+          _ (if (> N 0) (finder N) skip)
+          _ (if (empty? Mode) skip (do (key-finder N) (keyed-closure N (tl Mode))))
+          _ (if (element? Rel Equivalences) (do (key-finder-5) (index-function 5 [1])) skip)
+       (prepare-relations Rs Keyed Equivalences)))
+
+(define keyed-closure
+  N [lattice _] -> (adder-for N replace)
+  N Mode -> (adder-for N Mode))
+
+(define prepare-record
+  Width -> (if (> Width 0) (do (interner Width) (finder Width)) skip))
+
+\\ A program: its name, definition, schedule, demand programs, indexes, and plans as [Steps Function
+\\ | Forms].
+(define program-snapshot
+  Name -> (let Cache (get Name compiled)
+            [Name (datalog.program Name) (get Name schedule) (get Name demands) (get Name indexes)
+             (map (/. Steps [Steps | (tl (tl (dict-find Cache Steps)))]) (shen.dict-keys Cache))]))
+
+(define use
+  [datalog-program Name Adaptive Native Programs]
+  -> (do (if (trap-error (do (value *kernels*) true) (/. E false)) skip (isolate-globals))
+         (set *adaptive* Adaptive)
+         (set *native* Native)
+         (map (function use-program) Programs)
+         Name)
+  X -> (error "datalog: ~S is not a shared program" X))
+
+\\ What the library sets as it loads, which an isolate has not got.
+(define isolate-globals
+  -> (do (set *plans* 0)
+         (set *constructors* [])
+         (set *interned-slot* 0)
+         (set *naive-keyed* [])
+         (set *kernels* (shen.dict 8))
+         (set *equivalences* [])
+         (set *keyed* [])
+         (set *fallbacks* 0)
+         (set *labels* 0)
+         (set *made* [])
+         (set *merges* 0)
+         (set *fresh* [])))
+
+(define use-program
+  [Name Program Schedule Demands Indexes Plans]
+  -> (do (put Name datalog.program Program)
+         (put Name schedule Schedule)
+         (put Name demands Demands)
+         (put Name indexes Indexes)
+         (put Name counter 0)
+         (put Name compiled (plan-cache Plans (shen.dict 8)))))
+
+(define plan-cache
+  [] Cache -> Cache
+  [[Steps Fn | Forms] | Plans] Cache -> (do (shen.dict-> Cache Steps [(fn Fn) Fn | Forms])
+                                            (plan-cache Plans Cache)))
 
 \\ A form building the data, with variables as [var "X"] and _ as [any]: left as they are they
 \\ would be read as Shen's own variables.

@@ -58,6 +58,7 @@ false
 | `(datalog.plans Name)`, `(datalog.code Name)` | Each rule's order of joins with no sizes to go by, and the code that gives: each kernel as written for `lib/native.shen`, and the KL that calls it |
 | `(datalog.stats Db)` | The rounds, how many plans were made, and each relation's tuples, the derivations that made them and its indexes |
 | `(datalog.run-naive Name Facts)` | The same result by the plain definition, slowly: what the rest is tested against |
+| `(datalog.share Name)`, `(datalog.use Shared)` | A program prepared and shared, for [isolates](#isolates), and taken up in one, which gives its name |
 
 - **Columns** are `symbol`, `string`, `integer` or a declared type, and a value of another type raises when it is given. An integer
   is 32 bits, signed: from -2147483648 to 2147483647.
@@ -214,6 +215,33 @@ shen-jit eval -l lib/native.shen -l lib/datalog.shen -l lib/ffi.shen -l lib/buff
 ```
 
   After what `deps.shen` prints, this prints `(ok 8)`, the bytes written, and the facts read back, in no particular order.
+- **Isolates:** an [isolate](guide.md#isolates) cannot compile, and a run compiles its plans as it goes, so the builder
+  prepares a program for isolates and shares it. `(datalog.share Name)` compiles the plan of every rule with no sizes to
+  go by, the variants a run uses too, and what loading facts, queries, records and keyed relations call, and gives the
+  program, with every plan made so far, as a shared value. An isolate passes it to `(datalog.use Shared)`, which gives the
+  program's name, and the rest works there as in the builder:
+
+  ```shen
+  (define count-depends
+    [Shared Facts Out] -> (let Name (datalog.use Shared)
+                            (shen-jit.send Out (datalog.count (datalog.run Name Facts) depends))))
+
+  (let Shared (datalog.share dependencies)
+       R (shen-jit.channel 2)
+       _ (shen-jit.spawn count-depends [Shared [[imports a b] [imports b c]] (shen-jit.sender R)])
+       _ (shen-jit.spawn count-depends [Shared [[imports x y]] (shen-jit.sender R)])
+       A (shen-jit.receive R)
+       B (shen-jit.receive R)
+    (if (< A B) [A B] [B A]))
+  \\ [1 3]
+  ```
+
+  An isolate takes the order of joins the sizes choose if the builder made that plan, and otherwise the rule's order with no
+  sizes to go by, or for a variant that reads only new tuples, the whole rule's: any order gives the same tuples. So run the
+  program in the builder, on facts like those the isolates will have, before sharing it, and its isolates join as well as
+  the builder does. A query on columns the builder never looked up by reads every tuple of the relation, and a query by demand
+  the builder never asked runs the whole program. Define and share programs before spawning: the program cannot change while
+  isolates run.
 - **Saving:** a program saved with `--save` runs in the saved image, and one saved as an executable runs on its own:
   [example-apps/depends](https://github.com/tizoc/shen-jit/blob/main/example-apps/depends/README.md) is a dependency analyser
   over Shen and KL sources, built so, which uses most of the above.

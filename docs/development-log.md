@@ -1714,6 +1714,39 @@ off, two rounds of the main workloads and one of the ordering cases.
   fixed order, when the one it would choose is missing: correct always, adaptive when the builder has met the plans,
   and fixed at worst.
 
+### Datalog in isolates (2026-11-13, Apple M3 Max, against the builder's adaptive runs)
+
+The rest of step 6's design, on the hybrid chosen after measuring fixed against adaptive orders (above). An isolate
+cannot compile, so `(datalog.share Name)` prepares a program in the builder and gives it as a shared value, its plans
+included, and `(datalog.use Shared)` puts it in an isolate's own property list.
+
+- **Preparing:** a run on no facts with no sizes to go by compiles the plan of every rule and of every variant the
+  schedule has; the whole rule's plan with no sizes is compiled for every rule too, with the kernels and closures of the
+  indexes the plans look up, and those that loading facts, `holds?`, records, keyed relations, lattices and
+  equivalences call, for each arity.
+- **Choosing:** an isolate takes the plan the sizes choose if it was compiled, then the same with no sizes to go by, and
+  otherwise the whole rule's: `datalog.add` runs variants for whichever relations grew, which no run on no facts plans,
+  and the whole rule over all tuples gives what a variant does, with more derivations. A query on columns no prepared
+  index has reads every tuple, and a query by demand the builder never asked runs the whole program.
+- **Closures made with `eval-kl`:** six places made a closure of a kernel by evaluating a lambda, which an isolate
+  cannot. Each now installs a named function once, with its arity, and takes it with `fn`, in the builder as in an
+  isolate; plan functions are taken with `fn` too.
+- **Points-to, order a,** whose fixed order cost 3.3 and 14 times the adaptive one:
+
+  | ms | Builder, adaptive | Isolate, fixed plans only | Isolate, the builder's plans |
+  | --- | --- | --- | --- |
+  | Small | 86 | 299 | 85 |
+  | Large | 388 | 6,367 | 408; 379 with plans met on the small facts |
+
+  Plans the builder met on the small facts served the large ones.
+- **The builder pays nothing measurable:** the Datalog workloads with the library before and after, alternating, two
+  rounds, are within noise; `nonlinear, dense` read 3 to 4% slower in both, and alone, four times each, 130 to 133 ms
+  against 129 to 138.
+- **Found on the way:** an add's variants and the classes of an equivalence, laid out with an index kernel of their
+  own, needed what a run on no facts does not make; 60 generated programs, run, added to, removed from and queried
+  in isolates against the plain definition, showed both, and pass now, as 300 did once, also with a collection every
+  1,000 words.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on
