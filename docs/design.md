@@ -391,7 +391,8 @@ handle library's sweep, in rounds: a collection finds dead the guarded pointers 
 a release may use another handle, which outlives it until that release has run and so dies in a
 later round. Only what dies is released, so always in that order and with the globals a release may
 read still there; what the argument slots of calls to C and the error last caught hold is dead by then,
-and cleared before each round, and rounds go on while a collection finds a guard dead. What
+and cleared before each round, and rounds go on while a collection finds a guard dead. A
+collection inside a release may find more dead; they stay queued for the next round. What
 its globals still hold is left to the system, as a program's is when it ends. Then it tells its monitors,
 closes its files
 and the channels it receives on, and frees its context; its record keeps why it ended, as a symbol
@@ -443,7 +444,8 @@ space hold too, and marks each vector and byte buffer in it shared,
 by bit 7 of its header. Nothing in it points into a heap, so collections neither scan nor move
 it, any isolate reads it by pointer, and an image saves it with the program. Nothing changes
 it: code that stores into a vector or buffer tests the header's whole low byte, which a shared
-one fails, and C refuses it, as it refuses changing a shared dictionary, while code that reads
+one fails, and C refuses it, `shen_vector_set` too, as it refuses changing a dictionary whose
+buckets or entries are shared, even through an unshared copy of its wrapper, while code that reads
 masks the bit out, so neither pays for it. That replaced testing on every store whether the
 address lies in the program space, which would have added the space's bounds, a subtraction and
 a comparison to every store. It is never freed. C given a shared buffer must not write into it.

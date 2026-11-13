@@ -798,8 +798,10 @@ static void isolate_end(Isolate *p, V reason)
 
 /* Collections and releases, until a collection finds no guard dead, as a release may leave
    another unreached, or make one. Run releases what is on the dead list, through the functions in
-   sweepers; what they leave there is dropped. Before each collection, what a release left in the
-   argument slots of a call to C, or the error it caught, is cleared, as it is dead. */
+   sweepers. What a collection during a release puts there waits for the next round; the batch
+   they were given, if they left it there, is dropped, so that a sweeper that takes nothing ends
+   the rounds. Before each collection, what a release left in the argument slots of a call to C,
+   or the error it caught, is cleared, as it is dead. */
 static void release_rounds(VM *vm, V run, V *sweepers)
 {
     for (;;) {
@@ -809,8 +811,12 @@ static void release_rounds(VM *vm, V run, V *sweepers)
         vm_collect(vm, 0);
         if (vm->dead == V_NIL)
             return;
+        V batch = vm->dead;
+        vm_root(vm, &batch);
         jit_call(vm, run, 1, sweepers);
-        vm->dead = V_NIL;
+        if (vm->dead == batch)
+            vm->dead = V_NIL;
+        vm_unroot(vm, 1);
     }
 }
 

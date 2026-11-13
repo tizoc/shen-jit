@@ -315,6 +315,23 @@
   (freeze (handle-test.released-by c)))
 (handle-test.check "and one held by an error a release caught" [outer inner]
   (freeze (handle-test.released-by caught)))
+\\ And when a release lets go of the inner handle and collects, finding it dead, it is released in
+\\ the next round. The outer one holds the inner one in a box, which its release empties.
+(define handle-test.collecting
+  [Out _] -> (let Box (absvector 1)
+                  _ (address-> Box 0 (handle.wrap (memory.alloc 8) (/. M (do (memory.free M) (channel.send Out inner)))))
+                  Outer (handle.wrap (memory.alloc 8) (/. M (handle-test.let-go M Box Out)))
+               (shen-jit.u8! Outer 0 1)))
+
+(define handle-test.let-go
+  M Box Out -> (do (shen-jit.u8 (<-address Box 0) 0) (address-> Box 0 0) (memory.free M) (channel.send Out outer)
+                   (shen-jit.collect)))
+
+(handle-test.check "and when a release collects, finding the inner one dead" [outer inner]
+  (freeze (let R (channel.new 2)
+               M (isolate.monitor (isolate.spawn handle-test.collecting [(channel.sender R) []]))
+               _ (channel.receive M)
+            (handle-test.drain R))))
 
 (handle-test.check "a handle its last call to C took is released" released
   (freeze (let R (channel.new 2)

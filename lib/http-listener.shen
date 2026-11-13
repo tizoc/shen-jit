@@ -301,13 +301,15 @@
 
 \\ A connection's requests, under its limits and deadlines, until it ends; once the server stops,
 \\ it closes after its active response is written. A failure ends it and is counted, not raised.
+\\ The connection is set up inside the endpoint, which closes the socket however it ends; io.socket
+\\ closes it if the endpoint cannot be made.
 (define connection-isolate
   [Peer Handler Options Port Control Stop] ->
-    (let _ (set *serving* (handler-copy Port Control))
-         Result (trap-error
+    (let Result (trap-error
                   (io.with-endpoint (io.socket Peer "HTTP peer")
-                    (/. E (serve-controlled E (handler-function Handler) Options
-                            (freeze (ready? Stop)))))
+                    (/. E (do (set *serving* (handler-copy Port Control))
+                              (serve-controlled E (handler-function Handler) Options
+                                (freeze (ready? Stop))))))
                   (/. X [error (io.error serve "HTTP connection" (error-to-string X))]))
       (if (= (hd Result) error) (tell Control failed) true)))
 

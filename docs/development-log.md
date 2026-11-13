@@ -2085,6 +2085,26 @@ Four, all fixed; the reviewer found the earlier fixes sound and no speed-up wort
 - **A message's room.** Its large blocks were checked against `SHEN_JIT_MAX_HEAP` apart from the rest, so the two
   together could pass the limit; the whole of it is checked now.
 
+### What a sixth review found (2026-11-13, Apple M3 Max, against the commit before)
+
+Four, all fixed; the first three have cases that fail on the commit before, while the last needs a failure as a
+connection starts, which no test makes.
+
+- **Writes into shared storage.** `shen_vector_set` stored into a shared vector, which no collection scans, so a
+  heap value stored there would dangle; it gives 0 now. A dictionary checked only its own wrapper, so an unshared
+  copy of a shared dictionary's wrapper, made with `absvector`, could add to, change or remove from its shared
+  buckets; any write that would land in the program space raises now. Both checks are on paths that already test
+  their argument, and stores from compiled code are unchanged.
+- **The release rounds dropped what a release's own collection found.** A release that collected put the handles
+  found dead on the list, and the round then emptied the whole list, so those were never released. The round now
+  empties it only if nothing was added; a case whose outer release lets go of the inner handle and collects gave
+  `[outer]` and now `[outer inner]`.
+- **An HTTP connection's isolate** set up its handler's state before its socket became an endpoint, so a failure
+  there left the peer open and went unreported; it is set up inside the endpoint now, which closes the socket however
+  it ends, and such a failure is counted as the others are. Another closer around `io.socket` would close the socket
+  twice when making the endpoint fails, as `io.socket` closes it then, and the number could by then be another
+  isolate's.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on

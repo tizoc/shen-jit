@@ -41,6 +41,13 @@
 (define pt.third
   [_ _ X] -> X)
 
+\\ Whether a message ends with a text, as a dictionary's printed form varies.
+(define pt.message-of
+  Text -> [ends Text])
+
+(define pt.message-of-text
+  M -> (if (and (string? M) (>= (pt.length M) 28)) [ends (pt.suffix M 28)] [ends M]))
+
 (define pt.ready
   [ready R] -> R)
 
@@ -529,6 +536,23 @@
        _ (channel.receive M)
        X (if (= (channel.wait-any [R] 0) [timeout]) none (channel.receive R))
     [X (channel.wait-any [R] 0)]))
+
+\\ A dictionary that is not shared but holds the buckets of one that is cannot change them.
+(define pt.unshared-wrapper
+  D -> (let W (absvector 3)
+            _ (address-> W 0 (<-address D 0))
+            _ (address-> W 1 (<-address D 1))
+            _ (address-> W 2 (<-address D 2))
+         W))
+
+(pt.check "a copy of a shared dictionary cannot change its buckets"
+  [(pt.message-of "is shared, and cannot change") (pt.message-of "is shared, and cannot change")
+   (pt.message-of "is shared, and cannot change")]
+  (let D (shen.dict 4)
+       _ (shen.dict-> D a 1)
+       W (pt.unshared-wrapper (isolate.share D))
+    (map (/. F (pt.message-of-text (pt.message F)))
+         [(freeze (shen.dict-> W a 2)) (freeze (shen.dict-> W b 2)) (freeze (shen.dict-rm W a))])))
 
 (pt.check "a shared exception formats alike each time" ["three: 3" "three: 3"]
   (let E (isolate.share (trap-error (error "three: ~A" 3) (/. X X)))
