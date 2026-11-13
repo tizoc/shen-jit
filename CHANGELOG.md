@@ -29,9 +29,10 @@ All notable changes to this project are documented in this file. The format is b
   isolates, each for some of the keys, and gives a database of the parts, which counts, membership and queries read;
   `datalog.partition` says whether a program runs so. A recursive program that cannot run so runs its joins in the
   isolates instead: each holds the whole database and takes part of each round's new tuples, and the result is a
-  database as `datalog.run` gives; `datalog.partition` gives `[joins Reason]` for it. Others run as `datalog.run` does.
-- The `source-deps` example's batch queries are back, with `--workers N` running them in isolates over the graph
-  shared once; no worker image is needed.
+  database as `datalog.run` gives; `datalog.partition` gives `[joins Reason]` for it. It does so in as many isolates as
+  the program's last run says pay, or runs it whole. Others run as `datalog.run` does.
+- The `source-deps` example's batch queries, with `--workers N`, run in isolates over the graph shared once; no
+  worker image is needed.
 - Grammars work in isolates: a load compiles a rule's loops after the form defining it, and prepares the streaming
   reads that code names. `shen-jit.after-form` registers a function to run after each form of a load.
 

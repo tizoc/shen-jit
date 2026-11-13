@@ -60,6 +60,13 @@
   -> (dpp.check Label (dpp.answers (datalog.run-parallel N Name Facts) Relations Probes)
                       (dpp.answers (datalog.run Name Facts) Relations Probes)))
 
+\* The same for joins in isolates, which datalog.run-parallel runs only where its last run says they
+   pay: these run them however small. *\
+(define dpp.joins
+  Label N Name Facts Relations Probes
+  -> (dpp.check Label (dpp.answers (datalog.run-joined N Name Facts) Relations Probes)
+                      (dpp.answers (datalog.run Name Facts) Relations Probes)))
+
 (defdatalog dpp.paths
   (relation edge [integer integer])
   (relation path [integer integer])
@@ -165,28 +172,28 @@
 \* Joins in isolates: the same tuples, rounds and derivations as datalog.run, in any number of
    isolates, with more isolates than new tuples too. *\
 (set dpp.dense (dpp.edges 300 60 []))
-(map (/. N (do (dpp.compare (make-string "joins in ~An isolates" N) N dpp.nonlinear (value dpp.dense) [edge path]
+(map (/. N (do (dpp.joins (make-string "joins in ~An isolates" N) N dpp.nonlinear (value dpp.dense) [edge path]
                  [[path 3 [var "Y"]] [path [var "X"] 4] [path 5 5] [path 1000 1]])
                (dpp.check (make-string "with the rounds, plans and about the derivations of a run, in ~A" N)
-                 (dpp.counted (datalog.stats (datalog.run-parallel N dpp.nonlinear (value dpp.dense)))
+                 (dpp.counted (datalog.stats (datalog.run-joined N dpp.nonlinear (value dpp.dense)))
                    (datalog.stats (datalog.run dpp.nonlinear (value dpp.dense))))
                  true)))
      [2 3 8])
-(dpp.compare "joins for one edge" 6 dpp.nonlinear [[edge 1 2]] [path] [[path 1 2]])
-(dpp.compare "joins for no facts" 3 dpp.nonlinear [] [path] [[path 1 2]])
+(dpp.joins "joins for one edge" 6 dpp.nonlinear [[edge 1 2]] [path] [[path 1 2]])
+(dpp.joins "joins for no facts" 3 dpp.nonlinear [] [path] [[path 1 2]])
 
-(dpp.compare "two components, symbols and strings" 4 dpp.layers
+(dpp.joins "two components, symbols and strings" 4 dpp.layers
   (append (map (/. F [edge (dpp.symbol (hd (tl F))) (dpp.symbol (hd (tl (tl F))))]) (dpp.edges 90 50 []))
           (map (/. F [label (dpp.symbol (hd (tl F))) (cn "s" (str (hd (tl (tl F)))))]) (dpp.edges 20 50 [])))
   [reach alone tagged] [[tagged [var "X"] "s1"] [alone [var "X"]] [reach n1 [var "Y"]]])
-(dpp.compare "mutual recursion" 5 dpp.mutual (dpp.edges 200 50 []) [even odd] [[odd 1 [var "Y"]] [even [var "X"] 2]])
-(dpp.compare "wide tuples" 4 dpp.wide (dpp.edges 60 30 []) [row] [[row 1 [var "Y"] 1 2 3 4 5 6]])
+(dpp.joins "mutual recursion" 5 dpp.mutual (dpp.edges 200 50 []) [even odd] [[odd 1 [var "Y"]] [even [var "X"] 2]])
+(dpp.joins "wide tuples" 4 dpp.wide (dpp.edges 60 30 []) [row] [[row 1 [var "Y"] 1 2 3 4 5 6]])
 
 \* A database from joins in isolates takes facts, removes them and explains, as one from a run does;
    both change in place. *\
 (let Facts (dpp.edges 150 50 [])
      More (dpp.edges 20 50 [])
-     Db (datalog.run-parallel 4 dpp.nonlinear Facts)
+     Db (datalog.run-joined 4 dpp.nonlinear Facts)
      Run (datalog.run dpp.nonlinear Facts)
   (do (dpp.check "adding to joins" (datalog.sorted (datalog.add Db More) path) (datalog.sorted (datalog.add Run More) path))
       (dpp.check "removing from joins" (datalog.sorted (datalog.remove Db More) path)
@@ -194,7 +201,7 @@
       (dpp.check "explaining joins" true (cons? (datalog.explain Db [path | (hd (datalog.tuples Db path))])))))
 
 (dpp.check "a fact of no relation raises as in a run"
-  (trap-error (datalog.run-parallel 4 dpp.nonlinear [[edge 1 2] [nope 1 2]]) (/. E (error-to-string E)))
+  (trap-error (datalog.run-joined 4 dpp.nonlinear [[edge 1 2] [nope 1 2]]) (/. E (error-to-string E)))
   (trap-error (datalog.run dpp.nonlinear [[edge 1 2] [nope 1 2]]) (/. E (error-to-string E))))
 
 \* Generated programs, against datalog.run, all of whose relations it gives: those whose joins run
@@ -207,14 +214,56 @@
             Facts (hd (tl (tl Program)))
             Name (dtg.numbered "dpp.g" N)
             _ (datalog.define Name (dtg.items Relations (hd (tl Program))))
-            _ (if (= (hd (datalog.partition Name)) joins) (set dpp.joined (+ 1 (value dpp.joined))) skip)
+            Joins (= (hd (datalog.partition Name)) joins)
+            _ (if Joins (set dpp.joined (+ 1 (value dpp.joined))) skip)
             Names (map (function hd) Relations)
+            Db (if Joins (datalog.run-joined 3 Name Facts) (datalog.run-parallel 3 Name Facts))
             _ (dpp.check (make-string "generated ~A" N)
-                (map (/. R (datalog.sorted (datalog.run-parallel 3 Name Facts) R)) Names)
+                (map (/. R (datalog.sorted Db R)) Names)
                 (map (/. R (datalog.sorted (datalog.run Name Facts) R)) Names))
          (dpp.generated (- N 1))))
 (dpp.generated 100)
 (dpp.check "some generated programs ran their joins in isolates" true (> (value dpp.joined) 20))
+
+\* How many isolates datalog.run-parallel gives joins, by what the program's last run on facts counted:
+   rounds, derivations and the tuples they kept. *\
+(defdatalog dpp.fresh
+  (relation edge [integer integer])
+  (relation path [integer integer])
+  (rule (path X Y) <-- (edge X Y))
+  (rule (path X Z) <-- (path X Y) (path Y Z)))
+
+(defdatalog dpp.chain
+  (relation edge [integer integer])
+  (relation reach [integer integer])
+  (rule (reach X Y) <-- (edge X Y))
+  (rule (reach X Z) <-- (edge X Y) (reach Y Z)))
+
+(define dpp.line
+  N N -> []
+  I N -> [[edge I (+ I 1)] | (dpp.line (+ I 1) N)])
+
+(define dpp.count-after
+  Counts N -> (do (put dpp.fresh datalog.last-run Counts) (datalog.joins-count N dpp.fresh)))
+
+(dpp.check "with no run to go by, every isolate" 8 (datalog.joins-count 8 dpp.fresh))
+(dpp.check "none where derivations are not 4 times the tuples kept" 1 (dpp.count-after [10 3999999 1000000] 12))
+(dpp.check "as many as take 50,000 derivations a round" 5 (dpp.count-after [4 1000000 10000] 8))
+(dpp.check "at most N" 8 (dpp.count-after [4 100000000 10000] 8))
+(dpp.check "and none if not 2" 1 (dpp.count-after [10 600000 10000] 8))
+(dpp.check "a run on no facts tells nothing" []
+  (do (put dpp.fresh datalog.last-run []) (datalog.run dpp.fresh []) (get dpp.fresh datalog.last-run)))
+(dpp.check "a run on facts tells its counts" true
+  (do (datalog.run dpp.fresh (value dpp.dense)) (cons? (get dpp.fresh datalog.last-run))))
+(dpp.check "and so do joins" true
+  (do (put dpp.fresh datalog.last-run []) (datalog.run-joined 3 dpp.fresh (value dpp.dense))
+      (cons? (get dpp.fresh datalog.last-run))))
+(dpp.check "a closure that keeps what it derives runs whole" 1
+  (do (datalog.run dpp.chain (dpp.line 0 150)) (datalog.joins-count 8 dpp.chain)))
+(dpp.compare "and gives what a run does" 8 dpp.chain (dpp.line 0 150) [reach] [[reach 3 [var "Y"]]])
+
+(dpp.check "a count that is not a positive integer raises" [true true]
+  [(dpp.raises? (freeze (datalog.run-parallel 0 dpp.paths []))) (dpp.raises? (freeze (datalog.run-parallel a dpp.paths [])))])
 
 (dpp.check "a fact of no relation raises in the builder" true
   (dpp.raises? (freeze (datalog.run-parallel 4 dpp.paths [[nope 1 2]]))))

@@ -4606,6 +4606,38 @@ relation of one tuple a key or rule that makes a string, as interned values must
   generated programs, 35 of which ran their joins in isolates, once a declared record type that no relation uses
   no longer kept a program from them.
 
+### Joins only where they pay, and routing new tuples to owners rejected (2026-11-13, Apple M3 Max, against the joins above)
+
+- **Rejected: adding each new tuple once.** Isolates derive the same tuple in the same round, 1.58 times the
+  distinct ones on points-to, and each adds every copy it receives. Tried: each isolate sends each tuple it derived
+  only to the isolate that owns it, by a hash of all its columns, after a native pass that lays its new tuples out by
+  owner; each owner adds them and sends every other the new ones it owns, so each isolate adds each tuple about once.
+  It should have saved about 12 of points-to's 160 ms at 8, but the second exchange each round, another wait for the
+  slowest isolate, and the splitting cost more. Best of five, ms at 4 / 8 / 12, before and after, two rounds that
+  agreed: the nonlinear closure 44.6 / 28.8 / 25.2 → 49.8 / 34.1 / 30.3, points-to order c 246.5 / 194.1 / 189.3 →
+  294.8 / 228.5 / 222.5, the call graph 9.6 / 16.4 / 24.5 → 11.2 / 20.4 / 38.0, same generation even.
+- **Done: joins only where the last run says they pay.** Every isolate adds every new tuple, and each round's
+  exchange costs more with each isolate, so what decides is derivations per tuple kept and derivations per round.
+  `datalog.run` and joined runs record, for a run on facts, its rounds and the derivations and new tuples of its
+  recursive rounds, which are all that joins share out (counting every derivation at first made a heavy
+  non-recursive rule look like joins would pay, as a review found); `run-parallel` runs joins only if
+  derivations were four times the tuples kept, in as many isolates as get 50,000 derivations a round each, at most
+  N, and otherwise runs the program whole; with no run to go by, N.
+  The recursive rounds' counts, on facts from the benchmarks' generators: the nonlinear closure 26.4 million
+  derivations for 87,314 tuples in 4 rounds; points-to order c 24.7 million for 1.14 million in 26; same generation
+  1.0 million for 45,440 in 4, which gets 5 isolates; the call graph 279,225 for 121,862 in 49 and mutual recursion
+  36 for 31 in 16, which run whole. About 40 lines.
+- **On `make bench-datalog-souffle`'s facts,** best of three after a run, ms, `datalog.run` then 8 and 12
+  isolates, every result the same: same generation 9.4, 7.6, 7.2 (5 isolates; 8.7 and 11.7 before, in 8 and
+  12), the call graph 6.7, 6.9, 6.9 (whole; 15.3 and 24.1 before), mutual recursion 0.2 (whole; 3.7 and 6.9);
+  the nonlinear closure 131.7, 30.8, 27.8 and points-to order c 331.6, 146.9, 148.7, as before. So no program
+  there is slower in isolates than whole, and same generation is now ahead of Soufflé's 12 threads too (9.2, dated
+  above).
+- **Checks:** the count against set counts (none where derivations are short of four times the tuples kept, as many
+  as take 50,000 a round, at most N, none below 2, N with none to go by), that a run on no facts records nothing, and
+  that a right-linear closure over a line runs whole; the joins tests call the joined run directly, as
+  `run-parallel` now runs small programs whole.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.

@@ -78,6 +78,8 @@
 (set *adaptive* true)
 (set *plans* 0)
 (set *joined* false)
+(set *round-derivations* 0)
+(set *round-tuples* 0)
 
 \\ ---------------------------------------------------------------------------
 \\ Checking a program.
@@ -574,7 +576,8 @@
               (put Name indexes [])
               (put Name counter 0)
               (put Name parallel [])
-              (put Name joined [])))
+              (put Name joined [])
+              (put Name last-run [])))
 
 (define datalog.program
   Name -> (trap-error (get Name datalog.program)
@@ -3472,13 +3475,26 @@
   -> (let Now (signature (hd (tl Run)) Run)
           Replan (and (value *adaptive*) (not (= Now Signature)))
           Fs (if Replan (variant-functions Variants (estimator Run) Run) Functions)
-          Before (if (value *joined*) (map (function derivations) Rels) [])
+          Before (map (function derivations) Rels)
+          Sizes (sum-sizes Rels 0)
           _ (call-all Fs (nth 4 Run))
           _ (if (value *joined*) (exchange Rels Run Before) skip)
+          _ (set *round-derivations* (+ (value *round-derivations*) (derived-since Rels Before 0)))
           Any (merge-all Rels false)
+          _ (set *round-tuples* (+ (value *round-tuples*) (- (sum-sizes Rels 0) Sizes)))
        (if Any
            (fixpoint Variants Rels Run Fs Now (+ Rounds 1))
            (+ Rounds 1))))
+
+\\ What a run's rounds of recursive components derived and kept, which joins in isolates share out
+\\ (joins-count); an isolate counts only what it derived, as tuples others derived are added without.
+(define sum-sizes
+  [] N -> N
+  [Rec | Recs] N -> (sum-sizes Recs (+ N (size-of Rec))))
+
+(define derived-since
+  [] [] N -> N
+  [Rec | Recs] [B | Bs] N -> (derived-since Recs Bs (+ N (- (derivations Rec) B))))
 
 (define run-component
   [C First Variants] Run Rounds
@@ -3814,8 +3830,18 @@
           _ (merge-state S 1 N)
           Run [Name Relations Constants S]
           _ (set *plans* 0)
+          _ (set *round-derivations* 0)
+          _ (set *round-tuples* 0)
           Rounds (run-components (get Name schedule) Run 0)
+          _ (if (empty? Facts) skip (note-run Name Rounds (value *round-derivations*) (value *round-tuples*)))
        [db Name S Interned Rounds (value *plans*) Facts]))
+
+\\ What a program's last run on facts counted, by which datalog.run-parallel judges whether its joins
+\\ pay: its rounds, and the derivations and new tuples of the rounds of its recursive components,
+\\ which are all that joins share out. A run on none, as preparing one for isolates is, tells
+\\ nothing.
+(define note-run
+  Name Rounds Derived Kept -> (put Name last-run [Rounds Derived Kept]))
 
 \\ ---------------------------------------------------------------------------
 \\ Adding facts to a database. The facts go in, and each relation remembers its size before them,
@@ -4820,6 +4846,8 @@
          (set *made* [])
          (set *merges* 0)
          (set *joined* false)
+         (set *round-derivations* 0)
+         (set *round-tuples* 0)
          (set *fresh* [])))
 
 (define use-program
@@ -4908,10 +4936,12 @@
             true (body-in-parts Rest Key Derived)))
 
 (define run-parallel
+  N _ _ -> (error "datalog.run-parallel: ~S is not a number of isolates" N) where (not (and (integer? N) (> N 0)))
   N Name Facts -> (let Plan (partition Name)
-                    (cases (or (not (integer? N)) (< N 2)) (run Name Facts)
+                    (cases (= N 1) (run Name Facts)
                            (= (hd Plan) parts) (run-parts N Name Facts (hd (tl Plan)) (hd (tl (tl Plan))))
-                           (= (hd Plan) joins) (run-joined N Name Facts)
+                           (= (hd Plan) joins) (let K (joins-count N Name)
+                                                 (if (< K 2) (run Name Facts) (run-joined K Name Facts)))
                            true (run Name Facts))))
 
 (define run-parts
@@ -5106,9 +5136,36 @@
 \\ numbered past its own.
 (define joined-db
   Got Facts -> (let First (first-part Got)
-                    _ (map (/. G (if (= (hd G) 0) skip (add-derived (nth 3 (nth 4 First)) 1 (nth 2 G)))) Got)
+                    Db (nth 5 First)
+                    _ (map (/. G (if (= (hd G) 0) skip (add-derived (nth 3 Db) 1 (nth 2 G)))) Got)
                     _ (if (> (nth 3 First) (value *merges*)) (set *merges* (nth 3 First)) skip)
-                 (with-facts (nth 4 First) Facts)))
+                    _ (if (empty? Facts)
+                          skip
+                          (note-run (nth 2 Db) (nth 5 Db) (sum-rounds Got 0) (tl (nth 4 First))))
+                 (with-facts Db Facts)))
+
+\\ Every isolate's derivations in rounds; the tuples they kept, each isolate has all of.
+(define sum-rounds
+  [] N -> N
+  [G | Got] N -> (sum-rounds Got (+ N (hd (nth 4 G)))))
+
+\\ How many isolates a program's joins keep busy, by its last run: none unless its recursive rounds
+\\ derived four times the tuples they kept, as every isolate adds every new tuple, and only as many
+\\ as take 50,000 derivations a round each, as each round's exchange costs more with each isolate. N
+\\ with no run to go by.
+(define joins-count
+  N Name -> (let Last (trap-error (get Name last-run) (/. E []))
+              (if (empty? Last)
+                  N
+                  (let Rounds (if (> (hd Last) 0) (hd Last) 1)
+                       Derived (hd (tl Last))
+                    (if (< Derived (* 4 (hd (tl (tl Last)))))
+                        1
+                        (busy-count N (* Rounds 50000) Derived))))))
+
+(define busy-count
+  1 _ _ -> 1
+  N Each Derived -> (if (<= (* N Each) Derived) N (busy-count (- N 1) Each Derived)))
 
 (define with-facts
   [db Name S Interned Rounds Plans _] Facts -> [db Name S Interned Rounds Plans Facts])
@@ -5176,6 +5233,7 @@
           _ (set *joined* true)
           Db (run Name Facts)
        (shen-jit.send Reply [J (map (/. I (<-vector (value *derived*) I)) (upto 1 (length Relations))) (value *merges*)
+                             [(value *round-derivations*) | (value *round-tuples*)]
                              (if (= J 0) (cleared (with-facts Db [])) [])])))
 
 \\ What each isolate sent, once every one has ended; or the first error one raised, the others
