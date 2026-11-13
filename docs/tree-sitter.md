@@ -78,7 +78,7 @@ its configured paths; every operation resolves its entry again and checks ABI co
 NUL and malformed text are length-counted input, and can produce syntax-error nodes. No text decoding
 or newline normalization happens before parsing. Syntax errors return trees, not parse failures.
 
-The adapter copies the selected source range to stable native storage before releasing the VM lock,
+The adapter copies the selected source range to stable native storage before parsing,
 then returns a managed source snapshot. Changing or closing the original input afterwards cannot
 change it. Foreign input must stay open while its initial copy is made. Parsing never borrows a
 moving managed address while another Shen thread can collect.
@@ -174,8 +174,12 @@ exceeding it fails rather than losing matches silently. These are result/input b
 limit on all native parser memory. Upstream Tree-sitter's default allocator aborts on allocation
 failure; the binding does not replace its process-global allocator.
 
+A language loaded in one isolate can parse in any other: it holds the name of its foreign entry, which
+every isolate calls, and each parse makes its own parser. Load languages before spawning, as loading
+defines a foreign function, which only the builder does.
+
 One native operation owns each parser/cursor. Parse/query progress callbacks check the monotonic
-deadline while the VM is released; flattening checks it too. Query compilation and native destruction
+deadline during the native work; flattening checks it too. Query compilation and native destruction
 have no upstream progress callback, so the deadline cannot preempt those calls. There is no separate
 cross-thread cancellation API yet. The budget covers native analysis; Shen input normalization and
 managed result conversion/collection are outside its timed phase.

@@ -18,6 +18,7 @@ on:
       - docs/io.md
       - docs/fs.md
       - docs/processes.md
+      - docs/parallel.md
       - docs/tree-sitter.md
       - docs/framing.md
       - docs/io-sockets.md
