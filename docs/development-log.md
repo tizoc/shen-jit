@@ -1593,7 +1593,7 @@ threads in 0.7 and 233 in turn; `isolate.c` 77 more.
 
   A connection costs about 30 µs more, its isolate's spawn. Concurrent writes to one SQLite database wait for each
   other in SQLite's busy handler, which sleeps between its attempts; that is the application's to arrange, with WAL or
-  one writer. Serving in turn, a client that stalls holds every other back until its own timeout.
+  one writer (below). Serving in turn, a client that stalls holds every other back until its own timeout.
 - **Found on the way: a supervisor that sleeps when full.** Waiting 50 ms between looks once `max-connections` were
   open, as the listener over threads did, made each request at one connection at a time cost 52 ms, 3.3 s for the 64,
   as the next connection waited for the sleep to end. So the supervisor waits on its channel and the connections'
@@ -1617,6 +1617,28 @@ threads in 0.7 and 233 in turn; `isolate.c` 77 more.
 - **Checks:** 43 listener cases, 15 runs in a row and 24 at once on a loaded machine, and under ThreadSanitizer with
   the 42 isolate cases, which reports nothing. The listener's saved image passes under a collection at every
   allocation. The `sqlite-http` example's test has its stalled connections back.
+
+### A write-ahead log for the `sqlite-http` example (2026-11-12, Apple M3 Max, against the listener on isolates above)
+
+Writes from connections in several isolates had become slower than serving in turn, so the example's database keeps
+a write-ahead log. 64 `POST /counters/x` from 8 Python clients, in milliseconds:
+
+| | In turn, rollback journal | Isolates, rollback journal | Isolates, write-ahead log |
+| --- | --- | --- | --- |
+| One connection at a time | 27 to 30 | 32 to 35 | 18 to 21 |
+| 8 at once, ten runs | 26 to 30 | 75 to 150 | 26 to 101, median 46 |
+
+Reads and `GET /health` are unchanged. The example's 32 concurrent increments took 8 ms, against 383.
+
+- **The log must stay open.** Each request opens a connection of its own, and the last connection to close
+  checkpoints the log and removes it: alone, a write took 2 ms with the log against 0.32 ms without, and 76 µs once
+  another connection held the database. `sqlite3_open` reads nothing, so the connection that the server holds while
+  it runs (`counter-app.await`) reads the database once.
+- **Rejected: `synchronous=NORMAL`.** It gained nothing measurable, 26 to 101 ms for the 64 at once, for a commit that
+  can be lost on a power loss.
+- **Left: concurrent writers.** SQLite takes one writer at a time and makes the others retry in its busy handler, which
+  sleeps 1 ms or more for a write of 76 µs, hence the spread at 8 at once. The fix is one isolate owning the database,
+  to which the others send their writes, which also holds it open; left for later.
 
 ### x86-64 and Linux (2026-11-03)
 

@@ -1,15 +1,18 @@
 \\ A small persistent counter API. Load the public HTTP listener, grammar and SQLite libraries first.
-\\ Each database connection belongs to the request worker that opens it.
+\\ Each database connection belongs to the connection's isolate that opens it.
 
+\\ The database keeps a write-ahead log, so that writers do not wait for readers, such as an
+\\ export, nor readers for writers.
 (define counter-app.initialize
   Path ->
     (do (if (or (= Path "") (= Path ":memory:")) (error "counter app needs a database file") true)
         (sqlite.with-database Path
-          (/. Db (sqlite.exec Db
-            "CREATE TABLE IF NOT EXISTS counters (
-               name TEXT PRIMARY KEY,
-               value INTEGER NOT NULL CHECK(value BETWEEN 0 AND 1000000000000)
-             )")))))
+          (/. Db (do (sqlite.exec Db "PRAGMA journal_mode=WAL")
+                     (sqlite.exec Db
+                       "CREATE TABLE IF NOT EXISTS counters (
+                          name TEXT PRIMARY KEY,
+                          value INTEGER NOT NULL CHECK(value BETWEEN 0 AND 1000000000000)
+                        )"))))))
 
 (define counter-app.json
   Status Value ->
@@ -204,9 +207,14 @@
     (do (counter-app.initialize Path)
         (http.listen Host Port [counter-app.handle Path] Options)))
 
-\\ Serves until a handler stops the server, each connection in an isolate of its own.
+\\ Serves until a handler stops the server, each connection in an isolate of its own, holding the
+\\ database open meanwhile. Each request opens a connection of its own, and the last connection to
+\\ close would checkpoint the log and remove it, which made each write many times slower. A
+\\ connection holds the file only once it has read it.
 (define counter-app.await
-  S -> (counter-app.await-result S (http.run S)))
+  Path S -> (sqlite.with-database Path
+              (/. Db (do (sqlite.query Db "SELECT count(*) FROM counters" [])
+                         (counter-app.await-result S (http.run S))))))
 
 (define counter-app.await-result
   _ [ok] -> true
@@ -218,7 +226,7 @@
          S (http.listen "127.0.0.1" Port [counter-app.control Path]
               [[body-limit 4096] [response-body-limit 65536]])
          _ (output "Listening on http://127.0.0.1:~A~%" (http.port S))
-      (counter-app.await S)))
+      (counter-app.await Path S)))
 
 (define counter-app.control
   Path Request ->

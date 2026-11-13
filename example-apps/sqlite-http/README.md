@@ -59,13 +59,16 @@ The list limit is fixed; this example does not implement pagination.
 
 HTTP/1.1 connections can serve up to 100 sequential requests, with a 5-second idle limit and a
 60-second total lifetime. Each connection runs in an isolate of its own, up to the listener's
-`max-connections`, and each request still opens its own database connection; concurrent writes wait for
-each other under SQLite's 5-second busy timeout. The NDJSON source owns
+`max-connections`, and each request still opens its own database connection. The database keeps a
+write-ahead log (`counters.db-wal` and `counters.db-shm` beside it), so readers and writers do not wait for each
+other, and the server holds one connection open while it runs, so that the log stays between requests.
+Concurrent writes still wait for each other under SQLite's 5-second busy timeout, whose retries sleep a
+millisecond or more. The NDJSON source owns
 its prepared SELECT and database until completion/disconnect. It batches rows under both a 16 KiB cap
 and the sender's chunk bound, holding one encoded row and one output batch. It checks the total 5-second
-write budget while assembling batches; even a one-byte chunk bound preserves every row and newline. A slow export can hold a
-SQLite read lock until that budget is observed; this small example does not enable WAL or implement
-pagination. Streaming storage and database lifetimes remain bounded by the row/output/time limits.
+write budget while assembling batches; even a one-byte chunk bound preserves every row and newline. A slow export
+keeps its read snapshot until that budget is observed, without holding writers back, though the log cannot be
+checkpointed past it meanwhile; this small example does not implement pagination. Streaming storage and database lifetimes remain bounded by the row/output/time limits.
 
 ## Shutdown
 
@@ -83,7 +86,7 @@ would need separate runtime/library support; this example uses an explicit appli
 `main.shen` holds the routes, database scopes, startup and shutdown. `run.shen` loads their public
 dependencies and passes the command-line arguments. Applications can instead load `main.shen` and call
 `counter-app.start Path Host Port Options`, which returns an `http.server` that its caller serves with
-`http.run` until it is stopped. Its handler is `[counter-app.handle Path]`, as a handler runs in an isolate of
+`(counter-app.await Path S)` until it is stopped. Its handler is `[counter-app.handle Path]`, as a handler runs in an isolate of
 its connection's, which inherits no globals. The `/shutdown` control route is supplied by `counter-app.run`.
 
 ```sh
