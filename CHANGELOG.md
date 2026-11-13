@@ -27,7 +27,9 @@ All notable changes to this project are documented in this file. The format is b
   the order with no sizes to go by.
 - `(datalog.run-parallel N Name Facts)` runs a program whose rules keep the key of their first column in at most `N`
   isolates, each for some of the keys, and gives a database of the parts, which counts, membership and queries read;
-  `datalog.partition` says whether a program runs so. Others run as `datalog.run` does.
+  `datalog.partition` says whether a program runs so. A recursive program that cannot run so runs its joins in the
+  isolates instead: each holds the whole database and takes part of each round's new tuples, and the result is a
+  database as `datalog.run` gives; `datalog.partition` gives `[joins Reason]` for it. Others run as `datalog.run` does.
 - The `source-deps` example's batch queries are back, with `--workers N` running them in isolates over the graph
   shared once; no worker image is needed.
 - Grammars work in isolates: a load compiles a rule's loops after the form defining it, and prepares the streaming
