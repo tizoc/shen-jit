@@ -352,9 +352,11 @@ much took most of a spawn, a small stack that grows, and a slot for each global 
 starts as above and copies the fragment into its heap.
 
 **Copying.** Arguments and messages go through one copier, breadth first as a collection
-copies, with a table from old addresses to copies instead of forwarding pointers, so the
-sender's objects are untouched and nothing allocates in its heap meanwhile; sharing and cycles
-are kept. What lies in the program space crosses by pointer: symbols, constants and the
+copies, out of the sender's heap into a fragment with a table from old addresses to copies
+instead of forwarding pointers, so the sender's objects are untouched and nothing allocates in
+its heap meanwhile; sharing and cycles are kept. Into the receiver's heap, the fragment, which
+is freed next, is forwarded in as a collection forwards, which took a third of the time the
+table did. What lies in the program space crosses by pointer: symbols, constants and the
 program's functions. The receiver makes room for all of it first, so nothing moves while it is
 copied. A byte buffer or string of 256 KB or more, which a fragment keeps in a block of its own,
 is not copied in: the block becomes one of the receiver's large objects as it is, so a big
@@ -365,7 +367,9 @@ message costs one copy, in the sender, and the receiver's collections never copy
 queue of fragments, copied into the receiver's heap as it receives, its receiver, and the
 senders waiting while it is full. An endpoint is an absvector `[Tag Index Generation]`, whose
 tag is a port function that prints it; freeing a channel raises its slot's generation, so a
-stale endpoint raises "channel closed". At the end of a stream the primitive gives a marker,
+stale endpoint raises "channel closed". Generations start from a seed taken from the clock as
+the first isolate starts, so an endpoint or isolate saved in an image matches nothing in the
+next run. At the end of a stream the primitive gives a marker,
 `shen-jit.end-of-stream`, which nothing can send; the port's `channel.receive` turns it into
 "channel closed" and `channel.next` into `[closed]`, and `channel.wait-any`'s `[]` becomes
 `[timeout]`. Each isolate waits on a condition of its own, with a
@@ -379,7 +383,8 @@ and code compiled for one is what any program runs. What waits on
 something else, as the I/O library's socket waits do in slices of 100 ms, calls
 `isolate.check-kill` between them; in the builder, or before isolates exist, it does nothing. An isolate that
 cannot start, for want of memory for its context, tells its monitors too, with a message laid out by hand, as it has
-no heap to make one in. An isolate that ends tells its monitors, closes its files
+no heap to make one in; so does one whose down message cannot be made, and if even that cannot be, the monitor is
+closed, so that nothing waits on it for ever. An isolate that ends tells its monitors, closes its files
 and the channels it receives on, and frees its context; its record keeps why it ended, as a symbol
 or an error's text, so that a monitor that comes after, as one made just after a spawn can, is
 told at once with the same reason, until the record is used again with a new generation. Then,

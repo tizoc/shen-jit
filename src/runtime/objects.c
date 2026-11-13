@@ -298,12 +298,15 @@ static V find(VM *vm, uint64_t hash, const char *bytes, size_t len)
 V cell_symbol(VM *vm, size_t cell)
 {
     SymbolTable *tables[2] = {&vm->program->published, &vm->own};
-    for (int k = 0; k < 2; k++)
-        for (size_t i = 0; i < tables[k]->cap; i++) {
-            V s = tables[k]->slots[i];
+    for (int k = 0; k < 2; k++) { /* as table_find reads them, as another isolate may add */
+        size_t cap = __atomic_load_n(&tables[k]->cap, __ATOMIC_ACQUIRE);
+        V *slots = __atomic_load_n(&tables[k]->slots, __ATOMIC_ACQUIRE);
+        for (size_t i = 0; i < cap; i++) {
+            V s = __atomic_load_n(&slots[i], __ATOMIC_ACQUIRE);
             if (s && symbol_cell(s) == cell)
                 return s;
         }
+    }
     return V_NIL;
 }
 
@@ -425,9 +428,9 @@ V *global_slot_new(VM *vm, V sym)
     V *slot = NULL;
     if (vm->program->nfree_globals) {
         n = vm->program->free_globals[--vm->program->nfree_globals];
-    } else if (vm->program->nglobals <= CELL_MASK && vm_globals_commit(vm, vm->program->nglobals + 1)) {
+    } else if (vm->program->nglobals <= CELL_MASK && vm_globals_commit(vm, vm->program->nglobals + 1) &&
+               isolates_commit_globals(vm->program, vm->program->nglobals + 1)) { /* before any code can use it */
         n = vm->program->nglobals;
-        isolates_commit_globals(vm->program, n + 1); /* before any code can use it */
         __atomic_store_n(&vm->program->nglobals, n + 1, __ATOMIC_RELEASE); /* collections read it */
     } else {
         n = 0;

@@ -187,14 +187,19 @@ static void print_stats(void)
                                                "absvectors", "closures", "foreign functions", "code",
                                                "exceptions", "streams", "pointers"};
     size_t count[T_LIMIT] = {0}, words[T_LIMIT] = {0}, total = 0;
-    vm_census(stats_vm, count, words);
-    for (int t = 0; t < T_LIMIT; t++)
-        total += words[t];
-    fprintf(stderr, "shen-jit: live heap %zu KB:", total * sizeof(uint64_t) / 1024);
-    for (int t = 0; t < T_LIMIT; t++)
-        if (count[t])
-            fprintf(stderr, " %s %zu (%zu KB)%s", names[t], count[t], words[t] * sizeof(uint64_t) / 1024,
-                    t + 1 < T_LIMIT ? "," : "");
+    VM *exiting = program_exiting();
+    if (exiting && exiting != stats_vm) { /* the builder may be running: its heap is its own */
+        fprintf(stderr, "shen-jit: live heap not counted, as an isolate ended the program");
+    } else {
+        vm_census(stats_vm, count, words);
+        for (int t = 0; t < T_LIMIT; t++)
+            total += words[t];
+        fprintf(stderr, "shen-jit: live heap %zu KB:", total * sizeof(uint64_t) / 1024);
+        for (int t = 0; t < T_LIMIT; t++)
+            if (count[t])
+                fprintf(stderr, " %s %zu (%zu KB)%s", names[t], count[t], words[t] * sizeof(uint64_t) / 1024,
+                        t + 1 < T_LIMIT ? "," : "");
+    }
     fprintf(stderr, "\nshen-jit: roots: %zu symbols, %zu function cells, %zu global slots, %zu constant slots\n",
             stats_vm->program->published.count + stats_vm->own.count, stats_vm->program->cells.count / 2, stats_vm->program->nglobals - 1, stats_vm->program->consts.count);
     const Space *p = &stats_vm->program->space;

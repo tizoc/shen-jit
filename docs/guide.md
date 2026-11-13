@@ -342,7 +342,8 @@ are other programs.
   shared.
 - **Saving:** `shen-jit.save-executable` refuses while other isolates run, and in any isolate but the builder.
   `--save` writes the builder's image even so, as the program ends then: what isolates hold is not saved, and what
-  they add to the program meanwhile waits until the image is written.
+  they add to the program meanwhile waits until the image is written. An endpoint or isolate saved in an image
+  belongs to the run that saved it: once loaded, a receive on it raises "channel closed".
 - **Types and namespaces:** an isolate has type `isolate`, and endpoints have types `(receiver A)` and `(sender A)`,
   `A` being what crosses them. A typed function crosses by its name, which typechecks as the function: `(isolate.spawn
   f X)` with `f : (A --> B)` and `X : A`. A lambda typechecks too, but cannot cross. Results have datatypes:
@@ -1000,7 +1001,7 @@ flat profile at exit, and `SHEN_JIT_STATS=1` prints the collector's work and the
 | `SHEN_JIT_SEMISPACE=SIZE` | Starts the heap at SIZE bytes (with K, M or G; anything that is not a size is refused) instead of 32 MB, or at what the image needs if that is more: what a collection keeps and the room for new objects add up to this. It still grows with live data, up to 64 GiB, or stays at SIZE if that is more. Less collects more often and uses less memory |
 | `SHEN_JIT_MAX_HEAP=SIZE` | Limits the heap to SIZE bytes (with K, M or G; at least the initial semispace; anything that is not a size is refused). What the heap holds stays below SIZE, and an allocation past that raises `out of memory`. The collector copies, so the process can use two to three times SIZE: vectors and strings of 256 KB or more stay apart, uncopied, and count once |
 | `SHEN_JIT_PROFILE=1` | Samples the program and prints a flat profile to stderr at exit, naming both Shen and C functions. Not on Windows |
-| `SHEN_JIT_STATS=1` | Prints collection statistics, the live heap and its roots, and the native code compiled and freed, at exit |
+| `SHEN_JIT_STATS=1` | Prints collection statistics, the live heap and its roots, and the native code compiled and freed, at exit; the builder's, without its live heap when an isolate ends the program |
 | `SHEN_JIT_PERF_MAP=1` | Writes `/tmp/perf-PID.map`, so external profilers can name compiled code |
 | `SHEN_JIT_GC_STRESS=N` | Collects after every N words allocated and overwrites the old space, for testing |
 | `SHEN_JIT_SLOW_PRIMS=1` | Sends every primitive to C, for testing |

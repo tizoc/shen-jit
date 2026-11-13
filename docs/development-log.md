@@ -1935,6 +1935,31 @@ They are two namespaces of the image now, `isolate` (`spawn`, `self`, `kill`, `m
   spawns, and four libraries, would load it, and the REPL's Ctrl-C and monitors are the runtime's anyway. One
   `receive` giving `[ok X]` or `[closed]` always: a pair for every message, and every reply taken apart.
 
+### The review's leftovers (2026-11-13, Apple M3 Max, against the interface above)
+
+What the review of the branch had left as low, and what reading the documents against the code found after it.
+
+- **Copying in by forwarding.** A message was copied into the receiver's heap through a table from fragment
+  addresses to copies, for sharing and cycles. The fragment is the receiver's and is freed next, so its objects
+  are forwarded now, as a collection forwards; a large buffer the heap took over is recognised by its block, marked
+  taken. Receiving 200,000 lists of a number and a string took 17.4 to 18.7 ms and now 5.0 to 5.7, best of 10, three
+  rounds alternating; 100,000 tuples the same; `parallel.map` over 8 isolates each giving 40,000 rows, whole call,
+  65 to 68 ms and now 46 to 50. The review had guessed 20 to 35%. It also takes away the table's own failure.
+- **Out of memory.** A spawn, `channel.new`, `channel.sender`, `channel.give` and `isolate.self` could give the
+  unraised failure of a constructor; they raise "out of memory" now, and `channel.new` frees its channel then. An
+  isolate whose down message cannot be made tells its monitors `[down I ended]`, laid out by hand, and if even that
+  cannot be made, closes them, where they waited for ever. A global gets no number unless its slot is committed in
+  every isolate, where a failed commit faulted later. The first spawn says "out of memory" for that, not that
+  isolates start in the builder.
+- **Smaller:** `cell_symbol`, for "undefined function" errors and backtraces in isolates, reads the shared symbol
+  table as `table_find` does; an isolate that ends the program with `SHEN_JIT_STATS` no longer counts the builder's
+  heap, which a census would collect while the builder may run; the builder's `vm_destroy` leaves the program to the
+  system while isolates run it, as it left their records; and generations start from a seed per run, so an endpoint
+  saved in an image matched the next run's first channel, and now raises "channel closed". A case each for the last
+  two.
+- **Not done:** a cheaper check of ended connections in the HTTP supervisor, which the review gave as mattering only
+  near 1,024 connections at once, the exceptional case.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on
