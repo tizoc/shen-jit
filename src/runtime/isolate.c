@@ -431,7 +431,7 @@ static V fragment_in(VM *vm, Fragment *f)
     V root = V_CLEARED;
     size_t stress = vm->stress;
     vm->stress = 0; /* the room made here is used here */
-    if ((!nlarge || vm_large_room(vm, large, nlarge)) &&
+    if ((!nlarge || vm_large_room(vm, f->words, nlarge)) && /* the whole of it, under the heap's limit */
         ((size_t)(vm->hlimit - vm->hp) >= words || vm_collect(vm, words)) &&
         (size_t)(vm->hlimit - vm->hp) >= words) {
         uint64_t *start = vm->hp;
@@ -700,6 +700,17 @@ static Fragment *down_fragment(Isolates *ps, Isolate *p)
     return f;
 }
 
+/* With the lock held: the monitors in m whose channels are still there, moved to its front, and
+   how many; a monitor read and closed, as one each request of a server's makes, goes. */
+static size_t live_monitors(Isolates *ps, uint64_t *m, size_t n)
+{
+    size_t kept = 0;
+    for (size_t i = 0; i < n; i++)
+        if (channel_at(ps, (size_t)(m[i] >> 32), (uint32_t)m[i]))
+            m[kept++] = m[i];
+    return kept;
+}
+
 /* With the lock held: tells a monitor that p ended, with f, or else [down P ended], and closes it,
    so that what waits on it never waits for ever: a receive after its one message, or after none if
    neither could be made, raises channel closed. */
@@ -739,7 +750,7 @@ static void isolate_end(Isolate *p, V reason)
     p->end_text = copy;
     p->end_length = length;
     uint64_t *monitors = p->monitors;
-    size_t n = p->nmonitors;
+    size_t n = live_monitors(ps, monitors, p->nmonitors);
     p->monitors = NULL;
     p->nmonitors = p->monitors_cap = 0;
     pthread_mutex_unlock(&ps->lock);
@@ -785,17 +796,21 @@ static void isolate_end(Isolate *p, V reason)
     pthread_mutex_unlock(&ps->lock);
 }
 
-/* Collections and releases, until a collection finds none of the guards left dead. Run releases
-   what is on the dead list, through the functions in sweepers. */
+/* Collections and releases, until a collection finds no guard dead, as a release may leave
+   another unreached, or make one. Run releases what is on the dead list, through the functions in
+   sweepers; what they leave there is dropped. Before each collection, what a release left in the
+   argument slots of a call to C, or the error it caught, is cleared, as it is dead. */
 static void release_rounds(VM *vm, V run, V *sweepers)
 {
     for (;;) {
-        size_t before = vm->nguards;
+        for (size_t i = 0; i < sizeof vm->args / sizeof vm->args[0]; i++)
+            vm->args[i] = V_NIL;
+        vm->exception = V_NIL;
         vm_collect(vm, 0);
-        if (vm->dead != V_NIL)
-            jit_call(vm, run, 1, sweepers);
-        if (vm->nguards == before)
+        if (vm->dead == V_NIL)
             return;
+        jit_call(vm, run, 1, sweepers);
+        vm->dead = V_NIL;
     }
 }
 
@@ -892,7 +907,8 @@ static void *isolate_main(void *argument)
        in rounds, as collections order them: a release may use another handle, which outlives it
        until that release has run. Only what dies is released, so in that order, with the globals
        a release may read still there: what its globals still hold is left to the system, as a
-       program's is when it ends. The argument slots of its last call are dead, and cleared first.
+       program's is when it ends. What argument slots of calls to C and the error last caught hold
+       is dead by then, and cleared before each round.
        Errors there are dropped, as nothing is left to tell. */
     V ending = ps->ending ? *cell_function(vm, symbol_cell(ps->ending)) : V_CLEARED;
     if (is_proc(ending))
@@ -902,8 +918,6 @@ static void *isolate_main(void *argument)
     if (is_proc(run) && is_pair(sweepers)) {
         vm_root(vm, &sweepers);
         value = V_NIL;
-        for (size_t i = 0; i < sizeof vm->args / sizeof vm->args[0]; i++)
-            vm->args[i] = V_NIL;
         release_rounds(vm, run, &sweepers);
         vm_unroot(vm, 1);
     }
@@ -1267,6 +1281,8 @@ static V monitor(VM *vm, Isolates *ps, V isolate)
     if (ended && p && p->end_text && (text = malloc(length ? length : 1)))
         memcpy(text, p->end_text, length);
     if (i != SIZE_MAX && !ended) {
+        if (p->nmonitors == p->monitors_cap)
+            p->nmonitors = live_monitors(ps, p->monitors, p->nmonitors);
         if (p->nmonitors == p->monitors_cap) {
             size_t cap = p->monitors_cap ? 2 * p->monitors_cap : 4;
             uint64_t *monitors = realloc(p->monitors, cap * sizeof *monitors);

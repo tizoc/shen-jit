@@ -390,7 +390,8 @@ registered with `shen-jit.at-end`; then what it registered with `shen-jit.at-gua
 handle library's sweep, in rounds: a collection finds dead the guarded pointers nothing reaches, and
 a release may use another handle, which outlives it until that release has run and so dies in a
 later round. Only what dies is released, so always in that order and with the globals a release may
-read still there; the argument slots of its last call to C are cleared first, as they are dead. What
+read still there; what the argument slots of calls to C and the error last caught hold is dead by then,
+and cleared before each round, and rounds go on while a collection finds a guard dead. What
 its globals still hold is left to the system, as a program's is when it ends. Then it tells its monitors,
 closes its files
 and the channels it receives on, and frees its context; its record keeps why it ended, as a symbol

@@ -380,7 +380,9 @@ static V intern_shared(VM *vm, V name, uint64_t hash)
         if (symbol_table_put(&vm->program->published, sym)) {
             if (cell >= vm->program->published_top)
                 vm->program->published_top = cell + 1;
-        } else {
+        } else { /* outside the table, it would come back from an image as a second symbol */
+            program_unalloc(vm, copy, words);
+            program_free_symbol(vm, p);
             sym = 0;
         }
     }

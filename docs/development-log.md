@@ -2068,6 +2068,23 @@ The same reviewer, on the fixes above: eight, all fixed, and again no speed-up w
   a median of 6 ms before and after. The listener could leave a connection's monitor behind when listing it failed; it closes
   it.
 
+### What a fifth review found (2026-11-13, Apple M3 Max, against the commit before)
+
+Four, all fixed; the reviewer found the earlier fixes sound and no speed-up worth its code.
+
+- **The release rounds.** Argument slots were cleared once, before the first round, so a release that passed the next
+  handle to C left it in them, reached, and an error a release caught kept what it named; and the rounds stopped when
+  the count of guards had not changed, as when one died and its release made another. Both are cleared before each
+  collection now, and the rounds go on while a collection finds a guard dead. Two cases, an inner handle passed to C
+  in the outer one's release and one named by an error it caught, gave `[outer]` and now `[outer inner]`.
+- **Monitors a server makes and closes.** A closed monitor stayed in its isolate's list, so the `sqlite-http` owner,
+  watched once by each request, kept one entry per request for its life, and copied a message for each as it ended;
+  the closed ones are dropped when the list is full and as the isolate ends.
+- **Interning that failed late**, at the shared table, left a symbol outside it, which an image would bring back as a
+  second symbol of that name; its slot and name go back.
+- **A message's room.** Its large blocks were checked against `SHEN_JIT_MAX_HEAP` apart from the rest, so the two
+  together could pass the limit; the whole of it is checked now.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on

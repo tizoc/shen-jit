@@ -293,6 +293,29 @@
   [Out _] -> (let H (handle.wrap (memory.alloc 64) (/. M (do (memory.free M) (channel.send Out released))))
                (shen-jit.pointer! H 0 H)))
 
+\\ So too when the outer release passes the inner handle to C, or catches an error that holds it:
+\\ neither keeps it from the next round.
+(define handle-test.passing
+  [Out How] -> (let Inner (handle.wrap (memory.alloc 8) (/. M (do (memory.free M) (channel.send Out inner))))
+                    Outer (handle.wrap (memory.alloc 8)
+                            (/. M (do (memory.free M) (channel.send Out outer) (handle-test.use How Inner))))
+                 (shen-jit.u8! Outer 0 1)))
+
+(define handle-test.use
+  c Inner -> (shen-jit.pointer! Inner 0 Inner)
+  caught Inner -> (trap-error (cn Inner "x") (/. E skip)))
+
+(define handle-test.released-by
+  How -> (let R (channel.new 2)
+              M (isolate.monitor (isolate.spawn handle-test.passing [(channel.sender R) How]))
+              _ (channel.receive M)
+           (handle-test.drain R)))
+
+(handle-test.check "an inner handle passed to C in a release is released after" [outer inner]
+  (freeze (handle-test.released-by c)))
+(handle-test.check "and one held by an error a release caught" [outer inner]
+  (freeze (handle-test.released-by caught)))
+
 (handle-test.check "a handle its last call to C took is released" released
   (freeze (let R (channel.new 2)
                M (isolate.monitor (isolate.spawn handle-test.last-call [(channel.sender R) []]))
