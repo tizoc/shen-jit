@@ -837,7 +837,7 @@ static Isolate *new_isolate(Isolates *ps, Program *program)
    The primitive: (shen-jit.isolate Op A B), which the port's shen-jit.spawn and the rest call. */
 
 enum { OP_SPAWN, OP_CHANNEL, OP_SENDER, OP_SEND, OP_RECEIVE, OP_RECEIVE_ANY, OP_CLOSE, OP_GIVE, OP_MONITOR,
-       OP_KILL, OP_SELF };
+       OP_KILL, OP_SELF, OP_WAIT_ANY, OP_CHECK_KILL };
 
 static V raise_copy(VM *vm, const char *error, V offender)
 {
@@ -1119,8 +1119,84 @@ static V monitor(VM *vm, Isolates *ps, V isolate)
     return r == V_CLEARED ? sj_raise(vm, "out of memory") : r;
 }
 
+/* With the lock held: whether any of the endpoints has a message or is closed, or has gone. */
+static bool any_ready(Isolates *ps, V endpoints)
+{
+    for (V l = endpoints; is_pair(l); l = ptr(l)[1]) {
+        size_t index;
+        uint32_t generation;
+        if (!handle_of(ptr(l)[0], ps->tag_receiver, &index, &generation))
+            return true;
+        Channel *c = channel_at(ps, index, generation);
+        if (!c || c->count || c->closed)
+            return true;
+    }
+    return false;
+}
+
+/* (shen-jit.wait-any Rs Ms): the first of the receive endpoints Rs that a receive would not wait
+   on, as it has a message or is closed, after at most Ms milliseconds, or () if none is by then.
+   It receives nothing. */
+static V wait_any(VM *vm, Isolates *ps, V endpoints, V ms)
+{
+    if (!is_fix(ms) || fixval(ms) < 0 || fixval(ms) > 86400000)
+        return sj_raise_value(vm, "shen-jit.wait-any: ~S is not a number of milliseconds up to a day", ms);
+    struct timespec until;
+    clock_gettime(CLOCK_REALTIME, &until);
+    until.tv_sec += fixval(ms) / 1000;
+    until.tv_nsec += fixval(ms) % 1000 * 1000000;
+    if (until.tv_nsec >= 1000000000) {
+        until.tv_sec++;
+        until.tv_nsec -= 1000000000;
+    }
+    const char *error = NULL;
+    V found = V_NIL;
+    pthread_mutex_lock(&ps->lock);
+    for (bool late = false;; late = true) {
+        if (killed_now(vm, ps))
+            return sj_raise(vm, "killed");
+        for (V l = endpoints; is_pair(l) && found == V_NIL && !error; l = ptr(l)[1]) {
+            size_t index;
+            uint32_t generation;
+            if (!handle_of(ptr(l)[0], ps->tag_receiver, &index, &generation)) {
+                error = "shen-jit.wait-any: ~S is not a receive endpoint";
+                found = ptr(l)[0];
+                break;
+            }
+            Channel *c = channel_at(ps, index, generation);
+            if (c && c->receiver != vm->isolate) {
+                error = "shen-jit.wait-any: ~S belongs to another isolate";
+                found = ptr(l)[0];
+            } else if (!c || c->count || c->closed) {
+                found = ptr(l)[0];
+            }
+        }
+        if (found != V_NIL || late || fixval(ms) == 0)
+            break;
+        waiting(ps, endpoints, true, true);
+        int waited = 0;
+        while (waited == 0 && !vm->isolate->kill_pending && !any_ready(ps, endpoints))
+            waited = pthread_cond_timedwait(&vm->isolate->wake, &ps->lock, &until);
+        waiting(ps, endpoints, true, false);
+    }
+    pthread_mutex_unlock(&ps->lock);
+    return error ? sj_raise_value(vm, error, found) : found;
+}
+
 V sj_isolate(VM *vm)
 {
+    /* What waits on something else, such as a socket, asks now and then whether it was killed,
+       which does not start isolates. */
+    if (vm->args[0] == fix(OP_CHECK_KILL)) {
+        Isolates *ps = vm->program->isolates;
+        if (!ps || !vm->isolate)
+            return V_FALSE;
+        pthread_mutex_lock(&ps->lock);
+        if (killed_now(vm, ps))
+            return sj_raise(vm, "killed");
+        pthread_mutex_unlock(&ps->lock);
+        return V_FALSE;
+    }
     Isolates *ps = isolates_start(vm);
     if (!ps)
         return sj_raise(vm, "isolates start in the builder");
@@ -1180,6 +1256,7 @@ V sj_isolate(VM *vm)
         return a;
     }
     case OP_SELF: return handle(vm, ps->tag_isolate, vm->isolate->index, vm->isolate->generation);
+    case OP_WAIT_ANY: return wait_any(vm, ps, a, b);
     default: return sj_raise_value(vm, "shen-jit.isolate: ~S is not an operation", op);
     }
 }

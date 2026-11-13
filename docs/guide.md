@@ -297,7 +297,9 @@ are other programs.
 - **Channels:** `(shen-jit.channel N)` makes a channel that holds up to `N` messages and returns its receive endpoint,
   which only the isolate that made it reads. `(shen-jit.sender R)` gives a send endpoint, which can go anywhere.
   `shen-jit.send` waits while the channel is full and `shen-jit.receive` while it is empty;
-  `(shen-jit.receive-any [R1 R2 ...])` gives `[R Message]` from the first that has one.
+  `(shen-jit.receive-any [R1 R2 ...])` gives `[R Message]` from the first that has one, and
+  `(shen-jit.wait-any [R1 R2 ...] Ms)` gives the first that has a message or is closed, waiting at most `Ms`
+  milliseconds, or `[]` if none has by then, and receives nothing.
 - **Closing:** a sender's `(shen-jit.close S)` ends the stream: the receiver gets what was queued, then a value that
   `shen-jit.end?` recognises. The receiver's close drops what is queued. Sending on a closed channel raises "channel
   closed". A channel is freed when its receiver closes it, reads its end, or ends, and not before.
@@ -309,10 +311,12 @@ are other programs.
   it needs from its argument. Only the program's first isolate, the builder, defines: `eval`, `load` and the like
   raise an error in any other.
 - **The end:** an isolate ends when its function returns, or raises an error that nothing catches, which is printed to
-  stderr. `(shen-jit.monitor P)` returns a receive endpoint that gets `[down P Reason]` when `P` ends, the reason being
-  `normal`, the error's message, or `killed`. `(shen-jit.kill P)` raises "killed" at `P`'s next send or receive,
-  waking it if it waits on a channel, so that its handlers can clean up; an isolate busy elsewhere goes on until then. `(shen-jit.self)` is the isolate
-  running. The program ends when the builder does, or when any isolate calls `(shen-jit.exit N)`.
+  stderr. `(shen-jit.monitor P)` returns a receive endpoint that gets `[down P Reason]` when `P` ends, or at once if it
+  has, the reason being `normal`, the error's message, `killed`, or `ended` for one that could not start or ended long
+  enough ago that its record was used again. `(shen-jit.kill P)` raises "killed" at `P`'s next channel operation,
+  waking it if it waits on a channel, so that its handlers can clean up; an isolate busy elsewhere goes on until then,
+  or until it calls `(shen-jit.check-kill)`, as the I/O library's socket waits do every 100 ms at most.
+  `(shen-jit.self)` is the isolate running. The program ends when the builder does, or when any isolate calls `(shen-jit.exit N)`.
 - **The program is fixed while isolates run:** defining raises an error in the builder until every other isolate has
   ended, as a monitor tells. Define everything first, then spawn.
 - **Symbols are shared:** a symbol made in any isolate is the program's, and stays for as long as it runs, so names
@@ -526,7 +530,8 @@ by Content-Length or chunked, within limits, with trailers kept apart, and encod
 [Streaming HTTP responses](https://github.com/tizoc/shen-jit/blob/main/docs/http-streaming.md) writes a response as it
 is made, with a length or chunked.
 [HTTP servers](https://github.com/tizoc/shen-jit/blob/main/docs/http-listener.md) serve the connections a listener
-accepts, one at a time, keep each for later requests within limits, and stop when a handler asks. Ambiguous
+accepts, each in an isolate of its own, a bounded number at once, keep each for later requests within limits, and
+stop when asked, killing what has not finished within a grace period. Ambiguous
 framing is refused.
 
 [HTTP clients with libcurl](https://github.com/tizoc/shen-jit/blob/main/docs/curl.md): `lib/curl.shen` makes HTTP and

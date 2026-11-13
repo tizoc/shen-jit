@@ -116,13 +116,11 @@
       (connection-test.check "producer preflight failure remains local error" error (freeze (hd Result)))
       (connection-test.check "producer preflight closes once" 1 (freeze (<-address Closed 0)))))
 
-(set connection-test.server [])
+(define connection-test.stopper
+  Q -> (do (http.stop (http.current-server)) (http.response 200 [] (buffer.new 0))))
 
 \\ A handler's stop: its response is written, then the persistent connection closes.
-(let S (http.listen "127.0.0.1" 0 (/. Q (do (http.stop (value connection-test.server))
-                                             (http.response 200 [] (buffer.new 0))))
-          [[shutdown-grace 1000]])
-     _ (set connection-test.server S)
+(let S (http.listen "127.0.0.1" 0 connection-test.stopper [[shutdown-grace 1000]])
      C (socket.connect "127.0.0.1" (http.port S))
      _ (socket.send C "GET / HTTP/1.1c#13;c#10;Host: localc#13;c#10;c#13;c#10;")
      Result (http.run S)

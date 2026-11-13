@@ -36,19 +36,26 @@
 (set *held* 0)
 (set *limit* 67108864)
 
+\\ Each isolate counts its own, from nothing, as an isolate inherits no globals.
+(define held
+  -> (trap-error (value *held*) (/. E 0)))
+
+(define held-limit
+  -> (trap-error (value *limit*) (/. E 67108864)))
+
 (define wrap
   M Release -> (let Record (absvector 2)
                     _ (address-> (address-> Record 0 M) 1 Release)
                     Handle (shen-jit.pointer-guard M Record)
-                 (do (set *held* (+ (value *held*) (shen-jit.bytes-length M)))
+                 (do (set *held* (+ (held) (shen-jit.bytes-length M)))
                      (make-room)
                      Handle)))
 
 (define make-room
-  -> (if (> (value *held*) (value *limit*))
+  -> (if (> (held) (held-limit))
          (do (shen-jit.collect)
              (sweep)
-             (set *limit* (larger 67108864 (* 2 (value *held*)))))
+             (set *limit* (larger 67108864 (* 2 (held)))))
          (sweep)))
 
 (define larger
@@ -61,7 +68,7 @@
                   false
                   (let M (<-address Record 0)
                     (do (address-> Record 1 closed)
-                        (set *held* (- (value *held*) (shen-jit.bytes-length M)))
+                        (set *held* (- (held) (shen-jit.bytes-length M)))
                         (Release M)
                         true)))))
 

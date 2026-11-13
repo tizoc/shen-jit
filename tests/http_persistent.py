@@ -13,8 +13,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 LIBRARIES = ["ffi", "socket", "buffer", "io", "deadline", "clock", "io-socket",
              "grammar", "http-head", "http-request", "http-response", "http-server", "http-listener"]
+# Each connection runs in an isolate of its own, so sources say on standard output when they close.
 PROGRAM = '''
-(set persistent.closed 0)
 (define persistent.stream
   Target ->
     (let State (io.record [0])
@@ -28,25 +28,19 @@ PROGRAM = '''
                     ((= N 0) [chunk (buffer.from-string "abc")])
                     ((= Target "/late") [error (io.error read "test source" "private late failure")])
                     ((and (= Target "/slow") (= N 1))
-                      (do (http.pause 300) [eof]))
+                      (do (shen-jit.wait-any [(shen-jit.channel 1)] 300) [eof]))
                     (true [eof]))))
-          (freeze (do (set persistent.closed (+ 1 (value persistent.closed))) [ok]))))))
+          (freeze (do (output "source closed~%") [ok]))))))
 (define persistent.handle
   Q -> (cond ((= (http.target Q) "/stop")
-               (do (http.stop (value persistent.server)) (http.response 204 [] (buffer.new 0))))
-             ((= (http.target Q) "/closed")
-               (http.response 200 [] (buffer.from-string (str (value persistent.closed)))))
+               (do (http.stop (http.current-server)) (http.response 204 [] (buffer.new 0))))
              ((= (http.target Q) "/fixed") (http.response 200 [] (buffer.from-string "fixed")))
              ((= (http.target Q) "/close")
                (http.close-after (http.response 200 [] (buffer.from-string "closed"))))
              (true (persistent.stream (http.target Q)))))
-(set persistent.server
-  (http.listen "127.0.0.1" PORT (function persistent.handle)
-    [[request-limit 3] [idle-timeout 200] [connection-timeout 2000]
-     [write-timeout 200] [response-chunk-size 3]]))
-(define persistent.await
-  -> (if (= (http.wait (value persistent.server) 1000) [pending]) (persistent.await) true))
-(persistent.await)
+(http.run (http.listen "127.0.0.1" PORT persistent.handle
+  [[request-limit 3] [idle-timeout 200] [connection-timeout 2000]
+   [write-timeout 200] [response-chunk-size 3]]))
 '''
 
 
@@ -79,6 +73,8 @@ def server(executable):
                 connection.close()
                 process.wait(timeout=5)
                 assert process.returncode == 0
+                log.seek(0)
+                assert log.read().count(b"source closed\n") == 6, "sources not closed exactly once"
             except BaseException:
                 log.seek(0)
                 sys.stderr.buffer.write(log.read()[-4000:])
@@ -162,10 +158,6 @@ def main():
             headers, data = read_response(stream)
             assert data == b"closed" and headers["Connection"] == "close" and stream.read() == b""
 
-        connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
-        connection.request("GET", "/closed", headers={"Connection": "close"})
-        assert connection.getresponse().read() == b"6", "sources not closed exactly once"
-        connection.close()
     print("Persistent pipeline, HEAD boundaries, request/idle limits, producer failure and cleanup passed")
 
 

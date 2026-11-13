@@ -116,6 +116,24 @@
   0 -> true
   K -> (and (= (pt.ask pt.reply K) K) (pt.in-turn (- K 1))))
 
+(define pt.wait-long
+  Out -> (do (shen-jit.send Out ready) (shen-jit.wait-any [(shen-jit.channel 1)] 86400000)))
+
+(define pt.spin
+  Out -> (do (shen-jit.send Out ready) (pt.spin-on 0)))
+
+(define pt.spin-on
+  N -> (do (shen-jit.check-kill) (pt.spin-on (+ N 1))))
+
+\\ Spawns F with a sender, and kills it once it has sent: how it ended.
+(define pt.kill-when-ready
+  F -> (let R (shen-jit.channel 1)
+            P (shen-jit.spawn F (shen-jit.sender R))
+            M (shen-jit.monitor P)
+            _ (shen-jit.receive R)
+            _ (shen-jit.kill P)
+         (pt.third (shen-jit.receive M))))
+
 (set *pt.global* builder)
 (put pt.twice pt.note builder)
 
@@ -241,6 +259,26 @@
        _ (shen-jit.close Send)
     [Got (pt.suffix Refused 26)]))
 
+(pt.check "wait-any gives () once its time has passed" [] (shen-jit.wait-any [(shen-jit.channel 1)] 10))
+
+(pt.check "wait-any gives the first that has a message or is closed, and receives nothing" [true true x]
+  (let Empty (shen-jit.channel 1)
+       Full (shen-jit.channel 1)
+       Closed (shen-jit.channel 1)
+       _ (shen-jit.send (shen-jit.sender Full) x)
+       _ (shen-jit.close (shen-jit.sender Closed))
+    [(shen-jit.same? Full (shen-jit.wait-any [Empty Full Closed] 0))
+     (shen-jit.same? Closed (shen-jit.wait-any [Empty Closed] 0))
+     (shen-jit.receive Full)]))
+
+(pt.check "wait-any wakes when a message comes" [true x]
+  (let R (shen-jit.channel 1)
+       _ (shen-jit.spawn pt.reply [x (shen-jit.sender R)])
+    [(shen-jit.same? R (shen-jit.wait-any [R] 60000)) (shen-jit.receive R)]))
+
+(pt.check "wait-any refuses what is not a receive endpoint" "shen-jit.wait-any: 5 is not a receive endpoint"
+  (pt.message (freeze (shen-jit.wait-any [5] 0))))
+
 \\ ---------------------------------------------------------------------------------------------
 \\ Monitors and kill, which an isolate sees at its next channel operation.
 
@@ -279,6 +317,12 @@
        M (shen-jit.monitor P)
        _ (shen-jit.kill P)
     (pt.third (shen-jit.receive M))))
+
+(pt.check "kill wakes an isolate in wait-any" killed (pt.kill-when-ready pt.wait-long))
+
+(pt.check "check-kill lets kill reach an isolate busy elsewhere" killed (pt.kill-when-ready pt.spin))
+
+(pt.check "check-kill in the builder" false (shen-jit.check-kill))
 
 (pt.check "a busy isolate sees kill when it next sends" [killed true]
   (let R (shen-jit.channel 1)

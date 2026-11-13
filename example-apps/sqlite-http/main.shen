@@ -202,9 +202,9 @@
 (define counter-app.start
   Path Host Port Options ->
     (do (counter-app.initialize Path)
-        (http.listen Host Port (/. Request (counter-app.handle Path Request)) Options)))
+        (http.listen Host Port [counter-app.handle Path] Options)))
 
-\\ Serves until a handler stops the server; connections are served one at a time.
+\\ Serves until a handler stops the server, each connection in an isolate of its own.
 (define counter-app.await
   S -> (counter-app.await-result S (http.run S)))
 
@@ -214,22 +214,20 @@
 
 (define counter-app.run
   Path Port ->
-    (let Server (io.record [[]])
-         _ (counter-app.initialize Path)
-         S (http.listen "127.0.0.1" Port (/. Q (counter-app.control Path Server Q))
+    (let _ (counter-app.initialize Path)
+         S (http.listen "127.0.0.1" Port [counter-app.control Path]
               [[body-limit 4096] [response-body-limit 65536]])
-         _ (address-> Server 0 S)
          _ (output "Listening on http://127.0.0.1:~A~%" (http.port S))
       (counter-app.await S)))
 
 (define counter-app.control
-  Path Server Request ->
+  Path Request ->
     (if (= (http.target Request) "/shutdown")
         (cond ((not (= (http.method Request) "POST"))
                 (http.response 405 [["Allow" "POST"]] (buffer.new 0)))
               ((> (http.content-length Request) 0)
                 (counter-app.error 400 "this API expects an empty body"))
-              (true (do (http.stop (<-address Server 0))
+              (true (do (http.stop (http.current-server))
                         (http.close-after (counter-app.json 202 [object ["stopping" true]])))))
         (counter-app.handle Path Request)))
 

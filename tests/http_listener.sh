@@ -28,7 +28,8 @@ run_case "$SHEN" eval "$@" -l example-apps/sqlite-http/main.shen \
 run_case "$SHEN" eval "$@" -l example-apps/sqlite-http/main.shen \
     -s export-test.path "\"$dir/exports.db\"" -l tests/http_export.shen
 "$SHEN" --save "$dir/listener.img" eval "$@" -l example-apps/sqlite-http/main.shen \
-    -e '(set listener-image.server (http.listen "127.0.0.1" 0 (/. Q (http.response 200 [] (buffer.new 0))) []))' \
+    -e '(define listener-image.handler Q -> (http.response 200 [] (buffer.new 0)))' \
+    -e '(set listener-image.server (http.listen "127.0.0.1" 0 listener-image.handler []))' \
     -e '(http.stop (value listener-image.server))' \
     -e '(http.run (value listener-image.server))' > "$dir/save.out" 2>&1
 SHEN_JIT_IMAGE="$dir/listener.img" "$SHEN" eval \
