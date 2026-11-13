@@ -340,6 +340,7 @@ test-core: test test-jit test-ops test-kl check-lowerer check-generated test-ker
 test-isolates: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -l tests/isolates.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l tests/isolate-start.shen -e '(start-test.run)' | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l tests/isolates_typed.shen | $(FFI_RESULT)
 
 test-isolates-stress: $(BUILD)/shen-jit
 	SHEN_JIT_GC_STRESS=1 $(BUILD)/shen-jit eval -l tests/isolates.shen | $(FFI_RESULT)

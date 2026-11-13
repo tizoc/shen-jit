@@ -264,7 +264,7 @@ static V out_value(Out *o, V v)
     case T_EXCEPTION: return out_copy(o, v, obj_words(ptr(v)[0]));
     case T_VECTOR:
         if (handle_of(v, o->ps->tag_receiver, &index, &generation))
-            return out_fail(o, "~S can move only at spawn, through shen-jit.give", v);
+            return out_fail(o, "~S can move only at spawn, through channel.give", v);
         if (handle_of(v, o->ps->tag_given, &index, &generation)) {
             if (!o->spawn)
                 return out_fail(o, "~S can move only at spawn", v);
@@ -780,7 +780,7 @@ static void *isolate_main(void *argument)
         ok = value != V_CLEARED;
     }
     /* A kill that came before it started is raised as any other: at its first channel operation
-       or shen-jit.check-kill, so that what its argument holds, such as a socket, is cleaned up. */
+       or isolate.check-kill, so that what its argument holds, such as a socket, is cleaned up. */
     pthread_mutex_lock(&ps->lock);
     fragment_free(p->argument);
     p->argument = NULL;
@@ -863,7 +863,7 @@ static Isolate *new_isolate(Isolates *ps, Program *program)
 }
 
 /* ---------------------------------------------------------------------------------------------
-   The primitive: (shen-jit.isolate Op A B), which the port's shen-jit.spawn and the rest call. */
+   The primitive: (shen-jit.isolate Op A B), which the port's isolate.spawn and the rest call. */
 
 enum { OP_SPAWN, OP_CHANNEL, OP_SENDER, OP_SEND, OP_RECEIVE, OP_RECEIVE_ANY, OP_CLOSE, OP_GIVE, OP_MONITOR,
        OP_KILL, OP_SELF, OP_WAIT_ANY, OP_CHECK_KILL, OP_SHARE, OP_SINCE };
@@ -896,7 +896,7 @@ static V spawn(VM *vm, Isolates *ps, V name, V argument)
 {
     V f = is_symbol(name) && in_program(vm, ptr(name)) ? *cell_function(vm, symbol_cell(name)) : V_CLEARED;
     if (!unary(vm, f))
-        return sj_raise_value(vm, "shen-jit.spawn: ~S is not a function of one argument that the builder defined",
+        return sj_raise_value(vm, "isolate.spawn: ~S is not a function of one argument that the builder defined",
                               name);
     const char *error = NULL;
     V offender = V_NIL;
@@ -912,7 +912,7 @@ static V spawn(VM *vm, Isolates *ps, V name, V argument)
             pthread_mutex_unlock(&ps->lock);
             free(given);
             fragment_free(fragment);
-            return sj_raise(vm, "shen-jit.give: only a channel's receiver can give it, while it is open");
+            return sj_raise(vm, "channel.give: only a channel's receiver can give it, while it is open");
         }
     }
     Isolate *p = new_isolate(ps, vm->program);
@@ -937,7 +937,7 @@ static V spawn(VM *vm, Isolates *ps, V name, V argument)
     pthread_mutex_unlock(&ps->lock);
     free(given);
     fragment_free(fragment);
-    return sj_raise(vm, "shen-jit.spawn: cannot start a thread");
+    return sj_raise(vm, "isolate.spawn: cannot start a thread");
 }
 
 /* With the lock held: waiting on its condition until woken, or until the time given. The builder
@@ -997,7 +997,8 @@ static void waiting(Isolates *ps, V endpoints, bool any, bool on)
     }
 }
 
-/* (shen-jit.receive R), or with `any`, (shen-jit.receive-any Rs), which gives [R Message]. */
+/* (channel.receive R), or with `any`, (channel.receive-any Rs), which gives [R Message]; at the end of
+   a stream, shen-jit.end-of-stream, which the port turns into what each gives then. */
 static V receive(VM *vm, Isolates *ps, V endpoints, bool any)
 {
     V from = V_NIL, got = V_NIL;
@@ -1025,7 +1026,8 @@ static V receive(VM *vm, Isolates *ps, V endpoints, bool any)
             if (any)
                 l = ptr(l)[1];
             if (!handle_of(from, ps->tag_receiver, &index, &generation)) {
-                error = "shen-jit.receive: ~S is not a receive endpoint";
+                error = any ? "channel.receive-any: ~S is not a receive endpoint"
+                            : "channel.receive: ~S is not a receive endpoint";
                 offender = from;
                 break;
             }
@@ -1035,7 +1037,8 @@ static V receive(VM *vm, Isolates *ps, V endpoints, bool any)
                 break;
             }
             if (c->receiver != vm->isolate) {
-                error = "shen-jit.receive: ~S belongs to another isolate";
+                error = any ? "channel.receive-any: ~S belongs to another isolate"
+                            : "channel.receive: ~S belongs to another isolate";
                 offender = from;
                 break;
             }
@@ -1061,7 +1064,7 @@ static V receive(VM *vm, Isolates *ps, V endpoints, bool any)
         }
         if (!n) {
             pthread_mutex_unlock(&ps->lock);
-            error = "shen-jit.receive-any: no channels";
+            error = "channel.receive-any: no channels";
             break;
         }
         waiting(ps, endpoints, any, true);
@@ -1086,7 +1089,7 @@ static V send(VM *vm, Isolates *ps, V sender, V v)
     size_t index;
     uint32_t generation;
     if (!handle_of(sender, ps->tag_sender, &index, &generation))
-        return sj_raise_value(vm, "shen-jit.send: ~S is not a send endpoint", sender);
+        return sj_raise_value(vm, "channel.send: ~S is not a send endpoint", sender);
     const char *error = NULL;
     V offender = V_NIL;
     Fragment *f = fragment_out(vm, v, false, NULL, NULL, &error, &offender);
@@ -1187,7 +1190,7 @@ static V monitor(VM *vm, Isolates *ps, V isolate)
     return r == V_CLEARED ? sj_raise(vm, "out of memory") : r;
 }
 
-/* (shen-jit.share V): a copy of V in the program space, which crosses to any isolate by pointer,
+/* (isolate.share V): a copy of V in the program space, which crosses to any isolate by pointer,
    and which nothing changes, as stores refuse its vectors and byte buffers; it is never freed. */
 static V share(VM *vm, V v)
 {
@@ -1214,12 +1217,12 @@ static V first_ready(Isolates *ps, VM *vm, V endpoints, const char **error)
         size_t index;
         uint32_t generation;
         if (!handle_of(ptr(l)[0], ps->tag_receiver, &index, &generation)) {
-            *error = "shen-jit.wait-any: ~S is not a receive endpoint";
+            *error = "channel.wait-any: ~S is not a receive endpoint";
             return ptr(l)[0];
         }
         Channel *c = channel_at(ps, index, generation);
         if (c && c->receiver != vm->isolate) {
-            *error = "shen-jit.wait-any: ~S belongs to another isolate";
+            *error = "channel.wait-any: ~S belongs to another isolate";
             return ptr(l)[0];
         }
         if (!c || c->count || c->closed)
@@ -1228,13 +1231,13 @@ static V first_ready(Isolates *ps, VM *vm, V endpoints, const char **error)
     return V_NIL;
 }
 
-/* (shen-jit.wait-any Rs Ms): the first of the receive endpoints Rs that a receive would not wait
+/* (channel.wait-any Rs Ms): the first of the receive endpoints Rs that a receive would not wait
    on, as it has a message or is closed, after at most Ms milliseconds, or () if none is by then.
    It receives nothing. */
 static V wait_any(VM *vm, Isolates *ps, V endpoints, V ms)
 {
     if (!is_fix(ms) || fixval(ms) < 0 || fixval(ms) > 86400000)
-        return sj_raise_value(vm, "shen-jit.wait-any: ~S is not a number of milliseconds up to a day", ms);
+        return sj_raise_value(vm, "channel.wait-any: ~S is not a number of milliseconds up to a day", ms);
     struct timespec until;
     clock_gettime(CLOCK_REALTIME, &until);
     until.tv_sec += fixval(ms) / 1000;
@@ -1315,7 +1318,7 @@ V sj_isolate(VM *vm)
     case OP_SPAWN: return spawn(vm, ps, a, b);
     case OP_CHANNEL: {
         if (!is_fix(a) || fixval(a) < 1 || fixval(a) > (1 << 24))
-            return sj_raise_value(vm, "shen-jit.channel: ~S is not a capacity from 1 to 2^24", a);
+            return sj_raise_value(vm, "channel.new: ~S is not a capacity from 1 to 2^24", a);
         pthread_mutex_lock(&ps->lock);
         size_t i = channel_new(ps, (size_t)fixval(a), vm->isolate);
         uint32_t g = i == SIZE_MAX ? 0 : ps->channels[i].generation;
@@ -1325,8 +1328,8 @@ V sj_isolate(VM *vm)
     case OP_SENDER:
     case OP_GIVE:
         if (!handle_of(a, ps->tag_receiver, &index, &generation))
-            return sj_raise_value(vm, fixval(op) == OP_SENDER ? "shen-jit.sender: ~S is not a receive endpoint"
-                                                              : "shen-jit.give: ~S is not a receive endpoint", a);
+            return sj_raise_value(vm, fixval(op) == OP_SENDER ? "channel.sender: ~S is not a receive endpoint"
+                                                              : "channel.give: ~S is not a receive endpoint", a);
         return handle(vm, fixval(op) == OP_SENDER ? ps->tag_sender : ps->tag_given, index, generation);
     case OP_SEND: return send(vm, ps, a, b);
     case OP_RECEIVE: return receive(vm, ps, a, false);
@@ -1334,12 +1337,12 @@ V sj_isolate(VM *vm)
     case OP_CLOSE: {
         bool receiver = handle_of(a, ps->tag_receiver, &index, &generation);
         if (!receiver && !handle_of(a, ps->tag_sender, &index, &generation))
-            return sj_raise_value(vm, "shen-jit.close: ~S is not an endpoint", a);
+            return sj_raise_value(vm, "channel.close: ~S is not an endpoint", a);
         pthread_mutex_lock(&ps->lock);
         Channel *c = channel_at(ps, index, generation);
         if (c && receiver && c->receiver != vm->isolate) {
             pthread_mutex_unlock(&ps->lock);
-            return sj_raise_value(vm, "shen-jit.close: ~S belongs to another isolate", a);
+            return sj_raise_value(vm, "channel.close: ~S belongs to another isolate", a);
         }
         if (c && receiver) {
             channel_free(ps, c);

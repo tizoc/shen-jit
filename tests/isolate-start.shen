@@ -85,10 +85,10 @@
        [(length Results) (start-test.sum Results)]))
 
 (define start-test.in-isolate
-  Out -> (shen-jit.send Out (start-test.main)))
+  Out -> (channel.send Out (start-test.main)))
 
 (define start-test.run
-  -> (let R (shen-jit.channel 1)
-          _ (shen-jit.spawn start-test.in-isolate (shen-jit.sender R))
-          Got (shen-jit.receive R)
+  -> (let R (channel.new 1)
+          _ (isolate.spawn start-test.in-isolate (channel.sender R))
+          Got (channel.receive R)
        (output "~A passed, ~A failed (isolate start)~%" (- (hd Got) (hd (tl Got))) (hd (tl Got)))))

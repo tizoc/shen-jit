@@ -60,17 +60,17 @@
 \\ An isolate accepts and echoes a series of frames while the main program waits for its replies. A
 \\ socket cannot be sent, so it opens its own listener and sends its port, then what serving gave.
 (define io-socket-test.echo
-  Out -> (shen-jit.send Out
+  Out -> (channel.send Out
            (trap-error (let L (socket.listen "127.0.0.1" 0)
-                            _ (shen-jit.send Out (socket.port L))
+                            _ (channel.send Out (socket.port L))
                             S (socket.accept L)
                             _ (socket.close L)
                          (frame-echo.serve (io.socket S "echo peer") 1048576))
                        (/. X [raised (error-to-string X)]))))
 
-(let Replies (shen-jit.channel 2)
-     _ (shen-jit.spawn io-socket-test.echo (shen-jit.sender Replies))
-     C (io.socket (socket.connect "127.0.0.1" (shen-jit.receive Replies)) "echo client")
+(let Replies (channel.new 2)
+     _ (isolate.spawn io-socket-test.echo (channel.sender Replies))
+     C (io.socket (socket.connect "127.0.0.1" (channel.receive Replies)) "echo client")
      W (io.writer C [[chunk-size 8192]])
      F (frame.reader (io.reader C [[chunk-size 4096]]) 1048576)
      Payload (buffer.new 1048576)
@@ -89,7 +89,7 @@
         (freeze (io-socket-test.frame-value (frame.next F))))
       (io.shutdown-write C)
       (io-socket-test.check "echo stops after clean stream end" [ok 2]
-        (freeze (shen-jit.receive Replies)))
+        (freeze (channel.receive Replies)))
       (io-socket-test.check "echo sends EOF" [eof] (freeze (frame.next F)))
       (io.close C)))
 

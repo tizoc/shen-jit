@@ -11,7 +11,7 @@
   (use socket)
   (import struct defstruct)
   (externals [accept cancelling draining http-handler http-listener-options http-listener-results
-    listening max-connections ok pending serve shutdown-grace stopped])
+    listening max-connections ok pending serve shutdown-grace stopped timeout])
   (shadow port run)
   (export current-server handler listen listener-option option port request response run server
     state stats stop wait wait-result)
@@ -171,7 +171,7 @@
 
 (define tell
   Control Message ->
-    (trap-error (shen-jit.send Control Message)
+    (trap-error (channel.send Control Message)
       (/. X (if (= (error-to-string X) "channel closed") true (simple-error (error-to-string X))))))
 
 (define current-server
@@ -200,7 +200,7 @@
 \\ then closes the listener, waits for the connections, at most shutdown-grace, kills those left
 \\ and gives the result. Each turn waits at most 50 ms, on the listener while there is room for a
 \\ connection, and otherwise for one to end or to tell, so that Ctrl-C reaches a REPL that runs it,
-\\ which leaves the server as it was: running it again goes on.
+\\ which kills the connections it started and leaves the server listening: running it again serves.
 (define run
   S -> (let _ (owner-check S)
             Result (server.result S)
@@ -212,8 +212,8 @@
 \\ Each connection tells at most once that it failed and once that a handler stopped the server,
 \\ and the supervisor takes all that is waiting at every turn.
 (define open-events
-  S -> (let R (shen-jit.channel (+ 2 (* 2 (cap S))))
-         (do (server.events-> S R) (server.control-> S (shen-jit.sender R)))))
+  S -> (let R (channel.new (+ 2 (* 2 (cap S))))
+         (do (server.events-> S R) (server.control-> S (channel.sender R)))))
 
 (define supervisor
   S -> (trap-error (supervise S)
@@ -239,10 +239,10 @@
                  (true (do (await S) (supervise S))))))
 
 (define await
-  S -> (shen-jit.wait-any [(server.events S) | (map (/. C (hd (tl C))) (server.connections S))] 50))
+  S -> (channel.wait-any [(server.events S) | (map (/. C (hd (tl C))) (server.connections S))] 50))
 
 (define ready?
-  R -> (not (empty? (shen-jit.wait-any [R] 0))))
+  R -> (not (= (channel.wait-any [R] 0) [timeout])))
 
 \\ A connection is [Isolate Monitor Stop]: closing Stop, a send endpoint, tells it to stop.
 (define reap
@@ -253,7 +253,7 @@
   _ [] Live -> (reverse Live)
   S [[P M Stop] | Rest] Live ->
     (if (ready? M)
-        (do (shen-jit.close M)
+        (do (channel.close M)
             (server.completed-> S (+ 1 (server.completed S)))
             (reap-ended S Rest Live))
         (reap-ended S Rest [[P M Stop] | Live])))
@@ -261,7 +261,7 @@
 \\ After the ends: a connection tells before it ends.
 (define take-events
   S -> (if (ready? (server.events S))
-           (do (take-event S (shen-jit.receive (server.events S))) (take-events S))
+           (do (take-event S (channel.receive (server.events S))) (take-events S))
            true))
 
 (define take-event
@@ -279,13 +279,13 @@
 \\ The connection's isolate owns the socket from its start, and the supervisor never touches it.
 (define launch
   S Peer ->
-    (let Stop (shen-jit.channel 1)
-         Sender (shen-jit.sender Stop)
+    (let Stop (channel.new 1)
+         Sender (channel.sender Stop)
          P (socket.closing-on-error Peer
-             (freeze (shen-jit.spawn connection-isolate
+             (freeze (isolate.spawn connection-isolate
                        [Peer (server.handler S) (request-options S) (server.port S) (server.control S)
-                        (shen-jit.give Stop)])))
-         Cs [[P (shen-jit.monitor P) Sender] | (server.connections S)]
+                        (channel.give Stop)])))
+         Cs [[P (isolate.monitor P) Sender] | (server.connections S)]
          _ (server.connections-> S Cs)
          _ (server.accepted-> S (+ 1 (server.accepted S)))
       (if (> (length Cs) (server.peak S)) (server.peak-> S (length Cs)) true)))
@@ -306,11 +306,11 @@
   S -> (do (close-listener S)
            (server.grace-> S (clock.deadline (grace-ms S)))
            (server.phase-> S draining)
-           (map (/. C (shen-jit.close (hd (tl (tl C))))) (server.connections S))))
+           (map (/. C (channel.close (hd (tl (tl C))))) (server.connections S))))
 
 (define kill-all
   S -> (let Cs (server.connections S)
-         (do (map (/. C (shen-jit.kill (hd C))) Cs)
+         (do (map (/. C (isolate.kill (hd C))) Cs)
              (server.cancelled-> S (+ (server.cancelled S) (length Cs)))
              (server.phase-> S cancelling))))
 
@@ -334,7 +334,7 @@
   S ->
     (let _ (close-listener S)
          _ (take-events S)
-         _ (shen-jit.close (server.events S))
+         _ (channel.close (server.events S))
          _ (server.phase-> S stopped)
          Error (server.error S)
          Result (if (empty? Error) [ok] [error Error])

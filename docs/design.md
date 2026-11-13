@@ -336,7 +336,15 @@ state with the kernel's starting values: a new property vector, Prolog's memory 
 counters, the printer's settings, and `gensym` counting from a base of its own, so that
 names made in two isolates never meet.
 
-**Spawning** (`isolate.c`). `shen-jit.spawn` takes the name of a function of one argument
+**The interface.** The port defines the `isolate` and `channel` namespaces over one primitive,
+`shen-jit.isolate`, which takes an operation's number. Their functions are system functions, as
+the kernel's are, so a namespace leaves them unqualified, and the namespaces publish their
+exports for clients that use a prefix. Their types, declarations and datatypes are Shen source
+that `shen-jit.initialise` evaluates as the image is built, since the tool that compiles the
+port's Shen source takes definitions only; what the datatypes define is left off
+`shen.*userdefs*`.
+
+**Spawning** (`isolate.c`). `isolate.spawn` takes the name of a function of one argument
 whose procedure is in the program space, and a value, which it copies into a fragment: blocks
 outside every heap. The new thread makes a context (`vm_create_context`), with a heap that
 reserves 8 GiB for each region rather than the builder's 64, as reserving and releasing that
@@ -351,22 +359,25 @@ program's functions. The receiver makes room for all of it first, so nothing mov
 copied. A byte buffer or string of 256 KB or more, which a fragment keeps in a block of its own,
 is not copied in: the block becomes one of the receiver's large objects as it is, so a big
 message costs one copy, in the sender, and the receiver's collections never copy it. Closures in a heap, streams, pointers, code and the end of a stream are refused. A receive endpoint moves only in a spawn's argument, marked by
-`shen-jit.give`, which hands its channel to the child.
+`channel.give`, which hands its channel to the child.
 
 **Channels.** A table outside every heap, under the isolates' lock, holds each channel's
 queue of fragments, copied into the receiver's heap as it receives, its receiver, and the
 senders waiting while it is full. An endpoint is an absvector `[Tag Index Generation]`, whose
 tag is a port function that prints it; freeing a channel raises its slot's generation, so a
-stale endpoint raises "channel closed". Each isolate waits on a condition of its own, with a
-time limit for `shen-jit.wait-any`, which looks at several receive endpoints without receiving,
+stale endpoint raises "channel closed". At the end of a stream the primitive gives a marker,
+`shen-jit.end-of-stream`, which nothing can send; the port's `channel.receive` turns it into
+"channel closed" and `channel.next` into `[closed]`, and `channel.wait-any`'s `[]` becomes
+`[timeout]`. Each isolate waits on a condition of its own, with a
+time limit for `channel.wait-any`, which looks at several receive endpoints without receiving,
 so that a supervisor can wake for whichever of its connections ends and still look at a socket
-or a clock now and then. A monitor is a channel of capacity 1 that gets `[down P Reason]` when P
+or a clock now and then. A monitor is a channel of capacity 1 that gets `[down I Reason]` when I
 ends. `kill` marks the isolate, which raises "killed", once, at its next channel operation or
-`shen-jit.check-kill`, even if the kill came before it started, so that its handlers clean up
+`isolate.check-kill`, even if the kill came before it started, so that its handlers clean up
 what its argument holds, and wakes it if it waits on a channel: an isolate needs no safe points,
 and code compiled for one is what any program runs. What waits on
 something else, as the I/O library's socket waits do in slices of 100 ms, calls
-`shen-jit.check-kill` between them; in the builder, or before isolates exist, it does nothing. An isolate that
+`isolate.check-kill` between them; in the builder, or before isolates exist, it does nothing. An isolate that
 cannot start, for want of memory for its context, tells its monitors too, with a message laid out by hand, as it has
 no heap to make one in. An isolate that ends tells its monitors, closes its files
 and the channels it receives on, and frees its context; its record keeps why it ended, as a symbol
@@ -411,7 +422,7 @@ connections' monitors. A connection tells it once that it failed, before it ends
 once that it asked to stop. Once the grace has passed it kills the connections left, which a
 kill reaches in their next socket wait.
 
-**Shared storage.** `shen-jit.share` copies a value into a fragment as a send does, refusing
+**Shared storage.** `isolate.share` copies a value into a fragment as a send does, refusing
 what a send refuses, then lays the fragment out in one run of the program space, taken under
 the lock that guards making symbols there, and marks each vector and byte buffer in it shared,
 by bit 7 of its header. Nothing in it points into a heap, so collections neither scan nor move

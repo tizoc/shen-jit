@@ -66,16 +66,16 @@
         Answers Answers Answers]))
 
 (define dp.isolate
-  [Shared Facts Pattern Out] -> (shen-jit.send Out (dp.answers (datalog.use Shared) Facts Pattern)))
+  [Shared Facts Pattern Out] -> (channel.send Out (dp.answers (datalog.use Shared) Facts Pattern)))
 
 \* Shares Name and runs it in an isolate, giving its answers, or [failed Reason] if it raised. *\
 (define dp.in-isolate
   Name Facts Pattern
   -> (let Shared (datalog.share Name)
-          R (shen-jit.channel 1)
-          M (shen-jit.monitor (shen-jit.spawn dp.isolate [Shared Facts Pattern (shen-jit.sender R)]))
-          Got (shen-jit.receive-any [R M])
-          Down (if (= (hd Got) R) (shen-jit.receive M) skip)
+          R (channel.new 1)
+          M (isolate.monitor (isolate.spawn dp.isolate [Shared Facts Pattern (channel.sender R)]))
+          Got (channel.receive-any [R M])
+          Down (if (= (hd Got) R) (channel.receive M) skip)
        (if (= (hd Got) R) (hd (tl Got)) [failed (nth 3 (hd (tl Got)))])))
 
 (define dp.term
@@ -121,7 +121,7 @@
 (define dp.keyed
   [Shared Facts Out] -> (let Name (datalog.use Shared)
                              Db (datalog.run Name Facts)
-                    (shen-jit.send Out [(datalog.sorted Db dist) (datalog.sorted Db widest) (datalog.count Db via)
+                    (channel.send Out [(datalog.sorted Db dist) (datalog.sorted Db widest) (datalog.count Db via)
                                         (datalog.holds? Db [dist 3 7]) (datalog.ask Db (dist 3 D))])))
 
 \* Lattices, joined by functions the program defines. *\
@@ -148,14 +148,14 @@
 (define dp.lattice
   [Shared Facts Out] -> (let Name (datalog.use Shared)
                              Db (datalog.run Name Facts)
-                    (shen-jit.send Out [(datalog.sorted Db reached-by) (datalog.sorted Db const)
+                    (channel.send Out [(datalog.sorted Db reached-by) (datalog.sorted Db const)
                                         (datalog.sorted Db known)])))
 
 (define dp.ask
-  F Shared Facts -> (let R (shen-jit.channel 1)
-                   M (shen-jit.monitor (shen-jit.spawn F [Shared Facts (shen-jit.sender R)]))
-                   Got (shen-jit.receive-any [R M])
-                   _ (if (= (hd Got) R) (shen-jit.receive M) skip)
+  F Shared Facts -> (let R (channel.new 1)
+                   M (isolate.monitor (isolate.spawn F [Shared Facts (channel.sender R)]))
+                   Got (channel.receive-any [R M])
+                   _ (if (= (hd Got) R) (channel.receive M) skip)
                 (if (= (hd Got) R) (hd (tl Got)) [failed (nth 3 (hd (tl Got)))])))
 
 (set dp.path-db (datalog.run dp.paths (value dp.path-facts)))

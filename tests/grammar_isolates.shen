@@ -23,15 +23,15 @@
 
 \\ The reply, once the isolate has ended: the builder defines more after it.
 (define gp.ask
-  F Text -> (let R (shen-jit.channel 1)
-                 P (shen-jit.spawn F [Text (shen-jit.sender R)])
-                 M (shen-jit.monitor P)
-                 Reply (shen-jit.receive R)
-                 _ (shen-jit.receive M)
+  F Text -> (let R (channel.new 1)
+                 P (isolate.spawn F [Text (channel.sender R)])
+                 M (isolate.monitor P)
+                 Reply (channel.receive R)
+                 _ (channel.receive M)
               Reply))
 
 (define gp.work
-  [Text Out] -> (shen-jit.send Out [(grammar.match? <gp.digits> (buffer.from-string Text))
+  [Text Out] -> (channel.send Out [(grammar.match? <gp.digits> (buffer.from-string Text))
                                     (grammar.match? <gp.digits> (buffer.from-string "12a"))
                                     (grammar.read <gp.word> (gp.reader "abc;rest") (function gp.fail))
                                     (grammar.read <gp.word> (gp.reader "ab1;") (function gp.fail))]))
@@ -43,7 +43,7 @@
 (defgrammar <gp.late> (+ <gp.digit>) "!";)
 
 (define gp.late
-  [Text Out] -> (shen-jit.send Out (grammar.match? <gp.late> (buffer.from-string Text))))
+  [Text Out] -> (channel.send Out (grammar.match? <gp.late> (buffer.from-string Text))))
 
 (gp.check "a rule defined after a spawn" true (gp.ask gp.late "12!"))
 
@@ -51,7 +51,7 @@
 (defgrammar <gp.unread> (+ <gp.letter>);)
 
 (define gp.unread
-  [Text Out] -> (shen-jit.send Out (trap-error (grammar.read-from <gp.unread> [] (gp.reader Text) 10 (function gp.fail))
+  [Text Out] -> (channel.send Out (trap-error (grammar.read-from <gp.unread> [] (gp.reader Text) 10 (function gp.fail))
                                                (/. E (error-to-string E)))))
 
 (gp.check "an unprepared variant is refused"

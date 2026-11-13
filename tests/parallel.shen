@@ -46,7 +46,7 @@
   (freeze (par.raises? (freeze (parallel.map 0 par.square [1])))))
 
 \\ A table shared once crosses to every isolate by pointer.
-(let Table (shen-jit.share (@v a b c <>))
+(let Table (isolate.share (@v a b c <>))
   (do (par.check "a shared argument reads in every isolate" [a b c]
         (freeze (parallel.map 3 [par.first Table] [1 2 3])))
       (par.check "by pointer" [true true]

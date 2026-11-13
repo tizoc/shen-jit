@@ -62,7 +62,7 @@ static inline uint64_t *ptr(V v) { return (uint64_t *)(uintptr_t)(v & ~(V)7); }
 static inline V tagged(const uint64_t *p, unsigned tag) { return (V)(uintptr_t)p | tag; }
 
 /* Object headers: 111 in the low bits, the type in bits 3-6, bit 7 set in a vector or byte
-   buffer that is shared (shen-jit.share), and a size field in bits 8-63 whose meaning depends
+   buffer that is shared (isolate.share), and a size field in bits 8-63 whose meaning depends
    on the type. Code that stores into a vector or buffer tests the whole low byte, which a shared
    one fails, and code that reads tests it without bit 7, so neither costs an instruction. */
 enum {

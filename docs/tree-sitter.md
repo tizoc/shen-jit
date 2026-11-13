@@ -81,7 +81,7 @@ or newline normalization happens before parsing. Syntax errors return trees, not
 The adapter copies the selected source range to stable native storage before parsing,
 then returns a managed source snapshot. Changing or closing the original input afterwards cannot
 change it. Foreign input must stay open while its initial copy is made. Parsing never borrows a
-moving managed address while another Shen thread can collect.
+managed address that a collection could move.
 
 ## Snapshot traversal
 

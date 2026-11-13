@@ -863,31 +863,31 @@ check save-exe-goes-on "$dir/bad.out" "still here"
 
 # Isolates beside the program (tests/isolates.shen has the rest).
 # An isolate that ends the program while the REPL waits for input.
-{ printf '(define ex X -> (shen-jit.exit 3))\n(shen-jit.spawn ex 0)\n'; sleep 0.5; } | "$SHEN" > "$dir/proc2.out" 2>&1
+{ printf '(define ex X -> (shen-jit.exit 3))\n(isolate.spawn ex 0)\n'; sleep 0.5; } | "$SHEN" > "$dir/proc2.out" 2>&1
 echo "status $?" >> "$dir/proc2.out"
 contains isolate-exit "$dir/proc2.out" "status 3"
 # The program ends when the builder does, with an isolate still running.
-printf '(define forever N -> (forever (+ N 1)))\n(shen-jit.spawn forever 0)\n(output "main ends~%%")\n' > "$dir/proc3.shen"
+printf '(define forever N -> (forever (+ N 1)))\n(isolate.spawn forever 0)\n(output "main ends~%%")\n' > "$dir/proc3.shen"
 "$SHEN" script "$dir/proc3.shen" > "$dir/proc3.out" 2>&1 < /dev/null
 echo "status $?" >> "$dir/proc3.out"
 check isolate-main-ends "$dir/proc3.out" "main ends"
 check isolate-main-ends-status "$dir/proc3.out" "status 0"
 # Output written to a file before the program ends with isolates about.
-printf '(define forever N -> (forever (+ N 1)))\n(shen-jit.spawn forever 0)\n(set s (open "%s/proc4.txt" out))\n(pr "written" (value s))\n(shen-jit.exit 0)\n' "$dir" > "$dir/proc4.shen"
+printf '(define forever N -> (forever (+ N 1)))\n(isolate.spawn forever 0)\n(set s (open "%s/proc4.txt" out))\n(pr "written" (value s))\n(shen-jit.exit 0)\n' "$dir" > "$dir/proc4.shen"
 "$SHEN" script "$dir/proc4.shen" > /dev/null 2>&1 < /dev/null
 printf '\n' >> "$dir/proc4.txt"
 check isolate-flushes-files "$dir/proc4.txt" "written"
 # An image saved with an isolate still running holds what the builder reaches.
-printf '(define forever N -> (forever (+ N 1)))\n(shen-jit.spawn forever 0)\n(set saved kept)\n' > "$dir/proc6.shen"
+printf '(define forever N -> (forever (+ N 1)))\n(isolate.spawn forever 0)\n(set saved kept)\n' > "$dir/proc6.shen"
 "$SHEN" --save "$dir/proc6.img" script "$dir/proc6.shen" > /dev/null 2>&1 < /dev/null
 SHEN_JIT_IMAGE="$dir/proc6.img" "$SHEN" eval -e '(value saved)' > "$dir/proc6.out" 2>&1
 check isolate-saved-image "$dir/proc6.out" "kept"
 # Shared data is saved with the program, and stays shared once loaded.
-printf '(set shared (shen-jit.share (@v 1 [a "b"] (shen-jit.string->bytes "c") <>)))\n' > "$dir/share.shen"
+printf '(set shared (isolate.share (@v 1 [a "b"] (shen-jit.string->bytes "c") <>)))\n' > "$dir/share.shen"
 "$SHEN" --save "$dir/share.img" script "$dir/share.shen" > /dev/null 2>&1 < /dev/null
 SHEN_JIT_IMAGE="$dir/share.img" "$SHEN" eval -e '(let S (value shared) (output "~S ~A ~A~%" (<-address S 2) (shen-jit.u8 (<-address S 3) 0) (trap-error (vector-> S 1 2) (/. E (error-to-string E)))))' > "$dir/share.out" 2>&1
 check shared-in-image "$dir/share.out" '[a "b"] 99 address->: <1 [a "b"] #<bytes>> is shared, and cannot change'
-printf '(define forever N -> (forever (+ N 1)))\n(shen-jit.spawn forever 0)\n(output "~A~%%" (trap-error (shen-jit.save-executable "%s/proc7" (fn hd)) (/. E (error-to-string E))))\n' "$dir" > "$dir/proc7.shen"
+printf '(define forever N -> (forever (+ N 1)))\n(isolate.spawn forever 0)\n(output "~A~%%" (trap-error (shen-jit.save-executable "%s/proc7" (fn hd)) (/. E (error-to-string E))))\n' "$dir" > "$dir/proc7.shen"
 "$SHEN" script "$dir/proc7.shen" > "$dir/proc7.out" 2>&1 < /dev/null
 check isolate-save-executable "$dir/proc7.out" "save-executable: other isolates are running"
 
@@ -926,16 +926,16 @@ exec 3> "$dir/proc8"
 cat >&3 <<'EOF'
 (define spin N -> (spin (+ N 1)))
 (define beat Out -> (beat-on Out 0))
-(define beat-on Out N -> (if (= N 300000000) (shen-jit.send Out beats-went-on) (beat-on Out (+ N 1))))
-(set beats (shen-jit.channel 1))
-(shen-jit.spawn beat (shen-jit.sender (value beats)))
+(define beat-on Out N -> (if (= N 300000000) (channel.send Out beats-went-on) (beat-on Out (+ N 1))))
+(set beats (channel.new 1))
+(isolate.spawn beat (channel.sender (value beats)))
 EOF
 wait_for "(4-) <isolate 1>" "$dir/proc8.out"
 printf '(spin 0)\n' >&3
 sleep 0.2
 interrupts_to 1 "$dir/proc8.out"
 sleep 0.2
-printf '(shen-jit.receive (value beats))\n' >&3
+printf '(channel.receive (value beats))\n' >&3
 exec 3>&-
 ends
 contains isolate-interrupt "$dir/proc8.out" "interrupted"
@@ -958,7 +958,7 @@ wait_for "(0-) 7" "$dir/held.out"
 printf '(trap-error (read-byte (stinput)) (/. E caught))\n' >&3
 sleep 0.3
 interrupts_to 2 "$dir/held.out"
-printf '(+ 5 6)\n(define beat N -> (beat (+ N 1)))\n(shen-jit.spawn beat 0)\n' >&3
+printf '(+ 5 6)\n(define beat N -> (beat (+ N 1)))\n(isolate.spawn beat 0)\n' >&3
 wait_for "(4-) <isolate 1>" "$dir/held.out"
 sleep 0.1
 interrupts_to 3 "$dir/held.out"
@@ -977,17 +977,17 @@ check interrupt-prompt-beside-isolate-continues "$dir/held.out" "(5-) 15"
 # and a parallel map's wait for its isolates; the REPL goes on, and kills the map's isolates, so
 # that it can define again.
 mkfifo "$dir/chanwait"
-SHEN_JIT_GC_STRESS= "$SHEN" eval -l lib/parallel.shen -e '(define blocked X -> (shen-jit.receive (shen-jit.channel 1)))' \
+SHEN_JIT_GC_STRESS= "$SHEN" eval -l lib/parallel.shen -e '(define blocked X -> (channel.receive (channel.new 1)))' \
     -r < "$dir/chanwait" > "$dir/chanwait.out" 2>&1 &
 pid=$!
 exec 3> "$dir/chanwait"
 wait_for "(0-) " "$dir/chanwait.out"
-printf '(shen-jit.receive (shen-jit.channel 1))\n' >&3
+printf '(channel.receive (channel.new 1))\n' >&3
 sleep 0.3
 interrupts_to 1 "$dir/chanwait.out"
 printf '(+ 1 2)\n' >&3
 wait_for "(1-) 3" "$dir/chanwait.out"
-printf '(shen-jit.wait-any [(shen-jit.channel 1)] 60000)\n' >&3
+printf '(channel.wait-any [(channel.new 1)] 60000)\n' >&3
 sleep 0.3
 interrupts_to 2 "$dir/chanwait.out"
 printf '(+ 3 4)\n' >&3
@@ -1158,10 +1158,10 @@ EOF
 EOF
     cat > "$dir/nest.shen" <<'EOF'
 (output "main: ~A~%" (trap-error (c.deep 0) (/. E (error-to-string E))))
-(define c.in-isolate Out -> (shen-jit.send Out (trap-error (c.deep 0) (/. E (error-to-string E)))))
-(set c.out (shen-jit.channel 1))
-(shen-jit.spawn c.in-isolate (shen-jit.sender (value c.out)))
-(output "isolate: ~A~%" (shen-jit.receive (value c.out)))
+(define c.in-isolate Out -> (channel.send Out (trap-error (c.deep 0) (/. E (error-to-string E)))))
+(set c.out (channel.new 1))
+(isolate.spawn c.in-isolate (channel.sender (value c.out)))
+(output "isolate: ~A~%" (channel.receive (value c.out)))
 (output "goes on: ~A~%" (c.call (/. X (+ X 1)) 1))
 (define c.down N -> (if (= N 0) 0 (+ 1 (c.down (- N 1)))))
 (output "stack moved: ~S~%" (let A (cn "a" "b") (cons A (c.call (/. X (c.down 300000)) 1))))
@@ -1283,14 +1283,14 @@ fi
 # isolate has started.
 cat > "$dir/isolate-traces.shen" <<'EOF'
 (define trace-second X -> (tl X))
-(let P (shen-jit.spawn trace-second 0) M (shen-jit.monitor P) (shen-jit.receive M))
+(let P (isolate.spawn trace-second 0) M (isolate.monitor P) (channel.receive M))
 EOF
 "$SHEN" script "$dir/isolate-traces.shen" > "$dir/isolate-traces.out" 2>&1
 contains isolate-own-backtrace "$dir/isolate-traces.out" "  in trace-second"
-SHEN_JIT_STATS=1 "$SHEN" eval -e '(define one X -> X)' -e '(shen-jit.spawn one 1)' > "$dir/isolate-stats.out" 2>&1
+SHEN_JIT_STATS=1 "$SHEN" eval -e '(define one X -> X)' -e '(isolate.spawn one 1)' > "$dir/isolate-stats.out" 2>&1
 contains isolate-statistics "$dir/isolate-stats.out" "shen-jit: live heap"
 if [ "$posix" = yes ]; then
-    SHEN_JIT_PROFILE=1 "$SHEN" eval -e '(define one X -> X)' -e '(shen-jit.spawn one 1)' > "$dir/isolate-profile.out" 2>&1
+    SHEN_JIT_PROFILE=1 "$SHEN" eval -e '(define one X -> X)' -e '(isolate.spawn one 1)' > "$dir/isolate-profile.out" 2>&1
     contains isolate-profile "$dir/isolate-profile.out" "shen-jit: profile of"
     # A directory named shen-jit on PATH before the executable is not the executable.
     mkdir -p "$dir/path-a/shen-jit" "$dir/path-b"

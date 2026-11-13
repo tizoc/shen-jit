@@ -17,15 +17,15 @@
 
 \\ Spawns F with [Argument Replies], and gives the first reply once the isolate has ended.
 (define pt.ask
-  F Argument -> (let R (shen-jit.channel 1)
-                     P (shen-jit.spawn F [Argument (shen-jit.sender R)])
-                     M (shen-jit.monitor P)
-                     Reply (shen-jit.receive R)
-                     _ (shen-jit.receive M)
+  F Argument -> (let R (channel.new 1)
+                     P (isolate.spawn F [Argument (channel.sender R)])
+                     M (isolate.monitor P)
+                     Reply (channel.receive R)
+                     _ (channel.receive M)
                   Reply))
 
 (define pt.reply
-  [X Out] -> (shen-jit.send Out X))
+  [X Out] -> (channel.send Out X))
 
 (define pt.suffix
   S N -> (pt.drop S (- (pt.length S) N)))
@@ -41,23 +41,26 @@
 (define pt.third
   [_ _ X] -> X)
 
+(define pt.ready
+  [ready R] -> R)
+
 (define pt.shared
-  [X Out] -> (shen-jit.send Out [(shen-jit.same? (hd X) (hd (tl X))) X]))
+  [X Out] -> (channel.send Out [(shen-jit.same? (hd X) (hd (tl X))) X]))
 
 (define pt.cycle
-  [V Out] -> (shen-jit.send Out (shen-jit.same? V (<-address V 1))))
+  [V Out] -> (channel.send Out (shen-jit.same? V (<-address V 1))))
 
 (define pt.symbols
-  [S Out] -> (shen-jit.send Out [S (shen-jit.same? S (intern (str S))) (intern "pt-made-in-a-isolate")]))
+  [S Out] -> (channel.send Out [S (shen-jit.same? S (intern (str S))) (intern "pt-made-in-a-isolate")]))
 
 (define pt.twice
   X -> (* 2 X))
 
 (define pt.call
-  [F Out] -> (shen-jit.send Out [((fn F) 21) (map (fn F) [1 2]) (map (function pt.twice) [3])]))
+  [F Out] -> (channel.send Out [((fn F) 21) (map (fn F) [1 2]) (map (function pt.twice) [3])]))
 
 (define pt.start
-  [_ Out] -> (shen-jit.send Out [(trap-error (value *pt.global*) (/. E unbound))
+  [_ Out] -> (channel.send Out [(trap-error (value *pt.global*) (/. E unbound))
                                  (do (set *pt.global* mine) (value *pt.global*))
                                  (trap-error (get pt.twice pt.note) (/. E none))
                                  (value *hush*)
@@ -69,61 +72,62 @@
   X [_ | Y] <-- (pt.member X Y);)
 
 (define pt.prolog
-  [_ Out] -> (shen-jit.send Out [(prolog? (pt.member X [a b]) (return X)) (prolog? (pt.member c [a b]))]))
+  [_ Out] -> (channel.send Out [(prolog? (pt.member X [a b]) (return X)) (prolog? (pt.member c [a b]))]))
 
 (define pt.collect
   _ 0 -> []
-  R N -> [(shen-jit.receive R) | (pt.collect R (- N 1))])
+  R N -> [(channel.receive R) | (pt.collect R (- N 1))])
 
 (define pt.send-all
-  [Xs Out] -> (do (map (/. X (shen-jit.send Out X)) Xs) (shen-jit.close Out)))
+  [Xs Out] -> (do (map (/. X (channel.send Out X)) Xs) (channel.close Out)))
 
 (define pt.echo
-  Requests -> (let M (shen-jit.receive Requests)
-                (if (shen-jit.end? M)
-                    done
-                    (do (shen-jit.send (hd M) (tl M)) (pt.echo Requests)))))
+  Requests -> (pt.echoed Requests (channel.next Requests)))
+
+(define pt.echoed
+  _ [closed] -> done
+  Requests [ok M] -> (do (channel.send (hd M) (tl M)) (pt.echo Requests)))
 
 (define pt.fail
   X -> (simple-error (cn "failing with " (str X))))
 
 (define pt.down
-  F X -> (let P (shen-jit.spawn F X) M (shen-jit.monitor P) Down (shen-jit.receive M)
+  F X -> (let P (isolate.spawn F X) M (isolate.monitor P) Down (channel.receive M)
            [(hd Down) (= (hd (tl Down)) P) (pt.third Down)]))
 
 (define pt.wait
-  R -> (shen-jit.receive R))
+  R -> (channel.receive R))
 
 (define pt.block
-  _ -> (shen-jit.receive (shen-jit.channel 1)))
+  _ -> (channel.receive (channel.new 1)))
 
 (define pt.wait-catching
-  Out -> (let Never (shen-jit.channel 1)
-           (trap-error (do (shen-jit.send Out ready) (shen-jit.receive Never))
-                       (/. E (do (shen-jit.send Out (error-to-string E)) cleaned)))))
+  Out -> (let Never (channel.new 1)
+           (trap-error (do (channel.send Out ready) (channel.receive Never))
+                       (/. E (do (channel.send Out (error-to-string E)) cleaned)))))
 
 (define pt.count
   0 Acc -> Acc
   N Acc -> (pt.count (- N 1) (+ Acc 1)))
 
 (define pt.count-then-send
-  [N Out] -> (shen-jit.send Out (pt.count N 0)))
+  [N Out] -> (channel.send Out (pt.count N 0)))
 
 (define pt.save
-  [_ Out] -> (shen-jit.send Out (pt.message (freeze (shen-jit.save-executable "pt-never" [])))))
+  [_ Out] -> (channel.send Out (pt.message (freeze (shen-jit.save-executable "pt-never" [])))))
 
 (define pt.sum
-  [L Out] -> (shen-jit.send Out (sum L)))
+  [L Out] -> (channel.send Out (sum L)))
 
 (define pt.in-turn
   0 -> true
   K -> (and (= (pt.ask pt.reply K) K) (pt.in-turn (- K 1))))
 
 (define pt.wait-long
-  Out -> (do (shen-jit.send Out ready) (shen-jit.wait-any [(shen-jit.channel 1)] 86400000)))
+  Out -> (do (channel.send Out ready) (channel.wait-any [(channel.new 1)] 86400000)))
 
 (define pt.spin
-  Out -> (do (shen-jit.send Out ready) (pt.spin-on 0)))
+  Out -> (do (channel.send Out ready) (pt.spin-on 0)))
 
 \\ A buffer of 300,000 bytes, whose bytes are their offsets' low eight bits, and back what one is
 \\ given holds after a store and a collection.
@@ -137,19 +141,19 @@
 (define pt.big-echo
   [B Out] -> (let _ (shen-jit.u8! B 0 7)
                   _ (shen-jit.collect)
-               (shen-jit.send Out [(shen-jit.bytes-length B) (shen-jit.u8 B 0) (shen-jit.u8 B 299999) B])))
+               (channel.send Out [(shen-jit.bytes-length B) (shen-jit.u8 B 0) (shen-jit.u8 B 299999) B])))
 
 (define pt.spin-on
-  N -> (do (shen-jit.check-kill) (pt.spin-on (+ N 1))))
+  N -> (do (isolate.check-kill) (pt.spin-on (+ N 1))))
 
 \\ Spawns F with a sender, and kills it once it has sent: how it ended.
 (define pt.kill-when-ready
-  F -> (let R (shen-jit.channel 1)
-            P (shen-jit.spawn F (shen-jit.sender R))
-            M (shen-jit.monitor P)
-            _ (shen-jit.receive R)
-            _ (shen-jit.kill P)
-         (pt.third (shen-jit.receive M))))
+  F -> (let R (channel.new 1)
+            P (isolate.spawn F (channel.sender R))
+            M (isolate.monitor P)
+            _ (channel.receive R)
+            _ (isolate.kill P)
+         (pt.third (channel.receive M))))
 
 (defstruct pt-point
   x
@@ -157,10 +161,10 @@
 
 \\ What an isolate gets that was shared: whether it is the sender's own, and what it reads in it.
 (define pt.shared-in
-  [V Out] -> (shen-jit.send Out [V (<-address V 2) (pt-point.y (<-address V 3))]))
+  [V Out] -> (channel.send Out [V (<-address V 2) (pt-point.y (<-address V 3))]))
 
 (define pt.share-here
-  [X Out] -> (shen-jit.send Out (shen-jit.share X)))
+  [X Out] -> (channel.send Out (isolate.share X)))
 
 \\ A loop over a buffer's bytes, which reads them through the registers it keeps for them.
 (define pt.sum-bytes
@@ -190,11 +194,11 @@
 
 (pt.check "defining beside an isolate raises, and works once it has ended"
   ["the program cannot change while other isolates run" killed [later 20]]
-  (let P (shen-jit.spawn pt.wait (shen-jit.give (shen-jit.channel 1)))
-       M (shen-jit.monitor P)
+  (let P (isolate.spawn pt.wait (channel.give (channel.new 1)))
+       M (isolate.monitor P)
        Refused (pt.message (freeze (eval [define pt.later (intern "X") -> [cons later [cons (intern "X") []]]])))
-       _ (shen-jit.kill P)
-       Down (pt.third (shen-jit.receive M))
+       _ (isolate.kill P)
+       Down (pt.third (channel.receive M))
        _ (eval [define pt.later (intern "X") -> [cons later [cons (intern "X") []]]])
     [Refused Down (pt.later 20)]))
 
@@ -219,28 +223,28 @@
 (pt.check "a function goes by its name" [42 [2 4] [6]] (pt.ask pt.call pt.twice))
 
 (pt.check "what fn makes in the builder stays there" "#<procedure> cannot be sent: only the program's functions can"
-  (pt.message (freeze (shen-jit.send (shen-jit.sender (shen-jit.channel 1)) (fn pt.twice)))))
+  (pt.message (freeze (channel.send (channel.sender (channel.new 1)) (fn pt.twice)))))
 
 (pt.check "a closure is refused" "#<procedure> cannot be sent: only the program's functions can"
-  (pt.message (freeze (shen-jit.send (shen-jit.sender (shen-jit.channel 1)) [(/. X X)]))))
+  (pt.message (freeze (channel.send (channel.sender (channel.new 1)) [(/. X X)]))))
 
 (pt.check "a stream is refused" "#<stream> cannot be sent"
-  (pt.message (freeze (shen-jit.send (shen-jit.sender (shen-jit.channel 1)) (stoutput)))))
+  (pt.message (freeze (channel.send (channel.sender (channel.new 1)) (stoutput)))))
 
 (pt.check "the end of a stream is refused" "the end of a stream cannot be sent"
-  (pt.message (freeze (shen-jit.send (shen-jit.sender (shen-jit.channel 1)) [shen-jit.end-of-stream]))))
+  (pt.message (freeze (channel.send (channel.sender (channel.new 1)) [shen-jit.end-of-stream]))))
 
 (pt.check "a receive endpoint moves only at spawn" true
-  (let M (pt.message (freeze (shen-jit.send (shen-jit.sender (shen-jit.channel 1)) (shen-jit.channel 1))))
-    (and (string? M) (= "can move only at spawn, through shen-jit.give" (pt.suffix M 45)))))
+  (let M (pt.message (freeze (channel.send (channel.sender (channel.new 1)) (channel.new 1))))
+    (and (string? M) (= "can move only at spawn, through channel.give" (pt.suffix M 44)))))
 
 (pt.check "spawn wants a defined function of one argument"
-  "shen-jit.spawn: pt.nothing is not a function of one argument that the builder defined"
-  (pt.message (freeze (shen-jit.spawn pt.nothing 1))))
+  "isolate.spawn: pt.nothing is not a function of one argument that the builder defined"
+  (pt.message (freeze (isolate.spawn pt.nothing 1))))
 
 (pt.check "or one argument exactly"
-  "shen-jit.spawn: pt.check is not a function of one argument that the builder defined"
-  (pt.message (freeze (shen-jit.spawn pt.check 1))))
+  "isolate.spawn: pt.check is not a function of one argument that the builder defined"
+  (pt.message (freeze (isolate.spawn pt.check 1))))
 
 \\ ---------------------------------------------------------------------------------------------
 \\ An isolate starts as a program does: nothing of the builder's.
@@ -258,144 +262,163 @@
 
 (pt.check "a sender parks while the channel is full, and its close ends the stream"
   [1 2 3 4 5 true]
-  (let R (shen-jit.channel 1)
-       _ (shen-jit.spawn pt.send-all [[1 2 3 4 5] (shen-jit.sender R)])
+  (let R (channel.new 1)
+       _ (isolate.spawn pt.send-all [[1 2 3 4 5] (channel.sender R)])
        Got (pt.collect R 5)
-    (append Got [(shen-jit.end? (shen-jit.receive R))])))
+    (append Got [(= (channel.next R) [closed])])))
 
 (pt.check "a channel read to its end is freed" "channel closed"
-  (let R (shen-jit.channel 2)
-       S (shen-jit.sender R)
-       _ (shen-jit.send S 1)
-       _ (shen-jit.close S)
-       _ (shen-jit.receive R)
-       _ (shen-jit.receive R)
-    (pt.message (freeze (shen-jit.receive R)))))
+  (let R (channel.new 2)
+       S (channel.sender R)
+       _ (channel.send S 1)
+       _ (channel.close S)
+       _ (channel.receive R)
+       _ (channel.next R)
+    (pt.message (freeze (channel.receive R)))))
+
+(pt.check "a receive at the end of a stream raises" ["channel closed" "channel closed"]
+  (let R (channel.new 2)
+       S (channel.sender R)
+       _ (channel.close S)
+       R2 (channel.new 1)
+       _ (channel.close (channel.sender R2))
+    [(pt.message (freeze (channel.receive R))) (pt.message (freeze (channel.receive-any [R2])))]))
+
+(pt.check "next gives each message, then the end once" [[ok 1] [ok [2 3]] [closed] "channel closed"]
+  (let R (channel.new 2)
+       S (channel.sender R)
+       _ (channel.send S 1)
+       _ (channel.send S [2 3])
+       _ (channel.close S)
+       A (channel.next R)
+       B (channel.next R)
+       C (channel.next R)
+    [A B C (pt.message (freeze (channel.next R)))]))
 
 (pt.check "sending on a closed channel raises" "channel closed"
-  (let R (shen-jit.channel 1) S (shen-jit.sender R) _ (shen-jit.close R)
-    (pt.message (freeze (shen-jit.send S 1)))))
+  (let R (channel.new 1) S (channel.sender R) _ (channel.close R)
+    (pt.message (freeze (channel.send S 1)))))
 
 (pt.check "receive-any gives the endpoint too" [on-b true]
-  (let A (shen-jit.channel 1)
-       B (shen-jit.channel 1)
-       _ (shen-jit.send (shen-jit.sender B) on-b)
-       Got (shen-jit.receive-any [A B])
+  (let A (channel.new 1)
+       B (channel.new 1)
+       _ (channel.send (channel.sender B) on-b)
+       Got (channel.receive-any [A B])
     [(hd (tl Got)) (shen-jit.same? (hd Got) B)]))
 
 (pt.check "a given receive endpoint moves to the child" [[x y] "belongs to another isolate"]
-  (let Requests (shen-jit.channel 2)
-       Replies (shen-jit.channel 2)
-       _ (shen-jit.spawn pt.echo (shen-jit.give Requests))
-       Send (shen-jit.sender Requests)
-       _ (shen-jit.send Send [(shen-jit.sender Replies) x y])
-       Got (shen-jit.receive Replies)
-       Refused (pt.message (freeze (shen-jit.receive Requests)))
-       _ (shen-jit.close Send)
+  (let Requests (channel.new 2)
+       Replies (channel.new 2)
+       _ (isolate.spawn pt.echo (channel.give Requests))
+       Send (channel.sender Requests)
+       _ (channel.send Send [(channel.sender Replies) x y])
+       Got (channel.receive Replies)
+       Refused (pt.message (freeze (channel.receive Requests)))
+       _ (channel.close Send)
     [Got (pt.suffix Refused 26)]))
 
 \\ A channel closed after its endpoint was given takes a new one's place; the given endpoint must not
 \\ move that one.
 (pt.check "a given endpoint of a closed channel moves nothing"
-  ["shen-jit.give: only a channel's receiver can give it, while it is open" x]
-  (let R (shen-jit.channel 1)
-       G (shen-jit.give R)
-       _ (shen-jit.close R)
-       R2 (shen-jit.channel 1)
-       Message (pt.message (freeze (shen-jit.spawn pt.wait G)))
-       _ (shen-jit.send (shen-jit.sender R2) x)
-    [Message (shen-jit.receive R2)]))
+  ["channel.give: only a channel's receiver can give it, while it is open" x]
+  (let R (channel.new 1)
+       G (channel.give R)
+       _ (channel.close R)
+       R2 (channel.new 1)
+       Message (pt.message (freeze (isolate.spawn pt.wait G)))
+       _ (channel.send (channel.sender R2) x)
+    [Message (channel.receive R2)]))
 
-(pt.check "wait-any gives () once its time has passed" [] (shen-jit.wait-any [(shen-jit.channel 1)] 10))
+(pt.check "wait-any gives [timeout] once its time has passed" [timeout] (channel.wait-any [(channel.new 1)] 10))
 
 (pt.check "wait-any gives the first that has a message or is closed, and receives nothing" [true true x]
-  (let Empty (shen-jit.channel 1)
-       Full (shen-jit.channel 1)
-       Closed (shen-jit.channel 1)
-       _ (shen-jit.send (shen-jit.sender Full) x)
-       _ (shen-jit.close (shen-jit.sender Closed))
-    [(shen-jit.same? Full (shen-jit.wait-any [Empty Full Closed] 0))
-     (shen-jit.same? Closed (shen-jit.wait-any [Empty Closed] 0))
-     (shen-jit.receive Full)]))
+  (let Empty (channel.new 1)
+       Full (channel.new 1)
+       Closed (channel.new 1)
+       _ (channel.send (channel.sender Full) x)
+       _ (channel.close (channel.sender Closed))
+    [(shen-jit.same? Full (pt.ready (channel.wait-any [Empty Full Closed] 0)))
+     (shen-jit.same? Closed (pt.ready (channel.wait-any [Empty Closed] 0)))
+     (channel.receive Full)]))
 
 (pt.check "wait-any wakes when a message comes" [true x]
-  (let R (shen-jit.channel 1)
-       _ (shen-jit.spawn pt.reply [x (shen-jit.sender R)])
-    [(shen-jit.same? R (shen-jit.wait-any [R] 60000)) (shen-jit.receive R)]))
+  (let R (channel.new 1)
+       _ (isolate.spawn pt.reply [x (channel.sender R)])
+    [(shen-jit.same? R (pt.ready (channel.wait-any [R] 60000))) (channel.receive R)]))
 
-(pt.check "wait-any refuses what is not a receive endpoint" "shen-jit.wait-any: 5 is not a receive endpoint"
-  (pt.message (freeze (shen-jit.wait-any [5] 0))))
+(pt.check "wait-any refuses what is not a receive endpoint" "channel.wait-any: 5 is not a receive endpoint"
+  (pt.message (freeze (channel.wait-any [5] 0))))
 
 \\ ---------------------------------------------------------------------------------------------
 \\ Monitors and kill, which an isolate sees at its next channel operation.
 
-(pt.check "a normal end" [down true normal] (pt.down pt.reply [x (shen-jit.sender (shen-jit.channel 1))]))
+(pt.check "a normal end" [down true normal] (pt.down pt.reply [x (channel.sender (channel.new 1))]))
 
 (pt.check "an uncaught error ends an isolate" [down true "failing with 5"] (pt.down pt.fail 5))
 
 \\ An isolate ended once its first monitor is told, so the second comes after: it gets down at once,
 \\ with the reason, however long the builder took to ask.
 (define pt.again
-  P -> (let M (shen-jit.monitor P)
-            _ (shen-jit.receive M)
-         (pt.third (shen-jit.receive (shen-jit.monitor P)))))
+  P -> (let M (isolate.monitor P)
+            _ (channel.receive M)
+         (pt.third (channel.receive (isolate.monitor P)))))
 
 (pt.check "a monitor of an ended isolate gets down at once, with its reason" normal
-  (let R (shen-jit.channel 1) (pt.again (shen-jit.spawn pt.reply [x (shen-jit.sender R)]))))
+  (let R (channel.new 1) (pt.again (isolate.spawn pt.reply [x (channel.sender R)]))))
 
-(pt.check "an error's message" "failing with 5" (pt.again (shen-jit.spawn pt.fail 5)))
+(pt.check "an error's message" "failing with 5" (pt.again (isolate.spawn pt.fail 5)))
 
 (pt.check "or killed" killed
-  (let P (shen-jit.spawn pt.wait (shen-jit.give (shen-jit.channel 1)))
-       _ (shen-jit.kill P)
+  (let P (isolate.spawn pt.wait (channel.give (channel.new 1)))
+       _ (isolate.kill P)
     (pt.again P)))
 
 (pt.check "kill raises an error that handlers see" ["killed" normal]
-  (let R (shen-jit.channel 1)
-       P (shen-jit.spawn pt.wait-catching (shen-jit.sender R))
-       M (shen-jit.monitor P)
-       _ (shen-jit.receive R)
-       _ (shen-jit.kill P)
-       Got (shen-jit.receive R)
-    [Got (pt.third (shen-jit.receive M))]))
+  (let R (channel.new 1)
+       P (isolate.spawn pt.wait-catching (channel.sender R))
+       M (isolate.monitor P)
+       _ (channel.receive R)
+       _ (isolate.kill P)
+       Got (channel.receive R)
+    [Got (pt.third (channel.receive M))]))
 
 (pt.check "kill wakes a parked receiver" killed
-  (let P (shen-jit.spawn pt.wait (shen-jit.give (shen-jit.channel 1)))
-       M (shen-jit.monitor P)
-       _ (shen-jit.kill P)
-    (pt.third (shen-jit.receive M))))
+  (let P (isolate.spawn pt.wait (channel.give (channel.new 1)))
+       M (isolate.monitor P)
+       _ (isolate.kill P)
+    (pt.third (channel.receive M))))
 
 (pt.check "kill wakes an isolate in wait-any" killed (pt.kill-when-ready pt.wait-long))
 
 (pt.check "stop-each kills what spawn-each started and waits for each to end" [killed killed killed]
-  (let Started (shen-jit.spawn-each pt.block [1 2 3])
-       _ (shen-jit.stop-each Started)
-    (map (/. S (pt.third (shen-jit.receive (shen-jit.monitor (hd S))))) Started)))
+  (let Started (isolate.spawn-each pt.block [1 2 3])
+       _ (isolate.stop-each Started)
+    (map (/. S (pt.third (channel.receive (isolate.monitor (hd S))))) Started)))
 
 (pt.check "check-kill lets kill reach an isolate busy elsewhere" killed (pt.kill-when-ready pt.spin))
 
-(pt.check "check-kill in the builder" false (shen-jit.check-kill))
+(pt.check "check-kill in the builder" false (isolate.check-kill))
 
-(pt.check "a busy isolate sees kill when it next sends" [killed true]
-  (let R (shen-jit.channel 1)
-       P (shen-jit.spawn pt.count-then-send [50000000 (shen-jit.sender R)])
-       M (shen-jit.monitor P)
-       _ (shen-jit.kill P)
-       Down (pt.third (shen-jit.receive M))
-    [Down (shen-jit.end? (trap-error (do (shen-jit.close R) shen-jit.end-of-stream) (/. E E)))]))
+(pt.check "a busy isolate sees kill when it next sends" [killed none]
+  (let R (channel.new 1)
+       P (isolate.spawn pt.count-then-send [50000000 (channel.sender R)])
+       M (isolate.monitor P)
+       _ (isolate.kill P)
+       Down (pt.third (channel.receive M))
+    [Down (pt.message (freeze (channel.close R)))]))
 
 (pt.check "an isolate cannot save" "save-executable: only the builder can save" (pt.ask pt.save []))
 
 (pt.check "the builder cannot save beside isolates" "save-executable: other isolates are running"
-  (let P (shen-jit.spawn pt.wait (shen-jit.give (shen-jit.channel 1)))
-       M (shen-jit.monitor P)
+  (let P (isolate.spawn pt.wait (channel.give (channel.new 1)))
+       M (isolate.monitor P)
        Refused (pt.message (freeze (shen-jit.save-executable "pt-never" [])))
-       _ (shen-jit.kill P)
-       _ (shen-jit.receive M)
+       _ (isolate.kill P)
+       _ (channel.receive M)
     Refused))
 
 (pt.check "the builder cannot be killed" true
-  (let Me (shen-jit.self) (shen-jit.same? Me (shen-jit.kill Me))))
+  (let Me (isolate.self) (shen-jit.same? Me (isolate.kill Me))))
 
 (pt.check "a large buffer crosses, and is the receiver's own" [300000 7 223 7 true 0]
   (let B (pt.big-bytes 300000)
@@ -409,75 +432,75 @@
 
 (pt.check "a shared value equals what was shared" [true true true]
   (let V (@v 1 [a "b" 2.5] (@v x <>) <>)
-       S (shen-jit.share V)
+       S (isolate.share V)
     [(= S V) (= V S) (= (hash S 1000) (hash V 1000))]))
 
 (pt.check "and keeps its sharing and cycles" [true true]
   (let L [1 2]
        V (@v L L 0 <>)
        _ (address-> V 3 V)
-       S (shen-jit.share V)
+       S (isolate.share V)
     [(shen-jit.same? (<-address S 1) (<-address S 2)) (shen-jit.same? S (<-address S 3))]))
 
 (pt.check "what is already shared or has no copy comes back as it is" [true true 5 a]
-  (let S (shen-jit.share [1 2])
-    [(shen-jit.same? S (shen-jit.share S)) (shen-jit.same? S (hd (shen-jit.share [S]))) (shen-jit.share 5)
-     (shen-jit.share a)]))
+  (let S (isolate.share [1 2])
+    [(shen-jit.same? S (isolate.share S)) (shen-jit.same? S (hd (isolate.share [S]))) (isolate.share 5)
+     (isolate.share a)]))
 
 (pt.check "a shared vector reads as any" [true true 3 x true]
-  (let S (shen-jit.share (@v x y z <>))
+  (let S (isolate.share (@v x y z <>))
     [(absvector? S) (vector? S) (limit S) (<-address S 1) (= (map (/. I (<-address S I)) [1 2 3]) [x y z])]))
 
 (pt.check "stores into a shared vector raise"
   ["address->: <1 2> is shared, and cannot change" "address->: <1 2> is shared, and cannot change"
    "shen-jit.newpv: <1 2> is not a vector of bindings"]
-  (let S (shen-jit.share (@v 1 2 <>))
+  (let S (isolate.share (@v 1 2 <>))
     [(pt.message (freeze (vector-> S 1 3))) (pt.message (freeze (address-> S 1 3)))
      (pt.message (freeze (shen-jit.newpv S 0)))]))
 
 (pt.check "a shared dictionary reads, and cannot change" [1 "is shared, and cannot change" "is shared, and cannot change"]
   (let D (shen.dict 8)
        _ (shen.dict-> D a 1)
-       S (shen-jit.share D)
+       S (isolate.share D)
     [(shen.<-dict S a) (pt.suffix (pt.message (freeze (shen.dict-> S b 2))) 28)
      (pt.suffix (pt.message (freeze (shen.dict-rm S a))) 28)]))
 
 (pt.check "a shared byte buffer reads, in a loop too, and refuses stores" [104 532 532 true true true]
   (let B (shen-jit.string->bytes "hello")
-       S (shen-jit.share B)
+       S (isolate.share B)
     [(shen-jit.u8 S 0) (pt.sum-bytes S 0 5 0) (pt.sum-bytes B 0 5 0) (= S B)
      (not (= (pt.message (freeze (shen-jit.u8! S 0 1))) none))
      (not (= (pt.message (freeze (pt.fill-bytes S 0 5))) none))]))
 
 (pt.check "and copying into one raises" true
-  (not (= (pt.message (freeze (shen-jit.copy-bytes (shen-jit.share (shen-jit.bytes 4)) 0 (shen-jit.bytes 4) 0 4)))
+  (not (= (pt.message (freeze (shen-jit.copy-bytes (isolate.share (shen-jit.bytes 4)) 0 (shen-jit.bytes 4) 0 4)))
           none)))
 
 (pt.check "a shared record matches, reads, and refuses its setter" [true 1 2 true]
-  (let R (shen-jit.share (pt-point.make 1 2))
+  (let R (isolate.share (pt-point.make 1 2))
     [(pt-point? R) (pt-point.x R) (pt-point.y R) (not (= (pt.message (freeze (pt-point.y-> R 3))) none))]))
 
 (pt.check "a shared value crosses to an isolate by pointer" [true y 9]
-  (let S (shen-jit.share (@v x y (pt-point.make 8 9) <>))
+  (let S (isolate.share (@v x y (pt-point.make 8 9) <>))
        Got (pt.ask pt.shared-in S)
     [(shen-jit.same? S (hd Got)) (hd (tl Got)) (pt.third Got)]))
 
 (pt.check "an isolate shares, and the builder reads it by pointer" [true [1 "two" 3.0]]
   (let S (pt.ask pt.share-here [1 "two" 3.0])
-    [(shen-jit.same? S (shen-jit.share S)) S]))
+    [(shen-jit.same? S (isolate.share S)) S]))
 
 (pt.check "what cannot be sent cannot be shared"
-  ["#<procedure> cannot be sent: only the program's functions can" "can move only at spawn, through shen-jit.give"]
-  [(pt.message (freeze (shen-jit.share [(/. X X)])))
-   (pt.suffix (pt.message (freeze (shen-jit.share (shen-jit.channel 1)))) 45)])
+  ["#<procedure> cannot be sent: only the program's functions can" "can move only at spawn, through channel.give"]
+  [(pt.message (freeze (isolate.share [(/. X X)])))
+   (pt.suffix (pt.message (freeze (isolate.share (channel.new 1)))) 44)])
 
 \\ ---------------------------------------------------------------------------------------------
 \\ Many at once, and many in turn.
 
 (pt.check "eight at once" [36 36 36 36 36 36 36 36]
-  (let R (shen-jit.channel 8)
-       S (shen-jit.sender R)
-       _ (map (/. I (shen-jit.spawn pt.sum [[1 2 3 4 5 6 7 8] S])) [1 2 3 4 5 6 7 8])
+  (let R (channel.new 8)
+       S (channel.sender R)
+       _ (map (/. I (isolate.spawn pt.sum [[1 2 3 4 5 6 7 8] S])) [1 2 3 4 5 6 7 8])
     (pt.collect R 8)))
 
 (pt.check "two hundred in turn" true (pt.in-turn 200))

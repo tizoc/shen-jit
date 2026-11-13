@@ -194,7 +194,7 @@ plus:
 - `shen-jit.apply` (arity 2): calls a name's procedure, or a procedure, with the elements
   of a list at once, through a nested call: `fn`'s templates past four arguments.
 - `shen-jit.isolate` (arity 3): an operation's number and two operands, for the port's
-  `shen-jit.spawn`, channels, monitors and `kill` (docs/design.md, "The builder and
+  `isolate.spawn`, channels, monitors and `kill` (docs/design.md, "The builder and
   isolates").
 - `shen-jit.bit-and`, `shen-jit.bit-or`, `shen-jit.bit-xor`, `shen-jit.shift-left`,
   `shen-jit.shift-right`, `shen-jit.rotate32` (2), `shen-jit.bit-not`,
@@ -223,7 +223,7 @@ length. `u8`, `u16`, `u32`, `s32`, `f64`, `bytes-length` and the stores `u8!`, `
 inline for both; the others call C for both. `f64` allocates where it reads, and its real holds the word as it
 is in memory, so it takes no floating point. `f64!` takes a real inline, and leaves an integer to C. A read-only
 pointer differs in its header, which a store tests whole, so no other access pays for it. So does a shared buffer
-or vector (`shen-jit.share`), by a bit of its header's type field: a store tests the whole byte and sends one to C,
+or vector (`isolate.share`), by a bit of its header's type field: a store tests the whole byte and sends one to C,
 which refuses it, and a read masks the bit out, as it masks a string's type, with no more instructions. Only
 `absvector?`, which tests one byte it loads, and `=` on two objects, which tests their headers before calling C, take
 one more.

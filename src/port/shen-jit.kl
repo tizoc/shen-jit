@@ -525,84 +525,188 @@ unbound: only the builder defines."
 
 "Isolates (docs/design.md, The builder and isolates): each runs a function of
 one argument that the builder defined, on an OS thread of its own, and they talk
-through channels. These pass an operation's number to the primitive behind them,
-shen-jit.isolate (isolate.c). A channel's receive endpoint stays with its
-receiver, unless shen-jit.give marks it to move to an isolate being spawned; send
-endpoints and isolates copy freely."
+through channels. The isolate and channel namespaces are the interface; these
+pass an operation's number to the primitive behind them, shen-jit.isolate
+(isolate.c). A channel's receive endpoint stays with its receiver, unless
+channel.give marks it to move to an isolate being spawned; send endpoints and
+isolates copy freely."
 
-(defun shen-jit.spawn (F X) (shen-jit.isolate 0 F X))
+(defun isolate.spawn (F X) (shen-jit.isolate 0 F X))
 
-(defun shen-jit.channel (Capacity) (shen-jit.isolate 1 Capacity ()))
+(defun isolate.monitor (Isolate) (shen-jit.isolate 8 Isolate ()))
 
-(defun shen-jit.sender (Receiver) (shen-jit.isolate 2 Receiver ()))
+(defun isolate.kill (Isolate) (shen-jit.isolate 9 Isolate ()))
 
-(defun shen-jit.send (Sender X) (shen-jit.isolate 3 Sender X))
+(defun isolate.self () (shen-jit.isolate 10 () ()))
 
-(defun shen-jit.receive (Receiver) (shen-jit.isolate 4 Receiver ()))
+"What waits on something other than a channel, such as a socket, calls this now
+and then, so that a kill reaches it: it raises killed if one is pending."
 
-(defun shen-jit.receive-any (Receivers) (shen-jit.isolate 5 Receivers ()))
+(defun isolate.check-kill () (shen-jit.isolate 12 () ()))
 
-(defun shen-jit.close (Endpoint) (shen-jit.isolate 6 Endpoint ()))
+"(isolate.share V) copies V into storage outside every heap, where any isolate
+reads it by pointer rather than as a copy, and nothing changes it: a store into
+one of its vectors or byte buffers raises. It is never freed."
 
-(defun shen-jit.give (Receiver) (shen-jit.isolate 7 Receiver ()))
+(defun isolate.share (V) (shen-jit.isolate 13 V ()))
 
-(defun shen-jit.monitor (Isolate) (shen-jit.isolate 8 Isolate ()))
+(defun channel.new (Capacity) (shen-jit.isolate 1 Capacity ()))
 
-(defun shen-jit.kill (Isolate) (shen-jit.isolate 9 Isolate ()))
+(defun channel.sender (Receiver) (shen-jit.isolate 2 Receiver ()))
 
-(defun shen-jit.self () (shen-jit.isolate 10 () ()))
+(defun channel.send (Sender X) (shen-jit.isolate 3 Sender X))
+
+(defun channel.close (Endpoint) (shen-jit.isolate 6 Endpoint ()))
+
+(defun channel.give (Receiver) (shen-jit.isolate 7 Receiver ()))
+
+"A receive gives messages only: once a sender has closed the channel and its
+queue is empty, it raises channel closed, as it does after that, the channel
+being freed. The primitive gives shen-jit.end-of-stream for that end, which no
+message can be. channel.next gives [ok Message] or [closed] instead, for a
+stream; channel.wait-any gives [ready R] or [timeout], R having a message or
+being closed."
+
+(defun channel.receive (Receiver) (shen-jit.message (shen-jit.isolate 4 Receiver ())))
+
+(defun channel.receive-any (Receivers)
+  (let Got (shen-jit.isolate 5 Receivers ())
+    (do (shen-jit.message (hd (tl Got))) Got)))
+
+(defun shen-jit.message (X)
+  (if (= X shen-jit.end-of-stream) (simple-error "channel closed") X))
+
+(defun channel.next (Receiver)
+  (let X (shen-jit.isolate 4 Receiver ())
+    (if (= X shen-jit.end-of-stream) (cons closed ()) (cons ok (cons X ())))))
+
+(defun channel.wait-any (Receivers Milliseconds)
+  (let R (shen-jit.isolate 11 Receivers Milliseconds)
+    (if (= R ()) (cons timeout ()) (cons ready (cons R ())))))
 
 "A call that starts isolates for its parts and waits for them stops them if it
 raises, so that none is left waiting on one that is gone, or keeping the program
-from changing. (shen-jit.spawn-each F Args) spawns F with each of Args, each
-with a monitor, and gives [[P | Monitor] ...]; if one cannot start, it stops
-those it started, and raises. (shen-jit.stop-each Started) kills them all, as
+from changing. (isolate.spawn-each F Args) spawns F with each of Args, each
+with a monitor, and gives [[I | Monitor] ...]; if one cannot start, it stops
+those it started, and raises. (isolate.stop-each Started) kills them all, as
 a call's cleanup does, waits for each to end, and closes the monitors. A kill
 of an isolate that has ended does nothing, and a monitor already read or closed
 is passed over; a Ctrl-C ends the wait, as it ends any."
 
-(defun shen-jit.spawn-each (F Args) (shen-jit.spawn-each-h F Args ()))
+(defun isolate.spawn-each (F Args) (shen-jit.spawn-each-h F Args ()))
 
 (defun shen-jit.spawn-each-h (F Args Started)
   (if (= () Args)
       (reverse Started)
-      (let P (shen-jit.on-error (freeze (shen-jit.spawn F (hd Args))) (freeze (shen-jit.stop-each Started)))
-        (let Monitor (shen-jit.on-error (freeze (shen-jit.monitor P))
-                                        (freeze (do (shen-jit.kill P) (shen-jit.stop-each Started))))
-          (shen-jit.spawn-each-h F (tl Args) (cons (cons P Monitor) Started))))))
+      (let I (shen-jit.on-error (freeze (isolate.spawn F (hd Args))) (freeze (isolate.stop-each Started)))
+        (let Monitor (shen-jit.on-error (freeze (isolate.monitor I))
+                                        (freeze (do (isolate.kill I) (isolate.stop-each Started))))
+          (shen-jit.spawn-each-h F (tl Args) (cons (cons I Monitor) Started))))))
 
-(defun shen-jit.stop-each (Started)
+(defun isolate.stop-each (Started)
   (do (shen-jit.kill-each Started) (shen-jit.await-each Started)))
 
 (defun shen-jit.kill-each (Started)
   (if (= () Started)
       true
-      (do (shen-jit.kill (hd (hd Started))) (shen-jit.kill-each (tl Started)))))
+      (do (isolate.kill (hd (hd Started))) (shen-jit.kill-each (tl Started)))))
 
 (defun shen-jit.await-each (Started)
   (if (= () Started)
       true
-      (do (trap-error (do (shen-jit.receive (tl (hd Started))) (shen-jit.close (tl (hd Started)))) (lambda E skip))
+      (do (trap-error (do (channel.receive (tl (hd Started))) (channel.close (tl (hd Started)))) (lambda E skip))
           (shen-jit.await-each (tl Started)))))
 
-"(shen-jit.wait-any Rs Ms) gives the first of the receive endpoints Rs that has a
-message or is closed, waiting at most Ms milliseconds, or () if none has; it
-receives nothing."
+"Types for typed programs, and the two namespaces' exports, so that a client
+can write (use channel => c). An isolate is of type isolate, and endpoints of
+types (receiver A) and (sender A), A being what crosses them; the shapes of
+results have datatypes. The functions and the dotted types are system
+functions, as the kernel's are, so that a namespace leaves them as they are
+without a use. The image is built with them, from this source, which the tool
+that compiles the port's Shen source could not take, as it takes definitions
+only; what the datatypes define is not the program's, for shen.*userdefs*."
 
-(defun shen-jit.wait-any (Receivers Milliseconds) (shen-jit.isolate 11 Receivers Milliseconds))
+(defun shen-jit.isolate-interface ()
+  (let Userdefs (value shen.*userdefs*)
+    (do (map (lambda Form (eval Form)) (read-from-string "
+(datatype isolate.types
+  if (element? R [normal killed ended])
+  _____________________________________
+  R : isolate.reason;
 
-"What waits on something other than a channel, such as a socket, calls this now
-and then, so that a kill reaches it: it raises killed if one is pending."
+  R : string;
+  ___________
+  R : isolate.reason;
 
-(defun shen-jit.check-kill () (shen-jit.isolate 12 () ()))
+  I : isolate; R : isolate.reason;
+  ================================
+  [down I R] : isolate.down;
 
-"(shen-jit.share V) copies V into storage outside every heap, where any isolate
-reads it by pointer rather than as a copy, and nothing changes it: a store into
-one of its vectors or byte buffers raises. It is never freed."
+  I : isolate; M : (receiver isolate.down);
+  =========================================
+  [I | M] : isolate.started;)
 
-(defun shen-jit.share (V) (shen-jit.isolate 13 V ()))
+(datatype channel.types
+  R : (receiver A);
+  _________________
+  R : (channel.endpoint A);
 
-(defun shen-jit.end? (X) (= X shen-jit.end-of-stream))
+  S : (sender A);
+  _______________
+  S : (channel.endpoint A);
+
+  X : A;
+  ==========================
+  [ok X] : (channel.next A);
+
+  ____________________________
+  [closed] : (channel.next A);
+
+  R : (receiver A); X : A;
+  ========================
+  [R X] : (channel.got A);
+
+  R : (receiver A);
+  ==============================
+  [ready R] : (channel.ready A);
+
+  ______________________________
+  [timeout] : (channel.ready A);)
+
+(declare isolate.spawn [[A --> B] --> [A --> isolate]])
+(declare isolate.self [--> isolate])
+(declare isolate.kill [isolate --> isolate])
+(declare isolate.monitor [isolate --> [receiver isolate.down]])
+(declare isolate.check-kill [--> boolean])
+(declare isolate.share [A --> A])
+(declare isolate.spawn-each [[A --> B] --> [[list A] --> [list isolate.started]]])
+(declare isolate.stop-each [[list isolate.started] --> boolean])
+(declare channel.new [number --> [receiver A]])
+(declare channel.sender [[receiver A] --> [sender A]])
+(declare channel.give [[receiver A] --> [receiver A]])
+(declare channel.send [[sender A] --> [A --> A]])
+(declare channel.receive [[receiver A] --> A])
+(declare channel.next [[receiver A] --> [channel.next A]])
+(declare channel.receive-any [[list [receiver A]] --> [channel.got A]])
+(declare channel.wait-any [[list [receiver A]] --> [number --> [channel.ready A]]])
+(declare channel.close [[channel.endpoint A] --> [channel.endpoint A]])
+
+(shen.x.namespaces.publish isolate
+  [[spawn | isolate.spawn] [self | isolate.self] [kill | isolate.kill] [monitor | isolate.monitor]
+   [check-kill | isolate.check-kill] [share | isolate.share] [spawn-each | isolate.spawn-each]
+   [stop-each | isolate.stop-each] [down | isolate.down] [started | isolate.started]
+   [reason | isolate.reason]])
+(shen.x.namespaces.publish channel
+  [[new | channel.new] [sender | channel.sender] [give | channel.give] [send | channel.send]
+   [receive | channel.receive] [next | channel.next] [receive-any | channel.receive-any]
+   [wait-any | channel.wait-any] [close | channel.close] [endpoint | channel.endpoint]
+   [got | channel.got] [ready | channel.ready]])
+(map (/. F (systemf F))
+  [isolate.spawn isolate.self isolate.kill isolate.monitor isolate.check-kill isolate.share
+   isolate.spawn-each isolate.stop-each isolate.down isolate.started isolate.reason
+   channel.new channel.sender channel.give channel.send channel.receive channel.next
+   channel.receive-any channel.wait-any channel.close channel.endpoint channel.got channel.ready])"))
+        (set shen.*userdefs* Userdefs))))
 
 "After each form a load evaluates. A library can do then what needs the forms
 before it run, such as the grammar library compiling its loops once the
@@ -752,12 +856,12 @@ which would otherwise compile its calls to them as look-ups with fn."
 
 (defun shen-jit.initialise ()
   (do (shen.initialise-arity-table
-        (cons shen-jit.spawn (cons 2 (cons shen-jit.channel (cons 1 (cons shen-jit.sender (cons 1
-          (cons shen-jit.send (cons 2 (cons shen-jit.receive (cons 1 (cons shen-jit.receive-any (cons 1
-            (cons shen-jit.close (cons 1 (cons shen-jit.give (cons 1 (cons shen-jit.monitor (cons 1
-              (cons shen-jit.kill (cons 1 (cons shen-jit.self (cons 0 (cons shen-jit.end? (cons 1
-              (cons shen-jit.wait-any (cons 2 (cons shen-jit.check-kill (cons 0 (cons shen-jit.share (cons 1
-                (cons shen-jit.spawn-each (cons 2 (cons shen-jit.stop-each (cons 1
+        (cons isolate.spawn (cons 2 (cons channel.new (cons 1 (cons channel.sender (cons 1
+          (cons channel.send (cons 2 (cons channel.receive (cons 1 (cons channel.receive-any (cons 1
+            (cons channel.close (cons 1 (cons channel.give (cons 1 (cons isolate.monitor (cons 1
+              (cons isolate.kill (cons 1 (cons isolate.self (cons 0 (cons channel.next (cons 1
+              (cons channel.wait-any (cons 2 (cons isolate.check-kill (cons 0 (cons isolate.share (cons 1
+                (cons isolate.spawn-each (cons 2 (cons isolate.stop-each (cons 1
                 (cons shen-jit.after-form (cons 1 (cons shen-jit.loading? (cons 0
                 (cons shen-jit.print-isolate (cons 1 (cons shen-jit.print-receiver (cons 1
                   (cons shen-jit.print-sender (cons 1 (cons shen-jit.print-given (cons 1
@@ -766,6 +870,7 @@ which would otherwise compile its calls to them as look-ups with fn."
   (do (eval-kl (shen-jit.template-defun shen-jit.template-3 (cons a (cons b (cons c ())))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-4 (cons a (cons b (cons c (cons d ()))))))
   (do (shen-jit.struct.initialise)
+  (do (shen-jit.isolate-interface)
   (do (shen-jit.register-primitives)
   (do (shen-jit.primitive-procedures)
   (do (shen.initialise-arity-table
@@ -791,7 +896,7 @@ which would otherwise compile its calls to them as look-ups with fn."
           (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.exit))
               (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.code))
                   (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.save-executable))
-                      (set shen-jit.defined ())))))))))))))))))))
+                      (set shen-jit.defined ()))))))))))))))))))))
 
 "Definitions are factorised as they are evaluated, as Shen/Scheme's compiler
 does: the kernel's shen.factor binds each selector once and shares the tests
