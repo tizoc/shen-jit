@@ -321,6 +321,8 @@ are other programs.
   ended, as a monitor tells. Define everything first, then spawn.
 - **Symbols are shared:** a symbol made in any isolate is the program's, and stays for as long as it runs, so names
   that come from outside, such as a request's, belong in strings.
+- **A parallel map:** [`lib/parallel.shen`](https://github.com/tizoc/shen-jit/blob/main/docs/parallel.md) gives
+  `(parallel.map N F Xs)`, which maps a function named `F` over `Xs` with at most `N` isolates.
 - **Sharing data:** `(shen-jit.share X)` copies `X` once, with its sharing and cycles, into storage outside every
   heap, and gives the copy, which crosses to isolates by pointer rather than being copied again, as a large table
   many isolates read would. Any isolate can share. Nothing changes a shared value: a store into one of its vectors
@@ -1056,11 +1058,13 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 
 | Target | What it does |
 | --- | --- |
-| `make test-core` | `test`, `test-jit`, `test-ops`, `test-kl`, `check-lowerer`, `check-generated`, `test-kernel`, `test-stlib`, `test-thorn`, `test-native`, `test-ffi`, `test-overrides` and `test-structs` |
-| `make test-libs` | `test-buffer`, `test-json`, `test-io`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl` and `test-namespaces` |
+| `make test-core` | `test`, `test-jit`, `test-ops`, `test-kl`, `check-lowerer`, `check-generated`, `test-kernel`, `test-stlib`, `test-thorn`, `test-native`, `test-ffi`, `test-overrides`, `test-structs` and `test-isolates` |
+| `make test-libs` | `test-buffer`, `test-json`, `test-io`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl`, `test-namespaces` and `test-parallel` |
 | `make test` | The runtime's unit tests |
 | `make test-jit`, `make test-ops` | The JIT and the instructions, on small programs |
-| `make test-kl` | The `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
+| `make test-kl` | The `eval-kl` cases, the lowerer running inside Shen/JIT against its stage 0 output, and an isolate starting from the C harness |
+| `make test-isolates` | Isolates: spawning, channels, monitors, kill, sharing and what crosses, and the same with a collection at every allocation in `make test-isolates-stress` |
+| `make test-parallel` | `parallel.map` over isolates: order, errors, what crosses and shared arguments |
 | `make test-kernel` | The kernel's test suite, the extension tests, the contract examples and `tests/cli.sh` |
 | `make test-stlib` | The executable with the standard library |
 | `make test-thorn` | THORN, from the kernel, with no time limit: its inference counts and what goes unproved, as on Shen/Scheme |

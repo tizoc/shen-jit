@@ -1672,6 +1672,23 @@ heap and into the program space are one function now.
 - **C may still write into a shared byte buffer it is given:** the FFI's `bytes` has no read-only form, and refusing
   shared buffers there would refuse sending a shared response body to a socket; the documentation says C must not.
 
+### A parallel map, and Tree-sitter in isolates (2026-11-13, Apple M3 Max with 16 cores, against `map`)
+
+First part of step 6 of design D. `lib/parallel.shen` is back with one function, `(parallel.map N F Xs)`: at most `N`
+isolates, each mapping `F`, a name or `[F | Args]` as the HTTP listener's handlers are, over a run of `Xs`, with a
+channel for its reply and a monitor for its end, so that an isolate ending without a reply raises rather than waits.
+105 lines with comments, against 0.7's worker scopes, saved images and value codec. The number of isolates is explicit, as
+0.7's worker count was: the runtime has no count of cores, and the right number depends on the work.
+
+- **Speed:** `fib 30` eight times took 35 to 47 ms with `map`, 5.6 to 6.4 ms with 8 isolates and 9.5 to 11.3 ms
+  with 4. Incrementing 10,000 numbers took 35 µs with `map` and 0.7 to 1 ms in parallel, copying the runs there and
+  back and starting the isolates.
+- **Tree-sitter:** a language holds its foreign entry's name, and the library called it through `eval-kl`, which an
+  isolate refuses; it calls it with `shen-jit.apply` now, so a language loaded in the builder parses in any isolate,
+  each parse making its own parser.
+- **Left for later in step 6:** Datalog in isolates, which compiles plans and kernels as it runs and keeps state in
+  globals and property lists, and with it parallel Datalog and the `source-deps` batches.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on

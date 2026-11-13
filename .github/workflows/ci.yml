@@ -99,7 +99,7 @@ jobs:
         run: make deps-tree-sitter
       - name: Tests
         run: |
-          for suite in check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-fs test-process test-isolates test-tree-sitter test-http test-datalog test-ffi test-curl test-namespaces test-structs test-overrides; do
+          for suite in check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-fs test-process test-isolates test-parallel test-tree-sitter test-http test-datalog test-ffi test-curl test-namespaces test-structs test-overrides; do
             echo "::group::$suite"
             make "KERNEL_DIR=$KERNEL_DIR" "$suite"
             echo "::endgroup::"

@@ -251,7 +251,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi structs buffers grammar io fs processes tree-sitter framing io-sockets deadlines http-head http http-streaming http-listener json datalog curl
+GUIDE_PAGES := design semantics bytecode ffi structs buffers grammar io fs processes parallel tree-sitter framing io-sockets deadlines http-head http http-streaming http-listener json datalog curl
 GUIDE_PANDOC := pandoc -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
 guide:
@@ -346,9 +346,14 @@ test-isolates-stress: $(BUILD)/shen-jit
 	SHEN_JIT_GC_STRESS=1 $(BUILD)/shen-jit eval -l tests/isolates.shen | $(FFI_RESULT)
 
 # Every library's suite, without the collections test-lib-stress adds (about 30 s).
-test-libs: test-buffer test-json test-io test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces
+test-libs: test-buffer test-json test-io test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces \
+  test-parallel
 
-.PHONY: test-isolates test-isolates-stress
+.PHONY: test-isolates test-isolates-stress test-parallel
+
+# lib/parallel.shen: a map over isolates.
+test-parallel: $(BUILD)/shen-jit
+	$(BUILD)/shen-jit eval -l lib/parallel.shen -l tests/parallel.shen | $(FFI_RESULT)
 
 .PHONY: test-namespaces
 test-namespaces: $(BUILD)/shen-jit-stlib
