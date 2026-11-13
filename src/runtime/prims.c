@@ -1159,17 +1159,14 @@ static bool input_ready(bool wait)
 
 static V read_stdin_waiting(VM *vm);
 
-/* Isolates read it one at a time, waiting for their turn inside a blocking region, and wait
-   for input inside one too (isolate.c). */
+/* Isolates read it one at a time (isolate.c). */
 static pthread_mutex_t input_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static V read_stdin(VM *vm)
 {
     if (!vm->program->isolates)
         return read_stdin_waiting(vm);
-    isolate_block(vm);
     pthread_mutex_lock(&input_lock);
-    isolate_unblock(vm);
     V v = read_stdin_waiting(vm);
     pthread_mutex_unlock(&input_lock);
     return v;
@@ -1185,7 +1182,6 @@ static V read_stdin_waiting(VM *vm)
 #ifdef _WIN32
         /* select is for sockets there, so the read itself waits, and a Ctrl-C ends it. */
         static bool input_busy;
-        isolate_block(vm);
         long n = 1;
         if (input_busy) {
             win_sleep_briefly();
@@ -1198,7 +1194,6 @@ static V read_stdin_waiting(VM *vm)
                 input_end = (size_t)n;
             }
         }
-        isolate_unblock(vm);
         if (n == 0)
             return fix(-1);
 #else
@@ -1209,9 +1204,7 @@ static V read_stdin_waiting(VM *vm)
             input_next = 0;
             input_end = (size_t)n;
         } else {
-            isolate_block(vm);
             input_ready(true);
-            isolate_unblock(vm);
         }
 #endif
     }
@@ -1381,9 +1374,6 @@ bool sj_start_isolate(VM *vm, V gensym_base)
     vm->builder = false;
     for (size_t n = 1; n < vm->program->nglobals; n++)
         vm->globals[n] = V_CLEARED;
-    for (size_t i = 0; i < vm->local_cap; i++)
-        vm->local_keys[i] = 0;
-    vm->local_count = 0;
     bool ok = true;
     for (size_t i = 0; i < N; i++)
         if (sym[i] != V_NIL && value[i] != V_CLEARED)
@@ -1928,7 +1918,7 @@ V sj_primitive(VM *vm, size_t index)
             return sj_raise_value(vm, "shen-jit.gc: ~S is not a vector of bindings", a);
         ptr(a)[2] = fix(fixval(ptr(a)[2]) - 1);
         return V_FALSE;
-    case P_ISOLATE: return sj_isolate(vm, a, b, vm->args[2]);
+    case P_ISOLATE: return sj_isolate(vm);
     case P_FOREIGN: case P_POINTERP: case P_POINTER_KIND: case P_POINTER_ADDRESS: case P_BYTES_POINTER:
     case P_POINTER_STRING: case P_POINTER_BYTES: case P_ERRNO: case P_C_ERRNO: case P_POINTER_KILL:
     case P_POINTER_SIZED: case P_SET_POINTER: case P_POINTER_GUARD: case P_POINTER_OWNER: case P_POINTERS_DEAD:
@@ -1941,6 +1931,8 @@ V sj_primitive(VM *vm, size_t index)
     case P_SET_ARITY:
         if (!vm->builder)
             return sj_raise(vm, "only the builder can define functions");
+        if (isolates_running(vm->program))
+            return sj_raise(vm, "the program cannot change while other isolates run");
         if (!is_symbol(a))
             return sj_raise_value(vm, "shen-jit.set-arity: ~S is not a symbol", a);
         if (!is_fix(b) || fixval(b) < -1 || fixval(b) > 255)

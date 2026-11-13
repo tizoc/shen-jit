@@ -1,6 +1,6 @@
-\\ Grammars in isolates, which cannot compile: the builder compiles a rule's loops, and prepares
-\\ the streaming variants of the rules that reads name, before it spawns (shen-jit.publish).
-\\ Load buffer.shen, io.shen and grammar.shen first.
+\\ Grammars in isolates, which cannot compile: a rule's loops compile once the form defining it
+\\ has run, and the streaming variants of the rules that reads name are prepared then too. Load
+\\ buffer.shen, io.shen and grammar.shen first.
 (set gp.passed 0)
 (set gp.failed 0)
 
@@ -21,10 +21,14 @@
 (define gp.fail
   At Message -> [failed At Message])
 
+\\ The reply, once the isolate has ended: the builder defines more after it.
 (define gp.ask
   F Text -> (let R (shen-jit.channel 1)
-                 _ (shen-jit.spawn F [Text (shen-jit.sender R)])
-              (shen-jit.receive R)))
+                 P (shen-jit.spawn F [Text (shen-jit.sender R)])
+                 M (shen-jit.monitor P)
+                 Reply (shen-jit.receive R)
+                 _ (shen-jit.receive M)
+              Reply))
 
 (define gp.work
   [Text Out] -> (shen-jit.send Out [(grammar.match? <gp.digits> (buffer.from-string Text))
@@ -35,7 +39,7 @@
 (gp.check "loops and a streaming read in an isolate" [true false [ok skip] [failed 0 "no match"]]
   (gp.ask gp.work "2026"))
 
-\\ Defined after the first spawn: the next spawn publishes it.
+\\ Defined once the first isolate has ended: the program can change again.
 (defgrammar <gp.late> (+ <gp.digit>) "!";)
 
 (define gp.late

@@ -450,10 +450,7 @@ static V h_resolve(VM *vm, V *slot)
    frame or loop check comes here. */
 static V h_grow(VM *vm, size_t frame)
 {
-    if (vm->interrupted == ATTEND) {
-        if (isolate_attend(vm) == V_CLEARED) /* its turn, or a kill (isolate.c) */
-            return V_CLEARED;
-    } else if (vm->interrupted && sj_take_interrupt(vm)) {
+    if (vm->interrupted && sj_take_interrupt(vm)) {
         return sj_raise(vm, "interrupted");
     }
     size_t need = (size_t)(vm->fp - vm->stack) + frame;
@@ -2525,7 +2522,7 @@ static void emit_prim(Emit *e, const uint32_t *p)
         sljit_s32 cell = SLJIT_MEM1(VMR);
         sljit_sw at = 0;
         V *slot = (arg[0] & OPERAND_CONST) && is_symbol(*operand_cell(e, arg[0]))
-                      ? global_slot_numbered(e->vm, *operand_cell(e, arg[0])) : NULL;
+                      ? global_slot_new(e->vm, *operand_cell(e, arg[0])) : NULL;
         if (slot) {
             at = (sljit_sw)((char *)slot - (char *)e->vm);
         } else {

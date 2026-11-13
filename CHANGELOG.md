@@ -10,10 +10,11 @@ All notable changes to this project are documented in this file. The format is b
 - Isolates: `(shen-jit.spawn F X)` runs a function the program defined on an OS thread of its own, with its own
   heap, globals and property list, so isolates run on several cores at once. They talk through channels
   (`shen-jit.channel`, `shen-jit.sender`, `shen-jit.send`, `shen-jit.receive`, `shen-jit.receive-any`,
-  `shen-jit.close` and `shen-jit.end?`), which copy what is sent; `shen-jit.monitor` and `shen-jit.kill` watch and stop
-  them. Only the first isolate, the builder, defines, and the others stop for each definition.
-- Grammars work in isolates: before each spawn the builder compiles their loops and prepares the streaming reads that
-  code names, through `shen-jit.on-publish`, and `shen-jit.publish` does it at other times.
+  `shen-jit.close` and `shen-jit.end?`), which copy what is sent; `shen-jit.monitor` watches them, and `shen-jit.kill`
+  stops one at its next send or receive. Only the first isolate, the builder, defines, and the program is fixed while
+  other isolates run: defining raises until they have ended. Symbols are the same in every isolate.
+- Grammars work in isolates: a load compiles a rule's loops after the form defining it, and prepares the streaming
+  reads that code names. `shen-jit.after-form` registers a function to run after each form of a load.
 
 ### Changed
 
@@ -21,7 +22,11 @@ All notable changes to this project are documented in this file. The format is b
   handler calls `http.stop`; `http.listen` binds and returns the server without serving. `http.wait` gives the result
   once `http.run` has returned. `max-connections` and `shutdown-grace` are still checked but have no effect, until
   connections are served in isolates. The `sqlite-http` example serves in turn too.
-- A `blocking` foreign call passes byte buffers where they are, rather than copies.
+- A `blocking` foreign call passes byte buffers where they are, rather than copies, and the flag changes nothing now.
+- A definition whose code holds a value with no syntax, such as a vector put into a form given to `eval`, or a
+  native `(const E)` whose value is one, is refused when it is defined.
+- A grammar's loops compile after the form defining the rule, in a load, and at once outside one, rather than at
+  their first call; a guard that calls a function defined after the rule is tested in place, without a table.
 - Installed definitions, with what their code reaches, and every symbol now live in a program space that
   collections neither copy nor scan, so collections no longer copy the program. A redefined function's old
   versions stay there. `SHEN_JIT_STATS` reports the program space.

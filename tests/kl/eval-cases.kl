@@ -894,14 +894,17 @@ that holds itself, whose copy would not end."
 (value (true false false true true false true) (t.deref-eq-all))
 
 "Isolates, here also under GC stress and the sanitizers: one that sends back what it was
-given, and two whose lists collections move while the builder allocates its own."
+given, and two whose lists collections move while the builder allocates its own. Everything is
+defined first, as the program cannot change while another isolate runs, and each case waits for
+its isolates to end, as cases after it define more."
 (value t.reply (defun t.reply (X) (shen-jit.send (hd X) (tl X))))
-(value (7 "seven" seven) (let R (shen-jit.channel 1) (do (shen-jit.spawn t.reply (cons (shen-jit.sender R) (cons 7 (cons "seven" (cons seven ()))))) (shen-jit.receive R))))
 (value t.build (defun t.build (N) (if (= N 0) () (cons N (t.build (- N 1))))))
 (value t.sum (defun t.sum (L) (if (cons? L) (+ (hd L) (t.sum (tl L))) 0)))
 (value t.churn (defun t.churn (N A) (if (= N 0) A (t.churn (- N 1) (t.sum (t.build 50))))))
 (value t.churn-reply (defun t.churn-reply (S) (shen-jit.send S (t.churn 200 0))))
-(value (1275 1275 1275) (let R (shen-jit.channel 2) (let S (shen-jit.sender R) (do (shen-jit.spawn t.churn-reply S) (do (shen-jit.spawn t.churn-reply S) (let M (t.churn 200 0) (cons M (cons (shen-jit.receive R) (cons (shen-jit.receive R) ())))))))))
+(value t.ended (defun t.ended (P) (shen-jit.receive (shen-jit.monitor P))))
+(value (7 "seven" seven) (let R (shen-jit.channel 1) (let P (shen-jit.spawn t.reply (cons (shen-jit.sender R) (cons 7 (cons "seven" (cons seven ()))))) (let Got (shen-jit.receive R) (do (t.ended P) Got)))))
+(value (1275 1275 1275) (let R (shen-jit.channel 2) (let S (shen-jit.sender R) (let P (shen-jit.spawn t.churn-reply S) (let Q (shen-jit.spawn t.churn-reply S) (let M (t.churn 200 0) (let Got (cons M (cons (shen-jit.receive R) (cons (shen-jit.receive R) ()))) (do (t.ended P) (do (t.ended Q) Got)))))))))
 (error "shen-jit.spawn: 1 is not a function of one argument that the builder defined" (shen-jit.spawn 1 2))
 
 "Pointers and C functions as far as they go without a library: tests/ffi.shen has the rest. A call

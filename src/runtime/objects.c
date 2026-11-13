@@ -3,6 +3,8 @@
    Shen value equals, so callers can raise "out of memory". */
 #include "vm.h"
 
+#include <pthread.h>
+
 #include <string.h>
 
 #define XXH_INLINE_ALL
@@ -194,9 +196,9 @@ size_t symbol_cell(V sym) { return (size_t)(ptr(sym)[SYM_CELL] & CELL_MASK); }
 
 bool symbol_sealed(V sym) { return (ptr(sym)[SYM_CELL] >> SEALED_BIT) & 1; }
 
-void symbol_seal(V sym) { ptr(sym)[SYM_CELL] |= UINT64_C(1) << SEALED_BIT; }
+void symbol_seal(V sym) { __atomic_fetch_or(&ptr(sym)[SYM_CELL], UINT64_C(1) << SEALED_BIT, __ATOMIC_RELAXED); }
 
-void symbol_mark_called(V sym) { ptr(sym)[SYM_CELL] |= UINT64_C(1) << CALLED_BIT; }
+void symbol_mark_called(V sym) { __atomic_fetch_or(&ptr(sym)[SYM_CELL], UINT64_C(1) << CALLED_BIT, __ATOMIC_RELAXED); }
 
 /* Whether a symbol stays although only the table reaches it: interning
    its name again must find its value and function, and code that calls it by
@@ -229,49 +231,59 @@ static uint64_t name_kind(const unsigned char *s, size_t n)
     return s[0] >= 'A' && s[0] <= 'Z' ? 2 : 1;
 }
 
-/* The entry of the symbol with this name, or the empty entry where it would go. */
-V *symbol_table_slot(SymbolTable *t, uint64_t hash, const char *bytes, size_t len)
-{
-    if (!t->cap)
-        return NULL;
-    for (size_t i = hash & (t->cap - 1);; i = (i + 1) & (t->cap - 1)) {
-        V s = t->slots[i];
-        if (!s)
-            return &t->slots[i];
-        V name = ptr(s)[SYM_NAME];
-        if (ptr(s)[SYM_HASH] == hash && string_length(name) == len &&
-            memcmp(string_bytes(name), bytes, len) == 0)
-            return &t->slots[i];
-    }
-}
-
 /* Adds a symbol that is not in the table, growing it past half full. */
 bool symbol_table_put(SymbolTable *t, V sym)
 {
     if (2 * (t->count + 1) > t->cap) {
         size_t cap = t->cap ? 2 * t->cap : 1024;
         V *slots = calloc(cap, sizeof *slots);
-        if (!slots)
+        V **retired = t->shared ? realloc(t->retired, (t->nretired + 1) * sizeof *retired) : NULL;
+        if (!slots || (t->shared && !retired)) {
+            free(slots);
             return false;
-        SymbolTable grown = {slots, cap, 0};
+        }
+        SymbolTable grown = {slots, cap, 0, false, NULL, 0};
         for (size_t i = 0; i < t->cap; i++)
             if (t->slots[i])
                 symbol_table_put(&grown, t->slots[i]);
-        free(t->slots);
-        *t = grown;
+        if (t->shared) {
+            retired[t->nretired++] = t->slots;
+            t->retired = retired;
+        } else {
+            free(t->slots);
+        }
+        t->count = grown.count;
+        __atomic_store_n(&t->slots, slots, __ATOMIC_RELEASE);
+        __atomic_store_n(&t->cap, cap, __ATOMIC_RELEASE);
     }
     size_t i = ptr(sym)[SYM_HASH] & (t->cap - 1);
     while (t->slots[i])
         i = (i + 1) & (t->cap - 1);
-    t->slots[i] = sym;
+    __atomic_store_n(&t->slots[i], sym, __ATOMIC_RELEASE);
     t->count++;
     return true;
 }
 
+/* The symbol of that name in the table, or 0: what the probe read, as the empty entry where it
+   stopped may meanwhile take another name's symbol. Once isolates exist, the published table is
+   read without a lock while another isolate adds to it: the capacity is read first, then the
+   array, which a growth stores in the other order, and an entry is stored only once its symbol is
+   whole. A reader that sees the new array with the old capacity may miss a symbol, which interning
+   then finds under the lock. */
 static V table_find(SymbolTable *t, uint64_t hash, const char *bytes, size_t len)
 {
-    V *slot = symbol_table_slot(t, hash, bytes, len);
-    return slot ? *slot : 0;
+    size_t cap = __atomic_load_n(&t->cap, __ATOMIC_ACQUIRE);
+    V *slots = __atomic_load_n(&t->slots, __ATOMIC_ACQUIRE);
+    if (!cap)
+        return 0;
+    for (size_t i = hash & (cap - 1);; i = (i + 1) & (cap - 1)) {
+        V s = __atomic_load_n(&slots[i], __ATOMIC_ACQUIRE);
+        if (!s)
+            return 0;
+        V name = ptr(s)[SYM_NAME];
+        if (ptr(s)[SYM_HASH] == hash && string_length(name) == len && memcmp(string_bytes(name), bytes, len) == 0)
+            return s;
+    }
 }
 
 /* The symbol of that name, published or not, or 0. */
@@ -300,60 +312,72 @@ V published_find(VM *vm, const char *bytes, size_t len)
     return table_find(&vm->program->published, hash_bytes(bytes, len), bytes, len);
 }
 
-/* An isolate's own symbol is in its heap, with cell 0, which no definition ever takes, and no
-   number: its global's value goes in the isolate's dictionary. A collection drops it once
-   nothing reaches it (heap.c). */
-static V intern_in_heap(VM *vm, V name, uint64_t hash)
+/* New symbols and global numbers, once isolates exist: any isolate makes them. */
+static pthread_mutex_t shared_lock = PTHREAD_MUTEX_INITIALIZER;
+
+/* A new cell, both entries cleared, or SIZE_MAX. */
+static size_t new_cell(VM *vm)
 {
-    vm_root(vm, &name);
-    uint64_t *p = vm_alloc(vm, SYM_WORDS);
-    vm_unroot(vm, 1);
-    if (!p)
-        return FAILED;
-    p[0] = HEADER(T_SYMBOL, 0);
-    p[SYM_NAME] = name;
-    p[SYM_HASH] = hash;
-    p[SYM_CELL] = name_kind((const unsigned char *)string_bytes(name), string_length(name)) << KIND_SHIFT;
-    V sym = tagged(p, TAG_SYMBOL);
-    if (!symbol_table_put(&vm->own, sym))
-        return FAILED;
-    vm->nsymbols++;
-    return sym;
+    size_t reserved, entry, entry2;
+    /* Cell 0 is none's. */
+    if (vm->program->cells.count == 0 &&
+        (!ra_push(&vm->program->cells, V_CLEARED, &reserved) || !ra_push(&vm->program->cells, V_CLEARED, &reserved)))
+        return SIZE_MAX;
+    if (vm->program->nfree_cells)
+        return vm->program->free_cells[--vm->program->nfree_cells];
+    if (vm->program->cells.count / 2 > CELL_MASK || !ra_push(&vm->program->cells, V_CLEARED, &entry) ||
+        !ra_push(&vm->program->cells, V_CLEARED, &entry2))
+        return SIZE_MAX;
+    return entry / 2;
+}
+
+/* Once isolates exist, a new symbol is published as it is made, its name copied into the program
+   space, under the lock: every isolate sees one symbol for a name. */
+static V intern_shared(VM *vm, V name, uint64_t hash)
+{
+    pthread_mutex_lock(&shared_lock);
+    V found = table_find(&vm->program->published, hash, string_bytes(name), string_length(name));
+    V sym = found;
+    uint64_t *p = found ? NULL : program_symbol_slot(vm);
+    size_t words = obj_words(ptr(name)[0]);
+    uint64_t *copy = p ? program_alloc(vm, words) : NULL;
+    size_t cell = copy ? new_cell(vm) : SIZE_MAX;
+    if (cell != SIZE_MAX) {
+        memcpy(copy, ptr(name), words * sizeof(uint64_t));
+        p[0] = HEADER(T_SYMBOL, 0);
+        p[SYM_NAME] = tagged(copy, TAG_OBJECT);
+        p[SYM_HASH] = hash;
+        p[SYM_CELL] = cell | UINT64_C(1) << PUBLISHED_BIT |
+                      name_kind((const unsigned char *)string_bytes(name), string_length(name)) << KIND_SHIFT;
+        sym = tagged(p, TAG_SYMBOL);
+        if (symbol_table_put(&vm->program->published, sym)) {
+            if (cell >= vm->program->published_top)
+                vm->program->published_top = cell + 1;
+        } else {
+            sym = 0;
+        }
+    }
+    pthread_mutex_unlock(&shared_lock);
+    return sym ? sym : FAILED;
 }
 
 /* A new symbol takes a slot of the program space and keeps its name where it is; publishing
-   it moves the name there too. Nothing here allocates in the heap. In an isolate, which does
-   not own the program, it goes in the heap instead. */
+   it moves the name there too. Nothing here allocates in the heap. */
 static V intern_name(VM *vm, V name)
 {
-    if (vm->program->owner != vm && vm->program->isolates) {
-        vm_root(vm, &name);
-        isolate_fixup(vm); /* a name published since this isolate last looked has one symbol */
-        vm_unroot(vm, 1);
-    }
     uint64_t hash = hash_bytes(string_bytes(name), string_length(name));
     V found = find(vm, hash, string_bytes(name), string_length(name));
     if (found)
         return found;
-    if (vm->program->owner != vm)
-        return intern_in_heap(vm, name, hash);
-    /* Cell 0 is none's: an isolate's own symbols have it. */
-    size_t reserved;
-    if (vm->program->cells.count == 0 &&
-        (!ra_push(&vm->program->cells, V_CLEARED, &reserved) || !ra_push(&vm->program->cells, V_CLEARED, &reserved)))
-        return FAILED;
+    if (vm->program->isolates)
+        return intern_shared(vm, name, hash);
     uint64_t *p = program_symbol_slot(vm);
     if (!p)
         return FAILED;
-    size_t cell, entry, entry2;
-    if (vm->program->nfree_cells)
-        cell = vm->program->free_cells[--vm->program->nfree_cells]; /* both entries are cleared */
-    else if (vm->program->cells.count / 2 > CELL_MASK || !ra_push(&vm->program->cells, V_CLEARED, &entry) ||
-             !ra_push(&vm->program->cells, V_CLEARED, &entry2)) {
+    size_t cell = new_cell(vm);
+    if (cell == SIZE_MAX) {
         program_free_symbol(vm, p);
         return FAILED;
-    } else {
-        cell = entry / 2;
     }
     p[0] = HEADER(T_SYMBOL, 0);
     p[SYM_NAME] = name;
@@ -369,85 +393,41 @@ static V intern_name(VM *vm, V name)
     return sym;
 }
 
-static size_t local_index(VM *vm, V sym)
-{
-    size_t i = ptr(sym)[SYM_HASH] & (vm->local_cap - 1);
-    while (vm->local_keys[i] && vm->local_keys[i] != sym)
-        i = (i + 1) & (vm->local_cap - 1);
-    return i;
-}
-
-V *local_global(VM *vm, V sym)
-{
-    size_t i = local_index(vm, sym);
-    return vm->local_keys[i] ? &vm->local_values[i] : NULL;
-}
-
-/* A value for a symbol with no number, in a VM that may not number it. Entries are never
-   taken out, so a symbol given a value stays while the VM runs. */
-static V *local_global_new(VM *vm, V sym)
-{
-    if (vm->local_cap) {
-        V *slot = local_global(vm, sym);
-        if (slot)
-            return slot;
-    }
-    if (2 * (vm->local_count + 1) > vm->local_cap) {
-        size_t cap = vm->local_cap ? 2 * vm->local_cap : 64;
-        V *keys = calloc(cap, sizeof *keys), *values = malloc(cap * sizeof *values);
-        if (!keys || !values) {
-            free(keys);
-            free(values);
-            return NULL;
-        }
-        V *old_keys = vm->local_keys, *old_values = vm->local_values;
-        size_t old_cap = vm->local_cap;
-        vm->local_keys = keys;
-        vm->local_values = values;
-        vm->local_cap = cap;
-        for (size_t i = 0; i < old_cap; i++)
-            if (old_keys[i]) {
-                size_t j = local_index(vm, old_keys[i]);
-                keys[j] = old_keys[i];
-                values[j] = old_values[i];
-            }
-        free(old_keys);
-        free(old_values);
-    }
-    size_t i = local_index(vm, sym);
-    vm->local_keys[i] = sym;
-    vm->local_values[i] = V_CLEARED;
-    vm->local_count++;
-    return &vm->local_values[i];
-}
-
-/* The builder numbers a global when code names it or it is set (vm.h); another VM keeps the
-   value of a global with no number in its dictionary. Nothing here allocates in the heap. */
+/* A global gets a number when code names it or it is set (vm.h), the next free one; once isolates
+   exist, under the lock, and with a slot in every isolate before the symbol shows it. Nothing here
+   allocates in the heap. */
 V *global_slot_new(VM *vm, V sym)
 {
     size_t n = symbol_global(sym);
     if (n)
         return &vm->globals[n];
-    if (!vm->builder)
-        return local_global_new(vm, sym);
-    if (vm->program->nfree_globals)
+    bool shared = vm->program->isolates != NULL;
+    if (shared) {
+        pthread_mutex_lock(&shared_lock);
+        if ((n = symbol_global(sym))) {
+            pthread_mutex_unlock(&shared_lock);
+            return &vm->globals[n];
+        }
+    }
+    V *slot = NULL;
+    if (vm->program->nfree_globals) {
         n = vm->program->free_globals[--vm->program->nfree_globals];
-    else if (vm->program->nglobals > CELL_MASK || !vm_globals_commit(vm, vm->program->nglobals + 1))
-        return NULL;
-    else {
+    } else if (vm->program->nglobals <= CELL_MASK && vm_globals_commit(vm, vm->program->nglobals + 1)) {
         n = vm->program->nglobals;
         isolates_commit_globals(vm->program, n + 1); /* before any code can use it */
-        vm->program->nglobals = n + 1;
+        __atomic_store_n(&vm->program->nglobals, n + 1, __ATOMIC_RELEASE); /* collections read it */
+    } else {
+        n = 0;
     }
-    ptr(sym)[SYM_CELL] |= (uint64_t)n << CELL_BITS;
-    if (symbol_published(sym) && n >= vm->program->published_global_top)
-        vm->program->published_global_top = n + 1;
-    return &vm->globals[n];
-}
-
-V *global_slot_numbered(VM *vm, V sym)
-{
-    return symbol_global(sym) || vm->builder ? global_slot_new(vm, sym) : NULL;
+    if (n) {
+        __atomic_fetch_or(&ptr(sym)[SYM_CELL], (uint64_t)n << CELL_BITS, __ATOMIC_RELEASE);
+        if (symbol_published(sym) && n >= vm->program->published_global_top)
+            vm->program->published_global_top = n + 1;
+        slot = &vm->globals[n];
+    }
+    if (shared)
+        pthread_mutex_unlock(&shared_lock);
+    return slot;
 }
 
 /* Interns bytes that are outside the heap. Shen strings must be interned with

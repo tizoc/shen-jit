@@ -233,8 +233,7 @@ static inline shen_value shen_exception(shen_vm *vm) { return (*vm)->exception(v
 /* Its message, as a Shen string. May collect. */
 static inline shen_value shen_exception_message(shen_vm *vm) { return (*vm)->exception_message(vm); }
 
-/* Around C that waits: the isolate counts as stopped meanwhile, so that the builder need not wait for
-   it to define. */
+/* Around C that waits. They change nothing now, as nothing else uses an isolate's heap meanwhile. */
 static inline void *shen_release(shen_vm *vm) { return (*vm)->release(vm); }
 static inline void shen_acquire(shen_vm *vm, void *token) { (*vm)->acquire(vm, token); }
 

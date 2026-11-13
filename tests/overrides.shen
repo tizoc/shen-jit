@@ -1092,8 +1092,9 @@ b" (n->string 0) (n->string 255)] (o.strings)))
 \\ what reaches the top and end the process.
 (define o.left-out
   -> [shen.read-evaluate-print shen.toplevel-display-exception shen.x.launcher.main
-      \\ They change the program, which a check must not: arities, and eval.
-      eval shen.execute-store-arity update-lambda-table shen.update-lambda-table/precompiled])
+      \\ They change the program, which a check must not: arities, eval, and a load's forms.
+      eval shen.load-help shen.eval-and-print shen.work-through shen.execute-store-arity update-lambda-table
+      shen.update-lambda-table/precompiled])
 
 (define o.tested
   -> (append (o.single-names) (append (o.dict-group) (append (o.prolog-group) [integer?]))))

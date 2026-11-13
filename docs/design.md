@@ -276,14 +276,17 @@ collection copies at most a word for every four allocated. With its own area the
 
 **The program space** is a range of reserved address space, committed as it fills, that collections neither copy nor scan:
 a pointer into it is recognised by one range test and left as it is. Every symbol has a slot at its start. A definition,
-once installed, is copied there with all it reaches: its code objects, bytecode, constants and inline body. Only what
-cannot change is copied: pairs, strings, reals, code and the definition's closure, which captures nothing. A definition
-that reaches anything else, such as a byte buffer, stays in the heap, and a check before copying makes sure such a
-definition leaves nothing behind. A foreign function goes there too, with its description: a vector, but one only the
-FFI library makes and only the runtime reads. Grammar loops keep their byte tables as strings for the same reason. So nothing in the space points into the heap, and the constant slots of its code are
-neither scanned nor freed. What it holds stays, a redefined function's old version included. A symbol that it refers to
-is published: its name moves there too, and it is never dropped. A collection marks the other symbols it reaches, which
-are the only things in the space it writes to, and frees the slots of those nothing needs. Each VM has its own space.
+once installed, is copied there with all it reaches: its code objects, bytecode, constants and inline body: pairs,
+strings, reals, symbols, code and the definition's closure, which captures nothing. Code holds only what the reader
+makes, symbols, numbers, strings, booleans and lists of them, so every definition goes there: one whose code holds
+anything else, such as a vector put into a form given to `eval`, is refused when it is installed, and a check before
+copying makes sure it leaves nothing behind. A foreign function goes there too, with its description: a vector, but
+one only the FFI library makes and only the runtime reads. Grammar loops keep their byte tables as strings for the same
+reason. So nothing in the space points into the heap, function cells point only into it, and neither they nor the
+constant slots of its code are scanned or freed. What it holds stays, a redefined function's old version included. A
+symbol that it refers to is published: its name moves there too, and it is never dropped. A collection marks the other
+symbols it reaches, which are the only things in the space it writes to, and frees the slots of those nothing needs,
+until isolates exist (below).
 
 Reals are boxed, each a 16-byte object, and native code does their arithmetic and comparisons on its slow path, after the
 test for fixnums fails, loading each operand into a float register and allocating the result in line. Code written by hand can keep them unboxed
@@ -344,11 +347,9 @@ starts as above and copies the fragment into its heap.
 **Copying.** Arguments and messages go through one copier, breadth first as a collection
 copies, with a table from old addresses to copies instead of forwarding pointers, so the
 sender's objects are untouched and nothing allocates in its heap meanwhile; sharing and cycles
-are kept. What lies in the program space crosses by pointer: published symbols, constants and
-the program's functions. A symbol of the sender's own crosses by name, interned by the
-receiver before anything else is copied in, after which there is room for the rest at once,
-so nothing moves while it is copied. Closures in a heap, streams, pointers, code and the end
-of a stream are refused. A receive endpoint moves only in a spawn's argument, marked by
+are kept. What lies in the program space crosses by pointer: symbols, constants and the
+program's functions. The receiver makes room for all of it first, so nothing moves while it is
+copied. Closures in a heap, streams, pointers, code and the end of a stream are refused. A receive endpoint moves only in a spawn's argument, marked by
 `shen-jit.give`, which hands its channel to the child.
 
 **Channels.** A table outside every heap, under the isolates' lock, holds each channel's
@@ -357,41 +358,40 @@ senders waiting while it is full. An endpoint is an absvector `[Tag Index Genera
 tag is a port function that prints it; freeing a channel raises its slot's generation, so a
 stale endpoint raises "channel closed". Each isolate waits on a condition of its own. A
 monitor is a channel of capacity 1 that gets `[down P Reason]` when P ends. `kill` marks the
-isolate and sets its interrupt to `ATTEND`, so that its next safe point raises "killed",
-once, and wakes it if it waits. An isolate that ends tells its monitors, closes its files
+isolate, which raises "killed", once, at its next channel operation, or before it starts, and
+wakes it if it waits on a channel: an isolate needs no safe points, and code compiled for one is
+what any program runs. An isolate that ends tells its monitors, closes its files
 and the channels it receives on, and frees its context; its record is used again with a new
 generation.
 
-**The rendezvous.** The builder changes the program only while every other isolate is
-stopped: waiting on a channel, inside a blocking region (a blocking foreign call, C that
-releases the VM, a read of stdin, a wait for the compile lock), or parked at a safe point. To
-install a definition it takes the compile lock, sets each running isolate's interrupt to
-`ATTEND`, which clears its check limit as Ctrl-C does, and waits until none runs, asking again
-every millisecond, since an isolate clearing its interrupt at that moment may miss it at frame
-checks. The compile lock also guards compiling at a first call, the JIT's tables, which
+**The program is fixed while isolates run.** Defining, foreign definitions and arities are
+refused while an isolate other than the builder has not ended, so nothing patches the code
+isolates run, and the builder never has to stop them. Once they have all ended, the builder
+defines again. The compile lock guards compiling at a first call, the JIT's tables, which
 backtraces read, and the list of native code, which isolates add to; it is recursive, as the
-builder collects while it holds it. An isolate waits for it inside a blocking region, so a
-rendezvous never waits for an isolate that waits for the lock.
+builder collects while it holds it.
 
-**The fix-up.** When a rendezvous published symbols, a counter moves on, and each isolate,
-before anything published can reach it, at its next safe point or as it receives or interns,
-collects once with the fix-up on: a symbol of its own whose name is now published is replaced
-by the published one, and its value in the dictionary moves to that symbol's slot. So a name
-has one symbol in each isolate. A global number the builder gives has a slot in every isolate
-before code can use it.
+**Symbols.** At the first spawn, the builder's own symbols are published, and from then on every
+symbol is: an isolate interning a name new to the program makes the symbol in the program space,
+with its name, under a lock, so that a name has one symbol in every isolate and symbols cross
+by pointer. The table of published symbols is read without the lock: a lookup reads the
+capacity before the array, which growing stores in the other order, keeps the arrays it
+replaces, and returns the symbol its probe read, so a miss is found again under the lock. No
+symbol is freed once isolates exist, so names that come from outside belong in strings. Any
+isolate may number a global, under the same lock: every VM's slots are committed before the
+symbol shows its number.
 
-**Publication.** What compiles at a first call cannot be compiled in an isolate, so libraries
-that do it register a hook (`shen-jit.on-publish`), which the builder runs before each spawn
-and at `shen-jit.publish`. The grammar library's compiles the loops not compiled yet and
-prepares the streaming variants of the rules that reads name. In an isolate, a variant is
-found by its name, and one never prepared is refused.
+**Grammars** compile their loops once the functions their guards call exist, which is after
+the form defining the rule has run: the kernel expands a whole file before it evaluates any of
+it, so a load runs the functions registered with `shen-jit.after-form` after each form, and the
+grammar library compiles there the loops of rules defined so far, and prepares the streaming
+variants of the rules that reads name. Outside a load, it compiles at once. In an isolate, a
+variant is found by its name, and one never prepared is refused.
 
 A function goes to an isolate by its name, a published symbol, and the isolate gets it with
 `fn`; what `fn` makes is a closure in a heap, which does not cross.
 
-**Not yet.** A definition whose promotion failed stays in the builder's heap, where an isolate
-must not call it, and a channel whose receive endpoint is dropped stays until its receiver
-ends.
+**Not yet.** A channel whose receive endpoint is dropped stays until its receiver ends.
 
 ## Calling C
 

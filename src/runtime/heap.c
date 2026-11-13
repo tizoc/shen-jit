@@ -243,12 +243,14 @@ void vm_destroy(VM *vm)
     free(vm->foreign_roots);
     free(vm->files);
     free(vm->guards);
-    free(vm->local_keys);
-    free(vm->local_values);
     Program *p = vm->program;
     if (p && p->owner == vm) {
+        isolates_free(p);
         program_release(&p->space);
         free(p->published.slots);
+        for (size_t i = 0; i < p->published.nretired; i++)
+            free(p->published.retired[i]);
+        free(p->published.retired);
         ra_free(&p->cells);
         ra_free(&p->consts);
         free(p->natives);
@@ -552,22 +554,6 @@ static V reach_program(VM *vm, V v)
     return v;
 }
 
-/* In an isolate's fix-up (isolate.c), one of its own symbols whose name has been published
-   since becomes the published symbol, everywhere the collection finds it. */
-static V fix_symbol(Copy *c, V v)
-{
-    uint64_t *p = ptr(v);
-    V name = p[SYM_NAME];
-    if (is_ptr(name) && ptr(name)[0] == V_FORWARD)
-        name = ptr(name)[1];
-    V published = published_find(c->vm, string_bytes(name), string_length(name));
-    if (!published)
-        return 0;
-    p[0] = V_FORWARD;
-    p[1] = published;
-    return published;
-}
-
 static V copy_value(Copy *c, V v)
 {
     if (!is_ptr(v))
@@ -581,11 +567,6 @@ static V copy_value(Copy *c, V v)
     }
     if (p[0] == V_FORWARD)
         return p[1];
-    if (c->vm->fixup && tag3(v) == TAG_SYMBOL) {
-        V published = fix_symbol(c, v);
-        if (published)
-            return published;
-    }
     /* Every object has at least two words, and most are pairs: copy those
        two directly, since a call to memcpy per object costs more than the
        copy. */
@@ -619,12 +600,6 @@ static V copy_value(Copy *c, V v)
 }
 
 static void copy_slot(Copy *c, V *slot) { *slot = copy_value(c, *slot); }
-
-static void copy_root_array(Copy *c, RootArray *ra)
-{
-    for (size_t i = 0; i < ra->count; i++)
-        copy_slot(c, ra_at(ra, i));
-}
 
 /* Scan to-space linearly. A word at an object boundary is either a header or
    the head of a pair (docs/semantics.md, section 2). Many slots hold no pointer
@@ -762,7 +737,7 @@ static void sweep_symbols(VM *vm, Copy *c)
     V *slots = calloc(m ? m : 1, sizeof *slots);
     if (!slots)
         return; /* everything stays until a collection has room */
-    SymbolTable t = {slots, m, 0};
+    SymbolTable t = {slots, m, 0, false, NULL, 0};
     /* Cell 0 is none's, kept once it is made. */
     size_t top = vm->program->published_top > 1 ? vm->program->published_top : vm->program->cells.count ? 1 : 0;
     size_t global_top = vm->program->published_global_top > 1 ? vm->program->published_global_top : 1;
@@ -806,35 +781,6 @@ static void sweep_symbols(VM *vm, Copy *c)
     vm->nsymbols = vm->program->published.count + t.count;
 }
 
-/* An isolate's own symbols are in its heap, with no cell or number (objects.c), and its table
-   holds them weakly: a collection keeps those it copied, and a value in the dictionary keeps
-   its symbol, as the dictionary is a root. A symbol that the fix-up replaced takes its value
-   to the published symbol's slot, if it has one. */
-static void sweep_heap_symbols(VM *vm, Copy *c)
-{
-    SymbolTable *old = &vm->own;
-    SymbolTable t = {NULL, 0, 0};
-    for (size_t i = 0; i < old->cap; i++) {
-        V s = old->slots[i];
-        if (!s || in_program(vm, ptr(s)))
-            continue;
-        if (ptr(s)[0] == V_FORWARD && !in_program(vm, ptr(ptr(s)[1])))
-            symbol_table_put(&t, ptr(s)[1]);
-    }
-    free(old->slots);
-    *old = t;
-    vm->nsymbols = vm->program->published.count + t.count;
-    (void)c;
-    if (!vm->local_count)
-        return;
-    for (size_t i = 0; i < vm->local_cap; i++) {
-        V k = vm->local_keys[i];
-        if (k && in_program(vm, ptr(k)) && symbol_global(k)) {
-            vm->globals[symbol_global(k)] = vm->local_values[i];
-            vm->local_values[i] = V_CLEARED; /* kept as an entry, never read: a number goes first */
-        }
-    }
-}
 
 /* Slots above the published top are dead by the call-window invariants.
    Slots at or above the dirty mark are already clear, so clearing up to the
@@ -858,19 +804,12 @@ static void collect_into(VM *vm, uint64_t *to)
     Copy c = {from, (size_t)(from_end - from), to, vm, NULL, 0, 0};
     for (V *p = vm->stack; p < vm->top; p++)
         copy_slot(&c, p);
-    /* The program's roots may point into its owner's heap alone, so only its collections scan
-       and sweep them; another context's heap holds no code (Program). */
+    /* Function cells hold only what is in the program space (program_promote), and the constant
+       slots of top-level code may point into its owner's heap alone, so only its collections
+       scan them; another context's heap holds no code (Program). */
     bool owner = vm->program->owner == vm;
-    if (owner)
-        copy_root_array(&c, &vm->program->cells);
-    for (size_t n = 1; n < vm->program->nglobals; n++)
+    for (size_t n = 1, top = __atomic_load_n(&vm->program->nglobals, __ATOMIC_ACQUIRE); n < top; n++)
         copy_slot(&c, &vm->globals[n]);
-    /* A symbol's hash comes from its name, so the dictionary needs no rehashing. */
-    for (size_t i = 0; i < vm->local_cap; i++)
-        if (vm->local_keys[i]) {
-            copy_slot(&c, &vm->local_keys[i]);
-            copy_slot(&c, &vm->local_values[i]);
-        }
     ffi_drain_roots(vm);
     for (size_t i = 0; i < vm->nforeign_roots; i++)
         copy_slot(&c, &vm->foreign_roots[i / FOREIGN_ROOT_CHUNK][i % FOREIGN_ROOT_CHUNK].value);
@@ -909,10 +848,8 @@ static void collect_into(VM *vm, uint64_t *to)
         }
     }
     vm->nguards = guarded;
-    if (owner)
+    if (owner && !vm->program->isolates) /* once isolates exist, every symbol stays (objects.c) */
         sweep_symbols(vm, &c);
-    else
-        sweep_heap_symbols(vm, &c);
     free(c.pending);
     sweep_large(vm);
     if (owner)
