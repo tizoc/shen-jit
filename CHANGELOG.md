@@ -24,7 +24,8 @@ All notable changes to this project are documented in this file. The format is b
   `http.wait` gives the result once `http.run` has returned. A handler goes by name, as `f` or `[f Arg ...]`, which
   is called with the arguments and then the request, rather than as a closure, and stops its server with
   `(http.stop (http.current-server))`. Connections left once `shutdown-grace` has passed are killed. The
-  `sqlite-http` example passes its database path as a handler argument.
+  `sqlite-http` example passes its database path as a handler argument, and keeps a write-ahead log, with a
+  connection held open while it serves.
 - A `blocking` foreign call passes byte buffers where they are, rather than copies, and the flag changes nothing now.
 - A definition whose code holds a value with no syntax, such as a vector put into a form given to `eval`, or a
   native `(const E)` whose value is one, is refused when it is defined.

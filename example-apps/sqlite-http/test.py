@@ -55,7 +55,7 @@ def server(executable, database):
         (http.listen "127.0.0.1" {port} counter-test.handle
           [[max-connections 4] [shutdown-grace 100] [head-timeout 1000]
            [body-timeout 1000] [body-limit 4096] [response-body-limit 65536]]))
-      (counter-app.await (value counter-test.server))
+      (counter-app.await {shen_string(database.as_posix())} (value counter-test.server))
       (output "APP-STATS ~A~%" (http.stats (value counter-test.server)))'''
     driver = database.parent / "test-driver.shen"
     driver.write_text(program)
