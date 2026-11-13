@@ -14,6 +14,8 @@ All notable changes to this project are documented in this file. The format is b
   and `shen-jit.kill` stops one at its next channel operation or `shen-jit.check-kill`, which the I/O library's socket
   waits call. Only the first isolate, the builder, defines, and the program is fixed while other isolates run:
   defining raises until they have ended. Symbols are the same in every isolate.
+- `(shen-jit.share X)` copies `X` once into storage outside every heap, which isolates read by pointer rather than
+  as copies; nothing changes it, as stores into its vectors and byte buffers raise, and it is never freed.
 - Grammars work in isolates: a load compiles a rule's loops after the form defining it, and prepares the streaming
   reads that code names. `shen-jit.after-form` registers a function to run after each form of a load.
 

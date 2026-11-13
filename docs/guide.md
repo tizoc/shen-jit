@@ -321,6 +321,11 @@ are other programs.
   ended, as a monitor tells. Define everything first, then spawn.
 - **Symbols are shared:** a symbol made in any isolate is the program's, and stays for as long as it runs, so names
   that come from outside, such as a request's, belong in strings.
+- **Sharing data:** `(shen-jit.share X)` copies `X` once, with its sharing and cycles, into storage outside every
+  heap, and gives the copy, which crosses to isolates by pointer rather than being copied again, as a large table
+  many isolates read would. Any isolate can share. Nothing changes a shared value: a store into one of its vectors
+  or byte buffers raises, and a shared dictionary cannot change. It is never freed. What cannot be sent cannot be
+  shared.
 - **Saving:** `shen-jit.save-executable` refuses while other isolates run, and in any isolate but the builder.
 
 ### Cleaning up

@@ -331,6 +331,16 @@ static size_t new_cell(VM *vm)
     return entry / 2;
 }
 
+/* Room in the program space for data any isolate shares (isolate.c, shen-jit.share), under the
+   lock that guards it while isolates make symbols there. */
+uint64_t *program_alloc_shared(VM *vm, size_t words)
+{
+    pthread_mutex_lock(&shared_lock);
+    uint64_t *at = program_alloc(vm, words);
+    pthread_mutex_unlock(&shared_lock);
+    return at;
+}
+
 /* Once isolates exist, a new symbol is published as it is made, its name copied into the program
    space, under the lock: every isolate sees one symbol for a name. */
 static V intern_shared(VM *vm, V name, uint64_t hash)

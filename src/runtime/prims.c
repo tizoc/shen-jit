@@ -360,7 +360,7 @@ bool sj_equal_at(V a, V b, unsigned depth)
                : is_fix(b) ? equal_fix_real(fixval(b), real_value(a))
                            : real_value(a) == real_value(b);
     if ((is_type(a, T_STRING) && is_type(b, T_STRING)) || (is_type(a, T_BYTES) && is_type(b, T_BYTES))) {
-        if (ptr(a)[0] != ptr(b)[0])
+        if ((ptr(a)[0] ^ ptr(b)[0]) & ~SHARED_BIT)
             return false;
         for (size_t i = 1, n = byte_object_words(hdr_size(ptr(a)[0])); i < n; i++)
             if (ptr(a)[i] != ptr(b)[i])
@@ -1710,6 +1710,8 @@ V sj_primitive(VM *vm, size_t index)
         if (!vector_index(a, b))
             return is_type(a, T_VECTOR) ? sj_raise_value(vm, "address->: ~S is not a valid index", b)
                                         : sj_raise_value(vm, "address->: ~S is not an absvector", a);
+        if (hdr_shared(ptr(a)[0]))
+            return sj_raise_value(vm, "address->: ~S is shared, and cannot change", a);
         ptr(a)[1 + fixval(b)] = vm->args[2];
         return a;
     case P_SET: {
@@ -1899,7 +1901,7 @@ V sj_primitive(VM *vm, size_t index)
         /* A new variable in the vector of bindings a, whose element 1 is the
            next offset: its binding becomes b, which marks none, and the
            offset moves on, as the kernel's shen.newpv does. */
-        if (!is_type(a, T_VECTOR) || hdr_size(ptr(a)[0]) < 2)
+        if (!is_type(a, T_VECTOR) || hdr_size(ptr(a)[0]) < 2 || hdr_shared(ptr(a)[0]))
             return sj_raise_value(vm, "shen-jit.newpv: ~S is not a vector of bindings", a);
         V n = ptr(a)[2];
         if (!is_fix(n) || fixval(n) < 0 || (uint64_t)fixval(n) >= hdr_size(ptr(a)[0]))
@@ -1914,7 +1916,7 @@ V sj_primitive(VM *vm, size_t index)
            that variable's, as the kernel's shen.gc does. */
         if (b != V_FALSE)
             return b;
-        if (!is_type(a, T_VECTOR) || hdr_size(ptr(a)[0]) < 2 || !is_fix(ptr(a)[2]))
+        if (!is_type(a, T_VECTOR) || hdr_size(ptr(a)[0]) < 2 || !is_fix(ptr(a)[2]) || hdr_shared(ptr(a)[0]))
             return sj_raise_value(vm, "shen-jit.gc: ~S is not a vector of bindings", a);
         ptr(a)[2] = fix(fixval(ptr(a)[2]) - 1);
         return V_FALSE;

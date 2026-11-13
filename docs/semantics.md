@@ -146,7 +146,8 @@ bytes; source text and files pass through as UTF-8 bytes without decoding.
   symbol `shen.fail!`, as in Shen/Scheme, so the `vector` override need not
   fill elements again.
 - `(<-address V N)` and `(address-> V N X)`: N must be within 0 to length-1;
-  `address->` returns V. Out-of-range indices and non-vectors raise errors.
+  `address->` returns V. Out-of-range indices and non-vectors raise errors, and so does
+  `address->` on a shared absvector, one that `shen-jit.share` made, which never changes.
 
 The kernel catches `pos` past the end in `shen.string->byte` and `value` of an
 unbound symbol in `bound?`, and programs catch such errors too, so they must be
@@ -155,7 +156,7 @@ cheap to raise and catch.
 ## 6. Equality and hashing
 
 `(= A B)` is true when A and B are numbers with the same mathematical value,
-strings or byte buffers with the same bytes, pairs whose heads and tails are `=`,
+strings or byte buffers with the same bytes, shared or not, pairs whose heads and tails are `=`,
 absvectors of the same length whose elements are `=`, pointers of the same kind and
 address that are both read only or both not, or the same symbol, special, procedure,
 stream or exception. Closures compare by identity.

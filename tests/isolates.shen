@@ -134,6 +134,24 @@
             _ (shen-jit.kill P)
          (pt.third (shen-jit.receive M))))
 
+(defstruct pt-point
+  x
+  (mutable y))
+
+\\ What an isolate gets that was shared: whether it is the sender's own, and what it reads in it.
+(define pt.shared-in
+  [V Out] -> (shen-jit.send Out [V (<-address V 2) (pt-point.y (<-address V 3))]))
+
+(define pt.share-here
+  [X Out] -> (shen-jit.send Out (shen-jit.share X)))
+
+\\ A loop over a buffer's bytes, which reads them through the registers it keeps for them.
+(define pt.sum-bytes
+  B I N Acc -> (if (= I N) Acc (pt.sum-bytes B (+ I 1) N (+ Acc (shen-jit.u8 B I)))))
+
+(define pt.fill-bytes
+  B I N -> (if (= I N) B (do (shen-jit.u8! B I 7) (pt.fill-bytes B (+ I 1) N))))
+
 (set *pt.global* builder)
 (put pt.twice pt.note builder)
 
@@ -344,6 +362,73 @@
 
 (pt.check "the builder cannot be killed" true
   (let Me (shen-jit.self) (shen-jit.same? Me (shen-jit.kill Me))))
+
+\\ ---------------------------------------------------------------------------------------------
+\\ Shared storage: a copy outside every heap, read by pointer in any isolate, which nothing changes.
+
+(pt.check "a shared value equals what was shared" [true true true]
+  (let V (@v 1 [a "b" 2.5] (@v x <>) <>)
+       S (shen-jit.share V)
+    [(= S V) (= V S) (= (hash S 1000) (hash V 1000))]))
+
+(pt.check "and keeps its sharing and cycles" [true true]
+  (let L [1 2]
+       V (@v L L 0 <>)
+       _ (address-> V 3 V)
+       S (shen-jit.share V)
+    [(shen-jit.same? (<-address S 1) (<-address S 2)) (shen-jit.same? S (<-address S 3))]))
+
+(pt.check "what is already shared or has no copy comes back as it is" [true true 5 a]
+  (let S (shen-jit.share [1 2])
+    [(shen-jit.same? S (shen-jit.share S)) (shen-jit.same? S (hd (shen-jit.share [S]))) (shen-jit.share 5)
+     (shen-jit.share a)]))
+
+(pt.check "a shared vector reads as any" [true true 3 x true]
+  (let S (shen-jit.share (@v x y z <>))
+    [(absvector? S) (vector? S) (limit S) (<-address S 1) (= (map (/. I (<-address S I)) [1 2 3]) [x y z])]))
+
+(pt.check "stores into a shared vector raise"
+  ["address->: <1 2> is shared, and cannot change" "address->: <1 2> is shared, and cannot change"
+   "shen-jit.newpv: <1 2> is not a vector of bindings"]
+  (let S (shen-jit.share (@v 1 2 <>))
+    [(pt.message (freeze (vector-> S 1 3))) (pt.message (freeze (address-> S 1 3)))
+     (pt.message (freeze (shen-jit.newpv S 0)))]))
+
+(pt.check "a shared dictionary reads, and cannot change" [1 "is shared, and cannot change" "is shared, and cannot change"]
+  (let D (shen.dict 8)
+       _ (shen.dict-> D a 1)
+       S (shen-jit.share D)
+    [(shen.<-dict S a) (pt.suffix (pt.message (freeze (shen.dict-> S b 2))) 28)
+     (pt.suffix (pt.message (freeze (shen.dict-rm S a))) 28)]))
+
+(pt.check "a shared byte buffer reads, in a loop too, and refuses stores" [104 532 532 true true true]
+  (let B (shen-jit.string->bytes "hello")
+       S (shen-jit.share B)
+    [(shen-jit.u8 S 0) (pt.sum-bytes S 0 5 0) (pt.sum-bytes B 0 5 0) (= S B)
+     (not (= (pt.message (freeze (shen-jit.u8! S 0 1))) none))
+     (not (= (pt.message (freeze (pt.fill-bytes S 0 5))) none))]))
+
+(pt.check "and copying into one raises" true
+  (not (= (pt.message (freeze (shen-jit.copy-bytes (shen-jit.share (shen-jit.bytes 4)) 0 (shen-jit.bytes 4) 0 4)))
+          none)))
+
+(pt.check "a shared record matches, reads, and refuses its setter" [true 1 2 true]
+  (let R (shen-jit.share (pt-point.make 1 2))
+    [(pt-point? R) (pt-point.x R) (pt-point.y R) (not (= (pt.message (freeze (pt-point.y-> R 3))) none))]))
+
+(pt.check "a shared value crosses to an isolate by pointer" [true y 9]
+  (let S (shen-jit.share (@v x y (pt-point.make 8 9) <>))
+       Got (pt.ask pt.shared-in S)
+    [(shen-jit.same? S (hd Got)) (hd (tl Got)) (pt.third Got)]))
+
+(pt.check "an isolate shares, and the builder reads it by pointer" [true [1 "two" 3.0]]
+  (let S (pt.ask pt.share-here [1 "two" 3.0])
+    [(shen-jit.same? S (shen-jit.share S)) S]))
+
+(pt.check "what cannot be sent cannot be shared"
+  ["#<procedure> cannot be sent: only the program's functions can" "can move only at spawn, through shen-jit.give"]
+  [(pt.message (freeze (shen-jit.share [(/. X X)])))
+   (pt.suffix (pt.message (freeze (shen-jit.share (shen-jit.channel 1)))) 45)])
 
 \\ ---------------------------------------------------------------------------------------------
 \\ Many at once, and many in turn.

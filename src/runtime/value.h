@@ -61,8 +61,10 @@ static inline bool is_ptr(V v)
 static inline uint64_t *ptr(V v) { return (uint64_t *)(uintptr_t)(v & ~(V)7); }
 static inline V tagged(const uint64_t *p, unsigned tag) { return (V)(uintptr_t)p | tag; }
 
-/* Object headers: 111 in the low bits, the type in bits 3-7 and a size field
-   in bits 8-63 whose meaning depends on the type. */
+/* Object headers: 111 in the low bits, the type in bits 3-6, bit 7 set in a vector or byte
+   buffer that is shared (shen-jit.share), and a size field in bits 8-63 whose meaning depends
+   on the type. Code that stores into a vector or buffer tests the whole low byte, which a shared
+   one fails, and code that reads tests it without bit 7, so neither costs an instruction. */
 enum {
     T_STRING = 1, /* size: byte length; bytes follow */
     T_BYTES,      /* size: byte length; raw bytes (bytecode, and byte buffers) */
@@ -76,8 +78,9 @@ enum {
     T_EXCEPTION,  /* [message][value]: the value goes before the message */
     T_STREAM,     /* [flags raw][handle raw] */
     T_POINTER,    /* [kind][owner][address raw][length raw]: a C pointer, read only if its size is 1; an image clears all but the kind */
-    T_LIMIT
+    T_LIMIT       /* at most 16, below the shared bit */
 };
+#define SHARED_BIT (UINT64_C(1) << 7)
 
 #define HEADER(type, size) \
     ((((uint64_t)(size)) << 8) | (((uint64_t)(type)) << 3) | TAG_HEADER)
@@ -85,7 +88,8 @@ enum {
 #define HEADER_SIZE_LIMIT (UINT64_C(1) << 56)
 
 static inline bool is_header(uint64_t w) { return (w & 7) == TAG_HEADER; }
-static inline unsigned hdr_type(uint64_t h) { return (unsigned)((h >> 3) & 31); }
+static inline unsigned hdr_type(uint64_t h) { return (unsigned)((h >> 3) & 15); }
+static inline bool hdr_shared(uint64_t h) { return (h & SHARED_BIT) != 0; }
 static inline uint64_t hdr_size(uint64_t h) { return h >> 8; }
 
 /* Word offsets of fields after the header. */

@@ -1640,6 +1640,38 @@ Reads and `GET /health` are unchanged. The example's 32 concurrent increments to
   sleeps 1 ms or more for a write of 76 µs, hence the spread at 8 at once. The fix is one isolate owning the database,
   to which the others send their writes, which also holds it open; left for later.
 
+### Shared storage (2026-11-13, Apple M3 Max, against the write-ahead log above)
+
+Step 5 of design D: `(shen-jit.share X)` copies `X` into the program space through the copier sends use, where any
+isolate reads it by pointer and nothing changes it. A fragment is laid out in one run of the program space, taken
+under the lock that guards making symbols there, so any isolate can share; the spec's rule that only the builder may
+share data holding its own symbols went with the one table of symbols. 77 lines more in the runtime, and the copier into a
+heap and into the program space are one function now.
+
+- **Immutable by a header bit, not a range test.** The spec had every store test whether its address lay in the
+  program space: the space's bounds, a subtraction and a comparison on every `address->` and byte store. Bit 7 of a
+  header, above the type's four bits (twelve types), marks a shared vector or byte buffer instead. Stores already
+  test the header's whole low byte, so a shared one fails that and goes to C, which refuses it; reads test it through
+  a mask, now without bit 7, with no more instructions. `absvector?`, which loads one byte, and `=` on two objects,
+  which compares headers before calling C, take one instruction more each, and a loop keeping a buffer's base and
+  length in registers compares once more on entry. C refuses stores through `is_read_only`, `address->`, Prolog's
+  binding vectors and dictionaries, whose entries are pairs that only they change.
+- **Cost:** benchmark suite, alternating with the build before, geometric means 1.00 and 0.99, no group outside 0.91
+  to 1.04. `absvector read` read 1.07 in one round; alone, alternating four times, 30 million reads of three
+  elements took 76 to 77 ms on both, `=` on two equal lists of a vector 29 to 30 against 30 to 32 ms, and 50
+  million `absvector?` 49.9 ms on both.
+- **Sharing:** a list of 40,000 numbers, strings and reals took 3.2 to 3.4 ms to share. A spawn with it there and back
+  took 49 to 56 µs shared, against 6.2 to 6.4 ms copied each way.
+- **Found on the way:** `tests/source_reference.py` counts calls outside functions in three of the runtime's files,
+  which include `value.h`, so a `_Static_assert` there that the type field stays below the bit counted three times; a
+  comment holds the rule instead. Two of the new isolate cases waited for ever on an isolate that had failed, the
+  suite's documented way of hanging.
+- **Checks:** 54 isolate cases, under a collection at every allocation too, an image that keeps shared data shared,
+  and ThreadSanitizer on the cases and on eight isolates sharing 2,000 values each while making new symbols, which
+  reports nothing.
+- **C may still write into a shared byte buffer it is given:** the FFI's `bytes` has no read-only form, and refusing
+  shared buffers there would refuse sending a shared response body to a socket; the documentation says C must not.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on
