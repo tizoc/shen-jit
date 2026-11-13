@@ -15,9 +15,10 @@
 \\   (handle.sweep)           runs it for each handle that has died, and gives how many.
 \\
 \\ Release runs in the next call to handle.wrap or handle.sweep after a collection that finds the
-\\ handle dead, in whichever isolate that is, and for every handle an isolate still holds as it
-\\ ends, as a server's connection might. A program that stops making handles and never calls
-\\ handle.sweep leaves the rest to the system when it ends.
+\\ handle dead, in whichever isolate that is, and as an isolate ends for each of its handles that
+\\ dies then, as a server's connection's do. A program that stops making handles and never calls
+\\ handle.sweep leaves the rest to the system when it ends, as does an isolate for handles its
+\\ globals still hold: close those before it ends.
 \\ An error from Release raises in handle.close and is dropped in handle.sweep, which has no caller
 \\ to tell.
 \\

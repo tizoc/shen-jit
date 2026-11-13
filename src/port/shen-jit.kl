@@ -758,7 +758,8 @@ and the REPL starts each input at 0."
 function of no arguments it registered with (shen-jit.at-end F), the last first.
 Then, in rounds, as collections find its guards' pointers dead, it runs each it
 registered with (shen-jit.at-guards-dead F), which takes their values off the
-list, as the handle library's sweep releases what its handles hold (isolate.c).
+list, as the handle library's sweep releases what its handles hold: what dies
+then, while its globals still hold the rest (isolate.c).
 An error from one is dropped. The builder's run only as an isolate's would:
 never, as the program ends with it."
 

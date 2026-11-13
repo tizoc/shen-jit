@@ -836,13 +836,17 @@ static void *isolate_main(void *argument)
     pthread_mutex_lock(&ps->lock);
     size_t numbered = __atomic_load_n(&program->nglobals, __ATOMIC_ACQUIRE);
     if (!vm || !vm_globals_commit(vm, ps->globals > numbered ? ps->globals : numbered)) {
-        failed_start(ps, p);
+        /* Its context goes before it counts as ended, as what a monitor tells may let the builder
+           end the program, which the context's end reads. */
         pthread_mutex_unlock(&ps->lock);
-        fputs("shen-jit: an isolate cannot start: out of memory\n", stderr);
         if (vm) {
             vm->isolate = NULL;
             vm_destroy(vm);
         }
+        pthread_mutex_lock(&ps->lock);
+        failed_start(ps, p);
+        pthread_mutex_unlock(&ps->lock);
+        fputs("shen-jit: an isolate cannot start: out of memory\n", stderr);
         return NULL;
     }
     p->vm = vm;
@@ -886,9 +890,10 @@ static void *isolate_main(void *argument)
     /* As it ends, what it registered with shen-jit.at-end runs, once. Then what its guards hold, as
        the handle library's handles, is released by what it registered with shen-jit.at-guards-dead,
        in rounds, as collections order them: a release may use another handle, which outlives it
-       until that release has run. Its globals then go, as they die with it, and the rounds go on,
-       so that what they held is released in that order too; what is left holds itself, as a
-       cycle, and goes at once. Errors there are dropped, as nothing is left to tell. */
+       until that release has run. Only what dies is released, so in that order, with the globals
+       a release may read still there: what its globals still hold is left to the system, as a
+       program's is when it ends. The argument slots of its last call are dead, and cleared first.
+       Errors there are dropped, as nothing is left to tell. */
     V ending = ps->ending ? *cell_function(vm, symbol_cell(ps->ending)) : V_CLEARED;
     if (is_proc(ending))
         jit_call(vm, ending, 0, NULL);
@@ -897,14 +902,9 @@ static void *isolate_main(void *argument)
     if (is_proc(run) && is_pair(sweepers)) {
         vm_root(vm, &sweepers);
         value = V_NIL;
+        for (size_t i = 0; i < sizeof vm->args / sizeof vm->args[0]; i++)
+            vm->args[i] = V_NIL;
         release_rounds(vm, run, &sweepers);
-        if (vm->nguards) {
-            for (size_t i = 1; i < vm->globals_committed; i++)
-                vm->globals[i] = V_CLEARED;
-            release_rounds(vm, run, &sweepers);
-        }
-        if (vm->nguards && vm_guards_all_dead(vm))
-            jit_call(vm, run, 1, &sweepers);
         vm_unroot(vm, 1);
     }
     vm_unroot(vm, 2);
@@ -1303,7 +1303,15 @@ static V monitor(VM *vm, Isolates *ps, V isolate)
         pthread_mutex_unlock(&ps->lock);
     }
     vm_unroot(vm, 3);
-    return r == V_CLEARED ? sj_raise(vm, "out of memory") : r;
+    if (r == V_CLEARED) { /* no endpoint reaches it: freed, and a registration left matches nothing */
+        pthread_mutex_lock(&ps->lock);
+        Channel *c = channel_at(ps, i, generation);
+        if (c)
+            channel_free(ps, c);
+        pthread_mutex_unlock(&ps->lock);
+        return sj_raise(vm, "out of memory");
+    }
+    return r;
 }
 
 /* (isolate.share V): a copy of V in the program space, which crosses to any isolate by pointer,

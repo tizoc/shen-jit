@@ -291,7 +291,10 @@
       (shen-jit.on-error (freeze (listed S P Stop)) (freeze (isolate.kill P)))))
 
 (define listed
-  S P Stop -> (let Cs [[P (isolate.monitor P) (channel.sender Stop)] | (server.connections S)]
+  S P Stop -> (let Sender (channel.sender Stop)
+                   M (isolate.monitor P)
+                   Cs (shen-jit.on-error (freeze [[P M Sender] | (server.connections S)])
+                                         (freeze (trap-error (channel.close M) (/. E skip))))
                    _ (server.connections-> S Cs)
                    _ (server.accepted-> S (+ 1 (server.accepted S)))
                 (if (> (length Cs) (server.peak S)) (server.peak-> S (length Cs)) true)))

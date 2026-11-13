@@ -92,6 +92,16 @@ uint64_t *program_alloc(VM *vm, size_t words)
     return at;
 }
 
+/* Gives back what the last program_alloc took, before anything was written there, as a step after
+   it failed: a save and the REPL's walk read every word of the space, and zeros taken for an odd
+   number of words would be read as pairs, out of step with what follows. */
+void program_unalloc(VM *vm, uint64_t *at, size_t words)
+{
+    Space *p = &vm->program->space;
+    if (at + words == p->objects_next)
+        p->objects_next = at;
+}
+
 /* A free slot holds 0, then the next free slot's index plus one. */
 uint64_t *program_symbol_slot(VM *vm)
 {
@@ -287,6 +297,8 @@ static uint64_t *copy_object(Promote *pr, V v)
     size_t words = obj_words(ptr(v)[0]);
     uint64_t *q = program_alloc(pr->vm, words);
     if (!q || !addr_map_put(&pr->moved, (uintptr_t)ptr(v), tagged(q, tag3(v)))) {
+        if (q)
+            program_unalloc(pr->vm, q, words);
         pr->failed = true;
         return NULL;
     }

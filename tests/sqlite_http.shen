@@ -99,4 +99,12 @@
         (freeze (counter-test.owned Db "POST" "/counters/after")))
       (counter-test.check "closing ends the owning isolate" true (freeze (counter-app.close Owner)))))
 
+\\ A request to an owning isolate that has gone raises rather than waits.
+(let Owner (counter-app.open (value counter-test.path))
+     Db (counter-app.db Owner)
+     _ (isolate.kill (hd (tl (tl Db))))
+     _ (channel.receive (hd (tl Owner)))
+  (counter-test.check "a request after the owning isolate has gone raises" true
+    (freeze (counter-test.raises? (freeze (counter-app.do Db [list]))))))
+
 (output "~A passed, ~A failed~%" (value counter-test.passed) (value counter-test.failed))

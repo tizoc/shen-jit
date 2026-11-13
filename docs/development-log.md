@@ -2044,6 +2044,30 @@ The same reviewer again, on the fixes above. Ten, all fixed; it found no speed-u
   ran on; its stream is closed then.
 - **design.md** still said that only the builder numbers globals, and that an isolate keeps a dictionary for the rest.
 
+### What a fourth review found (2026-11-13, Apple M3 Max, against the commit before)
+
+The same reviewer, on the fixes above: eight, all fixed, and again no speed-up worth its code.
+
+- **Only what dies is released as an isolate ends.** Dropping the isolate's globals so that the collector would order
+  what they held did too little and too much: the argument slots of its last call to C, which collections also scan,
+  kept a handle reached, so it went at the forced last step, newest first, out of order, where none was a cycle; and a
+  release run after the globals went lost what it read, as `mmap.close` lost `*os*` and never unmapped. Rejected:
+  ordering what is left by tracing which handles each release reaches, apart from the isolate's other roots, a
+  reachability pass of 60 to 100 lines for an isolate that ends holding handles in globals. Instead the argument slots
+  are cleared, the globals stay, nothing is forced, and what the globals still hold is left to the system, as a
+  program's is when it ends. A case whose last call is `shen-jit.pointer!` on the handle: unreleased without the
+  clearing, released with it.
+- **Allocation failures.** An isolate whose slots could not catch up was told ended before its context went, so an
+  embedder could end the program first, which that context's end read; the context goes first now. Growing a root
+  array or a shared symbol table kept a moved list of retired tables only if the next allocation also succeeded; it
+  is kept at once. Promotion and interning took program space, then failed before filling it, leaving zeros that a
+  save and the REPL's walk read as pairs, out of step for an odd size; what they took goes back, and interning's
+  symbol slot too. A monitor whose endpoint could not be made kept its channel; it is freed.
+- **The SQLite owner and the listener.** A request queued to an owning isolate that then ended waited for ever on its
+  reply; it waits on a monitor of the owning isolate too, and raises, with a case, and 64 writes from 8 clients took
+  a median of 6 ms before and after. The listener could leave a connection's monitor behind when listing it failed; it closes
+  it.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on

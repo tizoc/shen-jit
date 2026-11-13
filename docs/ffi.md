@@ -112,7 +112,7 @@ collection puts V on the list that `(shen-jit.pointers-dead)` gives, and Shen do
 `lib/handle.shen` does it in Shen alone, as `(handle.wrap M Release)`, `(handle.close H)` and `(handle.sweep)`, and counts what handles hold to bring a collection, since memory outside the heap brings none by itself.
 
 - **V must not refer to the guarded pointer,** or it stays reached. V may refer to another guarded pointer, which then outlives this one, so what uses another is released first.
-- **As an isolate ends,** its guarded pointers die with it: `(shen-jit.at-guards-dead F)` registers `F`, a function of no arguments, which the isolate then calls each time a collection has put values on the list, in rounds, as collections order them, its globals going before the last ones. `lib/handle.shen` registers `handle.sweep` so.
+- **As an isolate ends,** its guarded pointers die with it: `(shen-jit.at-guards-dead F)` registers `F`, a function of no arguments, which the isolate then calls each time a collection has put values on the list, in rounds, as collections order them. What its globals still hold is not released, as at a program's end. `lib/handle.shen` registers `handle.sweep` so.
 - **It says nothing of when.** It needs a collection to be seen at all, and a frame can hold, in a slot it has not written yet, what an earlier frame left there, so a pointer may outlast its last use.
 - **A call keeps its arguments.** A guarded pointer given to C stays reached until the call returns, even a `blocking` one. C that keeps the address after that must keep the pointer too.
 - **A saved image holds it dead,** with no owner and no guard, and its value is never handed back.

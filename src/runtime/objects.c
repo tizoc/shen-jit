@@ -236,19 +236,21 @@ bool symbol_table_put(SymbolTable *t, V sym)
 {
     if (2 * (t->count + 1) > t->cap) {
         size_t cap = t->cap ? 2 * t->cap : 1024;
-        V *slots = calloc(cap, sizeof *slots);
-        V **retired = t->shared ? realloc(t->retired, (t->nretired + 1) * sizeof *retired) : NULL;
-        if (!slots || (t->shared && !retired)) {
-            free(slots);
-            return false;
+        if (t->shared) { /* kept as soon as it moves, whatever fails next */
+            V **retired = realloc(t->retired, (t->nretired + 1) * sizeof *retired);
+            if (!retired)
+                return false;
+            t->retired = retired;
         }
+        V *slots = calloc(cap, sizeof *slots);
+        if (!slots)
+            return false;
         SymbolTable grown = {slots, cap, 0, false, NULL, 0};
         for (size_t i = 0; i < t->cap; i++)
             if (t->slots[i])
                 symbol_table_put(&grown, t->slots[i]);
         if (t->shared) {
-            retired[t->nretired++] = t->slots;
-            t->retired = retired;
+            t->retired[t->nretired++] = t->slots;
         } else {
             free(t->slots);
         }
@@ -362,6 +364,11 @@ static V intern_shared(VM *vm, V name, uint64_t hash)
     size_t words = obj_words(ptr(name)[0]);
     uint64_t *copy = p ? program_alloc(vm, words) : NULL;
     size_t cell = copy ? new_cell(vm) : SIZE_MAX;
+    if (p && cell == SIZE_MAX) { /* what it took goes back, as the space's walks read every word */
+        if (copy)
+            program_unalloc(vm, copy, words);
+        program_free_symbol(vm, p);
+    }
     if (cell != SIZE_MAX) {
         memcpy(copy, ptr(name), words * sizeof(uint64_t));
         p[0] = HEADER(T_SYMBOL, 0);

@@ -39,13 +39,13 @@
 (define counter-app.row-json
   [Name Value] -> [object ["name" Name] ["value" Value]])
 
-\\ The database belongs to one isolate, which holds it open and does each request's work in turn: SQLite
-\\ takes one writer at a time and makes the others retry, sleeping a millisecond or more for a write of
-\\ tens of microseconds. A handler sends the owning isolate [Job Reply] and waits for [ok Result] or
-\\ [error Message]. Db is the path and the owning isolate's send endpoint, [Path Requests], which crosses to each
-\\ connection's isolate; or a path alone, for which each job opens the database, as the tests do
-\\ without a server. An export reads through a connection of its own, which the log lets it hold while
-\\ the owning isolate writes.
+\\ The database belongs to one isolate, which holds it open and does each request's work in turn:
+\\ SQLite takes one writer at a time and makes the others retry, sleeping a millisecond or more for a
+\\ write of tens of microseconds. A handler sends the owning isolate [Job Reply] and waits for [ok
+\\ Result] or [error Message]. Db is the path, the owning isolate's send endpoint and the owning
+\\ isolate, [Path Requests Owner], which crosses to each connection's isolate; or a path alone, for
+\\ which each job opens the database, as the tests do without a server. An export reads through a
+\\ connection of its own, which the log lets it hold while the owning isolate writes.
 (define counter-app.job
   Db [list] -> (sqlite.query Db "SELECT name, value FROM counters ORDER BY name LIMIT 100" [])
   Db [value Name] -> (sqlite.query Db "SELECT value FROM counters WHERE name = ?" [Name])
@@ -64,23 +64,29 @@
   Db [delete Name] -> (sqlite.run Db "DELETE FROM counters WHERE name = ?" [Name]))
 
 (define counter-app.do
-  [_ Requests] Job -> (counter-app.ask Requests Job)
+  [_ Requests Owner] Job -> (counter-app.ask Requests Owner Job)
   Path Job -> (sqlite.with-database Path (/. Db (counter-app.job Db Job))))
 
 (define counter-app.path
-  [Path _] -> Path
+  [Path _ _] -> Path
   Path -> Path)
 
+\\ It waits for the reply or the owning isolate's end, so that a handler does not wait for ever on an
+\\ owner that has gone, as one whose database could not be opened.
 (define counter-app.ask
-  Requests Job -> (let R (channel.new 1)
-                       _ (channel.send Requests [Job (channel.sender R)])
-                       Got (channel.receive R)
-                       _ (channel.close R)
-                    (counter-app.answer Got)))
+  Requests Owner Job ->
+    (let R (channel.new 1)
+         M (shen-jit.on-error (freeze (isolate.monitor Owner)) (freeze (channel.close R)))
+         Got (shen-jit.finally (freeze (do (channel.send Requests [Job (channel.sender R)])
+                                           (channel.receive-any [R M])))
+                               (freeze (do (trap-error (channel.close R) (/. X skip))
+                                           (trap-error (channel.close M) (/. X skip)))))
+      (counter-app.answer R Got)))
 
 (define counter-app.answer
-  [ok Result] -> Result
-  [error Message] -> (simple-error Message))
+  R [R [ok Result]] -> Result
+  R [R [error Message]] -> (simple-error Message)
+  _ _ -> (error "the database's owning isolate has ended"))
 
 (define counter-app.owner
   [Path Requests] -> (sqlite.with-database Path (/. Db (counter-app.serve-jobs Db Requests))))
@@ -108,14 +114,14 @@
                I (shen-jit.on-error (freeze (isolate.spawn counter-app.owner [Path (channel.give R)]))
                                     (freeze (channel.close R)))
                Monitor (shen-jit.on-error (freeze (isolate.monitor I)) (freeze (channel.close Requests)))
-            [[Path Requests] Monitor]))
+            [[Path Requests I] Monitor]))
 
 (define counter-app.db
   [Db _] -> Db)
 
 \\ Ends the owning isolate's stream, which it reads to its end, and waits for it to close the database.
 (define counter-app.close
-  [[_ Requests] Monitor] -> (do (channel.close Requests) (channel.receive Monitor) (channel.close Monitor) true))
+  [[_ Requests _] Monitor] -> (do (channel.close Requests) (channel.receive Monitor) (channel.close Monitor) true))
 
 (define counter-app.list
   Db -> (counter-app.json 200 (map (function counter-app.row-json) (counter-app.do Db [list]))))

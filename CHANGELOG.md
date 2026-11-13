@@ -40,7 +40,8 @@ All notable changes to this project are documented in this file. The format is b
   reads that code names. `shen-jit.after-form` registers a function to run after each form of a load, and
   `shen-jit.at-end` one to run once as the registering isolate ends, and `shen-jit.at-guards-dead` one to run then
   as its guarded pointers die, in rounds.
-- The handle library releases what an isolate's handles still hold as the isolate ends.
+- The handle library releases what an isolate's handles hold as the isolate ends, but for handles its globals still
+  hold, which are left to the system, as a program's are when it ends.
 
 ### Changed
 

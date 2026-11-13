@@ -278,6 +278,7 @@ static inline bool in_symbols(const VM *vm, const void *at)
 bool program_init(Space *p);
 void program_release(Space *p);
 uint64_t *program_alloc(VM *vm, size_t words);
+void program_unalloc(VM *vm, uint64_t *at, size_t words);
 uint64_t *program_symbol_slot(VM *vm);
 void program_free_symbol(VM *vm, uint64_t *slot);
 bool program_reserve(VM *vm, size_t symbol_words, size_t object_words);
@@ -307,7 +308,6 @@ V sj_isolate(VM *vm);
 bool isolates_commit_globals(Program *program, size_t n);
 bool isolates_free(Program *program);
 bool isolates_running(Program *program);
-bool vm_guards_all_dead(VM *vm);
 VM *program_exiting(void);
 void program_compile_lock(VM *vm);
 void program_compile_unlock(VM *vm);

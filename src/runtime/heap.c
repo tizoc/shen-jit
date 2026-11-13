@@ -277,18 +277,19 @@ bool ra_push(RootArray *ra, V v, size_t *index)
     if (ra->count == ra->nchunks * RA_CHUNK) {
         if (ra->nchunks == ra->chunks_cap) {
             size_t cap = ra->chunks_cap ? 2 * ra->chunks_cap : 8;
-            V **chunks = malloc(cap * sizeof *chunks);
-            V ***retired = ra->chunks ? realloc(ra->retired, (ra->nretired + 1) * sizeof *retired) : ra->retired;
-            if (!chunks || (ra->chunks && !retired)) {
-                free(chunks);
-                return false;
-            }
-            if (ra->nchunks)
-                memcpy(chunks, ra->chunks, ra->nchunks * sizeof *chunks);
-            if (ra->chunks) {
-                retired[ra->nretired++] = ra->chunks;
+            if (ra->chunks) { /* kept as soon as it moves, whatever fails next */
+                V ***retired = realloc(ra->retired, (ra->nretired + 1) * sizeof *retired);
+                if (!retired)
+                    return false;
                 ra->retired = retired;
             }
+            V **chunks = malloc(cap * sizeof *chunks);
+            if (!chunks)
+                return false;
+            if (ra->nchunks)
+                memcpy(chunks, ra->chunks, ra->nchunks * sizeof *chunks);
+            if (ra->chunks)
+                ra->retired[ra->nretired++] = ra->chunks;
             __atomic_store_n(&ra->chunks, chunks, __ATOMIC_RELEASE);
             ra->chunks_cap = cap;
         }
@@ -332,32 +333,6 @@ bool vm_guard(VM *vm, V pointer, V value)
         vm->guards_cap = cap;
     }
     vm->guards[vm->nguards++] = (Guard){pointer, value};
-    return true;
-}
-
-/* Every guard counts as dead: its value goes on the list that shen-jit.pointers-dead gives, as when a
-   collection finds its pointer unreached, the newest first. An isolate does this as it ends. A
-   collection made here may move some there itself, which then go once. */
-bool vm_guards_all_dead(VM *vm)
-{
-    while (vm->nguards) {
-        V pair = make_pair(vm, V_NIL, V_NIL);
-        if (pair == V_CLEARED)
-            return false;
-        if (!vm->nguards)
-            break;
-        ptr(pair)[0] = vm->guards[--vm->nguards].value;
-        ptr(pair)[1] = vm->dead;
-        vm->dead = pair;
-    }
-    V newest = V_NIL; /* the list holds the oldest first: turned around in place */
-    for (V l = vm->dead; l != V_NIL;) {
-        V next = ptr(l)[1];
-        ptr(l)[1] = newest;
-        newest = l;
-        l = next;
-    }
-    vm->dead = newest;
     return true;
 }
 

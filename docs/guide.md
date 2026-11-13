@@ -831,7 +831,8 @@ shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l lib/mmap.shen -l lib/handle.
 ```
 
 - **It is released some time later:** in the next `handle.wrap` or `(handle.sweep)` after a collection finds it dead, or
-  as the isolate that holds it ends, and not at all if the program ends first, which leaves it to the system. Handles count what they hold, so that memory
+  as the isolate that holds it ends, unless one of the isolate's globals holds it then; and not at all if the program
+  ends first, which leaves it to the system. Handles count what they hold, so that memory
   outside the heap brings collections too.
 - **`(handle.close H)` releases it now,** for what should not wait: on Windows, a mapped file cannot be deleted. H then
   raises when used, and closing it again does nothing.

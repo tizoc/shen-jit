@@ -389,8 +389,9 @@ closed, so that nothing waits on it for ever. An isolate that ends first runs, o
 registered with `shen-jit.at-end`; then what it registered with `shen-jit.at-guards-dead`, as the
 handle library's sweep, in rounds: a collection finds dead the guarded pointers nothing reaches, and
 a release may use another handle, which outlives it until that release has run and so dies in a
-later round. Its globals then go, as they die with it, and the rounds go on, so that what they held
-is released in that order too; only a cycle is left, which goes at once. Then it tells its monitors,
+later round. Only what dies is released, so always in that order and with the globals a release may
+read still there; the argument slots of its last call to C are cleared first, as they are dead. What
+its globals still hold is left to the system, as a program's is when it ends. Then it tells its monitors,
 closes its files
 and the channels it receives on, and frees its context; its record keeps why it ended, as a symbol
 or an error's text, so that a monitor that comes after, as one made just after a spawn can, is
