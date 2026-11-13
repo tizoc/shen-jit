@@ -1144,6 +1144,7 @@ static void emit_memory_caches(Emit *e)
         sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));
         struct sljit_jump *bytes = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(T_BYTES << 3 | TAG_HEADER));
         struct sljit_jump *string = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(T_STRING << 3 | TAG_HEADER));
+        struct sljit_jump *shared = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(SHARED_BIT | T_BYTES << 3 | TAG_HEADER));
         struct sljit_jump *pointer = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(T_POINTER << 3 | TAG_HEADER));
         sljit_emit_op1(c, SLJIT_MOV, R1, IMM(0));
         sljit_emit_op1(c, SLJIT_MOV, R3, IMM(0));
@@ -1161,7 +1162,9 @@ static void emit_memory_caches(Emit *e)
         sljit_emit_op2(c, SLJIT_LSHR, R3, R2, IMM(8));
         sljit_emit_op1(c, SLJIT_MOV, R4, R3);
         struct sljit_jump *based = sljit_emit_jump(c, SLJIT_JUMP);
-        sljit_set_label(string, sljit_emit_label(c)); /* read only: no store length */
+        struct sljit_label *read_only = sljit_emit_label(c); /* no store length */
+        sljit_set_label(string, read_only);
+        sljit_set_label(shared, read_only);
         sljit_emit_op2(c, SLJIT_LSHR, R3, R2, IMM(8));
         sljit_emit_op1(c, SLJIT_MOV, R4, IMM(0));
         sljit_set_label(based, sljit_emit_label(c));
@@ -1923,7 +1926,7 @@ static Test emit_type_test(Emit *e, uint32_t prim, const uint32_t *arg)
     if (prim == P_TAGGEDP) {
         t.no[0] = tag_cmp(c, SLJIT_NOT_EQUAL, R1, r, 0, TAG_OBJECT);
         sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(r), -TAG_OBJECT);
-        sljit_emit_op2(c, SLJIT_AND, R1, R2, IMM(0xFF));
+        sljit_emit_op2(c, SLJIT_AND, R1, R2, IMM(0xFF & ~SHARED_BIT));
         t.no[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(T_VECTOR << 3 | TAG_HEADER));
         t.no[2] = sljit_emit_cmp(c, SLJIT_LESS, R2, IMM(1 << 8)); /* length 0 */
         sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, arg[1]));
@@ -1938,8 +1941,11 @@ static Test emit_type_test(Emit *e, uint32_t prim, const uint32_t *arg)
     t.no[0] = tag_cmp(c, SLJIT_NOT_EQUAL, R1, r, 0, tag);
     if (tag == TAG_OBJECT) {
         unsigned type = prim == P_ABSVECTORP ? T_VECTOR : prim == P_STRINGP ? T_STRING : T_REAL;
-        /* The header's low byte holds its tag and the type. */
+        /* The header's low byte holds its tag and the type, and for a vector whether it is
+           shared. */
         sljit_emit_op1(c, SLJIT_MOV_U8, R1, SLJIT_MEM1(r), -TAG_OBJECT);
+        if (type == T_VECTOR)
+            sljit_emit_op2(c, SLJIT_AND, R1, R1, IMM(0xFF & ~SHARED_BIT));
         t.no[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(type << 3 | TAG_HEADER));
     }
     return t;
@@ -1955,7 +1961,7 @@ static struct sljit_jump *emit_vector_test(Emit *e, const uint32_t *arg, struct 
     sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, arg[0]));
     no[0] = tag_cmp(c, SLJIT_NOT_EQUAL, R1, R0, TAG_OBJECT);
     sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), -TAG_OBJECT);
-    sljit_emit_op2(c, SLJIT_AND, R1, R2, IMM(0xFF));
+    sljit_emit_op2(c, SLJIT_AND, R1, R2, IMM(0xFF & ~SHARED_BIT));
     no[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(T_VECTOR << 3 | TAG_HEADER));
     no[2] = sljit_emit_cmp(c, SLJIT_LESS, R2, IMM(1 << 8)); /* length 0 */
     sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM1(SLJIT_R0), sizeof(V) - TAG_OBJECT);
@@ -2016,10 +2022,11 @@ static Slow *emit_memory_base(Emit *e, uint32_t memory, SlowKind kind, bool stor
     sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, memory));
     Slow *slow = slow_path(e, kind, tag_cmp(c, SLJIT_NOT_EQUAL, R2, R0, TAG_OBJECT));
     sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), -TAG_OBJECT);
-    /* A read takes a string too, laid out as a byte buffer: the mask leaves the type bits in
-       which the two differ, and of the four types it lets through, only those two are ever
-       objects. A store takes a byte buffer alone; a string goes to C, which refuses it. */
-    uint64_t mask = store ? 0xFF : 0xE7;
+    /* A read takes a string too, laid out as a byte buffer, and a shared buffer: the mask leaves
+       out the type bits in which the two differ and the shared bit, and of the types it lets
+       through, only those are ever objects. A store takes an unshared byte buffer alone; a string
+       or a shared buffer goes to C, which refuses it. */
+    uint64_t mask = store ? 0xFF : 0xE7 & ~SHARED_BIT;
     sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(mask));
     Slow *pointer = slow_path(e, SLOW_POINTER,
                               sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM((T_BYTES << 3 | TAG_HEADER) & mask)));
@@ -2663,7 +2670,8 @@ static void emit_prim(Emit *e, const uint32_t *p)
         slow = slow_path(e, SLOW_PRIM, tag_cmp(c, SLJIT_NOT_EQUAL, R2, R0, TAG_OBJECT));
         slow->catch_label = quiet_catch(e); /* C raises wherever these checks fail */
         sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), -TAG_OBJECT);
-        sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));
+        /* A read takes a shared vector too; a store sends one to C, which refuses it. */
+        sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(prim == P_GET_ADDRESS ? 0xFF & ~SHARED_BIT : 0xFF));
         slow->from[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM(T_VECTOR << 3 | TAG_HEADER));
         sljit_emit_op2(c, SLJIT_LSHR, R2, R2, IMM(8));
         if (fixnum_operand(e, arg[1]) && (uint64_t)*operand_cell(e, arg[1]) < fix(4096)) {
@@ -3343,7 +3351,10 @@ static void emit_slow_paths(Emit *e)
                 differ[0] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R2, IMM(T_REAL << 3 | TAG_HEADER));
                 struct sljit_jump *real = sljit_emit_jump(c, SLJIT_JUMP);
                 sljit_set_label(two, sljit_emit_label(c));
-                differ[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R2, SLJIT_MEM1(SLJIT_R1), -TAG_OBJECT);
+                /* A shared vector or buffer equals an unshared one with the same contents. */
+                sljit_emit_op2(c, SLJIT_XOR, R3, R2, SLJIT_MEM1(SLJIT_R1), -TAG_OBJECT);
+                sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R3, IMM(~(sljit_sw)SHARED_BIT));
+                differ[1] = sljit_emit_jump(c, SLJIT_NOT_ZERO);
                 /* Two strings with the same header: compare the words, whose
                    padding is always 0. */
                 sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));

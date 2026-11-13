@@ -222,7 +222,11 @@ A pointer with a length is memory outside the heap ([ffi.md](ffi.md)), and all o
 length. `u8`, `u16`, `u32`, `s32`, `f64`, `bytes-length` and the stores `u8!`, `u16!`, `u32!` and `f64!` compile
 inline for both; the others call C for both. `f64` allocates where it reads, and its real holds the word as it
 is in memory, so it takes no floating point. `f64!` takes a real inline, and leaves an integer to C. A read-only
-pointer differs in its header, which a store tests whole, so no other access pays for it.
+pointer differs in its header, which a store tests whole, so no other access pays for it. So does a shared buffer
+or vector (`shen-jit.share`), by a bit of its header's type field: a store tests the whole byte and sends one to C,
+which refuses it, and a read masks the bit out, as it masks a string's type, with no more instructions. Only
+`absvector?`, which tests one byte it loads, and `=` on two objects, which tests their headers before calling C, take
+one more.
 
 A string is memory too, which they only read: it is laid out as a byte buffer, so a read takes
 either inline, the type tested through a mask with no more instructions, and a store into a

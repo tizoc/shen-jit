@@ -283,6 +283,7 @@ static inline bool in_symbols(const VM *vm, const void *at)
 bool program_init(Space *p);
 void program_release(Space *p);
 uint64_t *program_alloc(VM *vm, size_t words);
+uint64_t *program_alloc_shared(VM *vm, size_t words);
 uint64_t *program_symbol_slot(VM *vm);
 void program_free_symbol(VM *vm, uint64_t *slot);
 bool program_reserve(VM *vm, size_t symbol_words, size_t object_words);
@@ -426,11 +427,11 @@ static inline bool memory_of(V v, char **base, size_t *length)
     return false;
 }
 
-/* Whether stores to v are refused: a string, which never changes, a shared view, or a pointer
+/* Whether stores to v are refused: a string, which never changes, a shared buffer, or a pointer
    marked so, by the size in its header. */
 static inline bool is_read_only(V v)
 {
-    return obj_type(v) == T_STRING ||
+    return obj_type(v) == T_STRING || hdr_shared(ptr(v)[0]) ||
            (obj_type(v) == T_POINTER && hdr_size(ptr(v)[0]));
 }
 

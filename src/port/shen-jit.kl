@@ -127,7 +127,7 @@ arity. A name with no arity but a lambda form keeps that form."
                   (shen-jit.make-form F Arity)
                   (simple-error (cn "fn: " (shen.app F " is undefined
 " shen.a))))
-              (shen-jit.lambda-form F Form))))))
+              Form)))))
 
 (defun shen-jit.make-form (F N)
   (let Form (if (shen-jit.builder?) (eval-kl (shen-jit.curried (cons F ()) N)) (shen-jit.template F N))
@@ -173,12 +173,6 @@ function of that name."
 (defun shen.update-lambdatable (F N)
   (do (set shen.*gensym* (+ (value shen.*gensym*) N))
       (do (unput F shen.lambda-form (value *property-vector*)) N)))
-
-(defun shen-jit.lambda-form (F Form)
-  (if (shen-jit.tagged? Form shen-jit.lazy-form)
-      (let Lambda (eval-kl (shen-jit.curried (cons F ()) (<-address Form 1)))
-        (do (shen.set-lambda-form-entry (cons F Lambda)) Lambda))
-      Form))
 
 (defun shen-jit.curried (Call N)
   (if (= N 0)
@@ -563,6 +557,12 @@ and then, so that a kill reaches it: it raises killed if one is pending."
 
 (defun shen-jit.check-kill () (shen-jit.isolate 12 () ()))
 
+"(shen-jit.share V) copies V into storage outside every heap, where any isolate
+reads it by pointer rather than as a copy, and nothing changes it: a store into
+one of its vectors or byte buffers raises. It is never freed."
+
+(defun shen-jit.share (V) (shen-jit.isolate 13 V ()))
+
 (defun shen-jit.end? (X) (= X shen-jit.end-of-stream))
 
 "After each form a load evaluates. A library can do then what needs the forms
@@ -585,8 +585,18 @@ and the REPL starts each input at 0."
   (shen.for-each (lambda Form (do (pr (shen.app (eval-kl (shen.shen->kl Form)) "
 " shen.s) (stoutput)) (shen-jit.form-ended))) Forms))
 
-(defun shen.work-through (V1307) (cond ((= () V1307) ()) ((and (cons? V1307) (and (cons? (tl V1307)) (and (cons? (tl (tl V1307))) (= (hd (tl V1307)) (intern ":"))))) (let W1308 (shen.typecheck (hd V1307) (hd (tl (tl V1307)))) (if (= W1308 false) (shen.type-error) (let W1309 (eval-kl (shen.shen->kl (hd V1307))) (let W1310 (pr (shen.app W1309 (cn " : " (shen.app (shen.pretty-type W1308) "
-" shen.r)) shen.s) (stoutput)) (do (shen-jit.form-ended) (shen.work-through (tl (tl (tl V1307)))))))))) ((cons? V1307) (shen.work-through (cons (hd V1307) (cons (intern ":") (cons A (tl V1307)))))) (true (simple-error "implementation error in shen.work-through"))))
+(defun shen.work-through (Forms)
+  (cond ((= () Forms) ())
+        ((and (cons? Forms) (and (cons? (tl Forms)) (and (cons? (tl (tl Forms))) (= (hd (tl Forms)) (intern ":")))))
+         (let Type (shen.typecheck (hd Forms) (hd (tl (tl Forms))))
+           (if (= Type false)
+               (shen.type-error)
+               (let Value (eval-kl (shen.shen->kl (hd Forms)))
+                 (do (pr (shen.app Value (cn " : " (shen.app (shen.pretty-type Type) "
+" shen.r)) shen.s) (stoutput))
+                     (do (shen-jit.form-ended) (shen.work-through (tl (tl (tl Forms))))))))))
+        ((cons? Forms) (shen.work-through (cons (hd Forms) (cons (intern ":") (cons A (tl Forms))))))
+        (true (simple-error "implementation error in shen.work-through"))))
 
 (defun shen-jit.load-depth () (trap-error (value shen-jit.*load-depth*) (lambda E 0)))
 
@@ -707,11 +717,11 @@ which would otherwise compile its calls to them as look-ups with fn."
           (cons shen-jit.send (cons 2 (cons shen-jit.receive (cons 1 (cons shen-jit.receive-any (cons 1
             (cons shen-jit.close (cons 1 (cons shen-jit.give (cons 1 (cons shen-jit.monitor (cons 1
               (cons shen-jit.kill (cons 1 (cons shen-jit.self (cons 0 (cons shen-jit.end? (cons 1
-              (cons shen-jit.wait-any (cons 2 (cons shen-jit.check-kill (cons 0
+              (cons shen-jit.wait-any (cons 2 (cons shen-jit.check-kill (cons 0 (cons shen-jit.share (cons 1
                 (cons shen-jit.after-form (cons 1 (cons shen-jit.loading? (cons 0
                 (cons shen-jit.print-isolate (cons 1 (cons shen-jit.print-receiver (cons 1
                   (cons shen-jit.print-sender (cons 1 (cons shen-jit.print-given (cons 1
-                    ())))))))))))))))))))))))))))))))))))))))))
+                    ())))))))))))))))))))))))))))))))))))))))))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-2 (cons a (cons b ()))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-3 (cons a (cons b (cons c ())))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-4 (cons a (cons b (cons c (cons d ()))))))

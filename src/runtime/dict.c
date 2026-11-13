@@ -92,6 +92,8 @@ static bool grow(VM *vm, size_t n)
 V sj_dict_put(VM *vm)
 {
     size_t n;
+    if (is_object(vm->args[0]) && hdr_shared(ptr(vm->args[0])[0]))
+        return sj_raise_value(vm, "~S is shared, and cannot change", vm->args[0]);
     V *b = buckets(vm->args[0], &n);
     uint64_t h = sj_hash(vm->args[1]);
     V e = b ? find(b, n, vm->args[1], h) : V_CLEARED;
@@ -127,6 +129,8 @@ V sj_dict_remove(VM *vm)
 {
     size_t n;
     V d = vm->args[0], k = vm->args[1];
+    if (is_object(d) && hdr_shared(ptr(d)[0]))
+        return sj_raise_value(vm, "~S is shared, and cannot change", d);
     V *b = buckets(d, &n);
     if (!b)
         return sj_raise_value(vm, "~S is not a dictionary", vm->args[0]);

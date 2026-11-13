@@ -380,51 +380,71 @@ static Fragment *fragment_out(VM *vm, V v, bool spawn, size_t **given, size_t *n
 }
 
 /* ---------------------------------------------------------------------------------------------
-   Copying in: a fragment into this context's heap, with room for all of it made first, so that
-   nothing moves while it is copied. */
+   Copying in: a fragment into words laid out from `to`, as many as it has, breadth first: into
+   this context's heap, with room for all of it made first, so that nothing moves while it is
+   copied, or into the program space, shared, with its vectors and byte buffers marked so. */
 
-static V in_value(VM *vm, Map *map, V v)
+typedef struct {
+    VM *vm;
+    Map map;
+    uint64_t *next;
+    bool shared, failed;
+} In;
+
+static V in_value(In *in, V v)
 {
-    if (!is_ptr(v) || in_program(vm, ptr(v)))
+    if (!is_ptr(v) || in_program(in->vm, ptr(v)))
         return v;
-    V known = map_get(map, (uintptr_t)ptr(v));
+    V known = map_get(&in->map, (uintptr_t)ptr(v));
     if (known)
         return known;
     size_t words = is_pair(v) ? 2 : obj_words(ptr(v)[0]);
-    uint64_t *q = vm_alloc(vm, words); /* there is room: this does not collect */
+    uint64_t *q = in->next;
+    in->next += words;
     memcpy(q, ptr(v), words * sizeof(uint64_t));
+    if (in->shared && !is_pair(v) && (hdr_type(q[0]) == T_VECTOR || hdr_type(q[0]) == T_BYTES))
+        q[0] |= SHARED_BIT;
     V copy = tagged(q, tag3(v));
-    map_put(map, (uintptr_t)ptr(v), copy);
+    in->failed |= !map_put(&in->map, (uintptr_t)ptr(v), copy);
     return copy;
+}
+
+static V copy_fragment(VM *vm, Fragment *f, uint64_t *to, bool shared)
+{
+    In in = {vm, {NULL, NULL, 0, 0}, to, shared, false};
+    V root = in_value(&in, f->root);
+    for (uint64_t *s = to; s < in.next; s += fragment_object_words(s)) {
+        if (is_header(*s)) {
+            size_t first, count;
+            obj_values(*s, &first, &count);
+            for (size_t i = 0; i < count; i++)
+                s[first + i] = in_value(&in, s[first + i]);
+        } else {
+            s[0] = in_value(&in, s[0]);
+            s[1] = in_value(&in, s[1]);
+        }
+    }
+    free(in.map.keys);
+    free(in.map.values);
+    return in.failed ? V_CLEARED : root;
 }
 
 static V fragment_in(VM *vm, Fragment *f)
 {
     if (!is_ptr(f->root) || in_program(vm, ptr(f->root)))
         return f->root;
-    Map map = {NULL, NULL, 0, 0};
     V root = V_CLEARED;
     size_t stress = vm->stress;
     vm->stress = 0; /* the room made here is used here */
     if (((size_t)(vm->hlimit - vm->hp) >= f->words || vm_collect(vm, f->words)) &&
         (size_t)(vm->hlimit - vm->hp) >= f->words) {
         uint64_t *start = vm->hp;
-        root = in_value(vm, &map, f->root);
-        for (uint64_t *s = start; s < vm->hp; s += fragment_object_words(s)) {
-            if (is_header(*s)) {
-                size_t first, count;
-                obj_values(*s, &first, &count);
-                for (size_t i = 0; i < count; i++)
-                    s[first + i] = in_value(vm, &map, s[first + i]);
-            } else {
-                s[0] = in_value(vm, &map, s[0]);
-                s[1] = in_value(vm, &map, s[1]);
-            }
-        }
+        vm->hp += f->words;
+        root = copy_fragment(vm, f, start, false);
+        if (root == V_CLEARED) /* what was copied is dropped, as nothing reaches it */
+            vm->hp = start;
     }
     vm->stress = stress;
-    free(map.keys);
-    free(map.values);
     return root == V_CLEARED ? sj_raise(vm, "out of memory") : root;
 }
 
@@ -837,7 +857,7 @@ static Isolate *new_isolate(Isolates *ps, Program *program)
    The primitive: (shen-jit.isolate Op A B), which the port's shen-jit.spawn and the rest call. */
 
 enum { OP_SPAWN, OP_CHANNEL, OP_SENDER, OP_SEND, OP_RECEIVE, OP_RECEIVE_ANY, OP_CLOSE, OP_GIVE, OP_MONITOR,
-       OP_KILL, OP_SELF, OP_WAIT_ANY, OP_CHECK_KILL };
+       OP_KILL, OP_SELF, OP_WAIT_ANY, OP_CHECK_KILL, OP_SHARE };
 
 static V raise_copy(VM *vm, const char *error, V offender)
 {
@@ -1119,6 +1139,24 @@ static V monitor(VM *vm, Isolates *ps, V isolate)
     return r == V_CLEARED ? sj_raise(vm, "out of memory") : r;
 }
 
+/* (shen-jit.share V): a copy of V in the program space, which crosses to any isolate by pointer,
+   and which nothing changes, as stores refuse its vectors and byte buffers; it is never freed. */
+static V share(VM *vm, V v)
+{
+    const char *error = NULL;
+    V offender = V_NIL;
+    Fragment *f = fragment_out(vm, v, false, NULL, NULL, &error, &offender);
+    if (!f)
+        return raise_copy(vm, error, offender);
+    V root = f->root;
+    if (is_ptr(root) && !in_program(vm, ptr(root))) {
+        uint64_t *to = program_alloc_shared(vm, f->words);
+        root = to ? copy_fragment(vm, f, to, true) : V_CLEARED;
+    }
+    fragment_free(f);
+    return root == V_CLEARED ? sj_raise(vm, "out of memory") : root;
+}
+
 /* With the lock held: whether any of the endpoints has a message or is closed, or has gone. */
 static bool any_ready(Isolates *ps, V endpoints)
 {
@@ -1257,6 +1295,7 @@ V sj_isolate(VM *vm)
     }
     case OP_SELF: return handle(vm, ps->tag_isolate, vm->isolate->index, vm->isolate->generation);
     case OP_WAIT_ANY: return wait_any(vm, ps, a, b);
+    case OP_SHARE: return share(vm, a);
     default: return sj_raise_value(vm, "shen-jit.isolate: ~S is not an operation", op);
     }
 }

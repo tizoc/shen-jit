@@ -863,32 +863,33 @@ check save-exe-goes-on "$dir/bad.out" "still here"
 
 # Isolates beside the program (tests/isolates.shen has the rest).
 # An isolate that ends the program while the REPL waits for input.
-{ printf '(define ex X -> (shen-jit.exit 3))\n(shen-jit.spawn ex 0)\n'; sleep 0.5; } | "$SHEN" > "$dir/thr2.out" 2>&1
-echo "status $?" >> "$dir/thr2.out"
-contains isolate-exit "$dir/thr2.out" "status 3"
+{ printf '(define ex X -> (shen-jit.exit 3))\n(shen-jit.spawn ex 0)\n'; sleep 0.5; } | "$SHEN" > "$dir/proc2.out" 2>&1
+echo "status $?" >> "$dir/proc2.out"
+contains isolate-exit "$dir/proc2.out" "status 3"
 # The program ends when the builder does, with an isolate still running.
-printf '(define forever N -> (forever (+ N 1)))\n(shen-jit.spawn forever 0)\n(output "main ends~%%")\n' > "$dir/thr3.shen"
-"$SHEN" script "$dir/thr3.shen" > "$dir/thr3.out" 2>&1 < /dev/null
-echo "status $?" >> "$dir/thr3.out"
-check isolate-main-ends "$dir/thr3.out" "main ends"
-check isolate-main-ends-status "$dir/thr3.out" "status 0"
+printf '(define forever N -> (forever (+ N 1)))\n(shen-jit.spawn forever 0)\n(output "main ends~%%")\n' > "$dir/proc3.shen"
+"$SHEN" script "$dir/proc3.shen" > "$dir/proc3.out" 2>&1 < /dev/null
+echo "status $?" >> "$dir/proc3.out"
+check isolate-main-ends "$dir/proc3.out" "main ends"
+check isolate-main-ends-status "$dir/proc3.out" "status 0"
 # Output written to a file before the program ends with isolates about.
-printf '(define forever N -> (forever (+ N 1)))\n(shen-jit.spawn forever 0)\n(set s (open "%s/thr4.txt" out))\n(pr "written" (value s))\n(shen-jit.exit 0)\n' "$dir" > "$dir/thr4.shen"
-"$SHEN" script "$dir/thr4.shen" > /dev/null 2>&1 < /dev/null
-printf '\n' >> "$dir/thr4.txt"
-check isolate-flushes-files "$dir/thr4.txt" "written"
-# Programs may define a function named thread.
-printf '(define thread X -> [own X])\n(output "~S~%%" (thread 1))\n' > "$dir/thr5.shen"
-"$SHEN" script "$dir/thr5.shen" > "$dir/thr5.out" 2>&1 < /dev/null
-check thread-own-definition "$dir/thr5.out" "[own 1]"
+printf '(define forever N -> (forever (+ N 1)))\n(shen-jit.spawn forever 0)\n(set s (open "%s/proc4.txt" out))\n(pr "written" (value s))\n(shen-jit.exit 0)\n' "$dir" > "$dir/proc4.shen"
+"$SHEN" script "$dir/proc4.shen" > /dev/null 2>&1 < /dev/null
+printf '\n' >> "$dir/proc4.txt"
+check isolate-flushes-files "$dir/proc4.txt" "written"
 # An image saved with an isolate still running holds what the builder reaches.
-printf '(define forever N -> (forever (+ N 1)))\n(shen-jit.spawn forever 0)\n(set saved kept)\n' > "$dir/thr6.shen"
-"$SHEN" --save "$dir/thr6.img" script "$dir/thr6.shen" > /dev/null 2>&1 < /dev/null
-SHEN_JIT_IMAGE="$dir/thr6.img" "$SHEN" eval -e '(value saved)' > "$dir/thr6.out" 2>&1
-check isolate-saved-image "$dir/thr6.out" "kept"
-printf '(define forever N -> (forever (+ N 1)))\n(shen-jit.spawn forever 0)\n(output "~A~%%" (trap-error (shen-jit.save-executable "%s/thr7" (fn hd)) (/. E (error-to-string E))))\n' "$dir" > "$dir/thr7.shen"
-"$SHEN" script "$dir/thr7.shen" > "$dir/thr7.out" 2>&1 < /dev/null
-check isolate-save-executable "$dir/thr7.out" "save-executable: other isolates are running"
+printf '(define forever N -> (forever (+ N 1)))\n(shen-jit.spawn forever 0)\n(set saved kept)\n' > "$dir/proc6.shen"
+"$SHEN" --save "$dir/proc6.img" script "$dir/proc6.shen" > /dev/null 2>&1 < /dev/null
+SHEN_JIT_IMAGE="$dir/proc6.img" "$SHEN" eval -e '(value saved)' > "$dir/proc6.out" 2>&1
+check isolate-saved-image "$dir/proc6.out" "kept"
+# Shared data is saved with the program, and stays shared once loaded.
+printf '(set shared (shen-jit.share (@v 1 [a "b"] (shen-jit.string->bytes "c") <>)))\n' > "$dir/share.shen"
+"$SHEN" --save "$dir/share.img" script "$dir/share.shen" > /dev/null 2>&1 < /dev/null
+SHEN_JIT_IMAGE="$dir/share.img" "$SHEN" eval -e '(let S (value shared) (output "~S ~A ~A~%" (<-address S 2) (shen-jit.u8 (<-address S 3) 0) (trap-error (vector-> S 1 2) (/. E (error-to-string E)))))' > "$dir/share.out" 2>&1
+check shared-in-image "$dir/share.out" '[a "b"] 99 address->: <1 [a "b"] #<bytes>> is shared, and cannot change'
+printf '(define forever N -> (forever (+ N 1)))\n(shen-jit.spawn forever 0)\n(output "~A~%%" (trap-error (shen-jit.save-executable "%s/proc7" (fn hd)) (/. E (error-to-string E))))\n' "$dir" > "$dir/proc7.shen"
+"$SHEN" script "$dir/proc7.shen" > "$dir/proc7.out" 2>&1 < /dev/null
+check isolate-save-executable "$dir/proc7.out" "save-executable: other isolates are running"
 
 wait_for() { # text, file
     n=0
@@ -918,10 +919,10 @@ if [ "$posix" = yes ]; then
 # what comes after the interrupt until it has been seen: on a busy machine the
 # signal can take longer than the wait between tries, and a second one must not
 # reach that expression.
-mkfifo "$dir/thr8"
-"$SHEN" < "$dir/thr8" > "$dir/thr8.out" 2>&1 &
+mkfifo "$dir/proc8"
+"$SHEN" < "$dir/proc8" > "$dir/proc8.out" 2>&1 &
 pid=$!
-exec 3> "$dir/thr8"
+exec 3> "$dir/proc8"
 cat >&3 <<'EOF'
 (define spin N -> (spin (+ N 1)))
 (define beat Out -> (beat-on Out 0))
@@ -929,16 +930,16 @@ cat >&3 <<'EOF'
 (set beats (shen-jit.channel 1))
 (shen-jit.spawn beat (shen-jit.sender (value beats)))
 EOF
-wait_for "(4-) <isolate 1>" "$dir/thr8.out"
+wait_for "(4-) <isolate 1>" "$dir/proc8.out"
 printf '(spin 0)\n' >&3
 sleep 0.2
-interrupts_to 1 "$dir/thr8.out"
+interrupts_to 1 "$dir/proc8.out"
 sleep 0.2
 printf '(shen-jit.receive (value beats))\n' >&3
 exec 3>&-
 ends
-contains isolate-interrupt "$dir/thr8.out" "interrupted"
-contains isolate-survives-interrupt "$dir/thr8.out" "beats-went-on"
+contains isolate-interrupt "$dir/proc8.out" "interrupted"
+contains isolate-survives-interrupt "$dir/proc8.out" "beats-went-on"
 
 # Ctrl-C while the REPL waits for input, which a FIFO holds open: a half-typed
 # expression is dropped, and a program waiting for input stops, even inside its own
@@ -1214,17 +1215,17 @@ fi
 
 # An isolate's uncaught error reports its own backtrace, and the reports at exit still come once an
 # isolate has started.
-cat > "$dir/thread-traces.shen" <<'EOF'
+cat > "$dir/isolate-traces.shen" <<'EOF'
 (define trace-second X -> (tl X))
 (let P (shen-jit.spawn trace-second 0) M (shen-jit.monitor P) (shen-jit.receive M))
 EOF
-"$SHEN" script "$dir/thread-traces.shen" > "$dir/thread-traces.out" 2>&1
-contains isolate-own-backtrace "$dir/thread-traces.out" "  in trace-second"
-SHEN_JIT_STATS=1 "$SHEN" eval -e '(define one X -> X)' -e '(shen-jit.spawn one 1)' > "$dir/thread-stats.out" 2>&1
-contains isolate-statistics "$dir/thread-stats.out" "shen-jit: live heap"
+"$SHEN" script "$dir/isolate-traces.shen" > "$dir/isolate-traces.out" 2>&1
+contains isolate-own-backtrace "$dir/isolate-traces.out" "  in trace-second"
+SHEN_JIT_STATS=1 "$SHEN" eval -e '(define one X -> X)' -e '(shen-jit.spawn one 1)' > "$dir/isolate-stats.out" 2>&1
+contains isolate-statistics "$dir/isolate-stats.out" "shen-jit: live heap"
 if [ "$posix" = yes ]; then
-    SHEN_JIT_PROFILE=1 "$SHEN" eval -e '(define one X -> X)' -e '(shen-jit.spawn one 1)' > "$dir/thread-profile.out" 2>&1
-    contains isolate-profile "$dir/thread-profile.out" "shen-jit: profile of"
+    SHEN_JIT_PROFILE=1 "$SHEN" eval -e '(define one X -> X)' -e '(shen-jit.spawn one 1)' > "$dir/isolate-profile.out" 2>&1
+    contains isolate-profile "$dir/isolate-profile.out" "shen-jit: profile of"
     # A directory named shen-jit on PATH before the executable is not the executable.
     mkdir -p "$dir/path-a/shen-jit" "$dir/path-b"
     exe="$(cd "$(dirname "$SHEN")" && pwd)/$(basename "$SHEN")"

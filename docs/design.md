@@ -405,6 +405,23 @@ connections' monitors. A connection tells it once that it failed, before it ends
 once that it asked to stop. Once the grace has passed it kills the connections left, which a
 kill reaches in their next socket wait.
 
+**Shared storage.** `shen-jit.share` copies a value into a fragment as a send does, refusing
+what a send refuses, then lays the fragment out in one run of the program space, taken under
+the lock that guards making symbols there, and marks each vector and byte buffer in it shared,
+by bit 7 of its header. Nothing in it points into a heap, so collections neither scan nor move
+it, any isolate reads it by pointer, and an image saves it with the program. Nothing changes
+it: code that stores into a vector or buffer tests the header's whole low byte, which a shared
+one fails, and C refuses it, as it refuses changing a shared dictionary, while code that reads
+masks the bit out, so neither pays for it. That replaced testing on every store whether the
+address lies in the program space, which would have added the space's bounds, a subtraction and
+a comparison to every store. It is never freed. C given a shared buffer must not write into it.
+
+**Signals.** A Ctrl-C is the builder's: isolates start with SIGINT blocked. Loops test for an interrupt
+only in code compiled once the REPL catches Ctrl-C, when everything is compiled again, and in code an
+isolate compiles, which the builder runs too. `SIGPIPE` has a handler that does nothing, set at
+startup, so that a write to a closed pipe fails and raises; being a handler and not `SIG_IGN`, exec
+resets it, and a child finds the default.
+
 **Not yet.** A channel whose receive endpoint is dropped stays until its receiver ends.
 
 ## Calling C
