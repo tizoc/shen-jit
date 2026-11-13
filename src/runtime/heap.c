@@ -243,8 +243,7 @@ void vm_destroy(VM *vm)
     free(vm->files);
     free(vm->guards);
     Program *p = vm->program;
-    if (p && p->owner == vm) {
-        isolates_free(p);
+    if (p && p->owner == vm && isolates_free(p)) { /* or isolates still run it, an embedder's mistake */
         program_release(&p->space);
         free(p->published.slots);
         for (size_t i = 0; i < p->published.nretired; i++)

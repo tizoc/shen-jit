@@ -882,6 +882,15 @@ printf '(define forever N -> (forever (+ N 1)))\n(isolate.spawn forever 0)\n(set
 "$SHEN" --save "$dir/proc6.img" script "$dir/proc6.shen" > /dev/null 2>&1 < /dev/null
 SHEN_JIT_IMAGE="$dir/proc6.img" "$SHEN" eval -e '(value saved)' > "$dir/proc6.out" 2>&1
 check isolate-saved-image "$dir/proc6.out" "kept"
+# An endpoint saved in an image matches nothing in the next run, whose first channel takes the
+# same slot: a receive on it raises at once rather than waiting on that channel.
+printf '(set saved-r (channel.new 1))\n(set saved-i (isolate.self))\n' > "$dir/ends.shen"
+"$SHEN" --save "$dir/ends.img" script "$dir/ends.shen" > /dev/null 2>&1 < /dev/null
+SHEN_JIT_IMAGE="$dir/ends.img" "$SHEN" eval -e '(let R (channel.new 1) W (channel.wait-any [(value saved-r)] 1000) _ (channel.send (channel.sender R) x) (output "~A ~A~%" (if (= W [timeout]) matched (trap-error (channel.receive (value saved-r)) (/. E (error-to-string E)))) (channel.receive R)))' > "$dir/ends.out" 2>&1 < /dev/null
+check saved-endpoint-stale "$dir/ends.out" "channel closed x"
+# An isolate that ends the program reports statistics without counting the builder's heap.
+SHEN_JIT_STATS=1 "$SHEN" eval -e '(define ex X -> (shen-jit.exit 0))' -e '(isolate.spawn ex 0)' -e '(channel.receive (channel.new 1))' > "$dir/exstats.out" 2>&1 < /dev/null
+contains isolate-exit-statistics "$dir/exstats.out" "live heap not counted, as an isolate ended the program"
 # Shared data is saved with the program, and stays shared once loaded.
 printf '(set shared (isolate.share (@v 1 [a "b"] (shen-jit.string->bytes "c") <>)))\n' > "$dir/share.shen"
 "$SHEN" --save "$dir/share.img" script "$dir/share.shen" > /dev/null 2>&1 < /dev/null
