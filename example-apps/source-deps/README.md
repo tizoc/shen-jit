@@ -88,6 +88,42 @@ one or more edges: the selected function appears in its own answers only if a cy
 Each ordinary query evaluates one selected root/direction. A default report never computes an all-pairs
 transitive closure.
 
+## Batch queries
+
+Match calls once with the existing Datalog rules, export the matched graph to
+forward/reverse integer adjacency indexes, then run independent queries:
+
+```sh
+./source-deps facts.ndjson report.ndjson --batch queries.ndjson
+./source-deps facts.ndjson report.ndjson --batch queries.ndjson --workers 4
+```
+
+The queries run in turn by default (`--workers 0`), and with `--workers N`, from 1 to 64, in at most that many
+[isolates](../../docs/guide.md#isolates), through `parallel.map`. Parallel execution is explicit; there is no
+automatic threshold.
+
+The query file is NDJSON, in the desired answer order:
+
+```json
+{"mode":"reach","file":"a.c","name":"main"}
+{"mode":"impact","file":"b.c","name":"helper","definition_byte":123}
+```
+
+Selectors use the same validation and full function identity as ordinary
+queries. All selectors must resolve before output replacement starts. A batch
+report contains the ordinary graph records, then a `query` record and sorted
+answers per selector; query and answer records add zero-based `query_index`.
+Repeated queries are preserved. Empty query lists and empty runs of queries are
+valid. Reach/impact still mean one or more edges, including the root only when
+a cycle reaches it.
+
+The program that runs the batch owns matching, names and result assembly. It shares the graph once, so that every
+isolate reads it by pointer, and each runs the same BFS as the sequential path, with its own visited set and queue,
+for a run of the queries, and sends back the IDs it reached.
+
+Query input is at most 1 MiB and 4096 selectors, with at most 64 KiB per nonblank line; the graph is at most 64 MiB.
+Report limits still apply.
+
 ## Reports and input validation
 
 Output is NDJSON, with a `summary`, then deterministically sorted `excluded_file`, `function`,

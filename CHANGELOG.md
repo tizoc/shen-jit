@@ -22,6 +22,11 @@ All notable changes to this project are documented in this file. The format is b
 - Datalog programs run in isolates: `(datalog.share Name)` prepares a program and gives it as a shared value, which an
   isolate takes up with `(datalog.use Shared)`. An isolate joins in the orders the builder's runs chose, and otherwise in
   the order with no sizes to go by.
+- `(datalog.run-parallel N Name Facts)` runs a program whose rules keep the key of their first column in at most `N`
+  isolates, each for some of the keys, and gives a database of the parts, which counts, membership and queries read;
+  `datalog.partition` says whether a program runs so. Others run as `datalog.run` does.
+- The `source-deps` example's batch queries are back, with `--workers N` running them in isolates over the graph
+  shared once; no worker image is needed.
 - Grammars work in isolates: a load compiles a rule's loops after the form defining it, and prepares the streaming
   reads that code names. `shen-jit.after-form` registers a function to run after each form of a load.
 
@@ -57,8 +62,8 @@ All notable changes to this project are documented in this file. The format is b
 - `thread`, and the threads under a global lock it started: isolates run in parallel instead.
 - The worker scopes, `lib/parallel.shen`'s scopes and byte API, `lib/parallel-map.shen` with
   `tools/parallel-map.shen`, and `lib/datalog-parallel.shen`, with their primitives and the shared read-only view, and
-  the `source-deps` example's batch queries over them. A parallel map is back over isolates, and Datalog runs in
-  them.
+  the `source-deps` example's batch queries over them, which run over isolates now, with a parallel map and runs of
+  Datalog in parts. `--worker-image` is gone from `source-deps`.
 
 ## [0.7] - 2026-11-10
 

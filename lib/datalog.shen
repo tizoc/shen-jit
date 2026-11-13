@@ -35,6 +35,9 @@
 \\ datalog.share       (datalog.share Name), the program prepared for isolates, which cannot compile,
 \\                     as a shared value
 \\ datalog.use         (datalog.use Shared) in an isolate, which gives the name to run it by
+\\ datalog.run-parallel (datalog.run-parallel N Name Facts), a run in at most N isolates, each for
+\\                     some of the keys, for a program whose rules keep the key of their first column
+\\ datalog.partition   (datalog.partition Name), [parallel Type Derived] or [sequential Reason]
 \\
 \\ A column is a symbol, a string or an integer of 32 bits, signed. A variable in a head, a
 \\ comparison or a negated atom must appear in a positive atom of the body, or be bound by =.
@@ -60,14 +63,15 @@
   (externals [!= % a absent again aggregate all any assign b band bit-and bit-or bit-xor block
     bor bshl bshr bxor c cat check choice compare count csv d db defdatalog define-native demand
     e emit eq equivalence exit f fact filter fold for grow i insert integer j k keyed l lattice
-    lookup max mean min n naive new no none ok old p place plans probe program q r record
-    relation replace restart return-word rounds rule s s32 same scan shift-left shift-right
+    lookup max mean min n naive new no none ok old p parallel place plans probe program q r record
+    relation replace restart return-word rounds rule s s32 same scan sequential shift-left shift-right
     shift-right-signed skip start strlen substr t to-number to-string tsv u32 u32! u64 u64! u<
     unless unpack v var w while word x])
-  (shadow atom? bound? index log2 nth run some? sort subset?)
+  (shadow atom? bound? index log2 nth partition run some? sort subset?)
   (export add ask bytes->facts code datalog.count => count datalog.define => define demand-db
     explain holds? match datalog.plans => plans query read-facts relation->bytes
-    datalog.remove => remove run run-naive share solve sorted stats tuples use write-facts defdatalog)
+    partition datalog.remove => remove run run-naive run-parallel share solve sorted stats tuples use
+    write-facts defdatalog)
 
 (set *adaptive* true)
 (set *plans* 0)
@@ -565,7 +569,8 @@
 (define forget-code
   Name -> (do (put Name compiled (shen.dict 8))
               (put Name indexes [])
-              (put Name counter 0)))
+              (put Name counter 0)
+              (put Name parallel [])))
 
 (define datalog.program
   Name -> (trap-error (get Name datalog.program)
@@ -3746,6 +3751,7 @@
 \\ nothing that changed stays as it is. The database changes in place.
 
 (define add
+  [parts | _] _ -> (only-parts)
   [demand Name Kept] New -> (do (demand-store.facts-> Kept (append (demand-store.facts Kept) New))
                                 (each-kept Kept (/. Db (add Db New)))
                                 [demand Name Kept])
@@ -3886,6 +3892,7 @@
 \\ order, and the rest stay. A fact the database does not have is no change.
 
 (define datalog.remove
+  [parts | _] _ -> (only-parts)
   [demand Name Kept] Gone -> (do (demand-store.facts-> Kept (hd (split-facts (demand-store.facts Kept) (fact-set Gone (shen.dict 8)) [] [])))
                                  (each-kept Kept (/. Db (datalog.remove Db Gone)))
                                  [demand Name Kept])
@@ -3926,6 +3933,7 @@
 
 (define relation-of
   [demand | _] _ -> (only-asked)
+  [parts | _] _ -> (only-parts)
   [db Name S | _] Rel
   -> (let Relations (nth 3 (datalog.program Name))
        (if (cons? (assoc Rel Relations))
@@ -3953,6 +3961,9 @@
 
 (define tuples
   [demand | _] _ -> (only-asked)
+  [parts _ Parts Derived _] Rel -> (if (element? Rel Derived)
+                                       (mapcan (/. D (tuples D Rel)) Parts)
+                                       (tuples (hd Parts) Rel))
   [naive _ Tables] Rel
   -> (let Table (assoc Rel Tables)
        (if (empty? Table) (error "datalog: no relation ~A" Rel) (tl Table)))
@@ -3967,10 +3978,16 @@
 
 (define datalog.count
   [naive | Rest] Rel -> (length (tuples [naive | Rest] Rel))
+  [parts _ Parts Derived _] Rel -> (if (element? Rel Derived)
+                                       (sum-counts Parts Rel 0)
+                                       (datalog.count (hd Parts) Rel))
   Db Rel -> (size-of (relation-of Db Rel)))
 
 (define holds?
   [demand | _] _ -> (only-asked)
+  [parts _ Parts Derived _] [Rel | Values] -> (if (element? Rel Derived)
+                                                  (some-part? Parts [Rel | Values])
+                                                  (holds? (hd Parts) [Rel | Values]))
   [naive | Rest] [Rel | Values] -> (element? Values (tuples [naive | Rest] Rel))
   [db Name S Interned | Rest] [Rel | Values]
   -> (let Rec (relation-of [db Name S Interned | Rest] Rel)
@@ -3982,6 +3999,9 @@
 
 (define match
   [demand Name Kept] Pattern -> (match-demand Name Kept Pattern)
+  [parts _ Parts Derived _] [Rel | Terms] -> (if (element? Rel Derived)
+                                                 (mapcan (/. D (match D [Rel | Terms])) Parts)
+                                                 (match (hd Parts) [Rel | Terms]))
   [db | Rest] [Rel | Terms] -> (match-tuples (tuples-for [db | Rest] Rel Terms) Terms [])
   Db [Rel | Terms] -> (match-tuples (tuples Db Rel) Terms []))
 
@@ -4007,6 +4027,7 @@
 \\ Rounds, plans made, and for each relation its tuples, its derivations and its indexes.
 (define stats
   [demand | _] -> (only-asked)
+  [parts | _] -> (only-parts)
   [db Name S _ Rounds Plans | _]
   -> (let Relations (nth 3 (datalog.program Name))
        [[rounds Rounds] [plans Plans]
@@ -4025,6 +4046,7 @@
 
 (define explain
   [demand | _] _ -> (only-asked)
+  [parts | _] _ -> (only-parts)
   [db Name S Interned Rounds Plans Facts] [Rel | Values]
   -> (let Program (datalog.program Name)
           _ (if (cons? (assoc Rel (nth 3 Program))) skip (error "datalog: no relation ~A" Rel))
@@ -4735,6 +4757,209 @@
   [] Cache -> Cache
   [[Steps Fn | Forms] | Plans] Cache -> (do (shen.dict-> Cache Steps [(fn Fn) Fn | Forms])
                                             (plan-cache Plans Cache)))
+
+\\ ---------------------------------------------------------------------------
+\\ Runs in parts. A program can run in parts with no part needing another's tuples when its derived
+\\ relations all have a first column of one type, its key, and each rule gives a head whose key is a
+\\ constant or a variable a body atom reads, and reads derived relations only at that key, with no
+\\ negation, aggregate, record, equivalence or keyed relation. (datalog.run-parallel N Name Facts)
+\\ runs it so in N isolates at most: each runs, for some of the keys, a copy of the program whose
+\\ rules hold only for its keys, on every input fact and the derived facts of its keys, and sends
+\\ back its database, which is bytes but for the indexes it clears, so that nothing is built again.
+\\ What it gives answers datalog.count, holds?, ask, match, tuples and sorted from all the parts, or
+\\ the first for an input relation, which each has whole. A program that cannot run so runs as
+\\ datalog.run does.
+
+(define partition
+  Name -> (let P (datalog.program Name)
+               Relations (nth 3 P)
+               Rules (nth 4 P)
+               Derived (unique (map (/. R (hd (hd R))) Rules) [])
+               Reason (cases (empty? Derived) "no derived relations"
+                             (not (and (empty? (nth 7 P)) (empty? (nth 8 P)) (empty? (nth 9 P))))
+                               "records, equivalences and relations of one tuple a key are not run in parts"
+                             (cons? (assoc part-key Relations)) "part-key is a name of its own"
+                             (not (scalar-relations? Relations)) "only relations of symbols, strings and integers are run in parts"
+                             true [])
+            (if (string? Reason)
+                [sequential Reason]
+                (let Type (hd (tl (assoc (hd Derived) Relations)))
+                     Why (if (same-key-type? Derived Relations Type)
+                             (rules-in-parts Rules Derived Relations Type)
+                             "the derived relations need one key type")
+                  (if (string? Why) [sequential Why] [parallel Type Derived])))))
+
+(define scalar-relations?
+  [] -> true
+  [[_ | Types] | Rs] -> (and (cons? Types) (scalar-types? Types) (scalar-relations? Rs)))
+
+(define scalar-types?
+  [] -> true
+  [T | Ts] -> (and (element? T [integer symbol string]) (scalar-types? Ts)))
+
+(define same-key-type?
+  [] _ _ -> true
+  [R | Rs] Relations Type -> (and (= (hd (tl (assoc R Relations))) Type) (same-key-type? Rs Relations Type)))
+
+(define rules-in-parts
+  [] _ _ _ -> []
+  [[[_ Key | _] Body] | Rules] Derived Relations Type
+  -> (let Why (if (or (= (value-type Key) Type) (and (key-variable? Key) (read-by? Key Body Relations)))
+                  (body-in-parts Body Key Derived)
+                  "a head's key must be a constant or a variable a body atom reads")
+       (if (string? Why) Why (rules-in-parts Rules Derived Relations Type))))
+
+(define key-variable?
+  [var _] -> true
+  _ -> false)
+
+(define read-by?
+  _ [] _ -> false
+  Key [[Rel | Terms] | Rest] Relations -> (or (and (cons? (assoc Rel Relations)) (element? Key Terms))
+                                              (read-by? Key Rest Relations)))
+
+(define body-in-parts
+  [] _ _ -> []
+  [[Op | Terms] | Rest] Key Derived
+  -> (cases (element? Op [not aggregate]) "negation and aggregates are not run in parts"
+            (and (element? Op Derived) (not (= (hd Terms) Key))) "a derived atom of a body changes the key"
+            true (body-in-parts Rest Key Derived)))
+
+(define run-parallel
+  N Name Facts -> (let Plan (partition Name)
+                    (if (or (= (hd Plan) sequential) (not (integer? N)) (< N 2))
+                        (run Name Facts)
+                        (run-parts N Name Facts (hd (tl Plan)) (hd (tl (tl Plan)))))))
+
+(define run-parts
+  N Name Facts Type Derived
+  -> (let P (datalog.program Name)
+          _ (map (/. F (check-fact (nth 3 P) [] F)) Facts)
+          Seen (shen.dict 64)
+          Keys (keys-of Facts Type Seen (values-of-type (rule-keys (nth 4 P) Type []) Type Seen []))
+          K (if (< N (length Keys)) N (length Keys))
+       (if (< K 2)
+           (run Name Facts)
+           (let Shared (parts-shared Name Type)
+                Owners (shen.dict 64)
+                _ (own-keys Keys 0 K Owners)
+                Split (split-parts Facts Derived Owners K (part-facts Keys 0 K (absvector K)))
+             [parts Name (gather-parts (launch-parts Shared Split 0 K)) Derived Facts]))))
+
+(define rule-keys
+  [] _ Acc -> Acc
+  [[[_ Key | _] _] | Rules] Type Acc -> (rule-keys Rules Type (if (= (value-type Key) Type) (adjoin Key Acc) Acc)))
+
+\\ The constants heads have as keys, and every value of the key's type in the facts, once each.
+(define keys-of
+  [] _ _ Acc -> (reverse Acc)
+  [[_ | Values] | Facts] Type Seen Acc -> (keys-of Facts Type Seen (values-of-type Values Type Seen Acc)))
+
+(define values-of-type
+  [] _ _ Acc -> Acc
+  [V | Vs] Type Seen Acc -> (if (and (= (value-type V) Type) (not (cons? (dict-find Seen V))))
+                                (do (shen.dict-> Seen V true) (values-of-type Vs Type Seen [V | Acc]))
+                                (values-of-type Vs Type Seen Acc)))
+
+\\ Keys go to parts in turn.
+(define own-keys
+  [] _ _ _ -> true
+  [Key | Keys] I K Owners -> (do (shen.dict-> Owners Key I) (own-keys Keys (shen.mod (+ I 1) K) K Owners)))
+
+\\ Each part's facts start with its keys, as part-key facts.
+(define part-facts
+  [] _ K Parts -> (fill-empty Parts 0 K)
+  [Key | Keys] I K Parts -> (do (address-> Parts I [[part-key Key] | (part-list Parts I)])
+                                (part-facts Keys (shen.mod (+ I 1) K) K Parts)))
+
+(define part-list
+  Parts I -> (let X (<-address Parts I) (if (cons? X) X [])))
+
+(define fill-empty
+  Parts K K -> Parts
+  Parts I K -> (do (address-> Parts I (part-list Parts I)) (fill-empty Parts (+ I 1) K)))
+
+\\ A derived fact to the part of its key, and an input fact to every part.
+(define split-parts
+  [] _ _ _ Parts -> Parts
+  [[Rel | Values] | Facts] Derived Owners K Parts
+  -> (do (if (element? Rel Derived)
+             (let I (tl (dict-find Owners (hd Values)))
+               (address-> Parts I [[Rel | Values] | (<-address Parts I)]))
+             (every-part Parts 0 K [Rel | Values]))
+         (split-parts Facts Derived Owners K Parts)))
+
+(define every-part
+  _ K K _ -> true
+  Parts I K Fact -> (do (address-> Parts I [Fact | (<-address Parts I)]) (every-part Parts (+ I 1) K Fact)))
+
+\\ The program in parts, defined and shared once for each program.
+(define parts-shared
+  Name Type -> (let Known (get Name parallel)
+                 (if (not (empty? Known))
+                     Known
+                     (let Parts (intern (cn (str Name) "@parts"))
+                          P (datalog.program Name)
+                          _ (datalog.define Parts (parts-items P Type))
+                          Shared (share Parts)
+                          _ (put Name parallel Shared)
+                       Shared))))
+
+(define parts-items
+  [program _ Relations Rules | _] Type
+  -> (append (map (/. R [relation (hd R) (tl R)]) Relations)
+             [[relation part-key [Type]]
+              | (map (/. R [rule (hd R) [[part-key (hd (tl (hd R)))] | (map (function literal->data) (hd (tl R)))]])
+                     Rules)]))
+
+\\ An isolate for each part, with a channel for its database and a monitor for its end.
+(define launch-parts
+  _ _ K K -> []
+  Shared Split I K
+  -> (let Reply (shen-jit.channel 1)
+          P (shen-jit.spawn run-part [Shared (<-address Split I) (shen-jit.sender Reply)])
+       [[Reply (shen-jit.monitor P)] | (launch-parts Shared Split (+ I 1) K)]))
+
+(define run-part
+  [Shared Facts Out] -> (shen-jit.send Out (cleared (run (use Shared) Facts))))
+
+\\ Indexes hold closures, which do not cross, and are made again when a query wants one.
+(define cleared
+  [db Name S | Rest] -> (do (clear-relations S 1 (length (nth 3 (datalog.program Name)))) [db Name S | Rest]))
+
+(define clear-relations
+  S I N -> (if (> I N)
+               S
+               (let Rec (<-address S I)
+                    _ (address-> Rec 1 [])
+                    _ (clear-slots Rec 10 (<-address Rec 0))
+                 (clear-relations S (+ I 1) N))))
+
+(define clear-slots
+  Rec I Room -> (if (>= I Room) Rec (do (address-> Rec I 0) (clear-slots Rec (+ I 1) Room))))
+
+(define gather-parts
+  [] -> []
+  [[Reply Down] | Rest]
+  -> (let Got (shen-jit.receive-any [Reply Down])
+          End (if (= (hd Got) Reply) (shen-jit.receive Down) (hd (tl Got)))
+          _ (shen-jit.close Reply)
+          _ (shen-jit.close Down)
+          Others (gather-parts Rest)
+       (if (= (hd Got) Reply)
+           [(hd (tl Got)) | Others]
+           (error "datalog: a part ended without its database: ~A" (nth 3 End)))))
+
+(define sum-counts
+  [] _ N -> N
+  [D | Ds] Rel N -> (sum-counts Ds Rel (+ N (datalog.count D Rel))))
+
+(define some-part?
+  [] _ -> false
+  [D | Ds] Fact -> (or (holds? D Fact) (some-part? Ds Fact)))
+
+(define only-parts
+  -> (error "datalog: a database run in parts answers datalog.count, holds?, ask, match, tuples and sorted; datalog.run makes one for the rest"))
 
 \\ A form building the data, with variables as [var "X"] and _ as [any]: left as they are they
 \\ would be read as Shen's own variables.

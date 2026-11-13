@@ -363,4 +363,5 @@
      [[object ["kind" "error"] ["node_kind" "ERROR"] ["start_byte" 10001] ["end_byte" 10001]
               ["row" 0] ["column" 10001] ["excerpt" "bad"]]])])
 
+(load "tests/source_deps_batch.shen")
 (output "~A passed, ~A failed~%" (value sd-test.passed) (value sd-test.failed))

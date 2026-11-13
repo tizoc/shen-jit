@@ -59,6 +59,8 @@ false
 | `(datalog.stats Db)` | The rounds, how many plans were made, and each relation's tuples, the derivations that made them and its indexes |
 | `(datalog.run-naive Name Facts)` | The same result by the plain definition, slowly: what the rest is tested against |
 | `(datalog.share Name)`, `(datalog.use Shared)` | A program prepared and shared, for [isolates](#isolates), and taken up in one, which gives its name |
+| `(datalog.run-parallel N Name Facts)` | The same as `datalog.run`, in at most `N` isolates, each running the rules for some of the keys, for a program that [runs in parts](#isolates); a database of the parts, which answers `count`, `holds?`, `ask`, `match`, `tuples` and `sorted` |
+| `(datalog.partition Name)` | `[parallel KeyType DerivedRelations]` if the program runs in parts, or `[sequential Reason]` |
 
 - **Columns** are `symbol`, `string`, `integer` or a declared type, and a value of another type raises when it is given. An integer
   is 32 bits, signed: from -2147483648 to 2147483647.
@@ -242,6 +244,15 @@ shen-jit eval -l lib/native.shen -l lib/datalog.shen -l lib/ffi.shen -l lib/buff
   the builder does. A query on columns the builder never looked up by reads every tuple of the relation, and a query by demand
   the builder never asked runs the whole program. Define and share programs before spawning: the program cannot change while
   isolates run.
+- **Runs in parts:** a program runs in parts when its derived relations all have a first column of one type, its key, and
+  each rule gives a head whose key is a constant or a variable a body atom reads, and reads derived relations only at that
+  key, with no negation, aggregate, record, equivalence or relation of one tuple a key, only relations of symbols,
+  strings and integers, and none named `part-key`, which the copy uses: a transitive closure from each node, say. Then no key's tuples need another's, and `(datalog.run-parallel N Name Facts)` gives the keys to at most `N`
+  isolates in turn, each running a copy of the program whose rules hold only for its keys, on every input fact and the
+  derived facts of its keys, and keeps the databases they send back. Counts, membership and queries read them all, or the
+  first for an input relation, which each has whole; `add`, `remove`, `explain` and `stats` raise, and `datalog.run` makes a
+  database that answers them. A program that does not run in parts, or one with fewer than two keys, runs as `datalog.run`
+  does. The first run in parts defines and shares the copy, so it is made in the builder, while no other isolate runs.
 - **Saving:** a program saved with `--save` runs in the saved image, and one saved as an executable runs on its own:
   [example-apps/depends](https://github.com/tizoc/shen-jit/blob/main/example-apps/depends/README.md) is a dependency analyser
   over Shen and KL sources, built so, which uses most of the above.

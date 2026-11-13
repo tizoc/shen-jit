@@ -1747,6 +1747,40 @@ included, and `(datalog.use Shared)` puts it in an isolate's own property list.
   in isolates against the plain definition, showed both, and pass now, as 300 did once, also with a collection every
   1,000 words.
 
+### Datalog runs in parts, and source-deps batches, over isolates (2026-11-13, Apple M3 Max with 16 cores, against `datalog.run` and batches in turn)
+
+The last of step 6. `(datalog.run-parallel N Name Facts)` takes 0.7's partition, a program whose derived relations
+share a first-column key that every rule keeps, with no negation, aggregate, record, equivalence or keyed relation,
+and runs it in at most `N` isolates: the builder defines and shares once a copy whose rules hold only for a part's
+keys, each isolate runs it on every input fact and its keys' derived facts, and sends back its database.
+
+- **Kept apart, not rebuilt:** 0.7 rebuilt one database in the parent, remapping each worker's interned values and
+  building every hash table again, which held its whole-call gain to 1.45 and 1.2 times on the closure and the skewed
+  join. Here a part's database is bytes but for its indexes, which hold closures and which it clears, so it crosses as
+  a copy of buffers, hash tables included, and the parent keeps the parts: counts add up, membership and queries read
+  them all, or the first for an input relation, which each part has whole. `add`, `remove`, `explain` and `stats`
+  raise on it, as merging or proving across parts would bring the rebuilding back. About 230 lines, with comments.
+- **Whole calls,** facts in memory, best of three after a warm-up, two rounds, in ms:
+
+  | | `datalog.run` | 4 parts | 8 parts | 12 parts |
+  | --- | --- | --- | --- | --- |
+  | Sparse closure, 1,388,324 paths | 72 to 76 | 28 to 30 | 21 to 22 | 15 to 16 |
+  | Dense closure, 88,803 paths | 4.9 to 5.1 | 3.3 to 3.9 | 3.5 to 3.7 | 4.9 to 5.6 |
+  | Skewed join, 2,222,705 pairs | 84 to 87 | 35 to 37 | 35 | 25 |
+
+  4.8 and 3.4 times at 12, against 1.45 and 1.2 in 0.7's whole call. The dense closure is too small to gain.
+- **source-deps batches:** the graph's adjacency is shared once (0.1 ms for 40,000 nodes), and `parallel.map` runs a
+  batch's BFS queries over it; 0.7's byte protocol, worker image and value transport are gone: 245 lines, against
+  370. 256 queries over 40,000 nodes and 60,000 edges: 133 ms in turn, 42, 22 and 16 ms in 4, 8 and 12
+  isolates.
+- **A bug on the way:** the partition's reasons are strings, and a test with `cons?` for one let every program through;
+  the tests that expected nonlinear and negated programs to run whole caught it.
+- **And one the namespace suite found:** the standard library, which `make stlib` loads, has a `partition` of its own,
+  with which `datalog.partition` clashed there; the library shadows it, and `lib/parallel.shen` joins that suite.
+- **Checks:** 17 runs in parts against `datalog.run`, with integer, symbol and string keys, constants, derived facts
+  given and programs that run whole; the batch's 108 checks against an independent BFS, with 0 to 5, 32 and 64
+  isolates giving the same ordered output.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on
