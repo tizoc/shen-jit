@@ -299,8 +299,6 @@ $(BUILD)/test_kl: tests/test_kl.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(RUNTIME_HDR)
 
 test-kl: $(BUILD)/test_kl $(BUILD)/stage0/.done $(BUILD)/shen-jit.img
 	cd $(BUILD) && ./test_kl stage0 ../tests/kl/eval-cases.kl
-	cd $(BUILD) && ./test_kl --isolate shen-jit.img ../tests/isolate-start.shen > isolate.log 2>&1 || { cat isolate.log; exit 1; }
-	tail -1 $(BUILD)/isolate.log
 
 # The eval-kl cases with a collection before every allocation (slow).
 test-kl-stress: $(BUILD)/test_kl $(BUILD)/stage0/.done
@@ -341,6 +339,7 @@ test-core: test test-jit test-ops test-kl check-lowerer check-generated test-ker
 # Isolates (src/runtime/isolate.c), and the same with a collection at every allocation.
 test-isolates: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -l tests/isolates.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l tests/isolate-start.shen -e '(start-test.run)' | $(FFI_RESULT)
 
 test-isolates-stress: $(BUILD)/shen-jit
 	SHEN_JIT_GC_STRESS=1 $(BUILD)/shen-jit eval -l tests/isolates.shen | $(FFI_RESULT)

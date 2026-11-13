@@ -924,7 +924,7 @@ static FILE *open_path(VM *vm, const char *mode)
    is written beside Path and renamed, so a binary can replace itself. */
 static V save_executable(VM *vm)
 {
-    if (!vm->builder)
+    if (!vm_is_builder(vm))
         return sj_raise(vm, "save-executable: only the builder can save");
     if (isolates_running(vm->program))
         return sj_raise(vm, "save-executable: other isolates are running");
@@ -1245,10 +1245,7 @@ static void catch_interrupts(VM *vm)
     if (interrupt_vm == vm)
         return;
     interrupt_vm = vm;
-    if (!vm->interruptible) {
-        vm->interruptible = true;
-        jit_recompile(vm);
-    }
+    jit_catch_interrupts(vm);
 #ifdef _WIN32
     win_catch_interrupts(on_interrupt);
 #else
@@ -1353,35 +1350,6 @@ static V apply_function(VM *vm, V f, V list)
     if (list != V_NIL)
         return sj_raise_value(vm, "shen-jit.apply: ~S is not a list", vm->args[1]);
     return jit_call_nested(vm, proc, n, args);
-}
-
-/* An isolate starts as a program does (docs/design.md, "The builder and isolates"): nothing of the builder or
-   of its parent, but the program's constants, the standard streams and the run state the
-   port's shen-jit.start-isolate sets, its gensyms numbered from gensym_base. Here it starts
-   in a VM that was the builder, as a test: its globals are cleared, constants put back as
-   the builder would publish them, and it can no longer define. */
-bool sj_start_isolate(VM *vm, V gensym_base)
-{
-    static const char *const constants[] = {"*language*", "*implementation*", "*release*", "*port*",
-                                            "*porters*", "*os*", "*version*"};
-    enum { N = sizeof constants / sizeof constants[0] };
-    V sym[N], value[N];
-    for (size_t i = 0; i < N; i++) {
-        sym[i] = symbol_find(vm, constants[i], strlen(constants[i]));
-        value[i] = sym[i] == V_NIL ? V_CLEARED : global_value(vm, sym[i]);
-        vm_root(vm, &value[i]);
-    }
-    vm->builder = false;
-    for (size_t n = 1; n < vm->program->nglobals; n++)
-        vm->globals[n] = V_CLEARED;
-    bool ok = true;
-    for (size_t i = 0; i < N; i++)
-        if (sym[i] != V_NIL && value[i] != V_CLEARED)
-            *global_slot_new(vm, sym[i]) = value[i]; /* numbered, so a slot */
-    vm_unroot(vm, N);
-    V start = symbol_find(vm, "shen-jit.start-isolate", 22);
-    V proc = start == V_NIL ? V_CLEARED : *cell_function(vm, symbol_cell(start));
-    return ok && sj_init_host(vm) && is_proc(proc) && jit_call(vm, proc, 1, &gensym_base) != V_CLEARED;
 }
 
 static bool vector_index(V v, V i)
@@ -1931,7 +1899,7 @@ V sj_primitive(VM *vm, size_t index)
         return n == V_CLEARED ? fix(-1) : n;
     }
     case P_SET_ARITY:
-        if (!vm->builder)
+        if (!vm_is_builder(vm))
             return sj_raise(vm, "only the builder can define functions");
         if (isolates_running(vm->program))
             return sj_raise(vm, "the program cannot change while other isolates run");

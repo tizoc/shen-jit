@@ -315,6 +315,10 @@ V published_find(VM *vm, const char *bytes, size_t len)
 /* New symbols and global numbers, once isolates exist: any isolate makes them. */
 static pthread_mutex_t shared_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* For a walk of the program space that must not meet an object half made (jit.c). */
+void program_shared_lock(void) { pthread_mutex_lock(&shared_lock); }
+void program_shared_unlock(void) { pthread_mutex_unlock(&shared_lock); }
+
 /* A new cell, both entries cleared, or SIZE_MAX. */
 static size_t new_cell(VM *vm)
 {
@@ -399,7 +403,6 @@ static V intern_name(VM *vm, V name)
         program_free_symbol(vm, p);
         return FAILED;
     }
-    vm->nsymbols++;
     return sym;
 }
 

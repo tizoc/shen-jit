@@ -10,11 +10,13 @@
 \\ an isolate inherits nothing, and closures do not cross. Each run and its results are copied; a
 \\ value shared once (shen-jit.share) crosses by pointer. It returns once every isolate has ended,
 \\ so the program can change again, and raises the first error, in the order of Xs, that F raised.
+\\ If its wait raises, as a Ctrl-C makes it, it kills its isolates first.
 (define map
   N F Xs -> (let _ (check N F Xs)
               (if (empty? Xs)
                   []
-                  (gather (launch F (split Xs (sizes (length Xs) (smaller N (length Xs))))) [] []))))
+                  (let Launched (launch F (split Xs (sizes (length Xs) (smaller N (length Xs)))))
+                    (shen-jit.on-error (freeze (gather Launched [] [])) (freeze (stop Launched)))))))
 
 (define check
   N F Xs ->
@@ -57,13 +59,38 @@
   Xs 0 Run Ns -> [(reverse Run) | (split Xs Ns)]
   [X | Xs] N Run Ns -> (split-run Xs (- N 1) [X | Run] Ns))
 
-\\ An isolate for each run, with a channel for its reply and a monitor for its end: [Reply Down].
+\\ An isolate for each run, with a channel for its reply and a monitor for its end: [Reply Down P].
 (define launch
-  _ [] -> []
-  F [Run | Runs] ->
-    (let Reply (shen-jit.channel 1)
-         P (shen-jit.spawn map-run [F Run (shen-jit.sender Reply)])
-      [[Reply (shen-jit.monitor P)] | (launch F Runs)]))
+  F Runs -> (let Replies (replies Runs)
+              (launched Replies (shen-jit.spawn-each map-run (run-args F Runs Replies)))))
+
+(define replies
+  [] -> []
+  [_ | Runs] -> [(shen-jit.channel 1) | (replies Runs)])
+
+(define run-args
+  _ [] [] -> []
+  F [Run | Runs] [Reply | Replies] -> [[F Run (shen-jit.sender Reply)] | (run-args F Runs Replies)])
+
+(define launched
+  [] [] -> []
+  [Reply | Replies] [[P | Down] | Started] -> [[Reply Down P] | (launched Replies Started)])
+
+\\ Kills each isolate, waits for it to end, and closes its channels, some of which a wait may have
+\\ closed already.
+(define stop
+  Launched -> (do (shen-jit.stop-each (map-pairs Launched))
+                  (close-all Launched)))
+
+(define map-pairs
+  [] -> []
+  [[_ Down P] | Launched] -> [[P | Down] | (map-pairs Launched)])
+
+(define close-all
+  [] -> true
+  [[Reply Down _] | Launched] -> (do (trap-error (shen-jit.close Reply) (/. E skip))
+                                    (trap-error (shen-jit.close Down) (/. E skip))
+                                    (close-all Launched)))
 
 (define map-run
   [F Run Out] ->
@@ -84,7 +111,7 @@
 (define gather
   [] Results [] -> (concatenate (reverse Results) [])
   [] _ [Error | _] -> (error "parallel.map: ~A" Error)
-  [[Reply Down] | Rest] Results Errors ->
+  [[Reply Down _] | Rest] Results Errors ->
     (let Got (shen-jit.receive-any [Reply Down])
          End (if (= (hd Got) Reply) (shen-jit.receive Down) (hd (tl Got)))
          _ (shen-jit.close Reply)

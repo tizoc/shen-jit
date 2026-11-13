@@ -426,7 +426,7 @@ V h_foreign(VM *vm)
 static V define_foreign(VM *vm)
 {
     V name = vm->args[0], desc = vm->args[1];
-    if (!vm->builder)
+    if (!vm_is_builder(vm))
         return sj_raise(vm, "only the builder can define functions");
     if (isolates_running(vm->program))
         return sj_raise(vm, "the program cannot change while other isolates run");

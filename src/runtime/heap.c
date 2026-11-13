@@ -147,7 +147,6 @@ static VM *vm_block(void)
     }
     memset(vm, 0, offsetof(VM, globals)); /* fresh pages are zero; this says so */
     vm->block_bytes = bytes;
-    vm->builder = true;
     return vm;
 }
 
@@ -158,7 +157,9 @@ static VM *vm_heap(VM *vm, size_t semispace_words, size_t stack_words, size_t re
     vm->area = vm->space ? vm->space + vm->reserved_words + STAGGER_WORDS : NULL;
     vm->other = vm->space ? vm->area + vm->reserved_words + STAGGER_WORDS : NULL;
     vm->stack = vm_cleared_stack(stack_words);
-    if (!vm->space || !vm->stack || !vm_globals_commit(vm, vm->program->nglobals) ||
+    /* An isolate numbering a global meanwhile commits this one's slot too, under the isolates' lock
+       (isolates_commit_globals), once this context is listed. */
+    if (!vm->space || !vm->stack || !vm_globals_commit(vm, __atomic_load_n(&vm->program->nglobals, __ATOMIC_ACQUIRE)) ||
         !commit_space(vm->space, semispace_words) ||
         !commit_space(vm->area, semispace_words) || !commit_space(vm->other, semispace_words)) {
         vm_destroy(vm);
@@ -204,8 +205,6 @@ VM *vm_create_context(Program *program, size_t semispace_words, size_t stack_wor
     if (!vm)
         return NULL;
     vm->program = program;
-    vm->builder = false;
-    vm->interruptible = true; /* what it compiles is the builder's too, whose Ctrl-C its loops must see */
     return vm_heap(vm, semispace_words, stack_words, ISOLATE_RESERVED_WORDS);
 }
 
@@ -778,7 +777,6 @@ static void sweep_symbols(VM *vm, Copy *c)
     drain(c, mark);
     free(old->slots);
     *old = t;
-    vm->nsymbols = vm->program->published.count + t.count;
 }
 
 
@@ -813,9 +811,15 @@ static void collect_into(VM *vm, uint64_t *to)
     ffi_drain_roots(vm);
     for (size_t i = 0; i < vm->nforeign_roots; i++)
         copy_slot(&c, &vm->foreign_roots[i / FOREIGN_ROOT_CHUNK][i % FOREIGN_ROOT_CHUNK].value);
+    /* A slot of shared code may be bound by an isolate meanwhile (jit.c, resolving a call), so it is
+       written only if what it holds moved, which a value of the program space never does. */
     for (size_t i = 0; owner && i < vm->program->consts.count; i++)
-        if (!owned_slot(vm, i))
-            copy_slot(&c, ra_at(&vm->program->consts, i));
+        if (!owned_slot(vm, i)) {
+            V *slot = ra_at(&vm->program->consts, i);
+            V v = __atomic_load_n(slot, __ATOMIC_RELAXED), moved_to = copy_value(&c, v);
+            if (moved_to != v)
+                *slot = moved_to;
+        }
     for (size_t i = 0; i < vm->ncroots; i++)
         copy_slot(&c, vm->croots[i]);
     for (size_t i = 0; i < sizeof vm->args / sizeof vm->args[0]; i++)
@@ -989,10 +993,39 @@ static bool past_limit(VM *vm, size_t words)
     return held + words > vm->max_words / 10 * 9;
 }
 
+/* With room in the list, kept in address order. */
+static void large_insert(VM *vm, uint64_t *p, size_t words)
+{
+    size_t i = vm->nlarge++;
+    for (; i > 0 && vm->large[i - 1].object > p; i--)
+        vm->large[i] = vm->large[i - 1];
+    vm->large[i] = (Large){p, words, false, false};
+    vm->large_words += words;
+}
+
 /* A large object: a spare block of the same size if there is one, or a new
    one. Large allocations count toward the next collection, which frees the
    dead ones, and toward SHEN_JIT_MAX_HEAP. */
 static uint64_t *alloc_large(VM *vm, size_t words)
+{
+    if (!vm_large_room(vm, words, 1))
+        return NULL;
+    vm->large_since += words;
+    for (size_t i = 0; i < vm->nlarge; i++)
+        if (vm->large[i].spare && vm->large[i].words == words) {
+            vm->large[i].spare = false;
+            return vm->large[i].object;
+        }
+    uint64_t *p = malloc(words * sizeof(uint64_t));
+    if (!p)
+        return NULL;
+    large_insert(vm, p, words);
+    return p;
+}
+
+/* Room for large objects of `words` in all and `n` more blocks, which may collect; false if the
+   limit leaves none. Then alloc_large makes one, or vm_adopt_large takes blocks, collecting nothing. */
+bool vm_large_room(VM *vm, size_t words, size_t n)
 {
     if (vm->large_since + words > vm->space_words || vm->stress)
         vm_collect(vm, 0);
@@ -1002,32 +1035,32 @@ static uint64_t *alloc_large(VM *vm, size_t words)
             vm_collect(vm, 0);
             free_spares(vm);
             if (past_limit(vm, words))
-                return NULL;
+                return false;
         }
     }
-    vm->large_since += words;
-    for (size_t i = 0; i < vm->nlarge; i++)
-        if (vm->large[i].spare && vm->large[i].words == words) {
-            vm->large[i].spare = false;
-            return vm->large[i].object;
-        }
-    if (vm->nlarge == vm->large_cap) {
-        size_t cap = vm->large_cap ? 2 * vm->large_cap : 16;
+    if (vm->nlarge + n > vm->large_cap) {
+        size_t cap = vm->large_cap ? vm->large_cap : 16;
+        while (cap < vm->nlarge + n)
+            cap *= 2;
         Large *more = realloc(vm->large, cap * sizeof *more);
         if (!more)
-            return NULL;
+            return false;
         vm->large = more;
         vm->large_cap = cap;
     }
-    uint64_t *p = malloc(words * sizeof(uint64_t));
-    if (!p)
-        return NULL;
-    size_t i = vm->nlarge++;
-    for (; i > 0 && vm->large[i - 1].object > p; i--)
-        vm->large[i] = vm->large[i - 1];
-    vm->large[i] = (Large){p, words, false, false};
-    vm->large_words += words;
-    return p;
+    return true;
+}
+
+/* A block malloc'd elsewhere, holding one object, becomes a large object of this heap: a message's,
+   which its fragment kept alone (isolate.c), taken rather than copied. */
+void vm_adopt_large(VM *vm, uint64_t *p, size_t words)
+{
+    vm->large_since += words;
+    large_insert(vm, p, words);
+    if (vm->max_words) {
+        size_t room = (size_t)(vm->hlimit - vm->hp);
+        vm->hlimit -= words < room ? words : room;
+    }
 }
 
 uint64_t *vm_alloc_object(VM *vm, size_t words)

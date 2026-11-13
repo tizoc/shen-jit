@@ -187,7 +187,7 @@
        (server.cancelled S) (server.peak S)]))
 
 \\ The supervisor runs in the caller of http.run, so wait gives the result once run has returned,
-\\ and [pending] before.
+\\ and [pending] before, at once; the budget, checked, stays for the code written for it.
 (define wait
   S Milliseconds ->
     (let _ (owner-check S)
@@ -200,7 +200,7 @@
 \\ then closes the listener, waits for the connections, at most shutdown-grace, kills those left
 \\ and gives the result. Each turn waits at most 50 ms, on the listener while there is room for a
 \\ connection, and otherwise for one to end or to tell, so that Ctrl-C reaches a REPL that runs it,
-\\ which stops it as a failure does.
+\\ which leaves the server as it was: running it again goes on.
 (define run
   S -> (let _ (owner-check S)
             Result (server.result S)

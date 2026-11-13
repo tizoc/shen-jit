@@ -192,6 +192,8 @@ static bool write_globals(FILE *f, VM *vm)
     return true;
 }
 
+static bool write_copy(VM *vm, const char *path, const char *mode);
+
 static bool write_image(VM *vm, const char *path, const char *mode)
 {
     /* An image holds what the cells, constants and symbol table reach. Drop
@@ -218,6 +220,21 @@ static bool write_image(VM *vm, const char *path, const char *mode)
     vm->copy_large = true;
     vm_collect(vm, 0);
     vm->copy_large = false;
+    /* Isolates still running, as they may be when --save writes the builder's image, add symbols,
+       cells and shared data to the program space under this lock: held while it is copied and
+       written, the image is whole. */
+    bool shared = vm->program->isolates != NULL;
+    if (shared)
+        program_shared_lock();
+    bool ok = write_copy(vm, path, mode);
+    if (shared)
+        program_shared_unlock();
+    return ok;
+}
+
+/* The program space and the collected heap, rebased, with the root arrays. */
+static bool write_copy(VM *vm, const char *path, const char *mode)
+{
     Space *p = &vm->program->space;
     size_t words = (size_t)(vm->live_end - vm->space);
     size_t symbol_words = (size_t)(p->symbols_next - p->base);
@@ -387,7 +404,6 @@ VM *image_load(const char *path, size_t min_semispace_words, size_t stack_words,
         vm->program->free_globals[vm->program->nfree_globals++] = n;
     }
     free(held);
-    vm->nsymbols = vm->program->published.count + vm->own.count;
     /* The code objects take their constant slots again (heap.c), those of the program for good. */
     for (uint64_t *s = vm->space; s < vm->live_end; s += is_header(*s) ? obj_words(*s) : 2)
         if (is_header(*s) && hdr_type(*s) == T_CODE)

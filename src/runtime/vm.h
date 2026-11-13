@@ -190,14 +190,9 @@ typedef struct VM {
     volatile int interrupted;
     size_t repl_handlers; /* handlers active when the REPL's is the innermost */
     uintptr_t c_stack_limit; /* nested calls stop before the C stack reaches this; 0: never */
-    bool interruptible; /* the REPL catches SIGINT: loops test interrupted */
     bool seal_user; /* definitions installed now are sealed (shen-jit.seal) */
-    /* Whether this VM is the builder, which alone defines functions (docs/design.md, "The
-       builder and isolates"). Every VM is one until an isolate starts in it. */
-    bool builder;
     /* The isolate this VM runs (isolate.c), the builder's included once isolates exist, or NULL. */
     struct Isolate *isolate;
-    size_t nsymbols;
     /* Open file streams, held weakly: a collection closes those that nothing
        else reaches. */
     V *files;
@@ -292,6 +287,20 @@ bool program_publish_all(VM *vm);
 V program_promote(VM *vm, V closure, const char **why);
 V program_promote_foreign(VM *vm, V proc, const char **why);
 
+/* From an object's old address to its copy, so that a copy keeps sharing and cycles (program.c). */
+typedef struct {
+    uintptr_t *keys;
+    V *values;
+    size_t cap, n;
+} AddrMap;
+V addr_map_get(const AddrMap *m, uintptr_t key);
+bool addr_map_put(AddrMap *m, uintptr_t key, V value);
+void addr_map_free(AddrMap *m);
+
+/* Whether this VM is the builder, which alone defines functions: the program's owner, as an isolate's
+   context is not. */
+static inline bool vm_is_builder(const VM *vm) { return vm->program->owner == vm; }
+
 /* Isolates over one program (docs/design.md, "The builder and isolates"): isolate.c, with their
    contexts made in heap.c and the published names and strings they read in objects.c and program.c. */
 VM *vm_create_context(Program *program, size_t semispace_words, size_t stack_words);
@@ -301,6 +310,8 @@ void isolates_free(Program *program);
 bool isolates_running(Program *program);
 void program_compile_lock(VM *vm);
 void program_compile_unlock(VM *vm);
+void program_shared_lock(void);
+void program_shared_unlock(void);
 V published_find(VM *vm, const char *bytes, size_t len);
 V program_copy_string(VM *vm, V string);
 
@@ -318,6 +329,8 @@ void profile_code(const void *start, size_t size, const char *name, size_t len);
 uint64_t *vm_alloc(VM *vm, size_t words);
 enum { LARGE_WORDS = 1 << 15 }; /* 256 KB */
 uint64_t *vm_alloc_object(VM *vm, size_t words); /* a vector or string, maybe large */
+bool vm_large_room(VM *vm, size_t words, size_t n);
+void vm_adopt_large(VM *vm, uint64_t *p, size_t words);
 bool vm_collect(VM *vm, size_t need_words);
 bool vm_guard(VM *vm, V pointer, V value);
 bool vm_in_heap(const VM *vm, const void *at);

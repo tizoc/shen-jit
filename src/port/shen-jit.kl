@@ -49,12 +49,17 @@ in user code still raises the error."
 (defun shen.read-evaluate-print ()
   (do (shen-jit.mark-toplevel)
   (do (set shen-jit.*load-depth* 0)
+  (do (set shen-jit.*input-mark* (shen-jit.isolate 14 () ()))
   (let Package (value shen.*package*)
     (let Lineread (shen.package-user-input Package (shen-jit.repl-read (stinput)))
       (let History (shen.update-history)
-        (shen.evaluate-lineread Lineread History (value shen.*tc*))))))))
+        (shen.evaluate-lineread Lineread History (value shen.*tc*)))))))))
 
-"Backtraces. The REPL's read-evaluate-print runs
+"Each input marks how many isolates had been spawned before it, and a Ctrl-C
+that stops it kills those it spawned (docs/guide.md, Isolates), so that none
+is left waiting on a REPL that has gone on.
+
+Backtraces. The REPL's read-evaluate-print runs
 inside the kernel's top-level trap-error, so it marks that handler: an error
 raised while it is the innermost handler, or while none is, records the
 frames on the stack, and the display prints them after the message. Errors
@@ -62,8 +67,9 @@ that the program catches record nothing."
 
 (defun shen.toplevel-display-exception (E)
   (let Message (error-to-string E)
+    (do (if (= Message "interrupted") (shen-jit.isolate 14 (value shen-jit.*input-mark*) ()) skip)
     (do (pr Message (stoutput))
-        (pr (shen-jit.trace-text Message) (stoutput)))))
+        (pr (shen-jit.trace-text Message) (stoutput))))))
 
 (defun shen-jit.repl-read (Stream)
   (let Byte (shen.my-read-byte Stream)
@@ -546,6 +552,39 @@ endpoints and isolates copy freely."
 
 (defun shen-jit.self () (shen-jit.isolate 10 () ()))
 
+"A call that starts isolates for its parts and waits for them stops them if it
+raises, so that none is left waiting on one that is gone, or keeping the program
+from changing. (shen-jit.spawn-each F Args) spawns F with each of Args, each
+with a monitor, and gives [[P | Monitor] ...]; if one cannot start, it stops
+those it started, and raises. (shen-jit.stop-each Started) kills them all, as
+a call's cleanup does, waits for each to end, and closes the monitors. A kill
+of an isolate that has ended does nothing, and a monitor already read or closed
+is passed over; a Ctrl-C ends the wait, as it ends any."
+
+(defun shen-jit.spawn-each (F Args) (shen-jit.spawn-each-h F Args ()))
+
+(defun shen-jit.spawn-each-h (F Args Started)
+  (if (= () Args)
+      (reverse Started)
+      (let P (shen-jit.on-error (freeze (shen-jit.spawn F (hd Args))) (freeze (shen-jit.stop-each Started)))
+        (let Monitor (shen-jit.on-error (freeze (shen-jit.monitor P))
+                                        (freeze (do (shen-jit.kill P) (shen-jit.stop-each Started))))
+          (shen-jit.spawn-each-h F (tl Args) (cons (cons P Monitor) Started))))))
+
+(defun shen-jit.stop-each (Started)
+  (do (shen-jit.kill-each Started) (shen-jit.await-each Started)))
+
+(defun shen-jit.kill-each (Started)
+  (if (= () Started)
+      true
+      (do (shen-jit.kill (hd (hd Started))) (shen-jit.kill-each (tl Started)))))
+
+(defun shen-jit.await-each (Started)
+  (if (= () Started)
+      true
+      (do (trap-error (do (shen-jit.receive (tl (hd Started))) (shen-jit.close (tl (hd Started)))) (lambda E skip))
+          (shen-jit.await-each (tl Started)))))
+
 "(shen-jit.wait-any Rs Ms) gives the first of the receive endpoints Rs that has a
 message or is closed, waiting at most Ms milliseconds, or () if none has; it
 receives nothing."
@@ -718,10 +757,11 @@ which would otherwise compile its calls to them as look-ups with fn."
             (cons shen-jit.close (cons 1 (cons shen-jit.give (cons 1 (cons shen-jit.monitor (cons 1
               (cons shen-jit.kill (cons 1 (cons shen-jit.self (cons 0 (cons shen-jit.end? (cons 1
               (cons shen-jit.wait-any (cons 2 (cons shen-jit.check-kill (cons 0 (cons shen-jit.share (cons 1
+                (cons shen-jit.spawn-each (cons 2 (cons shen-jit.stop-each (cons 1
                 (cons shen-jit.after-form (cons 1 (cons shen-jit.loading? (cons 0
                 (cons shen-jit.print-isolate (cons 1 (cons shen-jit.print-receiver (cons 1
                   (cons shen-jit.print-sender (cons 1 (cons shen-jit.print-given (cons 1
-                    ())))))))))))))))))))))))))))))))))))))))))))
+                    ())))))))))))))))))))))))))))))))))))))))))))))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-2 (cons a (cons b ()))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-3 (cons a (cons b (cons c ())))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-4 (cons a (cons b (cons c (cons d ()))))))

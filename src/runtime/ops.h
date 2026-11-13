@@ -253,6 +253,5 @@ V sj_dict_remove(VM *vm);
 V sj_dict_entries(VM *vm);
 V sj_primitive(VM *vm, size_t index);
 bool sj_init_host(VM *vm);
-bool sj_start_isolate(VM *vm, V gensym_base);
 
 #endif

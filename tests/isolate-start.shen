@@ -1,6 +1,7 @@
-\\ An isolate started in a VM that was the builder (test_kl --isolate): the builder loads this file,
-\\ then an isolate starts there with none of its globals or properties, its gensyms numbered from
-\\ 1000000, and start-test.main runs the program. It returns the number of checks that failed.
+\\ What an isolate starts with: the builder loads this file, sets a global and a property, and spawns
+\\ an isolate that runs start-test.main, with none of the builder's globals or properties and its
+\\ gensyms numbered past 2^32, which sends back how many checks it ran and how many failed
+\\ (start-test.run).
 
 (set *start-test.global* builder)
 (put start-test.twice start-test.note builder)
@@ -48,12 +49,11 @@
   [X | Xs] -> (+ X (start-test.sum Xs)))
 
 (define start-test.main
-  -> (let Failures
-          (start-test.sum
+  -> (let Results
             [(start-test.check "printing" "1 c#34;ac#34; [b c]" (make-string "~A ~S ~A" 1 "a" [b c]))
              (start-test.check "output" "done" (do (output "isolate: output works~%") "done"))
              (start-test.check "prolog" true (prolog? (start-test.member 2 [1 2 3])))
-             (start-test.check "gensym range" "x1000001" (str (gensym x)))
+             (start-test.check "gensym range" true (> (length (explode (str (gensym x)))) 10))
              (start-test.check "fn of a definition" [2 4] (map (fn start-test.twice) [1 2]))
              (start-test.check "fn of two arguments" [a b] (let F start-test.pair (((fn F) a) b)))
              (start-test.check "fn of five arguments" [1 2 3 4 5]
@@ -81,6 +81,14 @@
                                    (freeze (shen-jit.install
                                              [defun start-test.new [code start-test.new 0 3 [] [[return 0]] []]]))))
              (start-test.check "vectors" 3 (<-vector (vector-> (vector 2) 1 3) 1))
-             (start-test.check "errors" "e" (trap-error (simple-error "e") (/. E (error-to-string E))))])
-          _ (output "isolate: ~A failed~%" Failures)
-       Failures))
+             (start-test.check "errors" "e" (trap-error (simple-error "e") (/. E (error-to-string E))))]
+       [(length Results) (start-test.sum Results)]))
+
+(define start-test.in-isolate
+  Out -> (shen-jit.send Out (start-test.main)))
+
+(define start-test.run
+  -> (let R (shen-jit.channel 1)
+          _ (shen-jit.spawn start-test.in-isolate (shen-jit.sender R))
+          Got (shen-jit.receive R)
+       (output "~A passed, ~A failed (isolate start)~%" (- (hd Got) (hd (tl Got))) (hd (tl Got)))))

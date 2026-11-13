@@ -94,6 +94,9 @@
 (define pt.wait
   R -> (shen-jit.receive R))
 
+(define pt.block
+  _ -> (shen-jit.receive (shen-jit.channel 1)))
+
 (define pt.wait-catching
   Out -> (let Never (shen-jit.channel 1)
            (trap-error (do (shen-jit.send Out ready) (shen-jit.receive Never))
@@ -121,6 +124,20 @@
 
 (define pt.spin
   Out -> (do (shen-jit.send Out ready) (pt.spin-on 0)))
+
+\\ A buffer of 300,000 bytes, whose bytes are their offsets' low eight bits, and back what one is
+\\ given holds after a store and a collection.
+(define pt.big-bytes
+  N -> (pt.fill-big (shen-jit.bytes N) 0 N))
+
+(define pt.fill-big
+  B N N -> B
+  B I N -> (do (shen-jit.u8! B I (shen-jit.bit-and I 255)) (pt.fill-big B (+ I 1) N)))
+
+(define pt.big-echo
+  [B Out] -> (let _ (shen-jit.u8! B 0 7)
+                  _ (shen-jit.collect)
+               (shen-jit.send Out [(shen-jit.bytes-length B) (shen-jit.u8 B 0) (shen-jit.u8 B 299999) B])))
 
 (define pt.spin-on
   N -> (do (shen-jit.check-kill) (pt.spin-on (+ N 1))))
@@ -277,6 +294,18 @@
        _ (shen-jit.close Send)
     [Got (pt.suffix Refused 26)]))
 
+\\ A channel closed after its endpoint was given takes a new one's place; the given endpoint must not
+\\ move that one.
+(pt.check "a given endpoint of a closed channel moves nothing"
+  ["shen-jit.give: only a channel's receiver can give it, while it is open" x]
+  (let R (shen-jit.channel 1)
+       G (shen-jit.give R)
+       _ (shen-jit.close R)
+       R2 (shen-jit.channel 1)
+       Message (pt.message (freeze (shen-jit.spawn pt.wait G)))
+       _ (shen-jit.send (shen-jit.sender R2) x)
+    [Message (shen-jit.receive R2)]))
+
 (pt.check "wait-any gives () once its time has passed" [] (shen-jit.wait-any [(shen-jit.channel 1)] 10))
 
 (pt.check "wait-any gives the first that has a message or is closed, and receives nothing" [true true x]
@@ -338,6 +367,11 @@
 
 (pt.check "kill wakes an isolate in wait-any" killed (pt.kill-when-ready pt.wait-long))
 
+(pt.check "stop-each kills what spawn-each started and waits for each to end" [killed killed killed]
+  (let Started (shen-jit.spawn-each pt.block [1 2 3])
+       _ (shen-jit.stop-each Started)
+    (map (/. S (pt.third (shen-jit.receive (shen-jit.monitor (hd S))))) Started)))
+
 (pt.check "check-kill lets kill reach an isolate busy elsewhere" killed (pt.kill-when-ready pt.spin))
 
 (pt.check "check-kill in the builder" false (shen-jit.check-kill))
@@ -362,6 +396,13 @@
 
 (pt.check "the builder cannot be killed" true
   (let Me (shen-jit.self) (shen-jit.same? Me (shen-jit.kill Me))))
+
+(pt.check "a large buffer crosses, and is the receiver's own" [300000 7 223 7 true 0]
+  (let B (pt.big-bytes 300000)
+       Got (pt.ask pt.big-echo B)
+       _ (shen-jit.collect)
+    [(hd Got) (hd (tl Got)) (nth 3 Got) (shen-jit.u8 (nth 4 Got) 0) (= (shen-jit.u8 (nth 4 Got) 299999) 223)
+     (shen-jit.u8 B 0)]))
 
 \\ ---------------------------------------------------------------------------------------------
 \\ Shared storage: a copy outside every heap, read by pointer in any isolate, which nothing changes.

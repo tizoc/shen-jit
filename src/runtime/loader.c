@@ -458,7 +458,7 @@ V sj_install(VM *vm, V form)
 {
     LoadStats stats = {0};
     Loader l = {vm, &stats, NULL, NULL, 0, 0, NULL, 0};
-    if (!vm->builder)
+    if (!vm_is_builder(vm))
         return sj_raise(vm, "only the builder can define functions");
     vm_root(vm, &form);
     bool defun = is_defun_form(form);

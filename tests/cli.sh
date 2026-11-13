@@ -972,6 +972,43 @@ check interrupt-program-reading "$dir/held.out" "(1-) interrupted"
 check interrupt-program-reading-continues "$dir/held.out" "(2-) 11"
 check interrupt-prompt-beside-isolate "$dir/held.out" "(5-) interrupted"
 check interrupt-prompt-beside-isolate-continues "$dir/held.out" "(5-) 15"
+
+# Ctrl-C ends the REPL's wait on a channel, in receive and in wait-any, which a signal cannot wake,
+# and a parallel map's wait for its isolates; the REPL goes on, and kills the map's isolates, so
+# that it can define again.
+mkfifo "$dir/chanwait"
+SHEN_JIT_GC_STRESS= "$SHEN" eval -l lib/parallel.shen -e '(define blocked X -> (shen-jit.receive (shen-jit.channel 1)))' \
+    -r < "$dir/chanwait" > "$dir/chanwait.out" 2>&1 &
+pid=$!
+exec 3> "$dir/chanwait"
+wait_for "(0-) " "$dir/chanwait.out"
+printf '(shen-jit.receive (shen-jit.channel 1))\n' >&3
+sleep 0.3
+interrupts_to 1 "$dir/chanwait.out"
+printf '(+ 1 2)\n' >&3
+wait_for "(1-) 3" "$dir/chanwait.out"
+printf '(shen-jit.wait-any [(shen-jit.channel 1)] 60000)\n' >&3
+sleep 0.3
+interrupts_to 2 "$dir/chanwait.out"
+printf '(+ 3 4)\n' >&3
+wait_for "(3-) 7" "$dir/chanwait.out"
+printf '(parallel.map 2 blocked [1 2])\n' >&3
+sleep 0.3
+interrupts_to 3 "$dir/chanwait.out"
+printf '(+ 5 6)\n' >&3
+wait_for "(5-) 11" "$dir/chanwait.out"
+sleep 0.3
+printf '(define after-map X -> X)\n' >&3
+wait_for "(6-) (fn after-map)" "$dir/chanwait.out"
+exec 3>&-
+ends
+check interrupt-receive "$dir/chanwait.out" "(0-) interrupted"
+check interrupt-receive-continues "$dir/chanwait.out" "(1-) 3"
+check interrupt-wait-any "$dir/chanwait.out" "(2-) interrupted"
+check interrupt-wait-any-continues "$dir/chanwait.out" "(3-) 7"
+check interrupt-parallel-map "$dir/chanwait.out" "(4-) interrupted"
+check interrupt-parallel-map-continues "$dir/chanwait.out" "(5-) 11"
+check interrupt-kills-what-it-spawned "$dir/chanwait.out" "(6-) (fn after-map)"
 [ "$status" -eq 0 ] && pass=$((pass + 1)) || { fail=$((fail + 1)); echo "FAIL interrupt-end-of-input: status $status"; }
 
 # A loop that ran before the REPL started, so before it caught Ctrl-C, can still be
@@ -1068,6 +1105,35 @@ EOF
     "$SHEN" eval -l lib/ffi.shen -l "$dir/ffi3.shen" > "$dir/ffi3.out" 2>&1 < /dev/null
     check ffi-backtrace "$dir/ffi3.out" "  in ffi.strlen"
     check ffi-backtrace-caller "$dir/ffi3.out" "  in ffi.outer"
+
+    # Ctrl-C at a REPL that runs an HTTP server returns to the prompt, as the program's handlers
+    # cannot hold it back, and leaves the server as it was: listening, until a stop and a run
+    # close it. Under GC stress, loading the libraries outlasts the waits, so it runs without.
+    if [ "$posix" = yes ]; then
+        set --
+        for name in ffi socket buffer io grammar deadline clock io-socket http-head http-request http-response \
+            http-server http-listener; do
+            set -- "$@" -l "lib/$name.shen"
+        done
+        mkfifo "$dir/serve"
+        SHEN_JIT_GC_STRESS= "$SHEN" eval "$@" -r < "$dir/serve" > "$dir/serve.out" 2>&1 &
+        pid=$!
+        exec 3> "$dir/serve"
+        printf '(define serve.h Q -> (http.response 200 [] (buffer.new 0)))\n(set serve.s (http.listen "127.0.0.1" 0 serve.h []))\n' >&3
+        wait_for "#<http server" "$dir/serve.out"
+        printf '(http.run (value serve.s))\n' >&3
+        sleep 0.3
+        interrupts_to 1 "$dir/serve.out"
+        printf '(http.state (value serve.s))\n(http.stop (value serve.s))\n(http.run (value serve.s))\n(http.state (value serve.s))\n' >&3
+        wait_for "stopped" "$dir/serve.out"
+        exec 3>&-
+        ends
+        contains serve-interrupted "$dir/serve.out" "interrupted"
+        contains serve-left-listening "$dir/serve.out" "listening"
+        contains serve-stopped-after "$dir/serve.out" "[ok]"
+        contains serve-closed "$dir/serve.out" "stopped"
+        set --
+    fi
 
     # A child finds SIGPIPE at its default: exec resets the handler, as it would not an ignored signal.
     if [ "$posix" = yes ]; then
