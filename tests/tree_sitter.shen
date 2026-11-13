@@ -123,15 +123,15 @@
 \\ A language loaded in the builder parses in an isolate, which makes its own parser.
 (define ts-test.in-isolate
   [Language Text Out] ->
-    (shen-jit.send Out (let T (ts-test.ok (treesitter.parse Language (buffer.from-string Text) []))
+    (channel.send Out (let T (ts-test.ok (treesitter.parse Language (buffer.from-string Text) []))
                          [(treesitter.kind T (treesitter.root T)) (treesitter.node-count T)])))
 
-(let R (shen-jit.channel 1)
-     P (shen-jit.spawn ts-test.in-isolate [(value ts-test.language) "int x; int f(void) { return 1; }"
-                                           (shen-jit.sender R)])
-     M (shen-jit.monitor P)
-     Got (shen-jit.receive-any [R M])
-     _ (shen-jit.receive M)
+(let R (channel.new 1)
+     P (isolate.spawn ts-test.in-isolate [(value ts-test.language) "int x; int f(void) { return 1; }"
+                                           (channel.sender R)])
+     M (isolate.monitor P)
+     Got (channel.receive-any [R M])
+     _ (channel.receive M)
      T (ts-test.parse "int x; int f(void) { return 1; }")
   (ts-test.check "an isolate parses with a language loaded in the builder"
     (= Got [R ["translation_unit" (treesitter.node-count T)]])))

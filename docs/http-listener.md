@@ -51,16 +51,17 @@ connections left, and waits for them to end.
 | Result of `http.run` | Meaning |
 | --- | --- |
 | `[ok]` | The server was stopped, the listener is closed and every connection has ended |
-| `[error Error]` | The listener failed; it is closed, the connections were killed, and Error retains cleanup failures |
+| `[error Error]` | The listener failed; it is closed, the connections were given the shutdown grace and then killed, and Error retains cleanup failures |
 
 Running a server that has finished gives its result again. `http.wait S Milliseconds` gives that result
 once `http.run` has returned, and `[pending]` before, at once: as `http.run` returns only when the server has
 ended, there is nothing to wait for, and Milliseconds stays for the code written for it. Ordinary malformed requests, handler exceptions and peer
 failures count as failed connections; they do not stop the server or make its result an error.
 
-Ctrl-C in a REPL that runs a server returns to the prompt, as a program's handlers cannot hold it back, and
-leaves the server as it was, listening, its open connections served: `http.run` goes on serving, and
-`http.stop`, then `http.run`, closes it.
+Ctrl-C in a REPL that runs a server returns to the prompt, as a program's handlers cannot hold it back. The
+prompt kills the connections that `http.run` started, as it kills whatever an interrupted input spawned, and
+leaves the server listening: `http.run` serves new connections again, and `http.stop`, then `http.run`, closes
+it.
 
 While a server runs, the program is fixed, as it is while any isolate runs: define everything first.
 Native servers saved in an image reload stale; recreate them rather than trying to run or stop a saved one.

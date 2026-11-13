@@ -155,12 +155,13 @@
                                    (again?) false
                                    true (fail "poll"))))
 
-\\ Code runs between the slices, which is where an interrupt is noticed.
+\\ Code runs between the slices, which is where an interrupt is noticed, and a kill raised.
 (define wait
-  S Event -> (if (poll S Event 100) true (wait S Event)))
+  S Event -> (do (isolate.check-kill) (if (poll S Event 100) true (wait S Event))))
 
 (define wait-for
   S Event Left -> (let Slice (min 100 Left)
+                       _ (isolate.check-kill)
                     (cases (poll S Event Slice) true
                            (<= Left Slice) false
                            true (wait-for S Event (- Left Slice)))))

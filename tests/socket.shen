@@ -94,14 +94,14 @@
   -> (shen-jit.u8! (shen-jit.u8! (shen-jit.bytes (socket-test.size)) 0 7) (- (socket-test.size) 1) 9))
 
 (define socket-test.client
-  [Port Out] -> (shen-jit.send Out (socket-test.result
+  [Port Out] -> (channel.send Out (socket-test.result
                                      (freeze (let S (socket.connect "127.0.0.1" Port)
                                                   Sent (socket.send S (socket-test.big))
                                                (do (socket.close S) Sent))))))
 
 (define socket-test.spawn-client
-  -> (let R (shen-jit.channel 1)
-          P (shen-jit.spawn socket-test.client [(socket.port (value l)) (shen-jit.sender R)])
+  -> (let R (channel.new 1)
+          P (isolate.spawn socket-test.client [(socket.port (value l)) (channel.sender R)])
        R))
 
 (set client (socket-test.spawn-client))
@@ -109,7 +109,7 @@
   (freeze (let S (socket.accept (value l))
                Got (socket-test.count S 0)
             (do (socket.close S) Got))))
-(socket-test.check "and sent" 8000000 (freeze (shen-jit.receive (value client))))
+(socket-test.check "and sent" 8000000 (freeze (channel.receive (value client))))
 
 \\ Its last byte arrives last, which a copy of the wrong place would change.
 (define socket-test.fill
@@ -124,7 +124,7 @@
                B (socket-test.fill S (shen-jit.bytes (socket-test.size)) 0)
             (do (socket.close S)
                 [(shen-jit.u8 B 0) (shen-jit.u8 B 65536) (shen-jit.u8 B (- (socket-test.size) 1))]))))
-(socket-test.check "and that finished" 8000000 (freeze (shen-jit.receive (value client))))
+(socket-test.check "and that finished" 8000000 (freeze (channel.receive (value client))))
 
 \\ ---------------------------------------------------------------------------
 \\ Waiting with a limit.
@@ -183,5 +183,20 @@
     (socket.close S)
     (socket.close C)
     (socket.close L)))
+
+\\ A kill reaches an isolate waiting in accept, between its poll slices.
+(define socket-test.accept-forever
+  [L Out] -> (do (channel.send Out ready) (socket.accept L)))
+
+(let L (socket-test.listener)
+     R (channel.new 1)
+     I (isolate.spawn socket-test.accept-forever [L (channel.sender R)])
+     M (isolate.monitor I)
+     _ (channel.receive R)
+     _ (isolate.kill I)
+     Ready (channel.wait-any [M] 5000)
+  (do (socket-test.check "a kill reaches an isolate waiting on a socket" [down killed]
+        (freeze (if (= Ready [timeout]) Ready (let Down (channel.receive M) [(hd Down) (hd (tl (tl Down)))]))))
+      (socket.close L)))
 
 (output "~A passed, ~A failed~%" (value socket-test.*passed*) (value socket-test.*failed*))

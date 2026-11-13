@@ -67,7 +67,7 @@
     e emit eq equivalence exit f fact filter fold for grow i insert integer j joins k keyed l
     lattice lookup max mean min n naive new no none normal ok old owned p parallel parts place
     plans probe program q r record relation replace restart return-word rounds rule s s32 same scan
-    sequential shift-left shift-right shift-right-signed skip start strlen substr t to-number
+    sequential shift-left shift-right shift-right-signed skip start strlen substr t timeout to-number
     to-string tsv u32 u32! u64 u64! u< unless unpack v var w while word x])
   (shadow atom? bound? index log2 nth partition run some? sort subset?)
   (export add ask bytes->facts code datalog.count => count datalog.define => define demand-db
@@ -4770,7 +4770,7 @@
 
 (define share
   Name -> (let _ (prepare-program Name)
-            (shen-jit.share [datalog-program Name (value *adaptive*) (value *native*)
+            (isolate.share [datalog-program Name (value *adaptive*) (value *native*)
                              (map (function program-snapshot) [Name | (all-demands Name)])])))
 
 (define all-demands
@@ -5030,32 +5030,32 @@
 \\ An isolate for each part, with a channel for its database and a monitor for its end.
 (define launch-parts
   Shared Split K -> (let Replies (part-replies 0 K)
-                      (with-replies Replies (shen-jit.spawn-each run-part (part-args Shared Split Replies 0)))))
+                      (with-replies Replies (isolate.spawn-each run-part (part-args Shared Split Replies 0)))))
 
 (define part-replies
   K K -> []
-  I K -> [(shen-jit.channel 1) | (part-replies (+ I 1) K)])
+  I K -> [(channel.new 1) | (part-replies (+ I 1) K)])
 
 (define part-args
   _ _ [] _ -> []
   Shared Split [Reply | Replies] I
-  -> [[Shared (<-address Split I) (shen-jit.sender Reply)] | (part-args Shared Split Replies (+ I 1))])
+  -> [[Shared (<-address Split I) (channel.sender Reply)] | (part-args Shared Split Replies (+ I 1))])
 
 (define with-replies
   [] [] -> []
   [Reply | Replies] [[P | Down] | Started] -> [[Reply Down P] | (with-replies Replies Started)])
 
-\\ What a wait that raised, as a Ctrl-C makes it, leaves: each isolate killed and waited for, and its
-\\ channels closed, some of which the wait closed already.
+\\ What a wait that raised leaves: each isolate killed and waited for, and its channels closed, some
+\\ of which the wait closed already. After a Ctrl-C, the REPL kills them instead.
 (define stop-launched
-  Launched -> (do (shen-jit.stop-each (map (/. L [(nth 3 L) | (nth 2 L)]) Launched))
+  Launched -> (do (isolate.stop-each (map (/. L [(nth 3 L) | (nth 2 L)]) Launched))
                   (close-quietly (map (function hd) Launched))))
 
 (define close-quietly
-  Endpoints -> (map (/. E (trap-error (shen-jit.close E) (/. X skip))) Endpoints))
+  Endpoints -> (map (/. E (trap-error (channel.close E) (/. X skip))) Endpoints))
 
 (define run-part
-  [Shared Facts Out] -> (shen-jit.send Out (cleared (run (use Shared) Facts))))
+  [Shared Facts Out] -> (channel.send Out (cleared (run (use Shared) Facts))))
 
 \\ Indexes hold closures, which do not cross, and are made again when a query wants one.
 (define cleared
@@ -5075,10 +5075,10 @@
 (define gather-parts
   [] -> []
   [[Reply Down _] | Rest]
-  -> (let Got (shen-jit.receive-any [Reply Down])
-          End (if (= (hd Got) Reply) (shen-jit.receive Down) (hd (tl Got)))
-          _ (shen-jit.close Reply)
-          _ (shen-jit.close Down)
+  -> (let Got (channel.receive-any [Reply Down])
+          End (if (= (hd Got) Reply) (channel.receive Down) (hd (tl Got)))
+          _ (channel.close Reply)
+          _ (channel.close Down)
           Others (gather-parts Rest)
        (if (= (hd Got) Reply)
            [(hd (tl Got)) | Others]
@@ -5124,12 +5124,12 @@
   N Name Facts
   -> (let Shared (joins-shared Name)
           Grid (join-grid 0 N (absvector N))
-          Reply (shen-jit.channel N)
-          Isolates (shen-jit.spawn-each join-isolate (joined-args Shared Facts Grid (shen-jit.sender Reply) 0 N))
+          Reply (channel.new N)
+          Isolates (isolate.spawn-each join-isolate (joined-args Shared Facts Grid (channel.sender Reply) 0 N))
           Monitors (map (function tl) Isolates)
           Got (shen-jit.on-error (freeze (gather-joined Reply Monitors (map (function hd) Isolates) [] []))
-                                 (freeze (do (shen-jit.stop-each Isolates) (close-quietly [Reply]))))
-          _ (shen-jit.close Reply)
+                                 (freeze (do (isolate.stop-each Isolates) (close-quietly [Reply]))))
+          _ (channel.close Reply)
        (joined-db Got Facts)))
 
 \\ The first isolate's database, with the facts, every isolate's derivations in rounds, and merges
@@ -5207,7 +5207,7 @@
 
 (define join-row
   N _ N Row -> Row
-  I J N Row -> (do (address-> Row I (if (= I J) none (shen-jit.channel 2))) (join-row (+ I 1) J N Row)))
+  I J N Row -> (do (address-> Row I (if (= I J) none (channel.new 2))) (join-row (+ I 1) J N Row)))
 
 (define others
   F N N _ -> []
@@ -5217,8 +5217,8 @@
 (define joined-args
   _ _ _ _ N N -> []
   Shared Facts Grid Reply J N
-  -> [[Shared Facts J N (others (/. I (shen-jit.give (<-address (<-address Grid J) I))) 0 N J)
-       (others (/. I (shen-jit.sender (<-address (<-address Grid I) J))) 0 N J) Reply]
+  -> [[Shared Facts J N (others (/. I (channel.give (<-address (<-address Grid J) I))) 0 N J)
+       (others (/. I (channel.sender (<-address (<-address Grid I) J))) 0 N J) Reply]
       | (joined-args Shared Facts Grid Reply (+ J 1) N)])
 
 (define join-isolate
@@ -5232,7 +5232,7 @@
           _ (map (/. I (vector-> (value *derived*) I 0)) (upto 1 (length Relations)))
           _ (set *joined* true)
           Db (run Name Facts)
-       (shen-jit.send Reply [J (map (/. I (<-vector (value *derived*) I)) (upto 1 (length Relations))) (value *merges*)
+       (channel.send Reply [J (map (/. I (<-vector (value *derived*) I)) (upto 1 (length Relations))) (value *merges*)
                              [(value *round-derivations*) | (value *round-tuples*)]
                              (if (= J 0) (cleared (with-facts Db [])) [])])))
 
@@ -5241,18 +5241,18 @@
 (define gather-joined
   Reply [] _ Got Failure -> (drain-joined Reply Got Failure)
   Reply Monitors Isolates Got Failure
-  -> (let Next (shen-jit.receive-any [Reply | Monitors])
+  -> (let Next (channel.receive-any [Reply | Monitors])
           From (hd Next)
        (if (= From Reply)
            (gather-joined Reply Monitors Isolates [(hd (tl Next)) | Got] Failure)
            (let Reason (nth 3 (hd (tl Next)))
-                _ (shen-jit.close From)
+                _ (channel.close From)
                 Failed (and (empty? Failure) (not (= Reason normal)))
-                _ (if Failed (map (/. P (trap-error (shen-jit.kill P) (/. E skip))) Isolates) skip)
+                _ (if Failed (map (/. P (trap-error (isolate.kill P) (/. E skip))) Isolates) skip)
              (gather-joined Reply (remove From Monitors) Isolates Got (if Failed [Reason] Failure))))))
 
 (define drain-joined
-  Reply Got [] -> (if (empty? (shen-jit.wait-any [Reply] 0)) Got (drain-joined Reply [(shen-jit.receive Reply) | Got] []))
+  Reply Got [] -> (if (= (channel.wait-any [Reply] 0) [timeout]) Got (drain-joined Reply [(channel.receive Reply) | Got] []))
   _ _ [Reason] -> (if (string? Reason) (simple-error Reason) (error "datalog: an isolate running joins ended: ~S" Reason)))
 
 \\ In an isolate running joins, at the end of a round: the tuples it derived go to every other, and
@@ -5260,9 +5260,9 @@
 (define exchange
   Rels Run Before -> (let Mine (map (function since-merge) Rels)
                           Peers (value *peers*)
-                          _ (map (/. Out (shen-jit.send Out Mine)) (tl Peers))
+                          _ (map (/. Out (channel.send Out Mine)) (tl Peers))
                           _ (count-derived Rels Before Run)
-                          _ (map (/. In (add-tuples Rels (shen-jit.receive In) Run)) (hd Peers))
+                          _ (map (/. In (add-tuples Rels (channel.receive In) Run)) (hd Peers))
                        true))
 
 (define count-derived

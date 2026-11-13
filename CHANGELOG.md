@@ -7,17 +7,20 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
-- Isolates: `(shen-jit.spawn F X)` runs a function the program defined on an OS thread of its own, with its own
+- Isolates: `(isolate.spawn F X)` runs a function the program defined on an OS thread of its own, with its own
   heap, globals and property list, so isolates run on several cores at once. They talk through channels
-  (`shen-jit.channel`, `shen-jit.sender`, `shen-jit.send`, `shen-jit.receive`, `shen-jit.receive-any`,
-  `shen-jit.wait-any`, `shen-jit.close` and `shen-jit.end?`), which copy what is sent, a large byte buffer or string
-  once, in the sender; `shen-jit.monitor` watches them,
-  and `shen-jit.kill` stops one at its next channel operation or `shen-jit.check-kill`, which the I/O library's socket
-  waits call. Only the first isolate, the builder, defines, and the program is fixed while other isolates run:
-  defining raises until they have ended. Symbols are the same in every isolate. `shen-jit.spawn-each` and
-  `shen-jit.stop-each` start an isolate for each part of a call and stop them if its wait raises. Ctrl-C at the REPL
-  ends a wait on a channel, and kills the isolates the interrupted input spawned.
-- `(shen-jit.share X)` copies `X` once into storage outside every heap, which isolates read by pointer rather than
+  (`channel.new`, `channel.sender`, `channel.send`, `channel.receive`, `channel.receive-any`, `channel.next`,
+  `channel.wait-any`, `channel.close`, and `channel.give` for a receive endpoint a spawn hands over), which copy
+  what is sent, a large byte buffer or string
+  once, in the sender; `isolate.self` is the one running, `isolate.monitor` watches them,
+  and `isolate.kill` stops one at its next channel operation or `isolate.check-kill`, which socket waits call.
+  Only the first isolate, the builder, defines, and the program is fixed while other isolates run:
+  defining raises until they have ended. Symbols are the same in every isolate. `isolate.spawn-each` and
+  `isolate.stop-each` start an isolate for each part of a call and stop them if its wait raises. Ctrl-C at the REPL
+  ends a wait on a channel, and kills the isolates the interrupted input spawned. `isolate` and `channel` are
+  namespaces of the image, with types for typed programs: `isolate`, `(receiver A)` and `(sender A)`, and datatypes
+  for results.
+- `(isolate.share X)` copies `X` once into storage outside every heap, which isolates read by pointer rather than
   as copies; nothing changes it, as stores into its vectors and byte buffers raise, and it is never freed.
 - `(parallel.map N F Xs)` in `lib/parallel.shen`, over isolates: a function named `F` mapped over `Xs` with at most
   `N` isolates, the results in order. It replaces the library's worker scopes and `lib/parallel-map.shen`.
@@ -45,7 +48,8 @@ All notable changes to this project are documented in this file. The format is b
   `(http.stop (http.current-server))`. Connections left once `shutdown-grace` has passed are killed. The
   `sqlite-http` example passes its database path as a handler argument, and keeps a write-ahead log, with a
   connection held open while it serves.
-- A `blocking` foreign call passes byte buffers where they are, rather than copies, and the flag changes nothing now.
+- A `blocking` foreign call passes byte buffers where they are, rather than copies, and the flag changes nothing now,
+  nor do `shen_release` and `shen_acquire` in the C API.
 - A definition whose code holds a value with no syntax, such as a vector put into a form given to `eval`, or a
   native `(const E)` whose value is one, is refused when it is defined.
 - A grammar's loops compile after the form defining the rule, in a load, and at once outside one, rather than at

@@ -118,7 +118,7 @@
 \\ An isolate's thread blocks SIGINT, which a child it spawns must not inherit.
 (define process-stream.signals
   [Helper Out] ->
-    (shen-jit.send Out
+    (channel.send Out
       (trap-error
         (let Bytes (process.output-bytes
                      (process-test.ok (process.run Helper ["signals"] (buffer.new 0) [])))
@@ -126,10 +126,10 @@
         (/. E [raised (error-to-string E)]))))
 
 (if (io.file-windows?) skip
-    (let Replies (shen-jit.channel 1)
-         _ (shen-jit.spawn process-stream.signals
-             [(value process-test.helper) (shen-jit.sender Replies)])
-         Report (shen-jit.receive Replies)
+    (let Replies (channel.new 1)
+         _ (isolate.spawn process-stream.signals
+             [(value process-test.helper) (channel.sender Replies)])
+         Report (channel.receive Replies)
       (do (process-test.check "isolate-spawned child does not inherit blocked SIGINT" 0
             (freeze (hd Report)))
           (process-test.check "child receives default SIGPIPE" 1

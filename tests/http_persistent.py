@@ -28,7 +28,7 @@ PROGRAM = '''
                     ((= N 0) [chunk (buffer.from-string "abc")])
                     ((= Target "/late") [error (io.error read "test source" "private late failure")])
                     ((and (= Target "/slow") (= N 1))
-                      (do (shen-jit.wait-any [(shen-jit.channel 1)] 300) [eof]))
+                      (do (channel.wait-any [(channel.new 1)] 300) [eof]))
                     (true [eof]))))
           (freeze (do (output "source closed~%") [ok]))))))
 (define persistent.handle

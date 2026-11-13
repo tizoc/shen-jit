@@ -88,7 +88,7 @@
                        (<-address Export 2))
   Export Queries Workers ->
     (source-deps.named Queries
-                       (parallel.map Workers [source-deps.batch-job (shen-jit.share (<-address Export 1))] Queries)
+                       (parallel.map Workers [source-deps.batch-job (isolate.share (<-address Export 1))] Queries)
                        (<-address Export 2)))
 
 (define source-deps.batch-answer-report

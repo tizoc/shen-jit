@@ -335,7 +335,7 @@ static size_t new_cell(VM *vm)
     return entry / 2;
 }
 
-/* Room in the program space for data any isolate shares (isolate.c, shen-jit.share), under the
+/* Room in the program space for data any isolate shares (isolate.c, isolate.share), under the
    lock that guards it while isolates make symbols there. */
 uint64_t *program_alloc_shared(VM *vm, size_t words)
 {

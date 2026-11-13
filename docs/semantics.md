@@ -62,7 +62,7 @@ states which fields hold values:
 | Stream | Kind, direction, open flag; raw OS handle. |
 | Pointer | Kind and what keeps it alive; raw address and length. Its header says whether it is read only. |
 
-An absvector or byte buffer that `shen-jit.share` made lies outside every heap and is shared by every isolate:
+An absvector or byte buffer that `isolate.share` made lies outside every heap and is shared by every isolate:
 it reads as any, is equal to an unshared one with the same contents, and raises on a store.
 
 There is no partial-application object: KLambda named calls are saturated (see
@@ -74,7 +74,8 @@ created. A symbol that code installed there refers to is published, and stays.
 The others are held weakly: a collection drops a symbol that nothing else reaches,
 that has no value or function, and that no compiled code calls by name, and its
 slot and cell are reused. Interning the name again makes a new symbol, which
-nothing can tell from the old one. `(intern "true")` and `(intern "false")`
+nothing can tell from the old one. From the first spawn of an isolate, every symbol
+is published as it is made, and none is dropped. `(intern "true")` and `(intern "false")`
 return the Boolean specials.
 
 Function cells, with the function's arity beside each, two entries per symbol,
@@ -149,7 +150,7 @@ bytes; source text and files pass through as UTF-8 bytes without decoding.
   fill elements again.
 - `(<-address V N)` and `(address-> V N X)`: N must be within 0 to length-1;
   `address->` returns V. Out-of-range indices and non-vectors raise errors, and so does
-  `address->` on a shared absvector, one that `shen-jit.share` made, which never changes.
+  `address->` on a shared absvector, one that `isolate.share` made, which never changes.
 
 The kernel catches `pos` past the end in `shen.string->byte` and `value` of an
 unbound symbol in `bound?`, and programs catch such errors too, so they must be
@@ -343,7 +344,8 @@ Stage 1 runs, in order: install the stage 0 definitions; set `*os*`,
 `shen.initialise`; call `shen.x.features.initialise` with the feature list
 `[shen/shen-jit]`, then `shen.x.programmable-pattern-matching.initialise` and
 `shen.x.namespaces.initialise`, and `shen-jit.initialise`, which registers the port's
-functions and defines `thread`; write the image, in which file streams are closed.
+functions, and the `isolate` and `channel` namespaces with their types; write the image, in
+which file streams are closed.
 `make stlib` loads the standard library later, into a running image, and calls
 `stlib.initialise` there.
 

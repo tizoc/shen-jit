@@ -53,7 +53,7 @@ An isolate's heap does not move during the call, so neither do those buffers. A 
 immediately; a short send is reported to the I/O core, whose writer retains the unsent suffix.
 
 Readiness shortage and EINTR wait/retry in Shen. Polling waits use 100 ms slices, between which the
-runtime's interruption checks run.
+runtime's interruption checks run and a kill of the waiting isolate is raised.
 [Absolute deadlines](deadlines.md) can bound a complete operation across retries and partial progress.
 Install one with `io.socket-deadline E D`, or remove it with `io.socket-unlimited E`. Transfer options
 remain `[]`; cancellation is not implemented. Slices alone are not operation timeouts. Unexpected

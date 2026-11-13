@@ -1905,6 +1905,36 @@ monitors, kill, global numbering, adoption or the Datalog joins' partition and t
   table on an error path outside its reading protocol, and copying a message in without the map, estimated at 20 to
   35% of large structured messages and not measured.
 
+### The isolate and channel interface (2026-11-13, Apple M3 Max, against the branch before)
+
+The functions were `shen-jit.spawn`, `shen-jit.channel` and so on, named after the runtime rather than what they do.
+They are two namespaces of the image now, `isolate` (`spawn`, `self`, `kill`, `monitor`, `check-kill`, `share`,
+`spawn-each`, `stop-each`) and `channel` (`new`, `sender`, `give`, `send`, `receive`, `next`, `receive-any`,
+`wait-any`, `close`), over the same primitive. Two namespaces, as messages go to channels and not to isolates.
+
+- **Typed.** An isolate is of type `isolate`, endpoints `(receiver A)` and `(sender A)`, and results have datatypes.
+  A typed function crosses by its name, which typechecks as the function. The types are Shen source that
+  `shen-jit.initialise` evaluates as the image is built, as the tool that compiles the port's Shen source takes
+  definitions only; what the datatypes define is left off `shen.*userdefs*`, where the kernel had put it.
+- **System functions.** Published exports alone left them qualified inside a library's namespace, `channel.new`
+  becoming `http.channel.new`, as `shen-jit.*` needed `(use shen-jit)`. As system functions, as the kernel's are,
+  every namespace names them as they are. The plain types and the tags stay ordinary words, kept with `externals`:
+  as system symbols, no program could define a function named `receiver`, `sender` or `isolate`.
+- **The end of a stream.** A receive gave a marker that `shen-jit.end?` recognised, which a typed receive could not
+  give, a `(receiver string)` handing back a symbol. `channel.receive` and `receive-any` now raise "channel closed"
+  there, as they did on the next receive, which suits replies, whose count is known; `channel.next` gives `[ok X]`
+  or `[closed]` for streams. `channel.wait-any` gives `[ready R]` or `[timeout]` for an endpoint or `()`. The
+  primitive is unchanged; the port tests for the marker. A million sends and receives in one isolate took 47.5 to
+  50.4 ms before and 47.5 to 50.2 after, five rounds alternating, under a load of 2 to 7.
+- **Found by reading the documents against the code:** `lib/socket.shen` said a kill reached an isolate between its
+  100 ms poll slices, but only `lib/io-socket.shen`'s waits checked; an isolate killed while waiting in
+  `socket.accept` never ended. Its waits call `isolate.check-kill` now, and a case kills one there. The rest were
+  documents: the HTTP listener said Ctrl-C left its connections served, where the REPL kills them, and two
+  libraries said their cleanup ran on Ctrl-C, where the REPL's kill does it.
+- **Rejected:** `lib/isolate.shen`, keeping the image's names to the kernel's and `shen-jit.*`: every program that
+  spawns, and four libraries, would load it, and the REPL's Ctrl-C and monitors are the runtime's anyway. One
+  `receive` giving `[ok X]` or `[closed]` always: a pair for every message, and every reply taken apart.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on

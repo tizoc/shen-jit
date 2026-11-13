@@ -226,14 +226,14 @@ shen-jit eval -l lib/native.shen -l lib/datalog.shen -l lib/ffi.shen -l lib/buff
   ```shen
   (define count-depends
     [Shared Facts Out] -> (let Name (datalog.use Shared)
-                            (shen-jit.send Out (datalog.count (datalog.run Name Facts) depends))))
+                            (channel.send Out (datalog.count (datalog.run Name Facts) depends))))
 
   (let Shared (datalog.share dependencies)
-       R (shen-jit.channel 2)
-       _ (shen-jit.spawn count-depends [Shared [[imports a b] [imports b c]] (shen-jit.sender R)])
-       _ (shen-jit.spawn count-depends [Shared [[imports x y]] (shen-jit.sender R)])
-       A (shen-jit.receive R)
-       B (shen-jit.receive R)
+       R (channel.new 2)
+       _ (isolate.spawn count-depends [Shared [[imports a b] [imports b c]] (channel.sender R)])
+       _ (isolate.spawn count-depends [Shared [[imports x y]] (channel.sender R)])
+       A (channel.receive R)
+       B (channel.receive R)
     (if (< A B) [A B] [B A]))
   \\ [1 3]
   ```

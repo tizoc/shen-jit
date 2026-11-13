@@ -35,7 +35,7 @@ reaches nothing, as the executable is static. A definition's C name and types ar
 | `double` | a real or a fixnum | a new real |
 | `string` | copied to a NUL-terminated buffer for the call; a NUL inside raises | copied into a new string; NULL is `[]` |
 | `pointer` | a pointer of any kind, or `[]` for NULL | a pointer of kind `pointer`; NULL is `[]` |
-| `bytes` | the address of a byte buffer, for the call; C must not write into a shared one (`shen-jit.share`) | not allowed |
+| `bytes` | the address of a byte buffer, for the call; C must not write into a shared one (`isolate.share`) | not allowed |
 | `bool` | `true` or `false`, as 1 or 0 | the **low byte** alone, all a C `bool` defines |
 | `void` | not allowed | `[]` |
 

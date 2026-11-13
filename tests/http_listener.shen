@@ -52,7 +52,7 @@
 \\ opens a connection that sends half a head and waits, takes [get Target], then reads what the
 \\ first connection gets until it ends.
 (define listener-test.client-isolate
-  [Port Steps Out] -> (shen-jit.send Out (map (/. Step (trap-error (listener-test.step Port Step)
+  [Port Steps Out] -> (channel.send Out (map (/. Step (trap-error (listener-test.step Port Step)
                                                          (/. X [raised (error-to-string X)])))
                                               Steps)))
 
@@ -89,12 +89,12 @@
 
 \\ Runs S while a client takes Steps, and gives [Result Stats Replies] once the client has ended.
 (define listener-test.serve
-  S Steps -> (let R (shen-jit.channel 1)
-                  P (shen-jit.spawn listener-test.client-isolate [(http.port S) Steps (shen-jit.sender R)])
-                  M (shen-jit.monitor P)
+  S Steps -> (let R (channel.new 1)
+                  P (isolate.spawn listener-test.client-isolate [(http.port S) Steps (channel.sender R)])
+                  M (isolate.monitor P)
                   Result (http.run S)
-                  Got (shen-jit.receive-any [R M])
-                  _ (if (= (hd Got) R) (shen-jit.receive M) true)
+                  Got (channel.receive-any [R M])
+                  _ (if (= (hd Got) R) (channel.receive M) true)
                [Result (http.stats S) (if (= (hd Got) R) (hd (tl Got)) [client (hd (tl Got))])]))
 
 (map (/. Options
