@@ -443,6 +443,14 @@ the component's atoms before that one read only the old tuples, from before the 
 the new tuples begin, a walk along an index's chain, which runs from the newest, skips those, and a probe of the table ignores them. Join order is chosen as a run goes, from the sizes of the relations, and again when one has doubled: the next atom is the one expected to give the fewest tuples for what is known, from
 an index's tuples per key if it has one, and otherwise as if the columns were alike and independent. Each order becomes code, described below, kept with the program, as a rule has only so many orders.
 
+An isolate cannot compile, so `datalog.share` prepares a program in the builder: a run on no facts with no sizes to go by
+compiles every rule's and variant's plan in that order, every rule's whole plan in it too, and the closures that facts,
+queries and keyed relations call, each a function installed once and taken with `fn`; the program goes out as a shared
+value with every plan made so far, which `datalog.use` puts in an isolate's property list. There a run takes the plan
+the sizes choose if it was made, then the same plan with no sizes, and otherwise the whole rule's, which reads all
+tuples where a variant reads the new ones: all give the same tuples. Queries on columns with no prepared index scan, and
+a query by demand whose program the builder never made runs the whole program.
+
 A negated atom counts as a dependency too, so its relation's component comes first, and the checker refuses a program where a relation depends
 on the negation of one in its own component. A negated atom is then a condition, like a comparison, placed as soon as its variables are bound:
 it probes the relation's own table for a whole tuple, an index for some columns, and asks only whether the relation is empty for none.

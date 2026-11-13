@@ -16,9 +16,12 @@ All notable changes to this project are documented in this file. The format is b
   defining raises until they have ended. Symbols are the same in every isolate.
 - `(shen-jit.share X)` copies `X` once into storage outside every heap, which isolates read by pointer rather than
   as copies; nothing changes it, as stores into its vectors and byte buffers raise, and it is never freed.
-- `lib/parallel.shen` again, now `(parallel.map N F Xs)` over isolates: a function named `F` mapped over `Xs`
-  with at most `N` isolates, the results in order.
+- `(parallel.map N F Xs)` in `lib/parallel.shen`, over isolates: a function named `F` mapped over `Xs` with at most
+  `N` isolates, the results in order. It replaces the library's worker scopes and `lib/parallel-map.shen`.
 - Tree-sitter languages loaded in the builder parse in any isolate.
+- Datalog programs run in isolates: `(datalog.share Name)` prepares a program and gives it as a shared value, which an
+  isolate takes up with `(datalog.use Shared)`. An isolate joins in the orders the builder's runs chose, and otherwise in
+  the order with no sizes to go by.
 - Grammars work in isolates: a load compiles a rule's loops after the form defining it, and prepares the streaming
   reads that code names. `shen-jit.after-form` registers a function to run after each form of a load.
 
@@ -54,8 +57,8 @@ All notable changes to this project are documented in this file. The format is b
 - `thread`, and the threads under a global lock it started: isolates run in parallel instead.
 - The worker scopes, `lib/parallel.shen`'s scopes and byte API, `lib/parallel-map.shen` with
   `tools/parallel-map.shen`, and `lib/datalog-parallel.shen`, with their primitives and the shared read-only view, and
-  the `source-deps` example's batch queries over them. A parallel map is back over isolates, and parallel Datalog is
-  to follow.
+  the `source-deps` example's batch queries over them. A parallel map is back over isolates, and Datalog runs in
+  them.
 
 ## [0.7] - 2026-11-10
 
