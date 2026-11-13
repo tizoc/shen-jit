@@ -1816,6 +1816,95 @@ keys, each isolate runs it on every input fact and its keys' derived facts, and 
   builder's settings from the isolates' own record, written as they start.
 - **`docs/semantics.md`** still listed the removed workers' shared view; it describes shared values now.
 
+### The isolates branch against main (2026-11-13, Apple M3 Max, against 0.7)
+
+The whole of design D's six steps, timed once against `main` at 0.7, which each step had only been timed against the
+commit before it, so that small losses would not add up unseen.
+
+- **Benchmark suite,** two rounds alternating: geometric means 0.99 and 0.98, medians 1.00. No row was more than 3%
+  slower in both rounds. Faster in both: `vector create (big)` and `absvector create (big)` 0.80 to 0.81, `match
+  string (multiple clauses, matching)` 0.83 to 0.90, `string (long) prepend long` 0.92.
+- **Independent workloads,** seven rounds, medians in ms, 0.7 then the branch: the kernel's test suite 179 → 175,
+  its extension tests 31 → 30, installing the standard library 56 → 56, the contract examples 14 → 13, startup 4 →
+  4, and THORN 237 → 233 (set), 200 → 184 (L), 202 → 186 (schubert) and 242 → 221 (ec). Loading and compiling did not
+  get slower for promoting definitions into the program space, and THORN, which mostly runs, is 2 to 8% faster.
+
+### Images under a limit on address space (2026-11-13, CI's Linux jobs and Linux arm64 in Docker)
+
+The branch's first CI run failed one CLI case on every Linux job: `limited-address-space`, which starts the
+executable under `ulimit -v 2000000` and expects it to run, crashed. The program space reserves 8 GB, halving until
+the reservation fits, and its objects start an eighth of the way in; an image stored every pointer into it as an
+offset from its start, so with the 1 GB that fit there, every pointer into the objects, symbols' names among them,
+landed past where they were. macOS does not enforce `ulimit -v`, so it never showed there. An image now stores a
+pointer into the symbols with bit 62 set and one into the objects with bit 61, each from its own start, and its
+version is 5. It starts at 2 GB, 1 GB and 600 MB of address space, and `test-kernel` passes in the container.
+
+### A monitor after an end, GC stress and a leak in CI (2026-11-13, CI's Linux jobs, Linux arm64 in Docker and x86-64)
+
+The branch's second CI run failed in three places, none of them the program space.
+
+- **A monitor made after an isolate ended was told `ended`,** not why it ended, as its record kept no reason.
+  Every caller spawns, then monitors, so an isolate that ends in between loses its reason: on arm64 a joined Datalog
+  run of a small generated program finished in every isolate before the builder monitored the last, and the
+  builder took `ended` for a failure; under GC stress on static arm64, the isolates test of an uncaught error got
+  `ended` for "failing with 5", the builder being slow to monitor; `parallel.map` could have reported an error so.
+  An isolate's record now keeps why it ended, the symbol or the error's text, until it is used again, and a monitor
+  that comes after is told that at once; `ended` is left for one that could not start, or whose record is used
+  again. The isolates tests monitor an ended isolate again for each reason, which no timing decides; on Linux
+  arm64 in Docker they pass plain and under GC stress, and the parallel Datalog suite passed 30 runs of 30.
+- **The CLI's Ctrl-C server case under GC stress** took 40 s to load the HTTP libraries, past its waits of 10 s,
+  so its interrupt came before the server ran. It runs without GC stress now, as the other slow cases do.
+- **And in the third run, a leak,** which only the static x86-64 job looks for, as macOS's AddressSanitizer does not:
+  the KL eval cases start isolates, and destroying the builder's VM freed the program but not the isolates'
+  record, their table and channels, 6,640 bytes. They are freed with it now, if no other isolate runs, as none does
+  when a program ends; one that ran would still use them. Reproduced and checked with LeakSanitizer on Linux arm64
+  in Docker, then CI's whole static x86-64 sequence ran on an Ubuntu 24.04 container on a Ryzen 5 5600X.
+
+### What a review of the branch found (2026-11-13, Apple M3 Max, against the branch before)
+
+A review of the whole branch, by a second model reading it cold, found no flaw in the symbol table, channels,
+monitors, kill, global numbering, adoption or the Datalog joins' partition and termination, and these at the edges.
+
+- **Loop checks were per VM, but code is shared.** An isolate's context compiled every loop with an interrupt test
+  and without tail-call leaves, even in a script, where nothing sets the flag it tests. Whether loops test is now
+  the program's, set once the REPL catches Ctrl-C, when everything is compiled again: under the compile lock and the
+  lock under which isolates add to the program space, which the walk reads and which a REPL started beside running
+  isolates left unlocked. Code first called in an isolate, in a script, three rounds alternating: a counting loop
+  89 to 94 → 75 to 78 ms, a list walk 95 to 103 → 93 to 96.
+- **Ctrl-C did not reach a builder waiting on a channel,** as a signal handler cannot wake a condition variable: a
+  parallel map or a Datalog run in isolates left the REPL dead. The builder now waits in slices of 50 ms and
+  raises "interrupted" between them; a CLI case checks receive, wait-any and a parallel map.
+- **Isolates left behind.** `shen-jit.spawn-each` and `shen-jit.stop-each` start a call's isolates and stop them,
+  waiting for each to end, if one cannot start or the call's wait raises; the parallel map, runs in parts and joins
+  use them. Not for Ctrl-C, though: the interrupt is raised again at every function entry until the REPL's handler
+  has it, so no cleanup runs. The REPL's handler kills them instead: each input notes how many isolates had been
+  spawned (a counter that numbers them already, for gensyms), and an interrupt kills those numbered after it, which
+  a dozen lines of C and four in the port do; earlier inputs' isolates go on. A CLI case defines after an
+  interrupted parallel map, which raised while its isolates were left waiting. Running cleanups with the
+  interrupt held back would also close what they hold, but needs the interrupt kept apart from the checks that
+  raise it; not tried.
+- **Smaller holes:** a given endpoint is recorded with its generation, so one of a channel closed since cannot move
+  the channel that took its place; the builder's collection writes a constant slot of shared code back only if what
+  it holds moved, as an isolate may bind it meanwhile; `--save` beside running isolates writes under the lock under
+  which they add to the program space, so the image is whole.
+- **Joins judged by what they share.** The count of isolates went by every derivation of the last run, but only
+  recursive rounds are shared out: a non-recursive rule of 4 million derivations beside a small nonlinear closure
+  chose 8 isolates and four times the time. It now goes by the derivations and new tuples of recursive rounds,
+  which `fixpoint` counts: that program runs whole, 66.7 ms against 68.8 for the call that now runs it so.
+- **Simpler:** the test-only start of an isolate in the builder's VM went, with `vm->builder`, whose four tests are
+  the program's owner, and its 20 checks run in a real isolate; one map from address to copy for the copier and
+  promotion; wait-any's scan of endpoints is the helper for its waits; `alloc_large` makes room through
+  `vm_large_room`; an isolate's state is whether it ended; the symbol count for `SHEN_JIT_STATS` is computed, as
+  isolates made it stale. Left as it is: a shared check of "a function's name, or a list of one and its first
+  arguments" for the parallel map and the HTTP listener, which would add to the port's API for a dozen lines each.
+- **And ThreadSanitizer,** run on the isolates, parallel map and Datalog suites after these, found two reads of
+  how many globals are numbered, by an isolate starting, unlocked against an isolate numbering one: harmless, as the
+  start commits again under the isolates' lock, but now atomic. Then 12 runs of the Datalog suite and the others
+  reported nothing.
+- **Left from the review,** low: allocation failures that raise nothing or tell no monitor, a walk of the symbol
+  table on an error path outside its reading protocol, and copying a message in without the map, estimated at 20 to
+  35% of large structured messages and not measured.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on
