@@ -498,6 +498,8 @@ test-datalog: $(BUILD)/shen-jit
 	  grep -a 'FAIL\|uncaught\| checks, ' | awk '{ print } END { exit !/ 0 failed$$/ }'
 	$(BUILD)/shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/datalog-generate.shen \
 	  -l tests/datalog_isolates.shen < /dev/null | grep -a 'FAIL\|uncaught\| checks, ' | awk '{ print } END { exit !/ 0 failed$$/ }'
+	$(BUILD)/shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/datalog_parallel.shen < /dev/null | \
+	  grep -a 'FAIL\|uncaught\| checks, ' | awk '{ print } END { exit !/ 0 failed$$/ }'
 	sh example-apps/depends/test.sh $(BUILD)/shen-jit $(KERNEL_DIR)/klambda
 	CC="$(CC)" sh example-apps/source-deps/test.sh $(SHEN_JIT)
 

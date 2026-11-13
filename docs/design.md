@@ -449,7 +449,10 @@ queries and keyed relations call, each a function installed once and taken with 
 value with every plan made so far, which `datalog.use` puts in an isolate's property list. There a run takes the plan
 the sizes choose if it was made, then the same plan with no sizes, and otherwise the whole rule's, which reads all
 tuples where a variant reads the new ones: all give the same tuples. Queries on columns with no prepared index scan, and
-a query by demand whose program the builder never made runs the whole program.
+a query by demand whose program the builder never made runs the whole program. A run in parts gives the keys of a program
+whose rules keep their first column's key to isolates in turn, each running a copy whose rules hold only for its
+keys, and keeps the databases they send back, with their hash tables, which are bytes, and without their indexes,
+which hold closures and are made again by the first query that wants one.
 
 A negated atom counts as a dependency too, so its relation's component comes first, and the checker refuses a program where a relation depends
 on the negation of one in its own component. A negated atom is then a condition, like a comparison, placed as soon as its variables are bound:
