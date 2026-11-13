@@ -384,7 +384,9 @@ something else, as the I/O library's socket waits do in slices of 100 ms, calls
 `isolate.check-kill` between them; in the builder, or before isolates exist, it does nothing. An isolate that
 cannot start, for want of memory for its context, tells its monitors too, with a message laid out by hand, as it has
 no heap to make one in; so does one whose down message cannot be made, and if even that cannot be, the monitor is
-closed, so that nothing waits on it for ever. An isolate that ends tells its monitors, closes its files
+closed, so that nothing waits on it for ever. An isolate that ends first counts every guard as dead, as a
+collection that reached none would, and runs what it registered with `shen-jit.at-end`, so that the handle library
+releases what its handles hold; then it tells its monitors, closes its files
 and the channels it receives on, and frees its context; its record keeps why it ended, as a symbol
 or an error's text, so that a monitor that comes after, as one made just after a spawn can, is
 told at once with the same reason, until the record is used again with a new generation. Then,

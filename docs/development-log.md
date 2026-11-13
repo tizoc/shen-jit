@@ -1960,6 +1960,29 @@ What the review of the branch had left as low, and what reading the documents ag
 - **Not done:** a cheaper check of ended connections in the HTTP supervisor, which the review gave as mattering only
   near 1,024 connections at once, the exceptional case.
 
+### One owner for the `sqlite-http` example's database, and handles released as an isolate ends (2026-11-13, Apple M3 Max, against the leftovers above)
+
+- **One owning isolate.** Each request opened a connection of its own, in its connection's isolate, and concurrent
+  writers waited in SQLite's busy handler, which sleeps a millisecond or more for a write of tens of microseconds
+  (above, "A write-ahead log"). The database now belongs to one isolate, which holds it open while the server runs and
+  does each request's work in turn: a handler sends it `[Job Reply]` and waits for `[ok Result]` or `[error Message]`.
+  A path alone still works, each job opening the database, as the in-builder tests use it; an export keeps a
+  connection of its own, which the write-ahead log lets it hold while the owning isolate writes. 64 `POST /counters/x`
+  from 8 Python clients, the same binary, two rounds alternating with the version before: one at a time 15 to 26 ms
+  before and 11 to 17 after; 8 at once, ten runs, 9 to 31 ms with a median of 13 to 15 before, and 6 to 7 with a
+  median of 6 after.
+- **Handles released as an isolate ends.** An isolate that ended holding handles never released them: a leak for each
+  connection of a server that did not close its own. As an isolate ends, after its function returns or raises,
+  every guard now counts as dead, as if a collection had reached none, and the isolate runs what it registered with
+  the new `shen-jit.at-end`; the handle library registers its sweep there at an isolate's first `handle.wrap`. A
+  case for an isolate that returns and one that is killed, which the library before fails.
+- **Rejected for now: freeing a channel whose receive endpoint is dropped.** It would need each heap to track its
+  endpoints weakly, as guards are, and to free a channel once none survives in its receiver's heap. But a channel
+  can have two endpoints there, the receive endpoint and one marked by `channel.give`, and must stay until a spawn
+  takes the marked one, after which it belongs to the child, whose copy must be tracked from then on: tracking in the
+  collector, the copier and the channel table, for a leak that closing the endpoint, or the receiver ending, avoids.
+  It stays a documented limit.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on

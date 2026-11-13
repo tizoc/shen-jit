@@ -15,9 +15,9 @@
 \\   (handle.sweep)           runs it for each handle that has died, and gives how many.
 \\
 \\ Release runs in the next call to handle.wrap or handle.sweep after a collection that finds the
-\\ handle dead, in whichever isolate that is. A program that stops making handles and never calls
-\\ handle.sweep leaves the rest to the system when it ends, and so does an isolate that ends with
-\\ handles alive: one that makes them, as a server's connection might, closes them before it ends.
+\\ handle dead, in whichever isolate that is, and for every handle an isolate still holds as it
+\\ ends, as a server's connection might. A program that stops making handles and never calls
+\\ handle.sweep leaves the rest to the system when it ends.
 \\ An error from Release raises in handle.close and is dropped in handle.sweep, which has no caller
 \\ to tell.
 \\
@@ -50,8 +50,13 @@
                     _ (address-> (address-> Record 0 M) 1 Release)
                     Handle (shen-jit.pointer-guard M Record)
                  (do (set *held* (+ (held) (shen-jit.bytes-length M)))
+                     (sweep-at-end)
                      (make-room)
                      Handle)))
+
+\\ An isolate that has made a handle sweeps as it ends, when every guard counts as dead.
+(define sweep-at-end
+  -> (if (trap-error (value *at-end*) (/. E false)) true (do (shen-jit.at-end sweep) (set *at-end* true))))
 
 (define make-room
   -> (if (> (held) (held-limit))

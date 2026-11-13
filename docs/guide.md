@@ -156,7 +156,8 @@ line. This does not work on Windows.
 A library can act after each form a load evaluates: `(shen-jit.after-form F)` registers `F`, a function of no
 arguments, to run then, and `(shen-jit.loading?)` says whether a load is going on. The kernel expands a whole file
 before it evaluates any of it, so what needs the definitions before it waits for this, as the grammar library
-compiling its loops does.
+compiling its loops does. `(shen-jit.at-end F)` registers `F` to run as the isolate that registers it ends, after its
+function returns or raises, as the handle library releases what an ending isolate's handles hold.
 
 ```shen
 #!/usr/bin/env -S shen-jit script
@@ -829,8 +830,8 @@ reaches the handle:
 shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l lib/mmap.shen -l lib/handle.shen -l program.shen
 ```
 
-- **It is released some time later:** in the next `handle.wrap` or `(handle.sweep)` after a collection finds it dead, and
-  not at all if the program ends first, which leaves it to the system. Handles count what they hold, so that memory
+- **It is released some time later:** in the next `handle.wrap` or `(handle.sweep)` after a collection finds it dead, or
+  as the isolate that holds it ends, and not at all if the program ends first, which leaves it to the system. Handles count what they hold, so that memory
   outside the heap brings collections too.
 - **`(handle.close H)` releases it now,** for what should not wait: on Windows, a mapped file cannot be deleted. H then
   raises when used, and closing it again does nothing.

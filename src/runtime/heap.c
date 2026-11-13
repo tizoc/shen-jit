@@ -335,6 +335,24 @@ bool vm_guard(VM *vm, V pointer, V value)
     return true;
 }
 
+/* Every guard counts as dead: its value goes on the list that shen-jit.pointers-dead gives, as when a
+   collection finds its pointer unreached. An isolate does this as it ends. A collection made here
+   may move some there itself, which then go once. */
+bool vm_guards_all_dead(VM *vm)
+{
+    while (vm->nguards) {
+        V pair = make_pair(vm, V_NIL, V_NIL);
+        if (pair == V_CLEARED)
+            return false;
+        if (!vm->nguards)
+            break;
+        ptr(pair)[0] = vm->guards[--vm->nguards].value;
+        ptr(pair)[1] = vm->dead;
+        vm->dead = pair;
+    }
+    return true;
+}
+
 /* Constant slots. A code object owns the range [cbase, cbase + nconst +
    ncode) of vm->program->consts: the collector copies those slots when it scans the
    code object, and once the code object is dead, clears them and reuses

@@ -835,6 +835,13 @@ static void *isolate_main(void *argument)
             reason = text == V_CLEARED ? ps->ended : text;
         }
     }
+    /* What it holds through guards, as the handle library's handles, is released as it ends: every
+       guard counts as dead, and the port runs what the isolate registered to run then. An error
+       there is dropped, as nothing is left to tell. */
+    V ending = published_find(vm, "shen-jit.isolate-ending", 23);
+    V run = ending ? *cell_function(vm, symbol_cell(ending)) : V_CLEARED;
+    if (vm_guards_all_dead(vm) && is_proc(run))
+        jit_call(vm, run, 0, NULL);
     vm_unroot(vm, 2);
     isolate_end(p, reason);
     return NULL;

@@ -59,11 +59,11 @@ The list limit is fixed; this example does not implement pagination.
 
 HTTP/1.1 connections can serve up to 100 sequential requests, with a 5-second idle limit and a
 60-second total lifetime. Each connection runs in an isolate of its own, up to the listener's
-`max-connections`, and each request still opens its own database connection. The database keeps a
-write-ahead log (`counters.db-wal` and `counters.db-shm` beside it), so readers and writers do not wait for each
-other, and the server holds one connection open while it runs, so that the log stays between requests.
-Concurrent writes still wait for each other under SQLite's 5-second busy timeout, whose retries sleep a
-millisecond or more. The NDJSON source owns
+`max-connections`. The database belongs to one isolate, which holds it open while the server runs and does each
+request's work in turn: a handler sends it a job and waits for the result, so writers never wait in SQLite's busy
+handler, whose retries sleep a millisecond or more. The database keeps a write-ahead log (`counters.db-wal` and
+`counters.db-shm` beside it), so that an export reads through a connection of its own without holding writes back,
+and the owning isolate keeps the log between requests. The NDJSON source owns
 its prepared SELECT and database until completion/disconnect. It batches rows under both a 16 KiB cap
 and the sender's chunk bound, holding one encoded row and one output batch. It checks the total 5-second
 write budget while assembling batches; even a one-byte chunk bound preserves every row and newline. A slow export
@@ -85,9 +85,11 @@ would need separate runtime/library support; this example uses an explicit appli
 
 `main.shen` holds the routes, database scopes, startup and shutdown. `run.shen` loads their public
 dependencies and passes the command-line arguments. Applications can instead load `main.shen` and call
-`counter-app.start Path Host Port Options`, which returns an `http.server` that its caller serves with
-`(counter-app.await Path S)` until it is stopped. Its handler is `[counter-app.handle Path]`, as a handler runs in an isolate of
-its connection's, which inherits no globals. The `/shutdown` control route is supplied by `counter-app.run`.
+`(counter-app.start Path Host Port F Options)`, which starts the database's owner and a server whose handler is `F`,
+called with `Db`, what reaches the owning isolate, and the request, such as `counter-app.handle`: a handler runs in an
+isolate of its connection's, which inherits no globals. It gives `[Owner S]`, which the caller serves with
+`(counter-app.await Owner S)` until it is stopped, which then ends the owning isolate. The `/shutdown` control route
+is supplied by `counter-app.run`.
 
 ```sh
 python3 example-apps/sqlite-http/test.py build/shen-jit

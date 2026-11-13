@@ -77,4 +77,26 @@
   (freeze (hd (counter-test.put "{c#34;valuec#34;:1}" "text/plain"))))
 (counter-test.check "invalid updates leave the stored value alone" [200 "{c#34;valuec#34;:43}"]
   (freeze (counter-test.response "GET" "/counters/body")))
+\\ The same routes through the database's owning isolate, which holds it open and does each job in turn;
+\\ a failed job's error reaches the handler, and the owning isolate goes on.
+(define counter-test.owned
+  Db Method Target ->
+    (let Response (counter-app.route Db Method Target)
+      [(http.buffered-response.status Response) (buffer.string (http.buffered-response.body Response))]))
+
+(let Owner (counter-app.open (value counter-test.path))
+     Db (counter-app.db Owner)
+  (do (counter-test.check "owner reads what was written without it" [200 "{c#34;valuec#34;:43}"]
+        (freeze (counter-test.owned Db "GET" "/counters/body")))
+      (counter-test.check "owner increments" [200 "{c#34;valuec#34;:44}"]
+        (freeze (counter-test.owned Db "POST" "/counters/body")))
+      (counter-test.check "owner deletes" [204 ""] (freeze (counter-test.owned Db "DELETE" "/counters/body")))
+      (counter-test.check "owner reports a missing counter" [404 "{c#34;errorc#34;:c#34;counter not foundc#34;}"]
+        (freeze (counter-test.owned Db "GET" "/counters/body")))
+      (counter-test.check "a failed job raises in the handler" true
+        (freeze (counter-test.raises? (freeze (counter-app.do Db [set "below" -1])))))
+      (counter-test.check "and the owning isolate goes on" [200 "{c#34;valuec#34;:1}"]
+        (freeze (counter-test.owned Db "POST" "/counters/after")))
+      (counter-test.check "closing ends the owning isolate" true (freeze (counter-app.close Owner)))))
+
 (output "~A passed, ~A failed~%" (value counter-test.passed) (value counter-test.failed))

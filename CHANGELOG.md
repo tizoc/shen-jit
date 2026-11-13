@@ -37,7 +37,9 @@ All notable changes to this project are documented in this file. The format is b
 - The `source-deps` example's batch queries, with `--workers N`, run in isolates over the graph shared once; no
   worker image is needed.
 - Grammars work in isolates: a load compiles a rule's loops after the form defining it, and prepares the streaming
-  reads that code names. `shen-jit.after-form` registers a function to run after each form of a load.
+  reads that code names. `shen-jit.after-form` registers a function to run after each form of a load, and
+  `shen-jit.at-end` one to run as the registering isolate ends.
+- The handle library releases what an isolate's handles still hold as the isolate ends.
 
 ### Changed
 
@@ -46,8 +48,9 @@ All notable changes to this project are documented in this file. The format is b
   `http.wait` gives the result once `http.run` has returned. A handler goes by name, as `f` or `[f Arg ...]`, which
   is called with the arguments and then the request, rather than as a closure, and stops its server with
   `(http.stop (http.current-server))`. Connections left once `shutdown-grace` has passed are killed. The
-  `sqlite-http` example passes its database path as a handler argument, and keeps a write-ahead log, with a
-  connection held open while it serves.
+  `sqlite-http` example keeps a write-ahead log, and its database belongs to one isolate, which holds it open while
+  it serves and does each request's work in turn, reached through a handler argument: writers no longer wait in
+  SQLite's busy handler.
 - A `blocking` foreign call passes byte buffers where they are, rather than copies, and the flag changes nothing now,
   nor do `shen_release` and `shen_acquire` in the C API.
 - A definition whose code holds a value with no syntax, such as a vector put into a form given to `eval`, or a

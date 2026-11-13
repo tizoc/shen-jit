@@ -226,4 +226,22 @@
 (handle.close (value h))
 (handle.close (value on-m))
 
+\\ An isolate releases what its handles still hold as it ends, whether its function returns or a kill
+\\ ends it, so that a server's connections leak nothing.
+(define handle-test.hold
+  [Out Wait] -> (let H (handle.wrap (memory.alloc 64) (/. M (do (memory.free M) (channel.send Out released))))
+                  (if Wait (channel.receive (channel.new 1)) (shen-jit.u8! H 0 1))))
+
+(define handle-test.released
+  Wait -> (let R (channel.new 2)
+               I (isolate.spawn handle-test.hold [(channel.sender R) Wait])
+               M (isolate.monitor I)
+               _ (if Wait (do (channel.wait-any [R] 200) (isolate.kill I)) skip)
+               Down (channel.receive M)
+            [(hd (tl (tl Down))) (if (= (channel.wait-any [R] 5000) [timeout]) unreleased (channel.receive R))]))
+
+(handle-test.check "an isolate that returns releases its handles" [normal released]
+  (freeze (handle-test.released false)))
+(handle-test.check "and one that is killed" [killed released] (freeze (handle-test.released true)))
+
 (output "~A passed, ~A failed~%" (value handle-test.*passed*) (value handle-test.*failed*))
