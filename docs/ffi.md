@@ -44,8 +44,8 @@ type called `int` or `long`, since `long` is 32 bits on Windows and 64 elsewhere
 
 **Flags** follow the result:
 
-- **`blocking`** marks a call that may wait: an isolate in one counts as stopped, so the builder need not wait for it to define. Its
-  arguments are passed as for any call, as nothing else moves the heap meanwhile.
+- **`blocking`** marks a call that may wait. It changes nothing now: nothing else uses an isolate's heap while it waits, so its
+  arguments are passed as for any call.
 - **`(varargs N)`** marks a variadic function with N fixed arguments, from 1 to 3, all integers. It is needed: Apple's arm64 passes variable arguments
   differently from fixed ones. `fcntl` is one.
 
@@ -162,7 +162,7 @@ It links against nothing: `shen_vm` is a pointer to a table of functions, which 
   and C returns it, or reads `shen_exception` and goes on. No `longjmp` crosses C, so a library calling back is safe.
 - **Roots:** `shen_root(vm, &local)` for a call, undone when a procedure returns, however it returns. `shen_root_new` gives a `shen_root_box` that outlives the call, for a callback's
   closure, say. Deleting one needs no `shen_vm` and no lock, so it can be done from anywhere.
-- **Waiting:** `shen_release` and `shen_acquire` mark where C waits, as `blocking` does for a whole call. Between them, touch no value.
+- **Waiting:** `shen_release` and `shen_acquire` mark where C waits, as `blocking` does for a whole call, and change nothing now. Between them, touch no value.
 - **Threads:** a callback must come on the thread that called the library: a thread the runtime did not start cannot call in.
 - **Memory:** nothing malloc'd by one side is freed by the other, and no `FILE *` crosses.
 

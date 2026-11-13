@@ -53,6 +53,11 @@ typedef struct Space {
 typedef struct SymbolTable {
     V *slots;
     size_t cap, count;
+    /* Once isolates exist, the published table is read without a lock while it grows, so an
+       array it replaces is kept until the program ends (objects.c). */
+    bool shared;
+    V **retired;
+    size_t nretired;
 } SymbolTable;
 
 struct VM;
@@ -181,21 +186,17 @@ typedef struct VM {
     const char *self;
     size_t launch_base;
     /* Ctrl-C at the REPL: the signal handler sets interrupted to INTERRUPT and clears
-       check_limit. The builder does the same with ATTEND for an isolate (isolate.c). */
+       check_limit. */
     volatile int interrupted;
     size_t repl_handlers; /* handlers active when the REPL's is the innermost */
     uintptr_t c_stack_limit; /* nested calls stop before the C stack reaches this; 0: never */
     bool interruptible; /* the REPL catches SIGINT: loops test interrupted */
     bool seal_user; /* definitions installed now are sealed (shen-jit.seal) */
-    /* Whether this VM is the builder, which alone defines functions and numbers globals
-       (docs/design.md, "The builder and isolates"). Every VM is one until an isolate starts in it. */
+    /* Whether this VM is the builder, which alone defines functions (docs/design.md, "The
+       builder and isolates"). Every VM is one until an isolate starts in it. */
     bool builder;
-    /* The isolate this VM runs (isolate.c), the builder's included once isolates exist, or NULL;
-       the publication it has seen, and whether a collection replaces its own symbols whose
-       names have been published since by the published ones. */
+    /* The isolate this VM runs (isolate.c), the builder's included once isolates exist, or NULL. */
     struct Isolate *isolate;
-    uint64_t epoch_seen;
-    bool fixup;
     size_t nsymbols;
     /* Open file streams, held weakly: a collection closes those that nothing
        else reaches. */
@@ -223,15 +224,11 @@ typedef struct VM {
        (objects.c, Program): the slots lie in the VM's own block of address space, committed as
        numbers grow, so emitted code reads one at a fixed offset from the VM's register. */
     size_t globals_committed;  /* slots committed, all holding a value or V_CLEARED */
-    /* In a VM that is not the builder, which cannot number symbols, the values of globals
-       that have none, by symbol: open addressing, 0 for an empty entry (objects.c). */
-    V *local_keys, *local_values;
-    size_t local_cap, local_count;
     size_t block_bytes;        /* the reserved block the VM lies in */
     V globals[];
 } VM;
 
-enum { INTERRUPT = 1, ATTEND = 2 }; /* vm->interrupted; ATTEND: the isolate's turn (isolate.c) */
+enum { INTERRUPT = 1 }; /* vm->interrupted */
 
 typedef struct Handler {
     /* Frame of the trap-error, as an offset in the stack, shifted left by 1;
@@ -290,22 +287,19 @@ uint64_t *program_symbol_slot(VM *vm);
 void program_free_symbol(VM *vm, uint64_t *slot);
 bool program_reserve(VM *vm, size_t symbol_words, size_t object_words);
 bool program_publish(VM *vm, V sym);
-V program_promote(VM *vm, V closure);
-V program_promote_foreign(VM *vm, V proc);
+bool program_publish_all(VM *vm);
+V program_promote(VM *vm, V closure, const char **why);
+V program_promote_foreign(VM *vm, V proc, const char **why);
 
-/* isolate.c: isolates over one program (docs/design.md, "The builder and isolates"). */
+/* Isolates over one program (docs/design.md, "The builder and isolates"): isolate.c, with their
+   contexts made in heap.c and the published names and strings they read in objects.c and program.c. */
 VM *vm_create_context(Program *program, size_t semispace_words, size_t stack_words);
-V sj_isolate(VM *vm, V op, V a, V b);
-V isolate_attend(VM *vm);
-void isolate_block(VM *vm);
-void isolate_unblock(VM *vm);
+V sj_isolate(VM *vm);
 void isolates_commit_globals(Program *program, size_t n);
+void isolates_free(Program *program);
 bool isolates_running(Program *program);
-bool program_stop(VM *vm);
-void program_go(VM *vm);
 void program_compile_lock(VM *vm);
 void program_compile_unlock(VM *vm);
-void isolate_fixup(VM *vm);
 V published_find(VM *vm, const char *bytes, size_t len);
 V program_copy_string(VM *vm, V string);
 
@@ -375,16 +369,17 @@ bool symbol_needed(VM *vm, V sym);
 enum { CELL_BITS = 28, KIND_SHIFT = 56, SEALED_BIT = 58, CALLED_BIT = 59, PUBLISHED_BIT = 60, MARK_BIT = 61 };
 #define CELL_MASK ((UINT64_C(1) << CELL_BITS) - 1)
 static inline bool symbol_published(V sym) { return (ptr(sym)[SYM_CELL] >> PUBLISHED_BIT) & 1; }
-static inline size_t symbol_global(V sym) { return (size_t)(ptr(sym)[SYM_CELL] >> CELL_BITS & CELL_MASK); }
+/* A number is given once, perhaps by another isolate meanwhile (objects.c). */
+static inline size_t symbol_global(V sym)
+{
+    return (size_t)(__atomic_load_n(&ptr(sym)[SYM_CELL], __ATOMIC_ACQUIRE) >> CELL_BITS & CELL_MASK);
+}
 /* A global's slot, or NULL when it has none and so no value; global_slot_new makes one first,
-   and is NULL only when it cannot. In a VM that is not the builder, a symbol with no number has
-   its value in the dictionary, whose entries move as it grows. global_slot_numbered is NULL
-   there instead: a slot that stays, for emitted code. */
-V *local_global(VM *vm, V sym);
+   and is NULL only when it cannot. Any VM may number a symbol. */
 static inline V *global_slot(VM *vm, V sym)
 {
     size_t n = symbol_global(sym);
-    return n ? &vm->globals[n] : vm->local_count ? local_global(vm, sym) : NULL;
+    return n ? &vm->globals[n] : NULL;
 }
 static inline V global_value(VM *vm, V sym)
 {
@@ -392,10 +387,8 @@ static inline V global_value(VM *vm, V sym)
     return slot ? *slot : V_CLEARED;
 }
 V *global_slot_new(VM *vm, V sym);
-V *global_slot_numbered(VM *vm, V sym);
 bool vm_globals_commit(VM *vm, size_t n);
 bool symbol_table_put(SymbolTable *t, V sym);
-V *symbol_table_slot(SymbolTable *t, uint64_t hash, const char *bytes, size_t len);
 uint64_t hash_bytes(const void *bytes, size_t len);
 
 static inline size_t string_length(V s) { return (size_t)hdr_size(ptr(s)[0]); }

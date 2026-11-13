@@ -142,7 +142,7 @@
          _ (put Name code Def)
          _ (restream Name)
          Checked (if (empty? Sig) [] (typed Name Params Sig Rules))
-      (if (tc?) (do (stub Name Def) (if (empty? Sig) Name Checked)) Def)))
+      (if (tc?) (do (stub Name Name Def) (if (empty? Sig) Name Checked)) Def)))
 
 \\ Typed grammars. A signature, {T1 --> T2 ==> B}, gives the parameters' types and the value's,
 \\ and is read as its symbols. What an alternative names, it gives to a function annotated with
@@ -284,31 +284,43 @@
     where (and (nonterminal? R) (cons? Args) (not (untyped? R)))
   [_ | Items] -> (checks Items))
 
-\\ A function compiled at its first call: Def, saved, and a stub that compiles it. Its variables
-\\ are checked now, as a definition's are, by compiling it to KL without running it.
+\\ A function of a rule, Owner, compiled once the functions its guards call exist: Def, saved, and
+\\ a stub that compiles it. Its variables are checked now, as a definition's are, by compiling it to
+\\ KL without running it. The macro runs as its file is read, before any of the file's forms
+\\ have, so in a load the stub waits until the form that defines Owner has run (shen-jit.after-form),
+\\ and the forms before it; outside a load it compiles at once. An isolate cannot compile, so what
+\\ it runs is compiled before it starts.
 (define stub
-  H Def -> (let Params (parameters Def)
-                _ (shen.shendef->kldef H (tl (tl Def)))
-                _ (put H loop Def)
-                _ (add-pending loops H)
-             (eval (append [define H | Params] [-> [compile H (list Params)]]))))
+  H Owner Def -> (let Params (parameters Def)
+                      _ (shen.shendef->kldef H (tl (tl Def)))
+                      _ (put H loop Def)
+                      Stub (eval (append [define H | Params] [-> [compile H (list Params)]]))
+                   (if (shen-jit.loading?) (do (add-pending loops [H Owner]) Stub) (do (compile-loop H) Stub))))
 
-\\ What compiles at a first call, kept for publication (shen-jit.on-publish), which compiles it
-\\ before isolates start, since an isolate cannot: the loops not compiled yet, and the rules that
-\\ reads name, whose streaming variants it prepares. On the builder's property list.
+\\ What waits for a later form, on the builder's property list: stubs with their rules, and the
+\\ rules that reads name, whose streaming variants are prepared once they can be.
 (define pending
   Key -> (trap-error (get pending Key) (/. E [])))
 
 (define add-pending
   Key X -> (put pending Key (adjoin X (pending Key))))
 
-(define publish-pending
-  -> (let Loops (pending loops)
-          _ (put pending loops [])
-          _ (map (/. H (compile-loop H)) Loops)
-       (map (/. R (trap-error (prepare R) (/. E skip))) (pending reads))))
+(define defined?
+  F -> (trap-error (do (shen-jit.function F) true) (/. E false)))
 
-(shen-jit.on-publish publish-pending)
+(define compile-pending
+  -> (let Loops (pending loops)
+          Ready (keep-if (/. E (defined? (hd (tl E)))) Loops)
+          _ (put pending loops (difference Loops Ready))
+          _ (map (/. E (compile-loop (hd E))) Ready)
+          Reads (pending reads)
+       (put pending reads (keep-if (/. R (not (trap-error (do (prepare R) true) (/. E false)))) Reads))))
+
+(define keep-if
+  _ [] -> []
+  F [X | Xs] -> (if (F X) [X | (keep-if F Xs)] (keep-if F Xs)))
+
+(shen-jit.after-form compile-pending)
 
 \\ A byte class, B where Guard and nothing else, is tested in place by the rules read after it.
 (define class
@@ -696,7 +708,7 @@
          Free (unique (intersection (symbols Body) Scope) [])
          Params [Buf At End S | Free]
          _ (grammar.arity [H | (length Params)])
-         _ (stub H (append [define H | Params]
+         _ (stub H Name (append [define H | Params]
                              [-> [let P Body [if [> P At] (append [H Buf P End S] Free) [if [= P -2] P At]]]]))
       [H | Free]))
 
@@ -706,11 +718,16 @@
 
 (define compile
   H Args -> (if (shen-jit.builder?)
-                (do (compile-loop H) (put pending loops (remove H (pending loops))) (apply (fn H) Args))
-                (error "grammar: ~A was defined after isolates started: (shen-jit.publish) compiles it" H)))
+                (do (compile-loop H) (put pending loops (unpend H (pending loops))) (apply (fn H) Args))
+                (error "grammar: ~A was not compiled before isolates started" H)))
 
 (define compile-loop
   H -> (eval (tables (get H loop))))
+
+(define unpend
+  _ [] -> []
+  H [[H | _] | Rest] -> (unpend H Rest)
+  H [E | Rest] -> [E | (unpend H Rest)])
 
 (define apply
   F [] -> F
@@ -754,7 +771,9 @@
 
 (define read-form
   Rule Reader Limit Fail ->
-    (do (add-pending reads (rule-name Rule))
+    (do (if (shen-jit.loading?)
+            (add-pending reads (rule-name Rule))
+            (trap-error (prepare (rule-name Rule)) (/. E skip)))
         [read-from (rule-name Rule) (list (rule-args Rule)) Reader Limit Fail]))
 
 \\ Typed code calls a typed rule's own functions, which have types.

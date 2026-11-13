@@ -1533,6 +1533,45 @@ elsewhere, against an estimate of 850 in all.
   after the worker scopes they replace; actor, since messages go to channels, not to the isolate; fiber or task, which
   suggest many cheap cooperative ones on one thread, a name kept for that if it ever comes.
 
+### Isolates made simpler (2026-11-12, Apple M3 Max, against the build without threads)
+
+The owner's decisions after step 3 (design D's spec, "Simplifications"), each taking machinery out:
+
+- **The program is fixed while isolates run.** Defining, foreign definitions and arities raise in the builder until
+  every other isolate has ended. Gone: the rendezvous, the blocking regions around foreign calls, C's release, stdin
+  and the compile lock, the re-asking every millisecond, and the publication counter. Few programs need to define
+  beside running isolates; one that does defines first, or waits for its isolates' ends.
+- **One table of symbols for every isolate.** At the first spawn the builder's own symbols are published, and from
+  then on a new name's symbol is made in the program space under a lock, by whichever isolate interns it; any
+  isolate numbers globals under the same lock. Gone: isolates' heap symbols, the fix-up collection, the per-isolate
+  dictionary of unnumbered globals with its sweep, and symbols crossing by name. **Cost:** no symbol is freed once
+  isolates exist. Two races ThreadSanitizer found in the lock-free lookup, on a test of eight isolates interning
+  and numbering 3,000 shared names each: a lookup re-read the empty entry where its probe stopped, which another
+  isolate could have filled with a different name, and without ordering; it now returns what the probe read. The
+  count of global numbers is read atomically by collections. With those, it reports nothing.
+- **`kill` at channel operations only.** A safe-point `kill` would need a loop check compiled into every loop once an
+  isolate exists, which cost 0.54 ns against 0.43 an empty loop turn on the Ryzen VM when threads needed it (under
+  "Threads"). A killed isolate now raises at its next send or receive, or before it starts, and is woken if it
+  waits; `ATTEND` and the recompiling at the first spawn are gone. A bug on the way: `send` checked only while the
+  channel was full, so a killed isolate sending into room went on; GC stress showed it.
+- **A definition's code holds only what the reader makes.** One holding a vector, closure or other value with no
+  syntax is refused rather than left in the builder's heap, where an isolate calling it would have crashed. So
+  function cells point only into the program space, and collections no longer scan them. Rejected: copying such
+  constants as read-only values, which would have needed the store check on every vector store. Native code's
+  `(const E)` follows the same rule.
+- **Grammars compile after the form that defines them.** Compiling at the end of the outermost load, decided first,
+  fails for a script, which is one load: an isolate it spawns would find loops not compiled, and the builder cannot
+  compile beside it. Compiling at definition, during macro expansion, comes before any of the file's functions exist,
+  as the kernel expands a whole file before evaluating it, so every guard calling one would lose its table. So a load
+  runs functions registered with `shen-jit.after-form` after each form, and the grammar library compiles there the
+  loops of rules whose forms have run. No guard in the libraries loses its table; two test grammars whose guards are
+  defined after them are now tested in place. Laziness had saved about 10 ms of an 80 ms load of the HTTP and JSON
+  libraries, 92 loops.
+- **Size and speed:** the runtime lost about 220 lines net, `isolate.c` going from 1,377 to 1,182. Benchmark suite,
+  alternating: geometric means 0.99 and 1.00 over two rounds. A spawn with its reply and end 47 to 48 µs against 49
+  to 52, a small message's round trip 4.1 µs against 4.2 to 4.3, a 40,000-element list's 3.17 to 3.20 ms against 3.37
+  to 3.45.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on

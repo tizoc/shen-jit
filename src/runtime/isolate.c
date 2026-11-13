@@ -2,14 +2,13 @@
    thread of its own, in a context of its own (a VM) over the builder's program, and they talk
    only through channels. A value crosses as a fragment: copied out of the sender's heap into
    blocks outside every heap, then into the receiver's, so no heap is read by two threads. What
-   is in the program space crosses by pointer, and a symbol of the sender's own by its name.
+   is in the program space crosses by pointer, symbols included, as every symbol is there once
+   isolates exist (objects.c).
 
-   One lock, the isolates' lock, guards the tables of isolates and channels and the counts of
-   the rendezvous; each isolate waits on a condition of its own. The builder changes the program
-   only while every other isolate is stopped: waiting on a channel, inside a blocking region, or
-   parked at a safe point, where its loop and entry checks bring it once its interrupt is ATTEND.
-   It holds the compile lock meanwhile, which compiling also takes, so nothing compiles against
-   cells being patched. */
+   The program does not change while isolates other than the builder run: defining refuses
+   (loader.c), so they need no safe points. One lock, the isolates' lock, guards the tables of
+   isolates and channels; each isolate waits on a condition of its own. The compile lock guards
+   compiling at a first call and the JIT's tables, which every isolate uses. */
 #define _DEFAULT_SOURCE
 #include "vm.h"
 #include "jit.h"
@@ -137,7 +136,7 @@ static bool map_put(Map *m, uintptr_t key, V value)
 /* ---------------------------------------------------------------------------------------------
    Isolates and channels */
 
-enum { STARTING, RUNNING, WAITING, STOPPED, ENDED };
+enum { STARTING, RUNNING, ENDED };
 
 typedef struct Isolate {
     Program *program;
@@ -145,9 +144,8 @@ typedef struct Isolate {
     pthread_cond_t wake;
     uint32_t index, generation;
     int state;
-    size_t blocked;    /* blocking regions it is in */
     bool killed;       /* for good, which its monitors are told */
-    bool kill_pending; /* until its next safe point raises it */
+    bool kill_pending; /* until its next channel operation raises it */
     bool ending;       /* monitors added now get down at once */
     V entry;           /* the procedure it runs, in the program space */
     Fragment *argument; /* until it takes it */
@@ -174,83 +172,23 @@ typedef struct Channel {
 
 typedef struct Isolates {
     pthread_mutex_t lock, compile;
-    pthread_cond_t stopped;
     Isolate **table; /* the builder's first */
     size_t n, cap;
     Channel *channels;
     size_t nchannels, channels_cap;
     size_t free_channel; /* the first free slot's index plus one, or 0 */
-    size_t running; /* isolates other than the builder that are not stopped */
-    bool rendezvous;
-    uint64_t epoch;         /* publications so far */
-    size_t published_count; /* published symbols when the rendezvous began */
-    size_t globals;         /* global slots every isolate has */
+    size_t globals;      /* global slots every isolate has */
     uint64_t spawned;
     V tag_isolate, tag_receiver, tag_sender, tag_given, end, down, normal, killed, ended;
     V constant_symbols[8], constant_values[8];
     size_t nconstants;
 } Isolates;
 
-/* Its turn at its next safe point: the interrupt first, then the limit, as a Ctrl-C does
-   (vm_set_limit). */
-static void attend(VM *vm)
-{
-    __atomic_store_n(&vm->interrupted, ATTEND, __ATOMIC_SEQ_CST);
-    vm->check_limit = NULL;
-}
-
-static bool counted(VM *vm) { return vm->isolate && vm->program->owner != vm; }
-
-/* With the lock held. */
-static void park(Isolates *ps, Isolate *p, int state)
-{
-    p->state = state;
-    ps->running--;
-    pthread_cond_signal(&ps->stopped);
-}
-
-/* With the lock held: once no rendezvous is going on, running again. */
-static void resume(Isolates *ps, Isolate *p)
-{
-    while (ps->rendezvous)
-        pthread_cond_wait(&p->wake, &ps->lock);
-    p->state = RUNNING;
-    ps->running++;
-}
-
-/* A publication since this isolate last looked: its next safe point collects. */
-static void note_epoch(Isolates *ps, VM *vm)
-{
-    if (vm->epoch_seen != ps->epoch)
-        attend(vm);
-}
-
-/* After a publication, before anything published can reach this isolate: a collection that
-   replaces its own symbols whose names have been published by the published ones (heap.c). */
-void isolate_fixup(VM *vm)
-{
-    Isolates *ps = vm->program->isolates;
-    if (!ps || !counted(vm))
-        return;
-    uint64_t epoch = __atomic_load_n(&ps->epoch, __ATOMIC_ACQUIRE);
-    if (vm->epoch_seen == epoch)
-        return;
-    vm->epoch_seen = epoch;
-    vm->fixup = true;
-    vm_collect(vm, 0);
-    vm->fixup = false;
-}
-
-/* The compile lock, recursive, as the builder collects while it holds it. An isolate waits for
-   it inside a blocking region, since the builder holds it for a whole rendezvous. */
+/* The compile lock, recursive, as the builder may collect while it holds it. */
 void program_compile_lock(VM *vm)
 {
-    Isolates *ps = vm->program->isolates;
-    if (!ps)
-        return;
-    isolate_block(vm);
-    pthread_mutex_lock(&ps->compile);
-    isolate_unblock(vm);
+    if (vm->program->isolates)
+        pthread_mutex_lock(&vm->program->isolates->compile);
 }
 
 void program_compile_unlock(VM *vm)
@@ -259,7 +197,8 @@ void program_compile_unlock(VM *vm)
         pthread_mutex_unlock(&vm->program->isolates->compile);
 }
 
-/* A new global number has a slot in every isolate before any code can use it. */
+/* A new global number has a slot in every VM before any code can use it, the builder's
+   included. Called with the lock that numbering takes (objects.c). */
 void isolates_commit_globals(Program *program, size_t n)
 {
     Isolates *ps = program->isolates;
@@ -268,48 +207,10 @@ void isolates_commit_globals(Program *program, size_t n)
     pthread_mutex_lock(&ps->lock);
     if (n > ps->globals)
         ps->globals = n;
-    for (size_t i = 1; i < ps->n; i++)
+    for (size_t i = 0; i < ps->n; i++)
         if (ps->table[i]->vm && ps->table[i]->state != ENDED)
             vm_globals_commit(ps->table[i]->vm, n);
     pthread_mutex_unlock(&ps->lock);
-}
-
-void isolate_block(VM *vm)
-{
-    Isolates *ps = vm->program->isolates;
-    if (!ps || !counted(vm))
-        return;
-    pthread_mutex_lock(&ps->lock);
-    if (vm->isolate->blocked++ == 0)
-        park(ps, vm->isolate, WAITING);
-    pthread_mutex_unlock(&ps->lock);
-}
-
-void isolate_unblock(VM *vm)
-{
-    Isolates *ps = vm->program->isolates;
-    if (!ps || !counted(vm))
-        return;
-    pthread_mutex_lock(&ps->lock);
-    if (--vm->isolate->blocked == 0) {
-        resume(ps, vm->isolate);
-        note_epoch(ps, vm);
-    }
-    pthread_mutex_unlock(&ps->lock);
-}
-
-/* With the lock held, in any isolate: waiting on its condition until woken, counted as
-   stopped meanwhile unless it is the builder. */
-static void wait_turn(Isolates *ps, VM *vm)
-{
-    Isolate *p = vm->isolate;
-    if (counted(vm))
-        park(ps, p, WAITING);
-    pthread_cond_wait(&p->wake, &ps->lock);
-    if (counted(vm)) {
-        resume(ps, p);
-        note_epoch(ps, vm);
-    }
 }
 
 /* Whether an isolate other than the builder has not ended. */
@@ -324,70 +225,6 @@ bool isolates_running(Program *program)
         any = ps->table[i]->state != ENDED;
     pthread_mutex_unlock(&ps->lock);
     return any;
-}
-
-/* The builder stops every other isolate, holding the compile lock until program_go. An isolate
-   that clears its interrupt just as this sets it may keep running past its frame checks, so
-   the request is made again until all are stopped. */
-bool program_stop(VM *vm)
-{
-    Isolates *ps = vm->program->isolates;
-    if (!ps || vm->program->owner != vm)
-        return false;
-    pthread_mutex_lock(&ps->compile);
-    pthread_mutex_lock(&ps->lock);
-    ps->rendezvous = true;
-    ps->published_count = vm->program->published.count;
-    while (ps->running > 0) {
-        for (size_t i = 1; i < ps->n; i++)
-            if (ps->table[i]->state == RUNNING && ps->table[i]->vm)
-                attend(ps->table[i]->vm);
-        struct timespec until;
-        clock_gettime(CLOCK_REALTIME, &until);
-        until.tv_nsec += 1000000;
-        if (until.tv_nsec >= 1000000000) {
-            until.tv_sec++;
-            until.tv_nsec -= 1000000000;
-        }
-        pthread_cond_timedwait(&ps->stopped, &ps->lock, &until);
-    }
-    pthread_mutex_unlock(&ps->lock);
-    return true;
-}
-
-void program_go(VM *vm)
-{
-    Isolates *ps = vm->program->isolates;
-    pthread_mutex_lock(&ps->lock);
-    ps->rendezvous = false;
-    if (vm->program->published.count != ps->published_count)
-        __atomic_add_fetch(&ps->epoch, 1, __ATOMIC_RELEASE);
-    for (size_t i = 1; i < ps->n; i++)
-        pthread_cond_signal(&ps->table[i]->wake);
-    pthread_mutex_unlock(&ps->lock);
-    pthread_mutex_unlock(&ps->compile);
-}
-
-/* At a safe point of an isolate whose interrupt is ATTEND: its turn, its fix-up, or a kill. */
-V isolate_attend(VM *vm)
-{
-    int asked = ATTEND;
-    __atomic_compare_exchange_n(&vm->interrupted, &asked, 0, false, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
-    vm_set_limit(vm, vm->stack_limit);
-    Isolates *ps = vm->program->isolates;
-    if (!ps || !counted(vm))
-        return V_NIL;
-    Isolate *p = vm->isolate;
-    pthread_mutex_lock(&ps->lock);
-    if (ps->rendezvous) {
-        park(ps, p, STOPPED);
-        resume(ps, p);
-    }
-    bool kill = p->kill_pending;
-    p->kill_pending = false;
-    pthread_mutex_unlock(&ps->lock);
-    isolate_fixup(vm);
-    return kill ? sj_raise(vm, "killed") : V_NIL;
 }
 
 /* A handle: [Tag Index Generation], an absvector of the caller's. Each tag is a function of the
@@ -457,13 +294,11 @@ static V out_value(Out *o, V v)
         return v;
     if (v == o->ps->end)
         return out_fail(o, "the end of a stream cannot be sent", V_NIL);
-    if (in_program(o->vm, ptr(v)) && !(is_symbol(v) && !symbol_published(v)))
+    if (in_program(o->vm, ptr(v)))
         return v;
     V known = map_get(&o->map, (uintptr_t)ptr(v));
     if (known)
         return known;
-    if (is_symbol(v))
-        return out_copy(o, v, SYM_WORDS); /* for its name, which the scan copies */
     if (is_pair(v))
         return out_copy(o, v, 2);
     if (is_proc(v))
@@ -545,9 +380,8 @@ static Fragment *fragment_out(VM *vm, V v, bool spawn, size_t **given, size_t *n
 }
 
 /* ---------------------------------------------------------------------------------------------
-   Copying in: a fragment into this context's heap. Its symbols are interned first, by name,
-   which may collect; then there is room for the rest at once, so nothing moves while it is
-   copied. */
+   Copying in: a fragment into this context's heap, with room for all of it made first, so that
+   nothing moves while it is copied. */
 
 static V in_value(VM *vm, Map *map, V v)
 {
@@ -566,42 +400,14 @@ static V in_value(VM *vm, Map *map, V v)
 
 static V fragment_in(VM *vm, Fragment *f)
 {
-    isolate_fixup(vm);
     if (!is_ptr(f->root) || in_program(vm, ptr(f->root)))
         return f->root;
-    size_t nsyms = 0;
-    for (size_t b = 0; b < f->nblocks; b++)
-        for (size_t w = 0; w < f->used[b]; w += fragment_object_words(f->blocks[b] + w))
-            nsyms += is_header(f->blocks[b][w]) && hdr_type(f->blocks[b][w]) == T_SYMBOL;
-    V *syms = calloc(nsyms ? nsyms : 1, sizeof *syms);
-    uint64_t **where = malloc((nsyms ? nsyms : 1) * sizeof *where);
-    if (!syms || !where) {
-        free(syms);
-        free(where);
-        return sj_raise(vm, "out of memory");
-    }
-    size_t k = 0;
-    bool ok = true;
-    for (size_t b = 0; b < f->nblocks && ok; b++)
-        for (size_t w = 0; w < f->used[b] && ok; w += fragment_object_words(f->blocks[b] + w)) {
-            uint64_t *s = f->blocks[b] + w;
-            if (!is_header(*s) || hdr_type(*s) != T_SYMBOL)
-                continue;
-            V name = s[SYM_NAME];
-            where[k] = s;
-            syms[k] = V_NIL;
-            vm_root(vm, &syms[k]);
-            syms[k] = intern(vm, string_bytes(name), string_length(name));
-            ok = syms[k++] != V_CLEARED;
-        }
     Map map = {NULL, NULL, 0, 0};
     V root = V_CLEARED;
     size_t stress = vm->stress;
     vm->stress = 0; /* the room made here is used here */
-    if (ok && ((size_t)(vm->hlimit - vm->hp) >= f->words || vm_collect(vm, f->words)) &&
+    if (((size_t)(vm->hlimit - vm->hp) >= f->words || vm_collect(vm, f->words)) &&
         (size_t)(vm->hlimit - vm->hp) >= f->words) {
-        for (size_t i = 0; i < k; i++)
-            map_put(&map, (uintptr_t)where[i], syms[i]);
         uint64_t *start = vm->hp;
         root = in_value(vm, &map, f->root);
         for (uint64_t *s = start; s < vm->hp; s += fragment_object_words(s)) {
@@ -617,11 +423,8 @@ static V fragment_in(VM *vm, Fragment *f)
         }
     }
     vm->stress = stress;
-    vm_unroot(vm, k);
     free(map.keys);
     free(map.values);
-    free(syms);
-    free(where);
     return root == V_CLEARED ? sj_raise(vm, "out of memory") : root;
 }
 
@@ -643,6 +446,10 @@ static Isolates *isolates_start(VM *vm)
     if (vm->program->isolates)
         return vm->program->isolates;
     if (vm->program->owner != vm)
+        return NULL;
+    /* Every symbol becomes the program's, and none is freed from now on: dead ones go first. */
+    vm_collect(vm, 0);
+    if (!program_publish_all(vm))
         return NULL;
     Isolates *ps = calloc(1, sizeof *ps);
     Isolate *self = calloc(1, sizeof *self);
@@ -686,7 +493,6 @@ static Isolates *isolates_start(VM *vm)
     pthread_mutex_init(&ps->compile, &recursive);
     pthread_mutexattr_destroy(&recursive);
     pthread_mutex_init(&ps->lock, NULL);
-    pthread_cond_init(&ps->stopped, NULL);
     pthread_cond_init(&self->wake, NULL);
     self->program = vm->program;
     self->vm = vm;
@@ -697,11 +503,6 @@ static Isolates *isolates_start(VM *vm)
     ps->cap = 16;
     ps->globals = vm->program->nglobals;
     vm->isolate = self;
-    /* Code compiled so far has no loop checks, which an isolate's turn needs. */
-    if (!vm->interruptible) {
-        vm->interruptible = true;
-        jit_recompile(vm);
-    }
     vm->program->isolates = ps;
     return ps;
 }
@@ -893,7 +694,7 @@ static void isolate_end(Isolate *p, V reason)
     for (size_t i = 0; i < ps->nchannels; i++)
         if (ps->channels[i].used && ps->channels[i].receiver == p)
             channel_free(ps, &ps->channels[i]);
-    park(ps, p, ENDED);
+    p->state = ENDED; /* with its monitors told, under the same lock */
     pthread_mutex_unlock(&ps->lock);
     free(fragments);
     free(monitors);
@@ -929,10 +730,7 @@ static void *isolate_main(void *argument)
     pthread_mutex_lock(&ps->lock);
     p->vm = vm;
     vm_globals_commit(vm, ps->globals > program->nglobals ? ps->globals : program->nglobals);
-    resume(ps, p);
-    vm->epoch_seen = ps->epoch;
-    if (p->kill_pending)
-        attend(vm);
+    p->state = RUNNING;
     pthread_mutex_unlock(&ps->lock);
 
     V reason = ps->normal, value = V_NIL;
@@ -954,7 +752,10 @@ static void *isolate_main(void *argument)
     pthread_mutex_lock(&ps->lock);
     fragment_free(p->argument);
     p->argument = NULL;
+    bool killed = p->kill_pending;
     pthread_mutex_unlock(&ps->lock);
+    if (ok && killed)
+        ok = sj_raise(vm, "killed") != V_CLEARED;
     if (ok)
         ok = jit_call(vm, p->entry, 1, &value) != V_CLEARED;
     if (!ok) {
@@ -1022,7 +823,6 @@ static Isolate *new_isolate(Isolates *ps, Program *program)
     p->program = program;
     p->vm = NULL;
     p->killed = p->kill_pending = p->ending = false;
-    p->blocked = 0;
     p->nmonitors = 0;
     free(p->end_text);
     p->end_text = NULL;
@@ -1109,10 +909,16 @@ static V spawn(VM *vm, Isolates *ps, V name, V argument)
     return sj_raise(vm, "shen-jit.spawn: cannot start a thread");
 }
 
+/* With the lock held: waiting on its condition until woken. */
+static void wait_turn(Isolates *ps, VM *vm)
+{
+    pthread_cond_wait(&vm->isolate->wake, &ps->lock);
+}
+
 /* With the lock held, which it releases if it says so: a kill to raise now. */
 static bool killed_now(VM *vm, Isolates *ps)
 {
-    if (!counted(vm) || !vm->isolate->kill_pending)
+    if (!vm->isolate->kill_pending)
         return false;
     vm->isolate->kill_pending = false;
     pthread_mutex_unlock(&ps->lock);
@@ -1224,6 +1030,10 @@ static V send(VM *vm, Isolates *ps, V sender, V v)
         return raise_copy(vm, error, offender);
     pthread_mutex_lock(&ps->lock);
     for (;;) {
+        if (killed_now(vm, ps)) {
+            fragment_free(f);
+            return sj_raise(vm, "killed");
+        }
         Channel *c = channel_at(ps, index, generation);
         if (!c || c->closed) {
             error = "channel closed";
@@ -1231,10 +1041,6 @@ static V send(VM *vm, Isolates *ps, V sender, V v)
         }
         if (enqueue(c, f))
             break;
-        if (killed_now(vm, ps)) {
-            fragment_free(f);
-            return sj_raise(vm, "killed");
-        }
         bool listed = false;
         for (size_t i = 0; i < c->nsenders; i++)
             listed |= c->senders[i] == vm->isolate;
@@ -1313,11 +1119,12 @@ static V monitor(VM *vm, Isolates *ps, V isolate)
     return r == V_CLEARED ? sj_raise(vm, "out of memory") : r;
 }
 
-V sj_isolate(VM *vm, V op, V a, V b)
+V sj_isolate(VM *vm)
 {
     Isolates *ps = isolates_start(vm);
     if (!ps)
         return sj_raise(vm, "isolates start in the builder");
+    V op = vm->args[0], a = vm->args[1], b = vm->args[2]; /* the first use may have collected */
     size_t index;
     uint32_t generation;
     switch (is_fix(op) ? fixval(op) : -1) {
@@ -1367,9 +1174,7 @@ V sj_isolate(VM *vm, V op, V a, V b)
         Isolate *p = isolate_at(ps, a);
         if (p && p != ps->table[0] && p->state != ENDED && !p->ending) {
             p->killed = p->kill_pending = true;
-            if (p->vm)
-                attend(p->vm);
-            pthread_cond_signal(&p->wake);
+            pthread_cond_signal(&p->wake); /* if it waits on a channel */
         }
         pthread_mutex_unlock(&ps->lock);
         return a;

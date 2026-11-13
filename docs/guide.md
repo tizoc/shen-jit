@@ -150,6 +150,11 @@ Options for Shen/JIT itself go before the command:
 A script whose first line starts with `#!` can run directly, with Shen/JIT on your `PATH`, and `load` skips that
 line. This does not work on Windows.
 
+A library can act after each form a load evaluates: `(shen-jit.after-form F)` registers `F`, a function of no
+arguments, to run then, and `(shen-jit.loading?)` says whether a load is going on. The kernel expands a whole file
+before it evaluates any of it, so what needs the definitions before it waits for this, as the grammar library
+compiling its loops does.
+
 ```shen
 #!/usr/bin/env -S shen-jit script
 (output "~A~%" (tl (value *argv*)))
@@ -296,8 +301,8 @@ are other programs.
 - **Closing:** a sender's `(shen-jit.close S)` ends the stream: the receiver gets what was queued, then a value that
   `shen-jit.end?` recognises. The receiver's close drops what is queued. Sending on a closed channel raises "channel
   closed". A channel is freed when its receiver closes it, reads its end, or ends, and not before.
-- **What crosses:** an argument or a message is copied, with its sharing and cycles. Symbols cross by name, so a
-  function goes by its name, and the isolate that gets it calls `(fn F)`. Closures made as the program runs, `fn`'s
+- **What crosses:** an argument or a message is copied, with its sharing and cycles. Symbols are the same in every
+  isolate, so a function goes by its name, and the isolate that gets it calls `(fn F)`. Closures made as the program runs, `fn`'s
   among them, streams and pointers are refused. A receive endpoint moves to a new isolate only in its argument,
   marked with `(shen-jit.give R)`, and its old holder can no longer read it.
 - **An isolate starts as a program does:** its globals are unbound and its property list is empty, so it takes what
@@ -305,12 +310,13 @@ are other programs.
   raise an error in any other.
 - **The end:** an isolate ends when its function returns, or raises an error that nothing catches, which is printed to
   stderr. `(shen-jit.monitor P)` returns a receive endpoint that gets `[down P Reason]` when `P` ends, the reason being
-  `normal`, the error's message, or `killed`. `(shen-jit.kill P)` raises "killed" at `P`'s next function entry or
-  loop turn, waking it if it waits on a channel, so that its handlers can clean up. `(shen-jit.self)` is the isolate
+  `normal`, the error's message, or `killed`. `(shen-jit.kill P)` raises "killed" at `P`'s next send or receive,
+  waking it if it waits on a channel, so that its handlers can clean up; an isolate busy elsewhere goes on until then. `(shen-jit.self)` is the isolate
   running. The program ends when the builder does, or when any isolate calls `(shen-jit.exit N)`.
-- **Defining while isolates run:** the builder can define at any time. Isolates stop for each definition and see
-  it at once. Grammars compile at their first call, which an isolate cannot do, so the builder compiles them before
-  each spawn; `(shen-jit.publish)` does it at other times.
+- **The program is fixed while isolates run:** defining raises an error in the builder until every other isolate has
+  ended, as a monitor tells. Define everything first, then spawn.
+- **Symbols are shared:** a symbol made in any isolate is the program's, and stays for as long as it runs, so names
+  that come from outside, such as a request's, belong in strings.
 - **Saving:** `shen-jit.save-executable` refuses while other isolates run, and in any isolate but the builder.
 
 ### Cleaning up
@@ -663,8 +669,8 @@ Windows reaches nothing, as the executable is static. A static Linux build canno
 A function takes at most 6 arguments that are not doubles and 8 that are, and no structs by value. After the result,
 two flags:
 
-- **`blocking`** marks a call that may wait, such as a read from a socket: the builder need not wait for an isolate
-  in one when it defines.
+- **`blocking`** marks a call that may wait, such as a read from a socket. It changes nothing now: nothing else
+  uses an isolate's heap while it waits.
 - **`(varargs N)`** marks a variadic function with N fixed arguments, from 1 to 3, all integers.
 
 ```shen
@@ -833,7 +839,7 @@ cc -shared -fPIC -I include -o libmine.so mine.c
   `shen_root_new` for longer. Reads do not allocate, so the loop above needs no root.
 - **Errors** come back by value, as `SHEN_ERROR`. `shen_call` calls Shen, and no `longjmp` crosses C, so a C library
   calling back is safe.
-- **Waiting:** `shen_release` and `shen_acquire` mark where C waits, touching no value.
+- **Waiting:** `shen_release` and `shen_acquire` mark where C waits, touching no value; they change nothing now.
 - **Limits:** up to 8 arguments, and a thread the runtime did not start cannot call in.
 
 > Test with `SHEN_JIT_GC_STRESS=1`, which collects at every allocation and finds most mistakes with values. `shen.h`
@@ -968,6 +974,8 @@ flat profile at exit, and `SHEN_JIT_STATS=1` prints the collector's work and the
 
 ### Differences from Shen/Scheme
 
+- **Code holds only what the reader makes.** A definition whose code holds a value with no syntax, such as a vector
+  put into a form given to `eval`, is refused, where Shen/Scheme keeps the value as a constant.
 - **No stlib in the default image.** Only the kernel and its extensions for features, programmable pattern matching, namespaces and the launcher are in use: see
   [The standard library](#the-standard-library).
 - **Fixnums only.** Integers are 62-bit, and a result outside that range raises `integer overflow`.

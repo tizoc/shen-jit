@@ -130,13 +130,15 @@ error of the caller's own, or return a value, which `grammar.parse` then returns
 
 A definition becomes `(define <rule> Buffer At End State -> ...)`, which returns the position after its
 match, or -1 when it does not match, and -2 when a require failed. A repetition becomes a function of
-its own, `<rule>/1` and so on, which loops by calling itself, and is compiled at its first call, when the
-functions its file defines exist. Since a file is read whole before any of it runs, `defgrammar` records
-each rule's arity as it is read, so that rules can call each other in any order.
+its own, `<rule>/1` and so on, which loops by calling itself. A file is read whole before any of it runs,
+so `defgrammar` records each rule's arity as it is read, so that rules can call each other in any order,
+and a load compiles a rule's loops once the form defining the rule has run, when the functions defined
+before it exist; outside a load, they compile at once. Isolates, which cannot compile, find them compiled.
 A byte class, a rule that is only `B where Guard`, is not called by the rules read after it: they test the
 byte in place, so that `(+ <tchar>)` is one loop with no call per byte, and a loop over a class is called only
-if its first byte matches. When a loop first runs, it evaluates each class's guard for all 256 bytes and tests a
-table from then on, so a class's guard must depend only on its byte; one that raises for some byte stays a test. Other small rules that do not name themselves are compiled in place too, up to three
+if its first byte matches. When a loop compiles, it evaluates each class's guard for all 256 bytes and tests a
+table from then on, so a class's guard must depend only on its byte; one that raises for some byte, or calls a
+function defined after the rule, stays a test. Other small rules that do not name themselves are compiled in place too, up to three
 deep. So define a grammar's parts before the rules that use them; a rule redefined later is not seen where an
 earlier definition was compiled in place.
 
@@ -200,8 +202,8 @@ This gives `[1 22 333]`. Rules without a value need no signature, and typed rule
 match them. The alternatives are checked as the clauses of a function, `<rule>.types`, so an error names
 the alternative, as in `type error in rule 2 of <numbers>.types`. A file is read whole before it is
 checked, so the arguments a typed rule gives a rule defined after it are checked too, and that rule must
-then be typed; a rule defined before it need not be. A typed rule is compiled at its first call, but its
-variables are checked as it is defined, as a definition's are.
+then be typed; a rule defined before it need not be. A typed rule is compiled after the form defining it,
+but its variables are checked as it is defined, as a definition's are.
 
 In typed code, `grammar.parse`, `grammar.match?`, `grammar.read` and `grammar.read-within` of a typed
 rule call functions that the signature declares: `<rule>.parse`, of type `T1 --> ... --> buffer.view -->
@@ -210,7 +212,7 @@ boolean`, and `<rule>.read`, of type `T1 --> ... --> io.reader --> number --> (n
 (grammar.read-result Value)) --> (grammar.read-result Value)`, whose number is the limit. A
 `(grammar.read-result A)` is `[ok A]`, `[eof]` or `[error Error]`, with an `io.error`, so a read's Fail
 gives one of those, or raises. `grammar.parse-range` is not typed. The loader would not accept a rule's own function, which has no
-type, so under `(tc +)` each rule is compiled at its first call, as a repetition is. Under `(tc -)` a
+type, so under `(tc +)` each rule is compiled as a repetition is. Under `(tc -)` a
 signature changes nothing in how a rule runs.
 
 ## Compared with defcc

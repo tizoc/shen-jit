@@ -429,7 +429,12 @@ bool load_stage0_sealed(VM *vm, const char *text, size_t len, size_t seal_until,
         V closure = build_closure(&l, nth(form, 2));
         if (closure == V_CLEARED)
             break;
-        closure = program_promote(vm, closure);
+        const char *why = NULL;
+        closure = program_promote(vm, closure, &why);
+        if (closure == V_CLEARED) {
+            fail(&l, why);
+            break;
+        }
         if (vm->program->redefine)
             vm->program->redefine(vm, symbol_cell(nth(form, 1)));
         *cell_function(vm, symbol_cell(nth(form, 1))) = closure;
@@ -463,6 +468,11 @@ V sj_install(VM *vm, V form)
         vm_unroot(vm, 1);
         return sj_raise_value(vm, "~S is sealed and cannot be redefined", name);
     }
+    /* The program is fixed while other isolates run, as they run it (isolate.c). */
+    if (defun && isolates_running(vm->program)) {
+        vm_unroot(vm, 1);
+        return sj_raise(vm, "the program cannot change while other isolates run");
+    }
     if (defun)
         result = build_closure(&l, nth(form, 2));
     else if (is_pair(form) && symbol_is(nth(form, 0), "code"))
@@ -471,20 +481,22 @@ V sj_install(VM *vm, V form)
         fail(&l, "install: expected (defun Name Code) or a code object");
     if (!l.error)
         bind_sealed(&l, true);
+    const char *refused = NULL;
     if (!l.error && defun) {
-        bool stopped = program_stop(vm); /* while isolates run, they stop meanwhile (isolate.c) */
-        result = program_promote(vm, result);
-        if (vm->program->redefine)
-            vm->program->redefine(vm, symbol_cell(nth(form, 1)));
-        *cell_function(vm, symbol_cell(nth(form, 1))) = result;
-        if (stopped)
-            program_go(vm);
-        if (vm->seal_user)
-            symbol_seal(nth(form, 1));
+        result = program_promote(vm, result, &refused);
+        if (result != V_CLEARED) {
+            if (vm->program->redefine)
+                vm->program->redefine(vm, symbol_cell(nth(form, 1)));
+            *cell_function(vm, symbol_cell(nth(form, 1))) = result;
+            if (vm->seal_user)
+                symbol_seal(nth(form, 1));
+        }
         result = nth(form, 1);
     }
     vm_unroot(vm, 1);
     free(l.buf);
     free(l.sealed_slot);
+    if (refused)
+        return sj_raise_text_value(vm, refused, result);
     return l.error ? sj_raise(vm, l.error) : result;
 }

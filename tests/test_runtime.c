@@ -372,7 +372,7 @@ static void test_image_round_trip(void)
     size_t k;
     CHECK(ra_push(&vm->program->consts, s[0], &k) && k == 0);
     *global_slot_new(vm, s[4]) = s[0];
-    *cell_function(vm, symbol_cell(s[4])) = ptr(s[0])[6];
+    *cell_arity(vm, symbol_cell(s[4])) = fix(2); /* a function cell holds only program code */
     char *before = render(s[0]);
     vm->top = vm->stack; /* nothing on the stack at a dump */
     CHECK(image_dump(vm, "test.img"));
@@ -388,7 +388,7 @@ static void test_image_round_trip(void)
     V sym = intern_cstr(loaded, "world-symbol");
     CHECK(sym == ptr(world)[4]);
     CHECK(global_value(loaded, sym) == world);
-    CHECK(*cell_function(loaded, symbol_cell(sym)) == ptr(world)[6]);
+    CHECK(*cell_arity(loaded, symbol_cell(sym)) == fix(2));
     CHECK(ptr(ptr(world)[6])[PROC_ENTRY] == (uint64_t)(uintptr_t)&stub);
     CHECK(ptr(ptr(world)[5])[CODE_NATIVE] == 0);
     CHECK(ptr(ptr(world)[7])[PROC_ENTRY] == (uint64_t)(uintptr_t)&stub);

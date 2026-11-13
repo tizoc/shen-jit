@@ -485,8 +485,10 @@ applies only to files read after it is defined.
 
 An operand follows Shen's conventions: a variable is a slot, a symbol is itself, and
 anything else is a constant, so `[1 2]` is a list. `(const E)` is the value of the
-expression E when the definition is evaluated, which may be any value, or a variable
-of the function around it when `define-native` is used inside one.
+expression E when the definition is evaluated, or a variable of the function around it
+when `define-native` is used inside one. As in any definition, a constant holds only what
+code can: symbols, numbers, strings, booleans and lists of them; a definition with another
+value, such as a vector, is refused when it is installed.
 
 | Form | Meaning |
 | --- | --- |

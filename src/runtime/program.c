@@ -156,6 +156,23 @@ bool program_publish(VM *vm, V sym)
     return true;
 }
 
+/* At the first spawn, the builder's own symbols are published, with their names, and from then
+   on the published table is shared (objects.c): no symbol is freed again. */
+bool program_publish_all(VM *vm)
+{
+    SymbolTable own = vm->own;
+    bool ok = true;
+    for (size_t i = 0; ok && i < own.cap; i++)
+        if (own.slots[i] && !symbol_published(own.slots[i]))
+            ok = program_publish(vm, own.slots[i]);
+    if (!ok)
+        return false;
+    free(own.slots);
+    vm->own = (SymbolTable){NULL, 0, 0, false, NULL, 0};
+    vm->program->published.shared = true;
+    return true;
+}
+
 /* Promotion: what a definition reaches is copied into the program space, each object once,
    with a table from the old address to the copy, so that sharing is kept. Only what cannot
    change is copied: pairs, strings, reals, code with its bytecode and constant slots, and the
@@ -424,7 +441,7 @@ static bool promotable(Promote *seen, V v)
    the FFI library makes it, once, and nothing reaches it again but the runtime, which only reads
    it. The address found at the first call is a raw field: two isolates finding it at once store
    the same word. */
-V program_promote_foreign(VM *vm, V proc)
+V program_promote_foreign(VM *vm, V proc, const char **why)
 {
     V desc = ptr(proc)[FOREIGN_DESC];
     size_t n = (size_t)hdr_size(ptr(desc)[0]);
@@ -434,8 +451,10 @@ V program_promote_foreign(VM *vm, V proc)
         ok = promotable(&check, ptr(desc)[1 + i]);
     free(check.keys);
     free(check.values);
-    if (!ok)
-        return proc;
+    if (!ok) {
+        *why = "~S: a foreign description may hold only symbols, numbers, strings and lists of them";
+        return V_CLEARED;
+    }
     Promote pr = {.vm = vm};
     uint64_t *d = copy_object(&pr, desc);
     for (size_t i = 0; d && i < n; i++)
@@ -449,21 +468,27 @@ V program_promote_foreign(VM *vm, V proc)
     free(pr.undo_slot);
     free(pr.undo_value);
     free(pr.codes);
-    return f && !pr.failed ? tagged(f, TAG_PROC) : proc;
+    if (!f || pr.failed) {
+        *why = "out of memory";
+        return V_CLEARED;
+    }
+    return tagged(f, TAG_PROC);
 }
 
-/* The closure of a definition being installed, in the program space; or the closure itself
-   when it cannot go there. */
-V program_promote(VM *vm, V closure)
+/* The closure of a definition being installed, in the program space; or V_CLEARED, with the reason
+   in *why. Code holds only what the reader makes, symbols, numbers, strings, booleans and lists of
+   them, which all go there: an object with no syntax, which only gets into a form by building it,
+   is refused, so no definition stays in a heap for an isolate to call. */
+V program_promote(VM *vm, V closure, const char **why)
 {
-    if (!vm->program->space.base)
-        return closure;
     Promote check = {.vm = vm};
     bool ok = promotable(&check, closure);
     free(check.keys);
     free(check.values);
-    if (!ok)
-        return closure;
+    if (!ok) {
+        *why = "~S: code may hold only symbols, numbers, strings, booleans and lists of them";
+        return V_CLEARED;
+    }
     Promote pr = {.vm = vm};
     V copy = promote(&pr, closure);
     /* Slots the owned table cannot mark stay roots, which costs a scan and nothing else. */
@@ -481,7 +506,11 @@ V program_promote(VM *vm, V closure)
     free(pr.ranges);
     free(pr.undo_slot);
     free(pr.undo_value);
-    return pr.failed ? closure : copy;
+    if (pr.failed) {
+        *why = "out of memory";
+        return V_CLEARED;
+    }
+    return copy;
 }
 
 /* A string in the program space, for a value every isolate reads, such as *version*; or

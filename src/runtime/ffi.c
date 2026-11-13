@@ -366,9 +366,8 @@ V h_foreign(VM *vm)
     memset(&c.call, 0, sizeof c.call);
     c.used = 0;
     c.nblocks = 0;
-    /* Nothing else moves this heap while it waits, so buffers are passed as they are; an isolate
-       waiting so is stopped for a rendezvous (isolate.c). */
-    bool blocking = flags & FLAG_BLOCKING;
+    /* A call that may wait (FLAG_BLOCKING) is an ordinary call: nothing else moves this heap
+       meanwhile, so buffers are passed as they are. */
     bool buffers = false;
     for (size_t i = 0; i < n; i++) {
         unsigned type = (unsigned)fixval(desc[DESC_TYPES + i]);
@@ -379,8 +378,6 @@ V h_foreign(VM *vm)
         }
     }
 
-    if (blocking)
-        isolate_block(vm);
     W word = 0;
     D real = 0;
     if (fixed)
@@ -394,8 +391,6 @@ V h_foreign(VM *vm)
 #else
     int error = errno, c_error = error;
 #endif
-    if (blocking)
-        isolate_unblock(vm);
     vm->foreign_error = error;
     vm->foreign_c_error = c_error;
 
@@ -432,6 +427,8 @@ static V define_foreign(VM *vm)
     V name = vm->args[0], desc = vm->args[1];
     if (!vm->builder)
         return sj_raise(vm, "only the builder can define functions");
+    if (isolates_running(vm->program))
+        return sj_raise(vm, "the program cannot change while other isolates run");
     if (!is_symbol(name))
         return sj_raise_value(vm, "shen-jit.foreign: ~S is not a symbol", name);
     if (symbol_sealed(name))
@@ -472,15 +469,15 @@ static V define_foreign(VM *vm)
     V proc = make_foreign(vm, desc, arity);
     if (proc == V_CLEARED)
         return sj_raise(vm, "out of memory");
-    bool stopped = program_stop(vm); /* while isolates run, they stop meanwhile (isolate.c) */
-    proc = program_promote_foreign(vm, proc);
+    const char *why = NULL;
+    proc = program_promote_foreign(vm, proc, &why);
+    if (proc == V_CLEARED)
+        return sj_raise_text_value(vm, why, vm->args[0]);
     name = vm->args[0]; /* it may have moved */
     size_t cell = symbol_cell(name);
     if (vm->program->redefine)
         vm->program->redefine(vm, cell);
     *cell_function(vm, cell) = proc;
-    if (stopped)
-        program_go(vm);
     if (vm->seal_user)
         symbol_seal(name);
     return name;
@@ -992,14 +989,14 @@ static shen_value api_exception_message(shen_vm *sv)
 
 static void *api_release(shen_vm *sv)
 {
-    isolate_block(vm_of(sv));
+    (void)sv; /* nothing else runs on this isolate's heap, so C waits as it likes */
     return NULL;
 }
 
 static void api_acquire(shen_vm *sv, void *token)
 {
+    (void)sv;
     (void)token;
-    isolate_unblock(vm_of(sv));
 }
 
 static const struct shen_api api_table = {

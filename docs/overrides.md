@@ -3,7 +3,7 @@
 Every kernel function that Shen/JIT replaces, in `src/port/shen-jit.kl`, and why. Stage 0 leaves out a kernel `defun` that the port also defines. Nothing
 is overridden just because another port does it: each entry was measured, and [development-log.md](development-log.md) has the numbers. Keep this current with each change.
 
-`make test-overrides` runs each of them beside the kernel's definition, from the KLambda, over generated values, except for `shen.read-evaluate-print`, `shen.toplevel-display-exception` and `shen.x.launcher.main`, which `tests/cli.sh` covers. Where they differ on purpose, `o.known` in `tests/overrides.shen` says how and why.
+`make test-overrides` runs each of them beside the kernel's definition, from the KLambda, over generated values, except for `shen.read-evaluate-print`, `shen.toplevel-display-exception` and `shen.x.launcher.main`, which `tests/cli.sh` covers, and `eval`, `shen.load-help`, `shen.eval-and-print`, `shen.work-through`, `shen.execute-store-arity`, `update-lambda-table` and `shen.update-lambda-table/precompiled`, which change the program, as a check must not. Where they differ on purpose, `o.known` in `tests/overrides.shen` says how and why.
 
 ## Also overridden by Shen/Scheme
 
@@ -61,7 +61,8 @@ The kernel's `shen.prolog-vector` makes an absvector of `(prolog-memory N)` word
 | `shen.record-kl` | Puts a name without a `shen.source` property straight on `shen.*userdefs*`, instead of an `adjoin` over every definition |
 | `shen.shendef->kldef-h`, `shen.record-and-evaluate` | Evaluate what `define` produced factorised, keeping `ps` as written: as with `(factorise +)`, a shared guard runs once and a vector's first element may be read early ([semantics.md](semantics.md), section 10) |
 | `shen.compute-integer`, `shen.compute-fraction-h`, `shen.compute-E` | Number reading as Shen/Scheme reads numbers: `8.0` reads as the integer 8, and literals beyond the fixnum range become the nearest real instead of overflowing ([semantics.md](semantics.md), section 3) |
-| `shen.read-evaluate-print`, `shen-jit.repl-read` | Backtraces, and ending the process at end of input |
+| `shen.load-help`, `shen.eval-and-print`, `shen.work-through` | After each form a load evaluates, run what `shen-jit.after-form` registered, and count how deep loads are, for `shen-jit.loading?`: the grammar library compiles a rule's loops once the form defining it has run, as a file's macros cannot wait for the functions its guards call |
+| `shen.read-evaluate-print`, `shen-jit.repl-read` | Backtraces, ending the process at end of input, and each input starting at a load depth of 0, as a load that raised leaves it as it was |
 | `shen.x.launcher.main` | Exit status 1 after an error or an unknown argument |
 
 ## Candidates found by profiling
