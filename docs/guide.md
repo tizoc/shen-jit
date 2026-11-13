@@ -156,8 +156,8 @@ line. This does not work on Windows.
 A library can act after each form a load evaluates: `(shen-jit.after-form F)` registers `F`, a function of no
 arguments, to run then, and `(shen-jit.loading?)` says whether a load is going on. The kernel expands a whole file
 before it evaluates any of it, so what needs the definitions before it waits for this, as the grammar library
-compiling its loops does. `(shen-jit.at-end F)` registers `F` to run as the isolate that registers it ends, after its
-function returns or raises, as the handle library releases what an ending isolate's handles hold.
+compiling its loops does. `(shen-jit.at-end F)` registers `F` to run once as the isolate that registers it ends,
+after its function returns or raises.
 
 ```shen
 #!/usr/bin/env -S shen-jit script

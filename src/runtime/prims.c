@@ -819,7 +819,9 @@ V exception_message(VM *vm, V e)
     vm_root(vm, &e);
     V string = make_string(vm, text, n);
     vm_unroot(vm, 1);
-    if (string != V_CLEARED) {
+    /* Kept for the next time, unless the exception was shared: the program space, which no
+       collection scans, must not point into a heap. */
+    if (string != V_CLEARED && !in_program(vm, ptr(e))) {
         ptr(e)[EXC_MESSAGE] = string;
         ptr(e)[EXC_VALUE] = V_CLEARED;
     }

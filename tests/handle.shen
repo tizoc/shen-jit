@@ -260,4 +260,31 @@
 (handle-test.check "and one that is killed" [killed released] (freeze (handle-test.released true)))
 (handle-test.check "a release that uses another handle runs first" [outer inner] (freeze (handle-test.order)))
 
+\\ So too for handles a global holds as the isolate ends, though the one a release uses, put in a box
+\\ the release holds, was made after it; and what it registered with shen-jit.at-end runs once.
+(define handle-test.boxed
+  [Out _] -> (let Box (absvector 1)
+                  Older (handle.wrap (memory.alloc 8)
+                          (/. M (do (shen-jit.u8 (<-address Box 0) 0) (memory.free M) (channel.send Out older))))
+                  Newer (handle.wrap (memory.alloc 8) (/. M (do (memory.free M) (channel.send Out newer))))
+                  _ (address-> Box 0 Newer)
+                  _ (set handle-test.kept [Older Newer])
+                  _ (set handle-test.out Out)
+               (shen-jit.at-end handle-test.ended)))
+
+(define handle-test.ended
+  -> (channel.send (value handle-test.out) ended))
+
+(define handle-test.boxed-order
+  -> (let R (channel.new 4)
+          M (isolate.monitor (isolate.spawn handle-test.boxed [(channel.sender R) []]))
+          _ (channel.receive M)
+       (handle-test.drain R)))
+
+(define handle-test.drain
+  R -> (if (= (channel.wait-any [R] 0) [timeout]) [] [(channel.receive R) | (handle-test.drain R)]))
+
+(handle-test.check "and for handles a global holds, the at-end function once" [ended older newer]
+  (freeze (handle-test.boxed-order)))
+
 (output "~A passed, ~A failed~%" (value handle-test.*passed*) (value handle-test.*failed*))

@@ -132,7 +132,7 @@ typedef struct Isolates {
     uint64_t spawned;
     uint32_t seed; /* where generations start, so that an endpoint saved in an image matches nothing */
     V tag_isolate, tag_receiver, tag_sender, tag_given, end, down, normal, killed, ended;
-    V start, ending; /* the port's shen-jit.start-isolate and shen-jit.isolate-ending, found once */
+    V start, ending, run, sweepers; /* the port's functions and global an isolate starts and ends with, found once */
     V constant_symbols[8], constant_values[8];
     size_t nconstants;
     size_t stress, max_words; /* the builder's settings, for every isolate, read here rather than in
@@ -491,6 +491,8 @@ static Isolates *isolates_start(VM *vm)
     ps->ended = publish(vm, "ended");
     ps->start = published_find(vm, "shen-jit.start-isolate", 22);
     ps->ending = published_find(vm, "shen-jit.isolate-ending", 23);
+    ps->run = published_find(vm, "shen-jit.run-at-end", 19);
+    ps->sweepers = published_find(vm, "shen-jit.*guards-dead*", 22);
     for (size_t i = 0; i < sizeof constant_names / sizeof constant_names[0]; i++) {
         V s = publish(vm, constant_names[i]);
         V value = s == V_CLEARED ? V_CLEARED : global_value(vm, s);
@@ -759,24 +761,16 @@ static void isolate_end(Isolate *p, V reason)
     for (size_t i = 0; i < n; i++)
         tell_monitor(ps, p, channel_at(ps, (size_t)(monitors[i] >> 32), (uint32_t)monitors[i]),
                      fragments ? fragments[i] : NULL);
-    /* Monitors made since it began to end wait for it to have ended: told the same way, in the
-       lock under which it then counts as ended. Making their messages allocates nothing in the
-       heap, so down stays where it is. */
-    while (p->nmonitors) {
-        uint64_t *late = p->monitors;
-        size_t m = p->nmonitors;
-        p->monitors = NULL;
-        p->nmonitors = p->monitors_cap = 0;
-        pthread_mutex_unlock(&ps->lock);
-        Fragment **told = calloc(m, sizeof *told);
-        for (size_t i = 0; told && down != V_CLEARED && i < m; i++)
-            told[i] = message(vm, down);
-        pthread_mutex_lock(&ps->lock);
-        for (size_t i = 0; i < m; i++)
-            tell_monitor(ps, p, channel_at(ps, (size_t)(late[i] >> 32), (uint32_t)late[i]), told ? told[i] : NULL);
-        free(told);
-        free(late);
-    }
+    /* Monitors made since it began to end wait for it to have ended: told here too, in the lock
+       under which it then counts as ended, so that none is told before. Their messages are made
+       under it, as copying one out takes no lock and allocates nothing in the heap, where down
+       stays. */
+    for (size_t i = 0; i < p->nmonitors; i++)
+        tell_monitor(ps, p, channel_at(ps, (size_t)(p->monitors[i] >> 32), (uint32_t)p->monitors[i]),
+                     down == V_CLEARED ? NULL : message(vm, down));
+    free(p->monitors);
+    p->monitors = NULL;
+    p->nmonitors = p->monitors_cap = 0;
     for (size_t i = 0; i < ps->nchannels; i++)
         if (ps->channels[i].used && ps->channels[i].receiver == p)
             channel_free(ps, &ps->channels[i]);
@@ -791,6 +785,38 @@ static void isolate_end(Isolate *p, V reason)
     pthread_mutex_unlock(&ps->lock);
 }
 
+/* Collections and releases, until a collection finds none of the guards left dead. Run releases
+   what is on the dead list, through the functions in sweepers. */
+static void release_rounds(VM *vm, V run, V *sweepers)
+{
+    for (;;) {
+        size_t before = vm->nguards;
+        vm_collect(vm, 0);
+        if (vm->dead != V_NIL)
+            jit_call(vm, run, 1, sweepers);
+        if (vm->nguards == before)
+            return;
+    }
+}
+
+/* With the lock held: an isolate that could not start, for want of memory, ends as one that ran,
+   so that nothing waits on it for ever: its monitors are told [down P ended], the channels given
+   to it are freed, and its argument goes. */
+static void failed_start(Isolates *ps, Isolate *p)
+{
+    for (size_t i = 0; i < p->nmonitors; i++)
+        tell_monitor(ps, p, channel_at(ps, (size_t)(p->monitors[i] >> 32), (uint32_t)p->monitors[i]), NULL);
+    free(p->monitors);
+    p->monitors = NULL;
+    p->nmonitors = p->monitors_cap = 0;
+    for (size_t i = 0; i < ps->nchannels; i++)
+        if (ps->channels[i].used && ps->channels[i].receiver == p)
+            channel_free(ps, &ps->channels[i]);
+    fragment_free(p->argument);
+    p->argument = NULL;
+    p->ended = true;
+}
+
 /* It starts as a program does (docs/design.md): the program's constants and the standard
    streams, then the port's run state, with its gensyms counted from a base of its own. */
 static void *isolate_main(void *argument)
@@ -799,29 +825,27 @@ static void *isolate_main(void *argument)
     Program *program = p->program;
     Isolates *ps = program->isolates;
     VM *vm = vm_create_context(program, CONTEXT_WORDS, CONTEXT_STACK);
-    if (!vm) {
-        fputs("shen-jit: an isolate cannot start: out of memory\n", stderr);
-        pthread_mutex_lock(&ps->lock);
-        p->ended = true;
-        for (size_t i = 0; i < p->nmonitors; i++) { /* told, or what waits on it would wait for ever */
-            tell_monitor(ps, p, channel_at(ps, (size_t)(p->monitors[i] >> 32), (uint32_t)p->monitors[i]), NULL);
-        }
-        free(p->monitors);
-        p->monitors = NULL;
-        p->nmonitors = p->monitors_cap = 0;
-        fragment_free(p->argument);
-        p->argument = NULL;
+    if (vm) {
+        vm->isolate = p;
+        vm->stress = ps->stress;
+        vm->max_words = ps->max_words;
+        vm_note_thread_stack(vm);
+    }
+    /* Its slots catch up with globals numbered since its context was made, under the lock under
+       which another isolate numbering one commits a slot in every context listed. */
+    pthread_mutex_lock(&ps->lock);
+    size_t numbered = __atomic_load_n(&program->nglobals, __ATOMIC_ACQUIRE);
+    if (!vm || !vm_globals_commit(vm, ps->globals > numbered ? ps->globals : numbered)) {
+        failed_start(ps, p);
         pthread_mutex_unlock(&ps->lock);
+        fputs("shen-jit: an isolate cannot start: out of memory\n", stderr);
+        if (vm) {
+            vm->isolate = NULL;
+            vm_destroy(vm);
+        }
         return NULL;
     }
-    vm->isolate = p;
-    vm->stress = ps->stress;
-    vm->max_words = ps->max_words;
-    vm_note_thread_stack(vm);
-    pthread_mutex_lock(&ps->lock);
     p->vm = vm;
-    size_t numbered = __atomic_load_n(&program->nglobals, __ATOMIC_ACQUIRE);
-    vm_globals_commit(vm, ps->globals > numbered ? ps->globals : numbered);
     pthread_mutex_unlock(&ps->lock);
 
     V reason = ps->normal, value = V_NIL;
@@ -859,21 +883,29 @@ static void *isolate_main(void *argument)
             reason = text == V_CLEARED ? ps->ended : text;
         }
     }
-    /* What it holds through guards, as the handle library's handles, is released as it ends, by
-       what the isolate registered to run then, which the port runs. In rounds: a collection finds
-       dead what nothing reaches, whose releases may leave more unreached, as a release may use
-       another handle, which outlives it; then what is left, as through a global, newest first, as
-       such a handle was made before. An error there is dropped, as nothing is left to tell. */
-    V run = ps->ending ? *cell_function(vm, symbol_cell(ps->ending)) : V_CLEARED;
-    if (is_proc(run)) {
-        for (size_t before = vm->nguards; before; before = vm->nguards) {
-            vm_collect(vm, 0);
-            jit_call(vm, run, 0, NULL);
-            if (vm->nguards == before)
-                break;
+    /* As it ends, what it registered with shen-jit.at-end runs, once. Then what its guards hold, as
+       the handle library's handles, is released by what it registered with shen-jit.at-guards-dead,
+       in rounds, as collections order them: a release may use another handle, which outlives it
+       until that release has run. Its globals then go, as they die with it, and the rounds go on,
+       so that what they held is released in that order too; what is left holds itself, as a
+       cycle, and goes at once. Errors there are dropped, as nothing is left to tell. */
+    V ending = ps->ending ? *cell_function(vm, symbol_cell(ps->ending)) : V_CLEARED;
+    if (is_proc(ending))
+        jit_call(vm, ending, 0, NULL);
+    V run = ps->run ? *cell_function(vm, symbol_cell(ps->run)) : V_CLEARED;
+    V sweepers = ps->sweepers ? global_value(vm, ps->sweepers) : V_CLEARED;
+    if (is_proc(run) && is_pair(sweepers)) {
+        vm_root(vm, &sweepers);
+        value = V_NIL;
+        release_rounds(vm, run, &sweepers);
+        if (vm->nguards) {
+            for (size_t i = 1; i < vm->globals_committed; i++)
+                vm->globals[i] = V_CLEARED;
+            release_rounds(vm, run, &sweepers);
         }
         if (vm->nguards && vm_guards_all_dead(vm))
-            jit_call(vm, run, 0, NULL);
+            jit_call(vm, run, 1, &sweepers);
+        vm_unroot(vm, 1);
     }
     vm_unroot(vm, 2);
     isolate_end(p, reason);
@@ -1003,9 +1035,13 @@ static V spawn(VM *vm, Isolates *ps, V name, V argument)
             ps->channels[given[i] >> 32].receiver = p;
     }
     pthread_mutex_unlock(&ps->lock);
-    if (p && start_thread(p)) {
+    /* Its handle is made before it starts, so that nothing can fail once it runs: one that could
+       not be given back would run with nothing to stop it, owning what its argument gave it. The
+       record waits meanwhile, its argument keeping it from being used again. */
+    V h = p ? handle(vm, ps->tag_isolate, index, generation) : V_CLEARED;
+    if (h != V_CLEARED && start_thread(p)) {
         free(given);
-        return made(vm, handle(vm, ps->tag_isolate, index, generation)); /* it runs even so */
+        return h;
     }
     pthread_mutex_lock(&ps->lock);
     if (p) {
@@ -1017,7 +1053,7 @@ static V spawn(VM *vm, Isolates *ps, V name, V argument)
     pthread_mutex_unlock(&ps->lock);
     free(given);
     fragment_free(fragment);
-    return sj_raise(vm, "isolate.spawn: cannot start a thread");
+    return sj_raise(vm, p && h == V_CLEARED ? "out of memory" : "isolate.spawn: cannot start a thread");
 }
 
 /* With the lock held: waiting on its condition until woken, or until the time given. The builder
@@ -1239,10 +1275,12 @@ static V monitor(VM *vm, Isolates *ps, V isolate)
                 p->monitors_cap = cap;
             }
         }
-        if (p->nmonitors < p->monitors_cap)
+        if (p->nmonitors < p->monitors_cap) {
             p->monitors[p->nmonitors++] = (uint64_t)i << 32 | generation;
-        else
-            ended = true; /* told at once rather than never */
+        } else { /* not told at all, nor told while it runs: no monitor */
+            channel_free(ps, &ps->channels[i]);
+            i = SIZE_MAX;
+        }
     }
     pthread_mutex_unlock(&ps->lock);
     if (i == SIZE_MAX) {

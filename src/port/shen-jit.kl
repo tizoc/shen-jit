@@ -754,15 +754,20 @@ and the REPL starts each input at 0."
 (defun shen-jit.run-after (Fs)
   (if (= Fs ()) shen.skip (do (shen-jit.apply (hd Fs) ()) (shen-jit.run-after (tl Fs)))))
 
-"As an isolate ends, after its function returns or raises, it runs each function
-of no arguments it registered with (shen-jit.at-end F), the last first, once its
-guards count as dead, so that the handle library can release what its handles
-hold. An error from one is dropped. The builder's run only as an isolate's would:
+"As an isolate ends, after its function returns or raises, it runs once each
+function of no arguments it registered with (shen-jit.at-end F), the last first.
+Then, in rounds, as collections find its guards' pointers dead, it runs each it
+registered with (shen-jit.at-guards-dead F), which takes their values off the
+list, as the handle library's sweep releases what its handles hold (isolate.c).
+An error from one is dropped. The builder's run only as an isolate's would:
 never, as the program ends with it."
 
 (defun shen-jit.at-end-list () (trap-error (value shen-jit.*at-end*) (lambda E ())))
 
 (defun shen-jit.at-end (F) (set shen-jit.*at-end* (adjoin F (shen-jit.at-end-list))))
+
+(defun shen-jit.at-guards-dead (F)
+  (set shen-jit.*guards-dead* (adjoin F (trap-error (value shen-jit.*guards-dead*) (lambda E ())))))
 
 (defun shen-jit.isolate-ending () (shen-jit.run-at-end (shen-jit.at-end-list)))
 
@@ -882,11 +887,11 @@ from a template, which needs the arity."
               (cons isolate.kill (cons 1 (cons isolate.self (cons 0 (cons channel.next (cons 1
               (cons channel.wait-any (cons 2 (cons isolate.check-kill (cons 0 (cons isolate.share (cons 1
                 (cons isolate.spawn-each (cons 2 (cons isolate.stop-each (cons 1
-                (cons shen-jit.after-form (cons 1 (cons shen-jit.loading? (cons 0 (cons shen-jit.at-end (cons 1
+                (cons shen-jit.after-form (cons 1 (cons shen-jit.loading? (cons 0 (cons shen-jit.at-end (cons 1 (cons shen-jit.at-guards-dead (cons 1
                 (cons shen.tuple (cons 1 (cons shen.pvar (cons 1 (cons shen.dictionary (cons 1
                 (cons shen-jit.print-isolate (cons 1 (cons shen-jit.print-receiver (cons 1
                   (cons shen-jit.print-sender (cons 1 (cons shen-jit.print-given (cons 1
-                    ())))))))))))))))))))))))))))))))))))))))))))))))))))))))
+                    ())))))))))))))))))))))))))))))))))))))))))))))))))))))))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-2 (cons a (cons b ()))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-3 (cons a (cons b (cons c ())))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-4 (cons a (cons b (cons c (cons d ()))))))

@@ -276,19 +276,25 @@
             ((io.socket-again? Code) true)
             (true (note-error S (io.socket-error accept "HTTP listener" Code))))))
 
-\\ The connection's isolate owns the socket from its start, and the supervisor never touches it.
+\\ The connection's isolate owns the socket and its stop channel from its start, and the supervisor
+\\ never touches the socket. Until then a failure closes both; after, it kills the isolate, which
+\\ closes them as it ends, as a connection that is not listed could not be stopped.
 (define launch
   S Peer ->
-    (let Stop (channel.new 1)
-         Sender (channel.sender Stop)
-         P (socket.closing-on-error Peer
-             (freeze (isolate.spawn connection-isolate
-                       [Peer (server.handler S) (request-options S) (server.port S) (server.control S)
-                        (channel.give Stop)])))
-         Cs [[P (isolate.monitor P) Sender] | (server.connections S)]
-         _ (server.connections-> S Cs)
-         _ (server.accepted-> S (+ 1 (server.accepted S)))
-      (if (> (length Cs) (server.peak S)) (server.peak-> S (length Cs)) true)))
+    (let Stop (socket.closing-on-error Peer (freeze (channel.new 1)))
+         P (shen-jit.on-error
+             (freeze (socket.closing-on-error Peer
+                       (freeze (isolate.spawn connection-isolate
+                                 [Peer (server.handler S) (request-options S) (server.port S) (server.control S)
+                                  (channel.give Stop)]))))
+             (freeze (trap-error (channel.close Stop) (/. E skip))))
+      (shen-jit.on-error (freeze (listed S P Stop)) (freeze (isolate.kill P)))))
+
+(define listed
+  S P Stop -> (let Cs [[P (isolate.monitor P) (channel.sender Stop)] | (server.connections S)]
+                   _ (server.connections-> S Cs)
+                   _ (server.accepted-> S (+ 1 (server.accepted S)))
+                (if (> (length Cs) (server.peak S)) (server.peak-> S (length Cs)) true)))
 
 \\ A connection's requests, under its limits and deadlines, until it ends; once the server stops,
 \\ it closes after its active response is written. A failure ends it and is counted, not raised.

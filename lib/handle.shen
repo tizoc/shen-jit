@@ -54,9 +54,10 @@
                      (make-room)
                      Handle)))
 
-\\ An isolate that has made a handle sweeps as it ends, when every guard counts as dead.
+\\ An isolate that has made a handle sweeps as it ends, in rounds as its guards die, so that a release
+\\ that uses another handle runs before that one's.
 (define sweep-at-end
-  -> (if (trap-error (value *at-end*) (/. E false)) true (do (shen-jit.at-end sweep) (set *at-end* true))))
+  -> (if (trap-error (value *at-end*) (/. E false)) true (do (shen-jit.at-guards-dead sweep) (set *at-end* true))))
 
 (define make-room
   -> (if (> (held) (held-limit))

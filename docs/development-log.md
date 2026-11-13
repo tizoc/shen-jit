@@ -2016,6 +2016,34 @@ experiments of a Fable review that was cut short, which reproduced two. Eleven, 
 - **Left as it is:** in an isolate, `read-from-string` fails with "shen.*source-form-handlers* has no value" rather than
   saying it is the builder's; that reader expands, which only the builder does.
 
+### What a third review found (2026-11-13, Apple M3 Max, against the commit before)
+
+The same reviewer again, on the fixes above. Ten, all fixed; it found no speed-up worth its code:
+
+- **The end of an isolate, again.** The at-end functions ran only inside the release rounds, so never for an isolate
+  with no guards, and once a round for one with them, and a guard already dead when none was left stayed unswept. And
+  handles a global held still went newest first at the last, where a release that uses another, through a box filled
+  after, ran after it. The at-end functions run once now; releases go through a registration of their own,
+  `shen-jit.at-guards-dead`, which the rounds call; and once no round frees more, the isolate's globals go, as they
+  die with it, and the rounds go on, so the collector orders those too; only a cycle goes at once. A case each: a
+  hook with no guards ran never, and with a handle in a global twice, its releases newest first.
+- **A shared exception** kept the text `error-to-string` made it in its message slot, a pointer from the program
+  space into a heap, which no collection updates; one in the program space is formatted each time now.
+- **Starting.** An isolate's slots catching up with globals numbered meanwhile ignored a failed commit, and ran on
+  with slots that were not there; it ends as one that could not start, as does one whose context cannot be made, and
+  both free the channels given to them, which stayed with a receiver that had gone. A spawn made the handle it
+  returns after the child ran, so a failure there left a child no one could stop, owning what it was given, as an
+  accepted connection's socket; the handle is made first.
+- **Monitors, again.** Telling the late ones let go of the lock between the first ones and the end, so a first one
+  could be read while the isolate still counted as running; all are told in one hold of the lock now. And a monitor
+  that could not be listed was told at once, though the isolate ran; it raises "out of memory" now.
+- **Cleanup after the fixes above.** `parallel`'s new close of a failed launch's replies called `map`, which that
+  namespace shadows with its own, and closed nothing. The HTTP listener made a connection's stop channel before the
+  socket was guarded, closed neither on every failure, and could leave a running connection unlisted; a failure before
+  the spawn closes both, and after it kills the connection. The `sqlite-http` owner, whose monitor failed to be made,
+  ran on; its stream is closed then.
+- **design.md** still said that only the builder numbers globals, and that an isolate keeps a dictionary for the rest.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on

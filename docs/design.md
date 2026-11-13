@@ -312,13 +312,14 @@ fit, so that a stale pointer fails at once. `SHEN_JIT_SLOW_PRIMS` compiles every
 A program runs as isolates over one program: each runs the program's definitions on an OS thread
 of its own, with its own heap, globals and property list, inherits nothing, and talks to others
 only through channels. Only the builder, the isolate a program starts as, defines: it alone
-installs code, records arities and gives globals their numbers, and in any other VM `eval`,
-`eval-kl`, installing, foreign definitions and recording an arity raise an error.
+installs code and records arities, and in any other VM `eval`, `eval-kl`, installing, foreign
+definitions and recording an arity raise an error. Any isolate may give a global its number, as
+below.
 
 The runtime is split the same way. What every isolate will share is a `Program`: the program space,
 the published symbols, function cells with arities, constant slots, global numbering, and the JIT
 with its native code. A `VM` is one context, pointing at its program: heap, stack, handlers, global
-slots and dictionary, its own symbols and C roots. Emitted code reads only the context through the
+slots, its own symbols and C roots. Emitted code reads only the context through the
 VM register, and reaches cells and constants at addresses that never move. The program's roots may
 point into one heap, its owner's, the builder's, whose collections alone scan and sweep them.
 
@@ -327,8 +328,7 @@ symbols in the program space, arities beside function cells, and global numbers.
 name's lambda form when first asked, from the arity, and keeps it in the property vector: the
 builder compiles it, as before, and an isolate, which cannot evaluate, makes it from a template
 whose last call reads the name's function cell inline. A primitive's cell holds a definition
-made from a code object at startup, so a template can call primitives too. An isolate gives a value to a global
-with no number in a dictionary of its own, since only the builder numbers.
+made from a code object at startup, so a template can call primitives too.
 
 An isolate starts as a program does: its globals are unbound, the program's constants are
 put back, the standard streams made, and the port's `shen-jit.start-isolate` sets the run
@@ -385,11 +385,13 @@ something else, as the I/O library's socket waits do in slices of 100 ms, calls
 `isolate.check-kill` between them; in the builder, or before isolates exist, it does nothing. An isolate that
 cannot start, for want of memory for its context, tells its monitors too, with a message laid out by hand, as it has
 no heap to make one in; so does one whose down message cannot be made, and if even that cannot be, the monitor is
-closed, so that nothing waits on it for ever. An isolate that ends first runs what it registered with
-`shen-jit.at-end`, so that the handle library releases what its handles hold, in rounds: a collection
-finds dead what nothing reaches, as a release may use another handle, which then outlives it, and
-what those releases leave unreached dies in the next; then every guard left counts as dead, the newest
-first. Then it tells its monitors, closes its files
+closed, so that nothing waits on it for ever. An isolate that ends first runs, once, what it
+registered with `shen-jit.at-end`; then what it registered with `shen-jit.at-guards-dead`, as the
+handle library's sweep, in rounds: a collection finds dead the guarded pointers nothing reaches, and
+a release may use another handle, which outlives it until that release has run and so dies in a
+later round. Its globals then go, as they die with it, and the rounds go on, so that what they held
+is released in that order too; only a cycle is left, which goes at once. Then it tells its monitors,
+closes its files
 and the channels it receives on, and frees its context; its record keeps why it ended, as a symbol
 or an error's text, so that a monitor that comes after, as one made just after a spawn can, is
 told at once with the same reason, until the record is used again with a new generation. Then,

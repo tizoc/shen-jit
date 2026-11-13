@@ -38,7 +38,8 @@ All notable changes to this project are documented in this file. The format is b
   worker image is needed.
 - Grammars work in isolates: a load compiles a rule's loops after the form defining it, and prepares the streaming
   reads that code names. `shen-jit.after-form` registers a function to run after each form of a load, and
-  `shen-jit.at-end` one to run as the registering isolate ends.
+  `shen-jit.at-end` one to run once as the registering isolate ends, and `shen-jit.at-guards-dead` one to run then
+  as its guarded pointers die, in rounds.
 - The handle library releases what an isolate's handles still hold as the isolate ends.
 
 ### Changed

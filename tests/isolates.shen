@@ -515,6 +515,27 @@
 
 (pt.check "an isolate prints tuples and dictionaries" ["(@p 1 2)" "(dict ...)"] (pt.ask pt.printed []))
 
+\\ What an isolate registers with shen-jit.at-end runs once as it ends. A shared exception formats
+\\ alike each time, keeping nothing of a heap.
+(define pt.tell-end
+  -> (channel.send (value pt.out) ended-once))
+
+(define pt.register-end
+  [_ Out] -> (do (set pt.out Out) (shen-jit.at-end pt.tell-end) done))
+
+(pt.check "an at-end function runs once" [ended-once [timeout]]
+  (let R (channel.new 4)
+       M (isolate.monitor (isolate.spawn pt.register-end [[] (channel.sender R)]))
+       _ (channel.receive M)
+       X (if (= (channel.wait-any [R] 0) [timeout]) none (channel.receive R))
+    [X (channel.wait-any [R] 0)]))
+
+(pt.check "a shared exception formats alike each time" ["three: 3" "three: 3"]
+  (let E (isolate.share (trap-error (error "three: ~A" 3) (/. X X)))
+       A (error-to-string E)
+       _ (shen-jit.collect)
+    [A (error-to-string E)]))
+
 \\ ---------------------------------------------------------------------------------------------
 \\ Many at once, and many in turn.
 

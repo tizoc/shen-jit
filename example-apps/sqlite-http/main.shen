@@ -101,11 +101,14 @@
   X -> (if (= (error-to-string X) "channel closed") skip (simple-error (error-to-string X))))
 
 \\ Starts the owning isolate: [Db Monitor], Db for the handlers and Monitor for the owning isolate's end.
+\\ A failure before it starts closes its channel; after, closing the send endpoint ends it.
 (define counter-app.open
   Path -> (let R (channel.new 64)
-               Db [Path (channel.sender R)]
-               I (isolate.spawn counter-app.owner [Path (channel.give R)])
-            [Db (isolate.monitor I)]))
+               Requests (shen-jit.on-error (freeze (channel.sender R)) (freeze (channel.close R)))
+               I (shen-jit.on-error (freeze (isolate.spawn counter-app.owner [Path (channel.give R)]))
+                                    (freeze (channel.close R)))
+               Monitor (shen-jit.on-error (freeze (isolate.monitor I)) (freeze (channel.close Requests)))
+            [[Path Requests] Monitor]))
 
 (define counter-app.db
   [Db _] -> Db)

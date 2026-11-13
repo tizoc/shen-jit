@@ -67,7 +67,8 @@
                                                    (freeze (close-replies Replies))))))
 
 (define close-replies
-  Replies -> (map (/. R (trap-error (channel.close R) (/. E skip))) Replies))
+  [] -> true
+  [R | Replies] -> (do (trap-error (channel.close R) (/. E skip)) (close-replies Replies)))
 
 (define replies
   [] -> []
