@@ -334,8 +334,7 @@ An isolate starts as a program does: its globals are unbound, the program's cons
 put back, the standard streams made, and the port's `shen-jit.start-isolate` sets the run
 state with the kernel's starting values: a new property vector, Prolog's memory and
 counters, the printer's settings, and `gensym` counting from a base of its own, so that
-names made in two isolates never meet. `test_kl --isolate` does the same in a VM that
-was the builder (`sj_start_isolate`), to test it without spawning.
+names made in two isolates never meet.
 
 **Spawning** (`isolate.c`). `shen-jit.spawn` takes the name of a function of one argument
 whose procedure is in the program space, and a value, which it copies into a fragment: blocks
@@ -349,7 +348,9 @@ copies, with a table from old addresses to copies instead of forwarding pointers
 sender's objects are untouched and nothing allocates in its heap meanwhile; sharing and cycles
 are kept. What lies in the program space crosses by pointer: symbols, constants and the
 program's functions. The receiver makes room for all of it first, so nothing moves while it is
-copied. Closures in a heap, streams, pointers, code and the end of a stream are refused. A receive endpoint moves only in a spawn's argument, marked by
+copied. A byte buffer or string of 256 KB or more, which a fragment keeps in a block of its own,
+is not copied in: the block becomes one of the receiver's large objects as it is, so a big
+message costs one copy, in the sender, and the receiver's collections never copy it. Closures in a heap, streams, pointers, code and the end of a stream are refused. A receive endpoint moves only in a spawn's argument, marked by
 `shen-jit.give`, which hands its channel to the child.
 
 **Channels.** A table outside every heap, under the isolates' lock, holds each channel's
@@ -361,12 +362,17 @@ time limit for `shen-jit.wait-any`, which looks at several receive endpoints wit
 so that a supervisor can wake for whichever of its connections ends and still look at a socket
 or a clock now and then. A monitor is a channel of capacity 1 that gets `[down P Reason]` when P
 ends. `kill` marks the isolate, which raises "killed", once, at its next channel operation or
-`shen-jit.check-kill`, or before it starts, and wakes it if it waits on a channel: an isolate
-needs no safe points, and code compiled for one is what any program runs. What waits on
+`shen-jit.check-kill`, even if the kill came before it started, so that its handlers clean up
+what its argument holds, and wakes it if it waits on a channel: an isolate needs no safe points,
+and code compiled for one is what any program runs. What waits on
 something else, as the I/O library's socket waits do in slices of 100 ms, calls
-`shen-jit.check-kill` between them; in the builder, or before isolates exist, it does nothing. An isolate that ends tells its monitors, closes its files
-and the channels it receives on, and frees its context; its record is used again with a new
-generation.
+`shen-jit.check-kill` between them; in the builder, or before isolates exist, it does nothing. An isolate that
+cannot start, for want of memory for its context, tells its monitors too, with a message laid out by hand, as it has
+no heap to make one in. An isolate that ends tells its monitors, closes its files
+and the channels it receives on, and frees its context; its record keeps why it ended, as a symbol
+or an error's text, so that a monitor that comes after, as one made just after a spawn can, is
+told at once with the same reason, until the record is used again with a new generation. Then,
+or for one that could not start, the reason is `ended`.
 
 **The program is fixed while isolates run.** Defining, foreign definitions and arities are
 refused while an isolate other than the builder has not ended, so nothing patches the code
@@ -416,11 +422,14 @@ masks the bit out, so neither pays for it. That replaced testing on every store 
 address lies in the program space, which would have added the space's bounds, a subtraction and
 a comparison to every store. It is never freed. C given a shared buffer must not write into it.
 
-**Signals.** A Ctrl-C is the builder's: isolates start with SIGINT blocked. Loops test for an interrupt
-only in code compiled once the REPL catches Ctrl-C, when everything is compiled again, and in code an
-isolate compiles, which the builder runs too. `SIGPIPE` has a handler that does nothing, set at
-startup, so that a write to a closed pipe fails and raises; being a handler and not `SIG_IGN`, exec
-resets it, and a child finds the default.
+**Signals.** A Ctrl-C is the builder's: isolates start with SIGINT blocked. Whether loops test for
+an interrupt is the program's, as its code is shared: only code compiled once the REPL catches
+Ctrl-C does, by any isolate, and everything is compiled again then, under the compile lock and the
+lock under which isolates add to the program space, which the walk reads. The builder waits on a
+channel in slices of 50 ms, as a signal handler cannot wake it, and raises "interrupted" between
+them. Each REPL input notes how many isolates had been spawned, the count that numbers their
+gensyms, and a Ctrl-C that stops it kills those numbered after. `SIGPIPE` has a handler that does nothing, set at startup, so that a write to a closed pipe
+fails and raises; being a handler and not `SIG_IGN`, exec resets it, and a child finds the default.
 
 **Not yet.** A channel whose receive endpoint is dropped stays until its receiver ends.
 

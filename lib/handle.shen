@@ -16,8 +16,10 @@
 \\
 \\ Release runs in the next call to handle.wrap or handle.sweep after a collection that finds the
 \\ handle dead, in whichever isolate that is. A program that stops making handles and never calls
-\\ handle.sweep leaves the rest to the system when it ends. An error from Release raises in
-\\ handle.close and is dropped in handle.sweep, which has no caller to tell.
+\\ handle.sweep leaves the rest to the system when it ends, and so does an isolate that ends with
+\\ handles alive: one that makes them, as a server's connection might, closes them before it ends.
+\\ An error from Release raises in handle.close and is dropped in handle.sweep, which has no caller
+\\ to tell.
 \\
 \\ A copy from shen-jit.pointer-sized keeps its handle alive, unless the handle is closed: it must
 \\ not be used after that. Release must not refer to the handle, or the handle will never die. It

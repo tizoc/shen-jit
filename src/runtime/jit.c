@@ -97,6 +97,7 @@ struct Jit {
     void *stubs;
     FILE *perf_map; /* address, size and name of each compiled code object */
     bool slow_prims; /* compilation policy, for every VM of the program */
+    bool interruptible; /* the REPL catches SIGINT: loops test interrupted, in code any VM compiles */
     /* For backtraces: the return address of every call in compiled code,
        with the call's window offset in slots, in an open-addressing table
        (0 is an empty entry). */
@@ -1679,12 +1680,13 @@ static void emit_call(Emit *e, const uint32_t *p)
 }
 
 /* A loop back to the body skips the entry checks, so it tests for a pending
-   interrupt itself, in code compiled once the REPL catches Ctrl-C, or by an
-   isolate: elsewhere SIGINT ends the program, and the test would only cost
-   time. The REPL's catching has everything compiled again (jit_recompile). */
+   interrupt itself, in code compiled once the REPL catches Ctrl-C, by any VM,
+   as code is shared: elsewhere SIGINT ends the program, and the test would
+   only cost time. The REPL's catching has everything compiled again
+   (jit_catch_interrupts). */
 static void emit_loop_check(Emit *e)
 {
-    if (!e->vm->interruptible)
+    if (!e->vm->program->jit->interruptible)
         return;
     Slow *s = slow_path(e, SLOW_LOOP, sljit_emit_cmp(e->c, SLJIT_NOT_EQUAL | SLJIT_32, VMF(interrupted), IMM(0)));
     s->back = sljit_emit_label(e->c);
@@ -3679,7 +3681,7 @@ static void *compile_code(VM *vm, V code)
        below a caller's reservation, or jit_call's margin. Unless the REPL
        catches Ctrl-C, tail calls do not count. */
     Slow *grow = NULL;
-    if (!leaf(words, nwords, !vm->interruptible) || e.frame > LEAF_FRAME) {
+    if (!leaf(words, nwords, !vm->program->jit->interruptible) || e.frame > LEAF_FRAME) {
         sljit_emit_op2(c, SLJIT_ADD, R0, FP, 0, IMM((e.frame + LEAF_FRAME) * sizeof(V)));
         grow = slow_path(&e, SLOW_GROW, sljit_emit_cmp(c, SLJIT_GREATER, R0, VMF(check_limit)));
         grow->words = e.arity;
@@ -4158,12 +4160,23 @@ static void uncompile(VM *vm, uint64_t *from, uint64_t *to)
     }
 }
 
-void jit_recompile(VM *vm)
+/* From now on loops test for an interrupt, so everything compiled before is compiled again when
+   next called. Under the compile lock, as an isolate may be compiling, and the lock under which an
+   isolate adds to the program space, as the walk reads it. */
+void jit_catch_interrupts(VM *vm)
 {
+    Jit *jit = vm->program->jit;
+    if (jit->interruptible)
+        return;
+    program_compile_lock(vm);
+    jit->interruptible = true;
     vm_collect(vm, 0); /* so that the heap can be walked */
+    program_shared_lock();
     uncompile(vm, vm->space, vm->live_end);
     uncompile(vm, vm->program->space.objects, vm->program->space.objects_next);
     vm->program->nnatives = 0; /* never freed: frames may be running it */
+    program_shared_unlock();
+    program_compile_unlock(vm);
 }
 
 void jit_attach(VM *vm, Jit *jit)

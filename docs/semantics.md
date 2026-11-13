@@ -61,7 +61,9 @@ states which fields hold values:
 | Exception | Message string, and a value that goes before it, or none. An error raised from C keeps the offending value apart; `error-to-string` builds the full message the first time it is asked. |
 | Stream | Kind, direction, open flag; raw OS handle. |
 | Pointer | Kind and what keeps it alive; raw address and length. Its header says whether it is read only. |
-| Shared view | A worker scope's read-only input: raw address and length, cleared when the scope ends and in an image. Equal only to itself; prints as `#<shared-bytes>`. |
+
+An absvector or byte buffer that `shen-jit.share` made lies outside every heap and is shared by every isolate:
+it reads as any, is equal to an unshared one with the same contents, and raises on a store.
 
 There is no partial-application object: KLambda named calls are saturated (see
 section 9), so only closures and foreign functions are ever applied.

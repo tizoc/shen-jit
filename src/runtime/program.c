@@ -180,9 +180,7 @@ bool program_publish_all(VM *vm)
    in the heap, as before. Nothing here allocates in the heap, so nothing moves meanwhile. */
 typedef struct {
     VM *vm;
-    uintptr_t *keys;
-    V *values;
-    size_t cap, n;
+    AddrMap moved;
     size_t *ranges; /* constant slots of code copied: start and length, in pairs */
     size_t nranges, ranges_cap;
     /* What each slot held before it got a copy, to put back if the promotion fails: a slot
@@ -195,51 +193,55 @@ typedef struct {
     bool failed;
 } Promote;
 
-static size_t moved_index(const Promote *pr, uintptr_t key)
+/* From an object's old address to its copy (vm.h), here and in isolate.c's copier. */
+static size_t addr_map_index(const AddrMap *m, uintptr_t key)
 {
-    return (size_t)((key >> 3) * 0x9E3779B97F4A7C15u) & (pr->cap - 1);
+    return (size_t)((key >> 3) * UINT64_C(0x9E3779B97F4A7C15) >> 20) & (m->cap - 1);
 }
 
-static V moved_get(const Promote *pr, uintptr_t key)
+V addr_map_get(const AddrMap *m, uintptr_t key)
 {
-    if (!pr->cap)
+    if (!m->cap)
         return 0;
-    for (size_t i = moved_index(pr, key);; i = (i + 1) & (pr->cap - 1)) {
-        if (!pr->keys[i])
+    for (size_t i = addr_map_index(m, key);; i = (i + 1) & (m->cap - 1)) {
+        if (!m->keys[i])
             return 0;
-        if (pr->keys[i] == key)
-            return pr->values[i];
+        if (m->keys[i] == key)
+            return m->values[i];
     }
 }
 
-static bool moved_put(Promote *pr, uintptr_t key, V value)
+bool addr_map_put(AddrMap *m, uintptr_t key, V value)
 {
-    if (2 * (pr->n + 1) > pr->cap) {
-        size_t cap = pr->cap ? 2 * pr->cap : 256;
-        uintptr_t *keys = calloc(cap, sizeof *keys);
-        V *values = malloc(cap * sizeof *values);
-        if (!keys || !values) {
-            free(keys);
-            free(values);
+    if (2 * (m->n + 1) > m->cap) {
+        size_t cap = m->cap ? 2 * m->cap : 64;
+        AddrMap grown = {calloc(cap, sizeof(uintptr_t)), malloc(cap * sizeof(V)), cap, 0};
+        if (!grown.keys || !grown.values) {
+            addr_map_free(&grown);
             return false;
         }
-        Promote grown = {.vm = pr->vm, .keys = keys, .values = values, .cap = cap};
-        for (size_t i = 0; i < pr->cap; i++)
-            if (pr->keys[i])
-                moved_put(&grown, pr->keys[i], pr->values[i]);
-        free(pr->keys);
-        free(pr->values);
-        pr->keys = keys;
-        pr->values = values;
-        pr->cap = cap;
+        for (size_t i = 0; i < m->cap; i++)
+            if (m->keys[i])
+                addr_map_put(&grown, m->keys[i], m->values[i]);
+        addr_map_free(m);
+        *m = grown;
     }
-    size_t i = moved_index(pr, key);
-    while (pr->keys[i])
-        i = (i + 1) & (pr->cap - 1);
-    pr->keys[i] = key;
-    pr->values[i] = value;
-    pr->n++;
+    size_t i = addr_map_index(m, key);
+    while (m->keys[i])
+        i = (i + 1) & (m->cap - 1);
+    m->keys[i] = key;
+    m->values[i] = value;
+    m->n++;
     return true;
+}
+
+void addr_map_free(AddrMap *m)
+{
+    free(m->keys);
+    free(m->values);
+    m->keys = NULL;
+    m->values = NULL;
+    m->cap = m->n = 0;
 }
 
 static V fail_promotion(Promote *pr)
@@ -256,11 +258,11 @@ static V promote_pair(Promote *pr, V v)
     V first = V_CLEARED;
     uint64_t *last = NULL;
     while (is_pair(v) && !in_program(pr->vm, ptr(v))) {
-        V known = moved_get(pr, (uintptr_t)ptr(v));
+        V known = addr_map_get(&pr->moved, (uintptr_t)ptr(v));
         if (known)
             break;
         uint64_t *q = program_alloc(pr->vm, 2);
-        if (!q || !moved_put(pr, (uintptr_t)ptr(v), tagged(q, TAG_PAIR)))
+        if (!q || !addr_map_put(&pr->moved, (uintptr_t)ptr(v), tagged(q, TAG_PAIR)))
             return fail_promotion(pr);
         q[0] = q[1] = V_NIL;
         if (last)
@@ -284,7 +286,7 @@ static uint64_t *copy_object(Promote *pr, V v)
 {
     size_t words = obj_words(ptr(v)[0]);
     uint64_t *q = program_alloc(pr->vm, words);
-    if (!q || !moved_put(pr, (uintptr_t)ptr(v), tagged(q, tag3(v)))) {
+    if (!q || !addr_map_put(&pr->moved, (uintptr_t)ptr(v), tagged(q, tag3(v)))) {
         pr->failed = true;
         return NULL;
     }
@@ -366,7 +368,7 @@ static V promote(Promote *pr, V v)
             return fail_promotion(pr);
         return v;
     }
-    V known = moved_get(pr, (uintptr_t)ptr(v));
+    V known = addr_map_get(&pr->moved, (uintptr_t)ptr(v));
     if (known)
         return known;
     if (is_pair(v))
@@ -399,9 +401,9 @@ static bool promotable(Promote *seen, V v)
 {
     VM *vm = seen->vm;
     for (;;) {
-        if (!is_ptr(v) || in_program(vm, ptr(v)) || moved_get(seen, (uintptr_t)ptr(v)))
+        if (!is_ptr(v) || in_program(vm, ptr(v)) || addr_map_get(&seen->moved, (uintptr_t)ptr(v)))
             return true;
-        if (!moved_put(seen, (uintptr_t)ptr(v), v))
+        if (!addr_map_put(&seen->moved, (uintptr_t)ptr(v), v))
             return false;
         uint64_t *p = ptr(v);
         if (is_pair(v)) {
@@ -449,8 +451,7 @@ V program_promote_foreign(VM *vm, V proc, const char **why)
     bool ok = true;
     for (size_t i = 0; ok && i < n; i++)
         ok = promotable(&check, ptr(desc)[1 + i]);
-    free(check.keys);
-    free(check.values);
+    addr_map_free(&check.moved);
     if (!ok) {
         *why = "~S: a foreign description may hold only symbols, numbers, strings and lists of them";
         return V_CLEARED;
@@ -462,8 +463,7 @@ V program_promote_foreign(VM *vm, V proc, const char **why)
     uint64_t *f = d && !pr.failed ? copy_object(&pr, proc) : NULL;
     if (f)
         f[FOREIGN_DESC] = tagged(d, TAG_OBJECT);
-    free(pr.keys);
-    free(pr.values);
+    addr_map_free(&pr.moved);
     free(pr.ranges);
     free(pr.undo_slot);
     free(pr.undo_value);
@@ -483,8 +483,7 @@ V program_promote(VM *vm, V closure, const char **why)
 {
     Promote check = {.vm = vm};
     bool ok = promotable(&check, closure);
-    free(check.keys);
-    free(check.values);
+    addr_map_free(&check.moved);
     if (!ok) {
         *why = "~S: code may hold only symbols, numbers, strings, booleans and lists of them";
         return V_CLEARED;
@@ -501,8 +500,7 @@ V program_promote(VM *vm, V closure, const char **why)
     for (size_t i = 0; pr.failed && i < pr.ncodes; i++)
         pr.codes[i][CODE_NCONST] = pr.codes[i][CODE_NCODE] = 0;
     free(pr.codes);
-    free(pr.keys);
-    free(pr.values);
+    addr_map_free(&pr.moved);
     free(pr.ranges);
     free(pr.undo_slot);
     free(pr.undo_value);

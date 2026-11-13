@@ -1781,6 +1781,41 @@ keys, each isolate runs it on every input fact and its keys' derived facts, and 
   given and programs that run whole; the batch's 108 checks against an independent BFS, with 0 to 5, 32 and 64
   isolates giving the same ordered output.
 
+### Large messages taken over, and what was left before pushing (2026-11-13, Apple M3 Max, against the commit before)
+
+- **A received large buffer is taken, not copied.** A fragment gives an object of 256 KB or more a block of exactly
+  its size, the same shape as a heap's large object, so the receiver takes the blocks of byte buffers and strings into
+  its list of large objects as they are, and copies the rest; room for both is made first, so that nothing collects
+  once a block is taken. Before, a big message was copied into the young heap and copied again by each collection,
+  and the builder gathering a run in parts collected to make room for each part's database, copying the earlier ones
+  again. About 60 lines. Runs in parts, best of three, three rounds alternating: the sparse closure in 12 parts 14.7
+  to 14.8 → 11.9 to 12.0 ms, the skewed join in 12 parts 25.6 to 27.6 → 20.1 to 21.0, and in 4 parts 28 to 29 → 26
+  to 29 and 35 to 37 → 32 to 33.
+- **Ideas weighed with Fable**, which ranked the same first: taking the blocks of an isolate that is ending too, so
+  that not even the sender copies, would cut peak memory more than time, as the senders copy in parallel, and needs a
+  new operation; left until a measurement asks. Rejected: reference-counted buffers shared by the isolates, as an
+  Erlang binary is, which would freeze the sender's buffer at a send, need atomics and help only buffers; keeping the
+  parts' databases in their isolates, which makes every query N round trips and ties isolates' lives to
+  collections; and shared storage that can be freed, which needs every collector to report what it reaches, and still
+  copies once.
+- **Rejected: trimming a part's tuples to those it has before sending.** Relations grow by doubling, but the hash
+  tables, which cannot be trimmed, are most of what crosses: the builder kept 39.0 → 37.4 MB for the sparse closure
+  and 77.9 → 70.4 for the skewed join, at the same times within noise.
+- **An isolate that cannot start tells its monitors.** Without memory for its context it set its monitors to none, so
+  whatever waited on it waited for ever; it now queues `[down P ended]`, laid out by hand as no heap is there to make
+  it in. Checked once with the context's creation made to fail by hand after 50 ms, so that the monitor came first.
+- **A kill before an isolate started** raised before its function ran, so what its argument held was never cleaned
+  up: the HTTP listener, at a grace of 0, could leave a connection's socket open. Now it raises at the first channel
+  operation or `check-kill`, as any kill does, and the special case is gone.
+- **Ctrl-C at a REPL running an HTTP server**, which the listener's page said stopped it as a failure does, was not
+  tested; tested, it returned to the prompt with the server still listening: an interrupt is raised again until the
+  REPL's handler is the innermost, so the supervisor's cleanup cannot finish. The page now says what happens, that
+  running the server again goes on, and that a stop then a run closes it, which a CLI case checks.
+- **Found by ThreadSanitizer:** a new isolate took the GC-stress setting from the builder's record while the builder
+  set it to 0 for a moment, receiving; runs in parts start isolates as the builder receives. Isolates now read the
+  builder's settings from the isolates' own record, written as they start.
+- **`docs/semantics.md`** still listed the removed workers' shared view; it describes shared values now.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on

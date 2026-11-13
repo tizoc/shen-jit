@@ -273,7 +273,7 @@ static void test_symbols(void)
     *global_slot_new(vm, valued) = fix(7);
     symbol_mark_called(intern_cstr(vm, "called"));
     vm_collect(vm, 0);
-    CHECK(vm->nsymbols == 3);
+    CHECK(vm->program->published.count + vm->own.count == 3);
     CHECK(vm->program->nfree_cells > 0);
     CHECK(intern_cstr(vm, "abc") == s[0]);
     CHECK(ptr(s[0])[SYM_HASH] == hash);

@@ -196,7 +196,7 @@ static void print_stats(void)
             fprintf(stderr, " %s %zu (%zu KB)%s", names[t], count[t], words[t] * sizeof(uint64_t) / 1024,
                     t + 1 < T_LIMIT ? "," : "");
     fprintf(stderr, "\nshen-jit: roots: %zu symbols, %zu function cells, %zu global slots, %zu constant slots\n",
-            stats_vm->nsymbols, stats_vm->program->cells.count / 2, stats_vm->program->nglobals - 1, stats_vm->program->consts.count);
+            stats_vm->program->published.count + stats_vm->own.count, stats_vm->program->cells.count / 2, stats_vm->program->nglobals - 1, stats_vm->program->consts.count);
     const Space *p = &stats_vm->program->space;
     fprintf(stderr, "shen-jit: program space: %zu KB of objects, %zu symbols published, %zu KB of symbol slots\n",
             (size_t)(p->objects_next - p->objects) * sizeof(uint64_t) / 1024, stats_vm->program->published.count,

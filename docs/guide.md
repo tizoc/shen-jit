@@ -112,8 +112,10 @@ Errors name the value they are about, and show where they happened:
   in test
 ```
 
-- **Ctrl-C** stops a running evaluation, or a program waiting for input, and returns to the prompt. At the prompt
-  it drops what you have typed of an expression.
+- **Ctrl-C** stops a running evaluation, or a program waiting for input or on a channel, and returns to the prompt.
+  At the prompt it drops what you have typed of an expression. It is raised again at every check until the prompt's
+  own handler has it, so a program's handlers cannot clean up; the prompt then kills the isolates the evaluation
+  spawned, which end at their next channel operation, and those spawned by earlier inputs go on.
 - **Ctrl-D** ends the REPL. On Windows, use Ctrl-Z then Enter, or `(shen-jit.exit 0)`.
 - **Line editing:** the REPL has none of its own. For history and arrow keys, run it under
   [rlwrap](https://github.com/hanslub42/rlwrap): `rlwrap shen-jit`.
@@ -319,6 +321,10 @@ are other programs.
   `(shen-jit.self)` is the isolate running. The program ends when the builder does, or when any isolate calls `(shen-jit.exit N)`.
 - **The program is fixed while isolates run:** defining raises an error in the builder until every other isolate has
   ended, as a monitor tells. Define everything first, then spawn.
+- **Isolates for the parts of a call:** `(shen-jit.spawn-each F Args)` spawns `F` with each of `Args`, each with a
+  monitor, and gives `[[P | Monitor] ...]`; if one cannot start, it stops those it started. `(shen-jit.stop-each
+  Started)` kills them, waits for each to end and closes the monitors, as a call's cleanup does when its wait
+  raises, so that none is left waiting on one that is gone.
 - **Symbols are shared:** a symbol made in any isolate is the program's, and stays for as long as it runs, so names
   that come from outside, such as a request's, belong in strings.
 - **A parallel map:** [`lib/parallel.shen`](https://github.com/tizoc/shen-jit/blob/main/docs/parallel.md) gives
@@ -329,6 +335,8 @@ are other programs.
   or byte buffers raises, and a shared dictionary cannot change. It is never freed. What cannot be sent cannot be
   shared.
 - **Saving:** `shen-jit.save-executable` refuses while other isolates run, and in any isolate but the builder.
+  `--save` writes the builder's image even so, as the program ends then: what isolates hold is not saved, and what
+  they add to the program meanwhile waits until the image is written.
 
 ### Cleaning up
 
@@ -1062,8 +1070,8 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-libs` | `test-buffer`, `test-json`, `test-io`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl`, `test-namespaces` and `test-parallel` |
 | `make test` | The runtime's unit tests |
 | `make test-jit`, `make test-ops` | The JIT and the instructions, on small programs |
-| `make test-kl` | The `eval-kl` cases, the lowerer running inside Shen/JIT against its stage 0 output, and an isolate starting from the C harness |
-| `make test-isolates` | Isolates: spawning, channels, monitors, kill, sharing and what crosses, and the same with a collection at every allocation in `make test-isolates-stress` |
+| `make test-kl` | The `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
+| `make test-isolates` | Isolates: what one starts with, spawning, channels, monitors, kill, sharing and what crosses, and the same with a collection at every allocation in `make test-isolates-stress` |
 | `make test-parallel` | `parallel.map` over isolates: order, errors, what crosses and shared arguments |
 | `make test-kernel` | The kernel's test suite, the extension tests, the contract examples and `tests/cli.sh` |
 | `make test-stlib` | The executable with the standard library |
