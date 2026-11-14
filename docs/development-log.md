@@ -844,6 +844,17 @@ cannot. The kernel suite is the kernel's `tests/runme.shen`; the stlib install l
     function defined later included. Applying in order would mean lowering each argument twice, once for the named
     call and once for the curried one, on every open `fn` call; `docs/semantics.md` lists it as a deviation instead.
     And a variable named like the lowerer's own, `shen-jit.lower.arg1`, can be captured: those names are the lowerer's.
+- **An `if` in a test** (2026-11-14, Apple M3 Max, against the build before, three alternating rounds, best of 5). An
+  inlined call's guard is an `if`, which `test` did not take, so a predicate inlined as a test made a Boolean that was
+  tested again: 9 of the 26 instructions of `(if (view? V) ...)`. Its branches are now tests themselves, as those of
+  `and` and `or` are. 10,000 passes over 1,000 values: a predicate of two tests, `(and (integer? X) (< X 10))`,
+  33.5 → 23.4 ms, and 29.3 → 23.4 with the code shifted by four unrelated definitions; a struct predicate
+  19.1 → 18.7 (19.4 → 18.5 shifted); a struct pattern 21.3 → 21.0. The independent workloads were within 1%, THORN
+  schubert 0.96, and the benchmark suite 1.00 to 1.01 over four rounds; its equality rows that moved by 3 to 5% compile
+  to the same bytecode as before, so they moved with placement.
+  - **Constant branches stay values.** At first a constant branch was a test too, a jump for `false` and nothing for
+    `true`, which made `not` two jumps. `(not (number? X))` then went 14.2 → 15.4 ms: the JIT already follows the
+    Boolean `not` makes to the one jump it takes, where a test, with no jump-if-true, needs a jump over a jump.
 
 ### Sealing and inlining
 

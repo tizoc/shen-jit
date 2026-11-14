@@ -1183,6 +1183,19 @@
            (shen-jit.lower.emit B [label Next])
            (shen-jit.lower.test B Env Y Else Top)
            (shen-jit.lower.emit B [label Then])))
+  \\ An inlined call's guard is an if: its branches are tests too, rather than
+  \\ a Boolean to test again. A constant branch, as in not, is left to the
+  \\ JIT, which follows the constant to the one jump it takes.
+  B Env [if C X Y] Else Top
+  -> (let Other (shen-jit.lower.new-label B)
+          Then (shen-jit.lower.new-label B)
+       (do (shen-jit.lower.test B Env C Other Top)
+           (shen-jit.lower.test B Env X Else Top)
+           (shen-jit.lower.emit B [jump Then])
+           (shen-jit.lower.emit B [label Other])
+           (shen-jit.lower.test B Env Y Else Top)
+           (shen-jit.lower.emit B [label Then])))
+      where (not (or (shen-jit.lower.constant? X) (shen-jit.lower.constant? Y)))
   \\ The factoriser binds each selector with a let inside the and that
   \\ tests it: the body is a test too, rather than a Boolean to test again.
   B Env [let shen-jit.lower.inlining [const F] Body] Else Top
@@ -1197,6 +1210,10 @@
                                  (shen-jit.lower.test B Env Y Else Top))
   B Env X Else Top -> (shen-jit.lower.emit B [jump-if-false (shen-jit.lower.operand B Env X Top)
                                                               Else]))
+
+(define shen-jit.lower.constant?
+  [const _] -> true
+  _ -> false)
 
 \\ The protected expression is never in tail position; the handler is when
 \\ the trap-error is. E is bound to the exception in slot Top.

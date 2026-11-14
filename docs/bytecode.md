@@ -333,7 +333,9 @@ the shifts. The others are calls to C.
   `(if (or A B) true false)`, whose tests become jumps; this also checks that B
   is a Boolean. In a test, `(let X V T)` and `(do V T)` evaluate V and then
   test T with the same jumps, so the factoriser's `let`-bound selectors make
-  no Booleans.
+  no Booleans. Nor does an inlined call's guard: `(if C T1 T2)` in a test
+  tests C, then T1 or T2, unless a branch is a constant, as in `not`, whose
+  Boolean the JIT follows to the one jump it takes.
 - `(cond (C1 E1) ... (Cn En))` is a chain of tests. A clause whose test is the
   literal `true` ends the chain, and later clauses are dropped. If no clause
   holds, the chain executes `raise-cond`.

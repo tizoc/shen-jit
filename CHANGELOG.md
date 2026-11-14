@@ -12,6 +12,8 @@ All notable changes to this project are documented in this file. The format is b
 - `parallel.map` sends each isolate a run at a time, up to four runs for each, the next as it finishes one, rather
   than one run each, so that slow elements hold up only the isolate that has them. No run starts after one has
   failed.
+- A small predicate the program defines, a struct's among them, tested by `if` or `cond` branches on its own tests
+  rather than making a Boolean to test again: one of two tests, in a loop, takes 20-30% less time.
 
 ## [0.8] - 2026-11-14
 
