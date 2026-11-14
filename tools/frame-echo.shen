@@ -4,7 +4,7 @@
 (shen.x.namespace frame-echo
   (use frame)
   (use io)
-  (externals [accepted eof frame ok])
+  (externals [accepted eof frame frame.limit ok])
 
 (define serve
   E Limit ->

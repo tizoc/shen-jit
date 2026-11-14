@@ -3,9 +3,9 @@
   (use datalog)
   (use io)
   (use shen-jit)
-  (externals [!= *argv* at calls count cycle cyclic dead defdatalog defined defines depth equivalence external-call
-    fact fan-in file-depends file-uses in-file integer live min ok place reaches recursive relation root rule
-    some-root some? tsv var])
+  (externals [!= *argv* at calls count cycle cyclic datalog.sort datalog.unique datalog.value< dead defdatalog defined
+    defines depth equivalence external-call fact fan-in file-depends file-uses in-file integer live min ok place
+    reaches recursive relation root rule some-root some? tsv var])
 
 \* depends: what calls what among Shen and KL source files, worked out by lib/datalog.shen.
 

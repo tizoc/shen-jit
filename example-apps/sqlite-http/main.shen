@@ -12,7 +12,7 @@
   (use sqlite)
   (shadow open run)
   (externals [body-limit byte-limit chunk chunked closed counter counters defgrammar delete done eof export health
-    increment invalid object ok response-body-limit row skip text timeout])
+    increment invalid io.capacity io.close-combine object ok response-body-limit row skip text timeout])
 
 \\ The database keeps a write-ahead log, so that writers do not wait for readers, such as an
 \\ export, nor readers for writers.

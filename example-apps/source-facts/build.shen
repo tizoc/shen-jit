@@ -13,7 +13,7 @@
   (use source-facts)
   (use source-syntax)
   (use treesitter)
-  (externals [byte-limit child chunk-size cwd depth-limit done node-limit object ok preprocess result-limit
+  (externals [byte-limit child chunk-size cwd depth-limit done fs.checked node-limit object ok preprocess result-limit
     stderr-limit stdout-limit timeout])
 
 (define member
