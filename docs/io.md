@@ -191,7 +191,7 @@ Close is a frozen zero-argument operation returning `[ok]` or `[error Error]`. U
 Public arbitrary views are copied through these bounded chunks; nothing else moves an isolate's heap during a
 blocking call. This first implementation favors safe bounded copies; it does not promise zero-copy I/O.
 
-Declarations expose opaque `io.endpoint`, `io.reader`, `io.writer`, `io.error`, and datatype rules for
+Declarations expose opaque `io.endpoint`, `io.reader`, `io.writer`, `io.error`, and the datatype `io.t` has rules for
 `io.read-result`, `io.write-result`, `io.transfer-result`, `io.peek-result`, `io.chunk-result`,
 `io.accept-result`, `io.close-result` and `(io.result A)`. Typed clients can construct and match results:
 

@@ -11,9 +11,9 @@
   (import struct defstruct)
   (externals [application body-limit body-timeout chunk-count-limit chunk-line-limit
     chunk-metadata-limit chunk-size connection-timeout define-foreign eof head-limit head-timeout
-    http http-head http-server-options idle-timeout int64 library ok pointer read-buffer-size
-    request-limit response-body-limit response-chunk-count-limit response-chunk-size
-    response-head-limit timeout trailer-fields-limit trailer-limit write-timeout])
+    http http-head idle-timeout int64 library ok pointer read-buffer-size request-limit
+    response-body-limit response-chunk-count-limit response-chunk-size response-head-limit timeout
+    trailer-fields-limit trailer-limit write-timeout])
   (export chunk-option option request response response-option serve-connection serve-one)
 
 (shen-jit.library time-lib ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])
@@ -324,51 +324,6 @@
 (define server-rejected
   Error [ok _] -> [error Error]
   Error [error Other N] -> [error (io.secondary Error (io.progress Other N))])
-
-(datatype http-server-options
-  N : number;
-  ===========================
-  [read-buffer-size N] : option;
-
-  Option : response-option;
-  ___________________________
-  Option : option;
-
-  N : number;
-  ===========================
-  [request-limit N] : option;
-
-  N : number;
-  ===========================
-  [idle-timeout N] : option;
-
-  N : number;
-  ===========================
-  [connection-timeout N] : option;
-
-  Option : chunk-option;
-  ___________________________
-  Option : option;
-
-  N : number;
-  ===========================
-  [head-limit N] : option;
-
-  N : number;
-  ===========================
-  [body-limit N] : option;
-
-  N : number;
-  =============================
-  [head-timeout N] : option;
-
-  N : number;
-  =============================
-  [body-timeout N] : option;
-
-  N : number;
-  ==============================
-  [write-timeout N] : option;)
 
 (declare serve-one
   [io.endpoint --> [[request --> response] --> [[list option] --> [io.result number]]]])

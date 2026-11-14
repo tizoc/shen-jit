@@ -6,8 +6,7 @@
   (use grammar)
   (use io)
   (use shen-jit)
-  (externals [? at byte-limit defgrammar depth-limit eof json-options json-values object ok require
-    span text])
+  (externals [? at byte-limit defgrammar depth-limit eof object ok require span text])
   (shadow <e> read value)
   (export array decode encode integer json.number => number json.string => string option parse read
     stringify value object null)
@@ -375,7 +374,7 @@
 
 \\ A string, a number or a list is a value, but a value is not one of them without a check, as
 \\ json.string and json.array make: those rules go one way.
-(datatype json-values
+(datatype t
   S : string;
   ___________________________
   S : value;
@@ -407,9 +406,8 @@
 
   Members : (list member);
   ===========================
-  [object | Members] : value;)
+  [object | Members] : value;
 
-(datatype json-options
   N : number;
   ===========================
   [byte-limit N] : option;

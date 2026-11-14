@@ -6,9 +6,9 @@
   (use io)
   (use shen-jit)
   (import struct defstruct)
-  (externals [body-limit ca-file callback chunk-size connect-timeout curl curl-options
-    define-foreign define-foreign-procedure header-limit int32 ok proxy redirect-limit request
-    request-limit timeout write written])
+  (externals [body-limit ca-file callback chunk-size connect-timeout curl define-foreign
+    define-foreign-procedure header-limit int32 ok proxy redirect-limit request request-limit
+    timeout write written])
   (shadow get input open trim-left trim-right version)
   (export *adapter-files* body body-length client curl.close => close elapsed fetch get get-to
     header-values headers open option raw-headers raw-trailers redirects curl.request => request
@@ -468,7 +468,7 @@
 (define header-values
   R Name -> (field-values (headers R) (lower Name)))
 
-(datatype curl-options
+(datatype t
   N : number;
   =============================
   [request-limit N] : option;

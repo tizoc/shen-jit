@@ -6,7 +6,7 @@
   (use buffer)
   (use shen-jit)
   (import struct defstruct)
-  (externals [accepted callback chunk chunk-size closed eof flush io-error io-results library ok
+  (externals [accepted callback chunk chunk-size closed eof flush io-error library ok
     pending-timeout read-write retry-timeout shen timeout write written])
   (shadow count min)
   (export accept-result available buffer-options check chunk-result io.close => close
@@ -674,7 +674,7 @@
         (freeze [ok]))))
 
 \\ Opaque resources with explicit, pattern-matchable outcomes for typed clients.
-(datatype io-results
+(datatype t
   N : number;
   =====================
   [read N] : read-result;

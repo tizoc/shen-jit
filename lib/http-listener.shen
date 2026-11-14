@@ -10,8 +10,8 @@
   (use shen-jit)
   (use socket)
   (import struct defstruct)
-  (externals [accept cancelling draining http-handler http-listener-options http-listener-results
-    listening max-connections ok pending serve shutdown-grace stopped timeout])
+  (externals [accept cancelling draining listening max-connections ok pending serve shutdown-grace
+    stopped timeout])
   (shadow port run)
   (export current-server handler listen listener-option option port request response run server
     state stats stop wait-result)
@@ -328,36 +328,6 @@
          Result (if (empty? Error) [ok] [error Error])
          _ (server.result-> S Result)
       Result))
-
-(datatype http-listener-results
-  ___________________________
-  [ok] : wait-result;
-
-  Error : io.error;
-  ===========================
-  [error Error] : wait-result;)
-
-(datatype http-listener-options
-  N : number;
-  =================================
-  [max-connections N] : listener-option;
-
-  N : number;
-  =================================
-  [shutdown-grace N] : listener-option;
-
-  Option : option;
-  _________________________________
-  Option : listener-option;)
-
-(datatype http-handler
-  F : symbol;
-  _________________________________
-  F : handler;
-
-  F : symbol; Args : (list A);
-  _________________________________
-  [F | Args] : handler;)
 
 (declare listen
   [string --> [number --> [handler --> [[list listener-option] --> server]]]])

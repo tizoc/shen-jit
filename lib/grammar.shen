@@ -16,8 +16,7 @@
   (use io)
   (use shen-jit)
   (import struct defstruct)
-  (externals [? at defgrammar eof grammar-read-results none ok plain require skip span text u16-be
-    u32-be unknown])
+  (externals [? at defgrammar eof none ok plain require skip span text u16-be u32-be unknown])
   (shadow bind call compile every? inline list pos read run stream subst type value)
   (export finish match? parse parse-range prepare read read-result read-within defgrammar)
 
@@ -827,7 +826,7 @@
   Rule Reader Limit Fail -> (read-from Rule [] Reader Limit Fail))
 
 \\ What a read of a typed rule gives typed code, Fail's result included.
-(datatype grammar-read-results
+(datatype t
   V : A;
   ========================================
   [ok V] : (read-result A);

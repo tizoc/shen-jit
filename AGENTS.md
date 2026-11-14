@@ -49,6 +49,8 @@ the pinned runtime/C grammar for tests; loading or testing never downloads them 
 - Niklaus Wirth's rule applies: "Generate good code for the frequent case; don't optimize the exceptional case."
   A pathological case must work correctly, but it doesn't need to be fast, and it doesn't get complexity or size.
 - Libraries outside the default image go in `lib/`, and scripts in `tools/`.
+- A library's datatype rules are one `(datatype t ...)`, which its namespace makes `<namespace>.t`. In a namespace
+  spread over several files it goes in the file the others load first, as a second `t` would replace it.
 - The standard library (stlib) stays out of the default image: `make stlib` builds an executable with it,
   from the kernel's `klambda/stlib.kl`.
 

@@ -9,7 +9,7 @@
   (use shen-jit)
   (import struct defstruct)
   (externals [cancel cancelled chunk-size cleanup-timeout closed communicate done eof exited ok
-    process-commands running shen stderr-limit stdout-limit terminate-grace timeout write written])
+    running shen stderr-limit stdout-limit terminate-grace timeout write written])
   (shadow abort close output run)
   (export child command process.communicate => communicate communicate-to error-bytes error-count
     error-observed? input-count input-read-count option output-bytes output-count
@@ -674,11 +674,6 @@
         (only-communication Rest)
         (error "process: option ~A cannot be changed after spawning" Name))
   _ -> (error "process: options must be [Name Value] pairs"))
-
-(datatype process-commands
-  Program : string; Args : (list string);
-  ============================
-  [Program Args] : command;)
 
 (declare process.communicate
   [child --> [buffer.view --> [[list option] --> [result report]]]])

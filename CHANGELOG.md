@@ -7,6 +7,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- Each library's rules for typed clients are one datatype named for its namespace: `io.t`, `json.t`, `http.t`,
+  `process.t` and so on, and `isolate.t` and `channel.t` in the image. The old names, such as `json-values`,
+  `process-options` and `isolate.types`, are gone, so `preclude` and `include` take the new ones.
 - The example applications and the examples in `tools/` use namespaces, as the libraries do; their names are
   unchanged.
 - `parallel.map` sends each isolate a run at a time, up to four runs for each, the next as it finishes one, rather

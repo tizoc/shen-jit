@@ -6,8 +6,8 @@
   (use shen-jit)
   (import struct defstruct)
   (externals [capture-limit define-foreign define-foreign-procedure input-limit load-language
-    match-limit native node-limit ok parse pointer predicate query query-limit result-limit
-    timeout treesitter-error treesitter-options treesitter-results uint32])
+    match-limit native node-limit ok parse pointer predicate query query-limit result-limit timeout
+    treesitter-error uint32])
   (export *adapter-files* capture-count capture-match capture-name capture-node capture-pattern
     child-by-field children end-byte end-point treesitter.error => error error-code error-domain
     error-message error-offset error-operation error-resource error? extra? field first-child
@@ -336,16 +336,15 @@
 (define capture-node
   Snapshot Capture -> (capture-word Snapshot Capture 3))
 
-(datatype treesitter-results
+(datatype t
   X : A;
   ============================
   [ok X] : (result A);
 
   E : treesitter.error;
   ============================
-  [error E] : (result A);)
+  [error E] : (result A);
 
-(datatype treesitter-options
   Key : symbol; N : number;
   ============================
   [Key N] : option;)

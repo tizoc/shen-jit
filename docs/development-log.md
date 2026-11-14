@@ -1359,6 +1359,15 @@ that. Its readings decided nothing below.
   go. The gain is uneven: `read.shen` loses 139 and the SQLite example 109, while `model.shen`, whose Datalog program
   names 57 relations and tags, loses 10 for a ten-line header, and each tool 3 to 10 for three to seven lines; they
   were converted for consistency.
+- **One datatype for each library, `<namespace>.t`** (2026-11-14). The libraries had 25 datatypes in 14 files, named
+  by hand (`json-values`, `process-options`, `http-handler`) and kept global through `externals`, and the image had
+  `isolate.types` and `channel.types`. Each namespace now has one `(datatype t ...)`, which it qualifies, so a library's
+  rules are found by its name alone: `io.t`, `json.t`, `isolate.t`. A later datatype of the same name replaces an
+  earlier one, so in a namespace spread over files the rules go in the file the others load first: `http-head.shen`
+  takes those of the four other HTTP files and `process.shen` that of `process-io.shen`. The 21 option tags of the
+  moved HTTP rules first went into `http-head.shen`'s externals, 9 entries becoming 29, though none of its code uses
+  them; a `with-externals` around the datatype keeps them bare there instead, and the header lists what the file's own
+  code shares. Rules were moved whole, in their order; `make test-core test-libs` passes, typed clients included.
 
 - **Self-hosting check** (2026-11-01, Apple M3 Max). The lowerer inside Shen/JIT must give stage 0's output exactly:
   1,162 defuns in 0.29 s, against 0.36 s under Shen/Scheme. It found: `read-file` macroexpands, so stage 0 reads

@@ -8,12 +8,10 @@
   (use io)
   (use shen-jit)
   (import struct defstruct)
-  (externals [bool bytes cancel cancelled chunk-size cleanup-timeout clear-environment cwd
-    deadline define-foreign define-foreign-procedure environment eof exited group inherit int32
-    library ok pending pipe posix process-environment-settings process-options process-results
-    process-statuses process-streams process-wait-results running search-path setup signalled
-    spawn stderr stderr-limit stdin stdout stdout-limit terminate terminate-grace timeout transfer
-    wait win32 write written])
+  (externals [bool bytes cancel cancelled chunk-size cleanup-timeout clear-environment cwd deadline
+    define-foreign define-foreign-procedure environment eof exited group inherit int32 library ok
+    pending pipe posix running search-path setup signalled spawn stderr stderr-limit stdin stdout
+    stdout-limit terminate terminate-grace timeout transfer wait win32 write written])
   (shadow limit stream unit)
   (export *adapter-files* child process.close => close kill option pid pipe-until poll result
     process.spawn => spawn status process.stderr => stderr process.stdin => stdin
@@ -472,7 +470,9 @@
                        _ (subprocess.close-result-> Child Result)
                     Result)))))))
 
-(datatype process-streams
+\\ The rules for all of process's types, process-io's too. They are here, as process-io.shen loads
+\\ this file first, and a datatype of the same name there would replace this one.
+(datatype t
   ____________________________
   inherit : stream;
 
@@ -488,18 +488,16 @@
 
   Path : string;
   ============================
-  [append Path] : stream;)
+  [append Path] : stream;
 
-(datatype process-environment-settings
   Name : string; Value : string;
   ============================
   [Name Value] : env-setting;
 
   Name : string;
   ============================
-  [Name []] : env-setting;)
+  [Name []] : env-setting;
 
-(datatype process-options
   Path : string;
   ============================
   [cwd Path] : option;
@@ -558,9 +556,8 @@
 
   F : (lazy boolean);
   ============================
-  [cancel F] : option;)
+  [cancel F] : option;
 
-(datatype process-statuses
   ____________________________
   [running] : status;
 
@@ -570,9 +567,8 @@
 
   N : number;
   ============================
-  [signalled N] : status;)
+  [signalled N] : status;
 
-(datatype process-wait-results
   S : status;
   ============================
   [ok S] : wait-result;
@@ -582,9 +578,8 @@
 
   E : io.error;
   ============================
-  [error E] : wait-result;)
+  [error E] : wait-result;
 
-(datatype process-results
   Value : A;
   ============================
   [ok Value] : (result A);
@@ -595,7 +590,11 @@
 
   E : io.error; Partial : A;
   ============================
-  [error E Partial] : (result A);)
+  [error E Partial] : (result A);
+
+  Program : string; Args : (list string);
+  ============================
+  [Program Args] : command;)
 
 (declare process.spawn [string --> [[list string] --> [[list option] --> [io.result child]]]])
 (declare pid [child --> number])

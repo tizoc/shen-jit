@@ -641,7 +641,7 @@ only; what the datatypes define is not the program's, for shen.*userdefs*."
 (defun shen-jit.isolate-interface ()
   (let Userdefs (value shen.*userdefs*)
     (do (map (lambda Form (eval Form)) (read-from-string "
-(datatype isolate.types
+(datatype isolate.t
   if (element? R [normal killed ended])
   _____________________________________
   R : isolate.reason;
@@ -658,7 +658,7 @@ only; what the datatypes define is not the program's, for shen.*userdefs*."
   =========================================
   [I | M] : isolate.started;)
 
-(datatype channel.types
+(datatype channel.t
   R : (receiver A);
   _________________
   R : (channel.endpoint A);

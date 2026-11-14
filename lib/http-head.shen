@@ -8,7 +8,7 @@
   (use io)
   (use shen-jit)
   (import struct defstruct)
-  (externals [deadline done eof http-head http-head-results invalid more ok timeout])
+  (externals [deadline done eof http-head invalid more ok timeout])
   (export head-reader head-result read-head read-head-until)
 
 \\ A head reader: its borrowed reader, byte limit, accumulator, used count, CRLF state, saved
@@ -139,17 +139,138 @@
         (io.let-ok _ (head-budget F D)
           [head (buffer.wrap (buffer.bytes (buffer.slice (head-state.storage F) 0 (head-state.used F))))])))
 
-(datatype http-head-results
-  V : buffer.view;
-  ===========================
-  [head V] : head-result;
+\\ The rules for all of http's types. They are here, as every other file of http loads this one
+\\ first, and a datatype of the same name in a later file would replace this one. The tags of the
+\\ other files' options stay bare in their rules, as clients write them.
+(with-externals [body-limit body-timeout chunk-count-limit chunk-line-limit chunk-metadata-limit chunked
+    connection-timeout head-limit head-timeout idle-timeout max-connections read-buffer-size
+    request-limit response-body-limit response-chunk-count-limit response-chunk-size response-head-limit
+    shutdown-grace trailer-fields-limit trailer-limit write-timeout]
+  (datatype t
+    V : buffer.view;
+    ===========================
+    [head V] : head-result;
 
-  _______________________
-  [eof] : head-result;
+    _______________________
+    [eof] : head-result;
 
-  Error : io.error;
-  ================================
-  [error Error] : head-result;)
+    Error : io.error;
+    ================================
+    [error Error] : head-result;
+
+    N : number;
+    ======================================
+    [chunk-line-limit N] : chunk-option;
+
+    N : number;
+    ======================================
+    [chunk-metadata-limit N] : chunk-option;
+
+    N : number;
+    ======================================
+    [trailer-limit N] : chunk-option;
+
+    N : number;
+    ======================================
+    [trailer-fields-limit N] : chunk-option;
+
+    N : number;
+    ======================================
+    [chunk-count-limit N] : chunk-option;
+
+    N : number;
+    ==============================
+    [length N] : response-framing;
+
+    ______________________________
+    [chunked] : response-framing;
+
+    N : number;
+    ==================================
+    [response-head-limit N] : response-option;
+
+    N : number;
+    ==================================
+    [response-body-limit N] : response-option;
+
+    N : number;
+    ==================================
+    [response-chunk-size N] : response-option;
+
+    N : number;
+    ==================================
+    [response-chunk-count-limit N] : response-option;
+
+    N : number;
+    ===========================
+    [read-buffer-size N] : option;
+
+    Option : response-option;
+    ___________________________
+    Option : option;
+
+    N : number;
+    ===========================
+    [request-limit N] : option;
+
+    N : number;
+    ===========================
+    [idle-timeout N] : option;
+
+    N : number;
+    ===========================
+    [connection-timeout N] : option;
+
+    Option : chunk-option;
+    ___________________________
+    Option : option;
+
+    N : number;
+    ===========================
+    [head-limit N] : option;
+
+    N : number;
+    ===========================
+    [body-limit N] : option;
+
+    N : number;
+    =============================
+    [head-timeout N] : option;
+
+    N : number;
+    =============================
+    [body-timeout N] : option;
+
+    N : number;
+    ==============================
+    [write-timeout N] : option;
+
+    ___________________________
+    [ok] : wait-result;
+
+    Error : io.error;
+    ===========================
+    [error Error] : wait-result;
+
+    N : number;
+    =================================
+    [max-connections N] : listener-option;
+
+    N : number;
+    =================================
+    [shutdown-grace N] : listener-option;
+
+    Option : option;
+    _________________________________
+    Option : listener-option;
+
+    F : symbol;
+    _________________________________
+    F : handler;
+
+    F : symbol; Args : (list A);
+    _________________________________
+    [F | Args] : handler;))
 
 (declare head-reader [io.reader --> [number --> head-reader]])
 (declare read-head [head-reader --> head-result])

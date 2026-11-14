@@ -9,8 +9,8 @@
   (use shen-jit)
   (import struct defstruct)
   (externals [? at bad chunk-count-limit chunk-line-limit chunk-metadata-limit chunked deadline
-    defgrammar done eof fixed http http-body http-chunk-options http-request more ok problem
-    require text timeout too-large trailer-fields-limit trailer-limit unread unsupported])
+    defgrammar done eof fixed http http-body http-request more ok problem require text timeout
+    too-large trailer-fields-limit trailer-limit unread unsupported])
   (shadow digit? version)
   (export <token> body body-reader body-reader-with chunk-option chunked? content-length
     forbidden-trailer? header-values headers method parse-request read-body read-body-until
@@ -814,27 +814,6 @@
                               [ok Pair])
                             (/. X (chunk-syntax B X)))
                 (io.let-ok Pair Field (chunk-trailers B D Total (+ Count 1) [Pair | Acc]))))))))
-
-(datatype http-chunk-options
-  N : number;
-  ======================================
-  [chunk-line-limit N] : chunk-option;
-
-  N : number;
-  ======================================
-  [chunk-metadata-limit N] : chunk-option;
-
-  N : number;
-  ======================================
-  [trailer-limit N] : chunk-option;
-
-  N : number;
-  ======================================
-  [trailer-fields-limit N] : chunk-option;
-
-  N : number;
-  ======================================
-  [chunk-count-limit N] : chunk-option;)
 
 (declare body-reader-with
   [io.reader --> [request --> [[list chunk-option] --> body-reader]]])

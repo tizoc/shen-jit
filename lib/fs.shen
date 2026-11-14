@@ -7,9 +7,9 @@
   (use shen-jit)
   (import struct defstruct)
   (externals [blocking bool bytes continue copy crt define-foreign define-foreign-procedure
-    depth-limit directory done entry-limit eof fs-options fs-visits int32 int64 io-error library
-    lstat mkdir name-byte-limit ok other posix random read-write rename replace resolve rmdir shen
-    skip stat stop symlink temp-directory temp-file uint32 unlink void walk win32 write written])
+    depth-limit directory done entry-limit eof int32 int64 io-error library lstat mkdir
+    name-byte-limit ok other posix random read-write rename replace resolve rmdir shen skip stat
+    stop symlink temp-directory temp-file uint32 unlink void walk win32 write written])
   (shadow copy-file)
   (export *adapter-files* accessed copy-file exists? extension info join kind fs.list => list
     fs.lstat => lstat fs.mkdir => mkdir mkdirs modified name option parent path remove-directory
@@ -645,7 +645,7 @@
                   (with-replacement Target
                     (/. Out (copy-read In Out Chunk State Limit))))))))))
 
-(datatype fs-options
+(datatype t
   N : number;
   ============================
   [entry-limit N] : option;
@@ -656,9 +656,8 @@
 
   N : number;
   ============================
-  [depth-limit N] : option;)
+  [depth-limit N] : option;
 
-(datatype fs-visits
   ____________________________
   continue : visit;
 

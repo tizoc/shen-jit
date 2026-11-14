@@ -7,9 +7,9 @@
   (use io)
   (use shen-jit)
   (import struct defstruct)
-  (externals [active application chunk chunked closed deadline eof http-response
-    http-response-framing http-response-options ok response-body-limit response-chunk-count-limit
-    response-chunk-size response-head-limit suppressed timeout written])
+  (externals [active application chunk chunked closed deadline eof http-response ok
+    response-body-limit response-chunk-count-limit response-chunk-size response-head-limit
+    suppressed timeout written])
   (export close-after encode-response request response response-framing response-option
     send-response source source-close stream-response)
 
@@ -542,31 +542,6 @@
          _ (buffer.copy! Out 0 Prefix 0 P)
          _ (buffer.copy! Out P V 0 N)
       (do (buffer.u8! Out (+ P N) 13) (buffer.u8! Out (+ P N 1) 10) Out)))
-
-(datatype http-response-framing
-  N : number;
-  ==============================
-  [length N] : response-framing;
-
-  ______________________________
-  [chunked] : response-framing;)
-
-(datatype http-response-options
-  N : number;
-  ==================================
-  [response-head-limit N] : response-option;
-
-  N : number;
-  ==================================
-  [response-body-limit N] : response-option;
-
-  N : number;
-  ==================================
-  [response-chunk-size N] : response-option;
-
-  N : number;
-  ==================================
-  [response-chunk-count-limit N] : response-option;)
 
 (declare response [number --> [[list [list string]] --> [buffer.view --> response]]])
 (declare close-after [response --> response])

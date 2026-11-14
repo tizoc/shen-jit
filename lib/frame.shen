@@ -7,7 +7,7 @@
   (use io)
   (use shen-jit)
   (import struct defstruct)
-  (externals [eof frame frame-results ok])
+  (externals [eof frame ok])
   (shadow limit)
   (export encode next position reader result)
 
@@ -120,7 +120,7 @@
   _ _ [eof N] -> (frame.error "incomplete payload" (+ 6 N))
   _ _ [error Error N] -> [error (io.progress Error (+ 6 N))])
 
-(datatype frame-results
+(datatype t
   Tag : number; Payload : buffer.view;
   ===================================
   [frame Tag Payload] : result;

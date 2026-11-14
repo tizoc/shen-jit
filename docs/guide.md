@@ -477,6 +477,8 @@ use prefixes or import their exported names:
 Exports include the public operations and types, and the support operations shared by libraries, such as
 `buffer.check` and `io.record`. HTTP, I/O and subprocess libraries contribute to their respective namespaces
 across several files. `lib/native.shen` and `lib/ffi.shen` extend the runtime's `shen-jit` namespace, which stays open.
+A library's rules for typed clients are one datatype named for its namespace, such as `io.t`, `json.t` and `http.t`,
+which `preclude` and `include` take; the image's isolates and channels have `isolate.t` and `channel.t`.
 
 Namespace qualification applies to symbols in data too. Preserve a DSL's keywords with `with-externals`
 around its form, while its definition names and references still resolve normally:
