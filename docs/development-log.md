@@ -2094,8 +2094,8 @@ isolates, with about 250 lines to spare; what went is below, and the suites pass
   endpoints serves receive, receive-any and wait-any; one `stopped` for a kill or an interrupt; promotion derives its
   slot ranges from the code it copied, keeps one undo array, and ends through one function, which gives the foreign
   path the undo it lacked; loading an image no longer rebuilds the list of free global numbers, which cells never had
-  either, at the cost of numbers dead at the save staying unused. With the down messages, the runtime is 154 lines
-  shorter, `isolate.c` 1,614 lines to 1,494.
+  either, at the cost of numbers dead at the save staying unused. With the down messages, the runtime is 152 lines
+  shorter, `isolate.c` 1,614 lines to 1,496.
 - **`isolate.spawn-each` takes the function to run over what it started**, inside its own cleanup, so that the vector
   `parallel.map`, Datalog's parts and joins and the SQLite example kept for their cleanups goes, and no caller has a
   gap between the spawns and its cleanup. `http.wait`, which since `http.run` supervises only gave `[pending]` before
