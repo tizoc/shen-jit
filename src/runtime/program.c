@@ -147,15 +147,10 @@ bool program_publish(VM *vm, V sym)
     uint64_t *s = ptr(sym);
     if (symbol_published(sym))
         return true;
-    V name = s[SYM_NAME];
-    if (!in_program(vm, ptr(name))) {
-        size_t words = obj_words(ptr(name)[0]);
-        uint64_t *q = program_alloc(vm, words);
-        if (!q)
-            return false;
-        memcpy(q, ptr(name), words * sizeof(uint64_t));
-        s[SYM_NAME] = tagged(q, TAG_OBJECT);
-    }
+    V name = program_copy_string(vm, s[SYM_NAME]);
+    if (name == V_CLEARED)
+        return false;
+    s[SYM_NAME] = name;
     if (!symbol_table_put(&vm->program->published, sym))
         return false;
     s[SYM_CELL] = (s[SYM_CELL] & ~(UINT64_C(1) << MARK_BIT)) | UINT64_C(1) << PUBLISHED_BIT;
@@ -191,14 +186,14 @@ bool program_publish_all(VM *vm)
 typedef struct {
     VM *vm;
     AddrMap moved;
-    size_t *ranges; /* constant slots of code copied: start and length, in pairs */
-    size_t nranges, ranges_cap;
     /* What each slot held before it got a copy, to put back if the promotion fails: a slot
        left with a copy would be cleared once the original code, which owns it, is dead. */
-    size_t *undo_slot;
-    V *undo_value;
+    struct Undo {
+        size_t slot;
+        V value;
+    } *undo;
     size_t nundo, undo_cap;
-    uint64_t **codes; /* the code objects copied, which name no slots if it fails */
+    uint64_t **codes; /* the code objects copied, whose slots are the program's, or none if it fails */
     size_t ncodes, codes_cap;
     bool failed;
 } Promote;
@@ -316,16 +311,12 @@ static V promote_code(Promote *pr, V v)
     uint64_t *q = copy_object(pr, v);
     if (!q)
         return V_CLEARED;
-    if (pr->ncodes == pr->codes_cap) {
-        size_t cap = pr->codes_cap ? 2 * pr->codes_cap : 16;
-        uint64_t **codes = realloc(pr->codes, cap * sizeof *codes);
-        if (!codes) {
-            q[CODE_NCONST] = q[CODE_NCODE] = 0;
-            return fail_promotion(pr);
-        }
-        pr->codes = codes;
-        pr->codes_cap = cap;
+    uint64_t **codes = grow_array(pr->codes, &pr->codes_cap, pr->ncodes, sizeof *codes, 16);
+    if (!codes) {
+        q[CODE_NCONST] = q[CODE_NCODE] = 0;
+        return fail_promotion(pr);
     }
+    pr->codes = codes;
     pr->codes[pr->ncodes++] = q;
     uint64_t *bytecode = copy_object(pr, p[CODE_BYTECODE]);
     if (!bytecode)
@@ -341,32 +332,12 @@ static V promote_code(Promote *pr, V v)
         V copy = promote(pr, *slot);
         if (pr->failed || copy == *slot)
             continue;
-        if (pr->nundo == pr->undo_cap) {
-            size_t cap = pr->undo_cap ? 2 * pr->undo_cap : 64;
-            size_t *slots = realloc(pr->undo_slot, cap * sizeof *slots);
-            if (slots)
-                pr->undo_slot = slots;
-            V *values = slots ? realloc(pr->undo_value, cap * sizeof *values) : NULL;
-            if (!values)
-                return fail_promotion(pr);
-            pr->undo_value = values;
-            pr->undo_cap = cap;
-        }
-        pr->undo_slot[pr->nundo] = base + i;
-        pr->undo_value[pr->nundo++] = *slot;
+        struct Undo *undo = grow_array(pr->undo, &pr->undo_cap, pr->nundo, sizeof *undo, 64);
+        if (!undo)
+            return fail_promotion(pr);
+        pr->undo = undo;
+        pr->undo[pr->nundo++] = (struct Undo){base + i, *slot};
         *slot = copy;
-    }
-    if (n) {
-        if (pr->nranges + 2 > pr->ranges_cap) {
-            size_t cap = pr->ranges_cap ? 2 * pr->ranges_cap : 32;
-            size_t *ranges = realloc(pr->ranges, cap * sizeof *ranges);
-            if (!ranges)
-                return fail_promotion(pr);
-            pr->ranges = ranges;
-            pr->ranges_cap = cap;
-        }
-        pr->ranges[pr->nranges++] = base;
-        pr->ranges[pr->nranges++] = n;
     }
     return tagged(q, TAG_OBJECT);
 }
@@ -450,6 +421,28 @@ static bool promotable(Promote *seen, V v)
     }
 }
 
+/* Whether a promotion succeeded, as it ends. If so, the constant slots of the code it copied are
+   the program's, those the owned table can mark (the others stay roots, which costs a scan and
+   nothing else); if not, each slot gets back what it held, and the copies name none. */
+static bool promote_finish(Promote *pr)
+{
+    VM *vm = pr->vm;
+    for (size_t i = pr->nundo; pr->failed && i-- > 0;)
+        *ra_at(&vm->program->consts, pr->undo[i].slot) = pr->undo[i].value;
+    for (size_t i = 0; i < pr->ncodes; i++) {
+        uint64_t *q = pr->codes[i];
+        size_t base = (size_t)q[CODE_CBASE], n = (size_t)(q[CODE_NCONST] + q[CODE_NCODE]);
+        if (pr->failed)
+            q[CODE_NCONST] = q[CODE_NCODE] = 0;
+        else if (base + n <= vm->program->owned_cap)
+            memset(vm->program->owned + base, PROGRAM, n);
+    }
+    free(pr->codes);
+    free(pr->undo);
+    addr_map_free(&pr->moved);
+    return !pr->failed;
+}
+
 /* A foreign function, copied into the program space when it is defined, so isolates share it.
    Its description is a vector, which promotion refuses as anything may store into one; but only
    the FFI library makes it, once, and nothing reaches it again but the runtime, which only reads
@@ -475,12 +468,7 @@ V program_promote_foreign(VM *vm, V proc, const char **why)
     uint64_t *f = d && !pr.failed ? copy_object(&pr, proc) : NULL;
     if (f)
         f[FOREIGN_DESC] = tagged(d, TAG_OBJECT);
-    addr_map_free(&pr.moved);
-    free(pr.ranges);
-    free(pr.undo_slot);
-    free(pr.undo_value);
-    free(pr.codes);
-    if (!f || pr.failed) {
+    if (!promote_finish(&pr) || !f) {
         *why = "out of memory";
         return V_CLEARED;
     }
@@ -502,21 +490,7 @@ V program_promote(VM *vm, V closure, const char **why)
     }
     Promote pr = {.vm = vm};
     V copy = promote(&pr, closure);
-    /* Slots the owned table cannot mark stay roots, which costs a scan and nothing else. */
-    if (!pr.failed)
-        for (size_t i = 0; i < pr.nranges; i += 2)
-            if (pr.ranges[i] + pr.ranges[i + 1] <= vm->program->owned_cap)
-                memset(vm->program->owned + pr.ranges[i], PROGRAM, pr.ranges[i + 1]);
-    for (size_t i = pr.nundo; pr.failed && i-- > 0;)
-        *ra_at(&vm->program->consts, pr.undo_slot[i]) = pr.undo_value[i];
-    for (size_t i = 0; pr.failed && i < pr.ncodes; i++)
-        pr.codes[i][CODE_NCONST] = pr.codes[i][CODE_NCODE] = 0;
-    free(pr.codes);
-    addr_map_free(&pr.moved);
-    free(pr.ranges);
-    free(pr.undo_slot);
-    free(pr.undo_value);
-    if (pr.failed) {
+    if (!promote_finish(&pr)) {
         *why = "out of memory";
         return V_CLEARED;
     }

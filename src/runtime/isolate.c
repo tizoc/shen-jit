@@ -31,9 +31,15 @@ enum { BLOCK_WORDS = 1 << 12, CONTEXT_WORDS = 1 << 14, CONTEXT_STACK = 1 << 12 }
 /* ---------------------------------------------------------------------------------------------
    Fragments */
 
+/* A block holds BLOCK_WORDS, or one object larger than that, alone and filling it: so an object of
+   LARGE_WORDS or more, which is larger, always has a block of its own, which a heap can take. */
+typedef struct {
+    uint64_t *words; /* NULL once a heap has taken it */
+    size_t used;
+} Block;
+
 typedef struct Fragment {
-    uint64_t **blocks;
-    size_t *used, *size;
+    Block *blocks;
     size_t nblocks, cap, words;
     V root;
 } Fragment;
@@ -43,41 +49,27 @@ static void fragment_free(Fragment *f)
     if (!f)
         return;
     for (size_t i = 0; i < f->nblocks; i++)
-        if (f->size[i]) /* not taken by a heap */
-            free(f->blocks[i]);
+        free(f->blocks[i].words);
     free(f->blocks);
-    free(f->used);
-    free(f->size);
     free(f);
 }
 
 static uint64_t *fragment_alloc(Fragment *f, size_t words)
 {
-    if (!f->nblocks || f->used[f->nblocks - 1] + words > f->size[f->nblocks - 1]) {
-        if (f->nblocks == f->cap) {
-            size_t cap = f->cap ? 2 * f->cap : 8;
-            uint64_t **blocks = realloc(f->blocks, cap * sizeof *blocks);
-            if (!blocks)
-                return NULL;
-            f->blocks = blocks;
-            size_t *used = realloc(f->used, cap * sizeof *used);
-            if (!used)
-                return NULL;
-            f->used = used;
-            size_t *size = realloc(f->size, cap * sizeof *size);
-            if (!size)
-                return NULL;
-            f->size = size;
-            f->cap = cap;
-        }
-        size_t n = words > BLOCK_WORDS ? words : BLOCK_WORDS;
-        if (!(f->blocks[f->nblocks] = malloc(n * sizeof(uint64_t))))
+    Block *b = f->nblocks ? &f->blocks[f->nblocks - 1] : NULL;
+    if (!b || b->used + words > (b->used > BLOCK_WORDS ? b->used : BLOCK_WORDS)) {
+        Block *blocks = grow_array(f->blocks, &f->cap, f->nblocks, sizeof *blocks, 8);
+        if (!blocks)
             return NULL;
-        f->used[f->nblocks] = 0;
-        f->size[f->nblocks++] = n;
+        f->blocks = blocks;
+        uint64_t *words_at = malloc((words > BLOCK_WORDS ? words : BLOCK_WORDS) * sizeof(uint64_t));
+        if (!words_at)
+            return NULL;
+        b = &f->blocks[f->nblocks++];
+        *b = (Block){words_at, 0};
     }
-    uint64_t *at = f->blocks[f->nblocks - 1] + f->used[f->nblocks - 1];
-    f->used[f->nblocks - 1] += words;
+    uint64_t *at = b->words + b->used;
+    b->used += words;
     f->words += words;
     return at;
 }
@@ -97,7 +89,6 @@ typedef struct Isolate {
     bool ended; /* its function has returned or raised, or it could not start, and its monitors are told */
     bool killed;       /* for good, which its monitors are told */
     bool kill_pending; /* until its next channel operation raises it */
-    bool ending;       /* monitors added now get down at once */
     V entry;           /* the procedure it runs, in the program space */
     Fragment *argument; /* until it takes it */
     uint64_t gensym_base;
@@ -276,14 +267,10 @@ static V out_value(Out *o, V v)
         if (handle_of(v, o->ps->tag_given, &index, &generation)) {
             if (!o->spawn)
                 return out_fail(o, "~S can move only at spawn", v);
-            if (o->ngiven == o->given_cap) {
-                size_t cap = o->given_cap ? 2 * o->given_cap : 4;
-                uint64_t *given = realloc(o->given, cap * sizeof *given);
-                if (!given)
-                    return out_fail(o, "out of memory", V_NIL);
-                o->given = given;
-                o->given_cap = cap;
-            }
+            uint64_t *given = grow_array(o->given, &o->given_cap, o->ngiven, sizeof *given, 4);
+            if (!given)
+                return out_fail(o, "out of memory", V_NIL);
+            o->given = given;
             o->given[o->ngiven++] = (uint64_t)index << 32 | generation;
             V copy = out_copy(o, v, obj_words(ptr(v)[0]));
             if (!o->error)
@@ -307,8 +294,8 @@ static Fragment *fragment_out(VM *vm, V v, bool spawn, uint64_t **given, size_t 
     } else {
         f->root = out_value(&o, v);
         for (size_t b = 0; b < f->nblocks && !o.error; b++)
-            for (size_t w = 0; w < f->used[b] && !o.error;) {
-                uint64_t *s = f->blocks[b] + w;
+            for (size_t w = 0; w < f->blocks[b].used && !o.error;) {
+                uint64_t *s = f->blocks[b].words + w;
                 w += fragment_object_words(s);
                 if (is_header(*s)) {
                     size_t first, count;
@@ -347,27 +334,16 @@ static Fragment *fragment_out(VM *vm, V v, bool spawn, uint64_t **given, size_t 
 
 typedef struct {
     VM *vm;
-    Fragment *f;
     uint64_t *next;
-    bool shared;
+    bool shared, adopt;
 } In;
 
-/* A block a large byte buffer or string has alone, which a heap can take as it is: fragment_alloc
-   gives an object of LARGE_WORDS or more a block of its size, and these have no values in them. */
-static bool adoptable(const Fragment *f, size_t b)
+/* A large byte buffer or string, which has no values in it, in a block of its own (fragment_alloc),
+   which a heap can take as it is. */
+static bool adoptable(const uint64_t *o)
 {
-    const uint64_t *o = f->blocks[b];
-    return o && f->used[b] >= LARGE_WORDS && f->used[b] == f->size[b] && is_header(o[0]) &&
-           obj_words(o[0]) == f->used[b] && (hdr_type(o[0]) == T_BYTES || hdr_type(o[0]) == T_STRING);
-}
-
-/* Whether o is a block a heap took, which keeps its words. */
-static bool taken(const Fragment *f, const uint64_t *o)
-{
-    for (size_t b = 0; b < f->nblocks; b++)
-        if (f->blocks[b] == o && !f->size[b])
-            return true;
-    return false;
+    return is_header(o[0]) && obj_words(o[0]) >= LARGE_WORDS &&
+           (hdr_type(o[0]) == T_BYTES || hdr_type(o[0]) == T_STRING);
 }
 
 static V in_value(In *in, V v)
@@ -377,9 +353,9 @@ static V in_value(In *in, V v)
     uint64_t *o = ptr(v);
     if (o[0] == V_FORWARD)
         return o[1];
-    size_t words = is_pair(v) ? 2 : obj_words(o[0]);
-    if (words >= LARGE_WORDS && !is_pair(v) && taken(in->f, o))
+    if (in->adopt && !is_pair(v) && adoptable(o)) /* taken by the heap, as it is */
         return v;
+    size_t words = is_pair(v) ? 2 : obj_words(o[0]);
     uint64_t *q = in->next;
     in->next += words;
     memcpy(q, o, words * sizeof(uint64_t));
@@ -393,11 +369,11 @@ static V in_value(In *in, V v)
 
 static V copy_fragment(VM *vm, Fragment *f, uint64_t *to, bool shared, bool adopt)
 {
-    In in = {vm, f, to, shared};
+    In in = {vm, to, shared, adopt};
     for (size_t b = 0; adopt && b < f->nblocks; b++)
-        if (adoptable(f, b)) {
-            vm_adopt_large(vm, f->blocks[b], f->used[b]);
-            f->size[b] = 0; /* the heap's now, which fragment_free leaves */
+        if (adoptable(f->blocks[b].words)) {
+            vm_adopt_large(vm, f->blocks[b].words, f->blocks[b].used);
+            f->blocks[b].words = NULL; /* the heap's now, which fragment_free leaves */
         }
     V root = in_value(&in, f->root);
     for (uint64_t *s = to; s < in.next; s += fragment_object_words(s)) {
@@ -423,8 +399,8 @@ static V fragment_in(VM *vm, Fragment *f)
        unreached and free it. */
     size_t large = 0, nlarge = 0;
     for (size_t b = 0; b < f->nblocks; b++)
-        if (adoptable(f, b)) {
-            large += f->used[b];
+        if (adoptable(f->blocks[b].words)) {
+            large += f->blocks[b].used;
             nlarge++;
         }
     size_t words = f->words - large;
@@ -468,12 +444,8 @@ static Isolates *isolates_start(VM *vm)
     Isolates *ps = calloc(1, sizeof *ps);
     Isolate *self = calloc(1, sizeof *self);
     Isolate **table = malloc(16 * sizeof *table);
-    if (!ps || !self || !table) {
-        free(ps);
-        free(self);
-        free(table);
-        return NULL;
-    }
+    if (!ps || !self || !table)
+        goto fail;
     ps->stress = vm->stress;
     ps->max_words = vm->max_words;
     struct timespec now;
@@ -505,12 +477,8 @@ static Isolates *isolates_start(VM *vm)
     }
     if (ps->tag_isolate == V_CLEARED || ps->tag_receiver == V_CLEARED || ps->tag_sender == V_CLEARED ||
         ps->tag_given == V_CLEARED || ps->end == V_CLEARED || ps->down == V_CLEARED || ps->normal == V_CLEARED ||
-        ps->killed == V_CLEARED || ps->ended == V_CLEARED) {
-        free(ps);
-        free(self);
-        free(table);
-        return NULL;
-    }
+        ps->killed == V_CLEARED || ps->ended == V_CLEARED)
+        goto fail;
     pthread_mutexattr_t recursive;
     pthread_mutexattr_init(&recursive);
     pthread_mutexattr_settype(&recursive, PTHREAD_MUTEX_RECURSIVE);
@@ -528,6 +496,11 @@ static Isolates *isolates_start(VM *vm)
     vm->isolate = self;
     vm->program->isolates = ps;
     return ps;
+fail:
+    free(ps);
+    free(self);
+    free(table);
+    return NULL;
 }
 
 /* ---------------------------------------------------------------------------------------------
@@ -550,16 +523,12 @@ static size_t channel_new(Isolates *ps, size_t capacity, Isolate *receiver)
         i = ps->free_channel - 1;
         ps->free_channel = ps->channels[i].next_free;
     } else {
-        if (ps->nchannels == ps->channels_cap) {
-            size_t cap = ps->channels_cap ? 2 * ps->channels_cap : 64;
-            Channel *channels = realloc(ps->channels, cap * sizeof *channels);
-            if (!channels) {
-                free(queue);
-                return SIZE_MAX;
-            }
-            ps->channels = channels;
-            ps->channels_cap = cap;
+        Channel *channels = grow_array(ps->channels, &ps->channels_cap, ps->nchannels, sizeof *channels, 64);
+        if (!channels) {
+            free(queue);
+            return SIZE_MAX;
         }
+        ps->channels = channels;
         memset(&ps->channels[ps->nchannels], 0, sizeof(Channel));
         ps->channels[ps->nchannels++].generation = ps->seed;
     }
@@ -658,46 +627,45 @@ static Fragment *dequeue(Channel *c)
     return f;
 }
 
-/* A message the runtime sends, such as down. */
-static Fragment *message(VM *vm, V v)
-{
-    const char *error;
-    V offender;
-    return fragment_out(vm, v, false, NULL, NULL, &error, &offender);
-}
-
-/* [down P Reason]. */
-static V down_message(VM *vm, Isolates *ps, V isolate, V reason)
-{
-    vm_root(vm, &isolate);
-    V tail = make_pair(vm, reason, V_NIL);
-    V mid = tail == V_CLEARED ? V_CLEARED : make_pair(vm, isolate, tail);
-    vm_unroot(vm, 1);
-    return mid == V_CLEARED ? V_CLEARED : make_pair(vm, ps->down, mid);
-}
-
-/* [down P ended] for an isolate that never had a heap to make it in, laid out as a copy would be. */
-static Fragment *down_fragment(Isolates *ps, Isolate *p)
+/* [down P Reason], for the isolate of that index and generation, laid out as a copy would be, so
+   that it is made with the lock held and no heap: Reason is the symbol given, or else the text, as
+   a string. NULL without memory. */
+static Fragment *down_fragment(Isolates *ps, size_t index, uint32_t generation, V symbol, const char *text,
+                               size_t length)
 {
     Fragment *f = calloc(1, sizeof *f);
+    uint64_t h = HEADER(T_STRING, length);
     uint64_t *v = f ? fragment_alloc(f, 4) : NULL;
-    uint64_t *c = v ? fragment_alloc(f, 6) : NULL;
+    uint64_t *s = v && text ? fragment_alloc(f, obj_words(h)) : NULL;
+    uint64_t *c = v && (s || !text) ? fragment_alloc(f, 6) : NULL;
     if (!c) {
         fragment_free(f);
         return NULL;
     }
     v[0] = HEADER(T_VECTOR, 3);
     v[1] = ps->tag_isolate;
-    v[2] = fix((int64_t)p->index);
-    v[3] = fix((int64_t)p->generation);
+    v[2] = fix((int64_t)index);
+    v[3] = fix((int64_t)generation);
+    if (s) {
+        s[0] = h;
+        s[obj_words(h) - 1] = 0; /* the padding of the last word */
+        memcpy(s + 1, text, length);
+    }
     c[0] = ps->down;
     c[1] = tagged(c + 2, TAG_PAIR);
     c[2] = tagged(v, TAG_OBJECT);
     c[3] = tagged(c + 4, TAG_PAIR);
-    c[4] = ps->ended;
+    c[4] = s ? tagged(s, TAG_OBJECT) : symbol;
     c[5] = V_NIL;
     f->root = tagged(c, TAG_PAIR);
     return f;
+}
+
+/* With the lock held: [down P Reason] from p's record, which keeps why it ended, or ended. */
+static Fragment *down_of(Isolates *ps, Isolate *p)
+{
+    return down_fragment(ps, p->index, p->generation, p->end_symbol == V_CLEARED ? ps->ended : p->end_symbol,
+                         p->end_text, p->end_length);
 }
 
 /* With the lock held: the monitors in m whose channels are still there, moved to its front, and
@@ -711,30 +679,51 @@ static size_t live_monitors(Isolates *ps, uint64_t *m, size_t n)
     return kept;
 }
 
-/* With the lock held: tells a monitor that p ended, with f, or else [down P ended], and closes it,
-   so that what waits on it never waits for ever: a receive after its one message, or after none if
-   neither could be made, raises channel closed. */
-static void tell_monitor(Isolates *ps, Isolate *p, Channel *c, Fragment *f)
+/* With the lock held: no more is sent on c, which wakes what waits on it. */
+static void close_sending(Channel *c)
 {
-    if (!c) {
-        fragment_free(f);
-        return;
-    }
-    if (!f && p)
-        f = down_fragment(ps, p);
-    if (!f || !enqueue(c, f))
-        fragment_free(f);
     c->closed = true;
     wake_senders(c);
     if (c->receiver_waiting)
         pthread_cond_signal(&c->receiver->wake);
 }
 
+/* With the lock held: tells a monitor its down message, f, if one could be made, and closes it, so
+   that what waits on it never waits for ever: a receive after its one message, or after none,
+   raises channel closed. */
+static void tell_monitor(Channel *c, Fragment *f)
+{
+    if (!f || !enqueue(c, f))
+        fragment_free(f);
+    close_sending(c);
+}
+
 /* ---------------------------------------------------------------------------------------------
    An isolate's life. */
 
-/* It tells its monitors, closes its files and the channels it receives on, and frees its
-   context. */
+/* With the lock held: p ends, having run or not. Its monitors are told why, from its record, and
+   closed, the channels it receives on are freed, its argument goes, and it counts as ended, all in
+   one hold of the lock, so that no monitor is told before, and one made later is told at once. */
+static void end_now(Isolates *ps, Isolate *p)
+{
+    for (size_t i = 0; i < p->nmonitors; i++) {
+        Channel *c = channel_at(ps, (size_t)(p->monitors[i] >> 32), (uint32_t)p->monitors[i]);
+        if (c)
+            tell_monitor(c, down_of(ps, p));
+    }
+    free(p->monitors);
+    p->monitors = NULL;
+    p->nmonitors = p->monitors_cap = 0;
+    for (size_t i = 0; i < ps->nchannels; i++)
+        if (ps->channels[i].used && ps->channels[i].receiver == p)
+            channel_free(ps, &ps->channels[i]);
+    fragment_free(p->argument);
+    p->argument = NULL;
+    p->ended = true;
+}
+
+/* It closes its files, keeps why it ended in its record, a symbol or an error's text, copied out
+   of its heap, ends (end_now), and frees its context. */
 static void isolate_end(Isolate *p, V reason)
 {
     VM *vm = p->vm;
@@ -744,51 +733,17 @@ static void isolate_end(Isolate *p, V reason)
     char *copy = text ? malloc(length ? length : 1) : NULL;
     if (copy)
         memcpy(copy, string_bytes(reason), length);
-    pthread_mutex_lock(&ps->lock);
-    p->ending = true;
-    p->end_symbol = text ? V_CLEARED : reason;
-    p->end_text = copy;
-    p->end_length = length;
-    uint64_t *monitors = p->monitors;
-    size_t n = live_monitors(ps, monitors, p->nmonitors);
-    p->monitors = NULL;
-    p->nmonitors = p->monitors_cap = 0;
-    pthread_mutex_unlock(&ps->lock);
-
-    Fragment **fragments = calloc(n ? n : 1, sizeof *fragments);
-    vm_root(vm, &reason);
-    V self = handle(vm, ps->tag_isolate, p->index, p->generation);
-    V down = self == V_CLEARED ? V_CLEARED : down_message(vm, ps, self, reason);
-    vm_unroot(vm, 1);
-    for (size_t i = 0; fragments && down != V_CLEARED && i < n; i++)
-        fragments[i] = message(vm, down);
     for (size_t i = 0; i < vm->nfiles; i++)
         if (ptr(vm->files[i])[STREAM_FLAGS] & STREAM_OPEN) {
             fclose((FILE *)(uintptr_t)ptr(vm->files[i])[STREAM_HANDLE]);
             ptr(vm->files[i])[STREAM_FLAGS] &= ~(uint64_t)STREAM_OPEN;
         }
-
     pthread_mutex_lock(&ps->lock);
-    for (size_t i = 0; i < n; i++)
-        tell_monitor(ps, p, channel_at(ps, (size_t)(monitors[i] >> 32), (uint32_t)monitors[i]),
-                     fragments ? fragments[i] : NULL);
-    /* Monitors made since it began to end wait for it to have ended: told here too, in the lock
-       under which it then counts as ended, so that none is told before. Their messages are made
-       under it, as copying one out takes no lock and allocates nothing in the heap, where down
-       stays. */
-    for (size_t i = 0; i < p->nmonitors; i++)
-        tell_monitor(ps, p, channel_at(ps, (size_t)(p->monitors[i] >> 32), (uint32_t)p->monitors[i]),
-                     down == V_CLEARED ? NULL : message(vm, down));
-    free(p->monitors);
-    p->monitors = NULL;
-    p->nmonitors = p->monitors_cap = 0;
-    for (size_t i = 0; i < ps->nchannels; i++)
-        if (ps->channels[i].used && ps->channels[i].receiver == p)
-            channel_free(ps, &ps->channels[i]);
-    p->ended = true; /* with its monitors told, under the same lock */
+    p->end_symbol = text ? V_CLEARED : reason; /* ended, if the text could not be kept */
+    p->end_text = copy;
+    p->end_length = copy ? length : 0;
+    end_now(ps, p);
     pthread_mutex_unlock(&ps->lock);
-    free(fragments);
-    free(monitors);
     vm->isolate = NULL;
     vm_destroy(vm);
     pthread_mutex_lock(&ps->lock);
@@ -820,24 +775,6 @@ static void release_rounds(VM *vm, V run, V *sweepers)
     }
 }
 
-/* With the lock held: an isolate that could not start, for want of memory, ends as one that ran,
-   so that nothing waits on it for ever: its monitors are told [down P ended], the channels given
-   to it are freed, and its argument goes. */
-static void failed_start(Isolates *ps, Isolate *p)
-{
-    for (size_t i = 0; i < p->nmonitors; i++)
-        tell_monitor(ps, p, channel_at(ps, (size_t)(p->monitors[i] >> 32), (uint32_t)p->monitors[i]), NULL);
-    free(p->monitors);
-    p->monitors = NULL;
-    p->nmonitors = p->monitors_cap = 0;
-    for (size_t i = 0; i < ps->nchannels; i++)
-        if (ps->channels[i].used && ps->channels[i].receiver == p)
-            channel_free(ps, &ps->channels[i]);
-    fragment_free(p->argument);
-    p->argument = NULL;
-    p->ended = true;
-}
-
 /* It starts as a program does (docs/design.md): the program's constants and the standard
    streams, then the port's run state, with its gensyms counted from a base of its own. */
 static void *isolate_main(void *argument)
@@ -865,7 +802,7 @@ static void *isolate_main(void *argument)
             vm_destroy(vm);
         }
         pthread_mutex_lock(&ps->lock);
-        failed_start(ps, p);
+        end_now(ps, p); /* as one that ran, with nothing to say why: ended */
         pthread_mutex_unlock(&ps->lock);
         fputs("shen-jit: an isolate cannot start: out of memory\n", stderr);
         return NULL;
@@ -964,13 +901,10 @@ static Isolate *new_isolate(Isolates *ps, Program *program)
     if (p) {
         p->generation++;
     } else {
-        if (ps->n == ps->cap) {
-            Isolate **table = realloc(ps->table, 2 * ps->cap * sizeof *table);
-            if (!table)
-                return NULL;
-            ps->table = table;
-            ps->cap *= 2;
-        }
+        Isolate **table = grow_array(ps->table, &ps->cap, ps->n, sizeof *table, 16);
+        if (!table)
+            return NULL;
+        ps->table = table;
         if (!(p = calloc(1, sizeof *p)))
             return NULL;
         pthread_cond_init(&p->wake, NULL);
@@ -980,7 +914,7 @@ static Isolate *new_isolate(Isolates *ps, Program *program)
     }
     p->program = program;
     p->vm = NULL;
-    p->killed = p->kill_pending = p->ending = false;
+    p->killed = p->kill_pending = false;
     p->nmonitors = 0;
     free(p->end_text);
     p->end_text = NULL;
@@ -1002,14 +936,16 @@ static V raise_copy(VM *vm, const char *error, V offender)
     return strstr(error, "~S") ? sj_raise_value(vm, error, offender) : sj_raise(vm, error);
 }
 
+static Isolate *isolate_numbered(Isolates *ps, size_t index, uint32_t generation)
+{
+    return index < ps->n && ps->table[index]->generation == generation ? ps->table[index] : NULL;
+}
+
 static Isolate *isolate_at(Isolates *ps, V v)
 {
     size_t index;
     uint32_t generation;
-    if (!handle_of(v, ps->tag_isolate, &index, &generation) || index >= ps->n)
-        return NULL;
-    Isolate *p = ps->table[index];
-    return p->generation == generation ? p : NULL;
+    return handle_of(v, ps->tag_isolate, &index, &generation) ? isolate_numbered(ps, index, generation) : NULL;
 }
 
 static bool unary(VM *vm, V f)
@@ -1076,6 +1012,20 @@ static V spawn(VM *vm, Isolates *ps, V name, V argument)
     return sj_raise(vm, p && h == V_CLEARED ? "out of memory" : "isolate.spawn: cannot start a thread");
 }
 
+/* The time ms milliseconds from now, as condition waits take it. */
+static struct timespec after_ms(int64_t ms)
+{
+    struct timespec t;
+    clock_gettime(CLOCK_REALTIME, &t);
+    t.tv_sec += ms / 1000;
+    t.tv_nsec += ms % 1000 * 1000000;
+    if (t.tv_nsec >= 1000000000) {
+        t.tv_sec++;
+        t.tv_nsec -= 1000000000;
+    }
+    return t;
+}
+
 /* With the lock held: waiting on its condition until woken, or until the time given. The builder
    waits in slices of 50 ms, as a Ctrl-C, which is its own, cannot wake it from a signal handler. 0
    when woken or between slices, ETIMEDOUT once the time has passed. */
@@ -1084,41 +1034,26 @@ static int wait_turn_until(Isolates *ps, VM *vm, const struct timespec *until)
     if (vm != vm->program->owner)
         return until ? pthread_cond_timedwait(&vm->isolate->wake, &ps->lock, until)
                      : pthread_cond_wait(&vm->isolate->wake, &ps->lock);
-    struct timespec slice;
-    clock_gettime(CLOCK_REALTIME, &slice);
-    slice.tv_nsec += 50000000;
-    if (slice.tv_nsec >= 1000000000) {
-        slice.tv_sec++;
-        slice.tv_nsec -= 1000000000;
-    }
+    struct timespec slice = after_ms(50);
     bool last = until && (until->tv_sec < slice.tv_sec || (until->tv_sec == slice.tv_sec && until->tv_nsec <= slice.tv_nsec));
     int waited = pthread_cond_timedwait(&vm->isolate->wake, &ps->lock, last ? until : &slice);
     return waited == ETIMEDOUT && !last ? 0 : waited;
 }
 
-static void wait_turn(Isolates *ps, VM *vm)
+/* With the lock held, which it releases if it gives one: "killed" or "interrupted", to raise now; a
+   Ctrl-C is only the builder's. */
+static const char *stopped(VM *vm, Isolates *ps)
 {
-    wait_turn_until(ps, vm, NULL);
-}
-
-/* With the lock held, which it releases if it says so: a Ctrl-C to raise now, which only the
-   builder gets. */
-static bool interrupted_now(VM *vm, Isolates *ps)
-{
-    if (vm->interrupted != INTERRUPT || !sj_take_interrupt(vm))
-        return false;
-    pthread_mutex_unlock(&ps->lock);
-    return true;
-}
-
-/* With the lock held, which it releases if it says so: a kill to raise now. */
-static bool killed_now(VM *vm, Isolates *ps)
-{
-    if (!vm->isolate->kill_pending)
-        return false;
-    vm->isolate->kill_pending = false;
-    pthread_mutex_unlock(&ps->lock);
-    return true;
+    const char *why = NULL;
+    if (vm->isolate->kill_pending) {
+        vm->isolate->kill_pending = false;
+        why = "killed";
+    } else if (vm->interrupted == INTERRUPT && sj_take_interrupt(vm)) {
+        why = "interrupted";
+    }
+    if (why)
+        pthread_mutex_unlock(&ps->lock);
+    return why;
 }
 
 /* Marks the endpoints of a receive as waited on, or not. */
@@ -1133,6 +1068,48 @@ static void waiting(Isolates *ps, V endpoints, bool any, bool on)
     }
 }
 
+/* Which operation reads endpoints, for its errors. */
+enum { BY_RECEIVE, BY_RECEIVE_ANY, BY_WAIT_ANY };
+static const char *const not_receive_endpoint[] = {"channel.receive: ~S is not a receive endpoint",
+                                                   "channel.receive-any: ~S is not a receive endpoint",
+                                                   "channel.wait-any: ~S is not a receive endpoint"};
+static const char *const anothers[] = {"channel.receive: ~S belongs to another isolate",
+                                       "channel.receive-any: ~S belongs to another isolate",
+                                       "channel.wait-any: ~S belongs to another isolate"};
+
+/* With the lock held: the first of the endpoints, a list of them unless by is BY_RECEIVE, that a
+   receive would not wait on, as it has a message, is closed or has gone, in *found, and its
+   channel, or NULL if it has gone; *found is V_NIL if none is. One that is not this isolate's
+   receive endpoint is *found too, with *error saying so. */
+static Channel *first_ready(Isolates *ps, VM *vm, V endpoints, int by, V *found, const char **error)
+{
+    *found = V_NIL;
+    for (V l = endpoints;;) {
+        V e = l;
+        if (by != BY_RECEIVE) {
+            if (!is_pair(l))
+                return NULL;
+            e = ptr(l)[0];
+            l = ptr(l)[1];
+        }
+        size_t index;
+        uint32_t generation;
+        bool endpoint = handle_of(e, ps->tag_receiver, &index, &generation);
+        Channel *c = endpoint ? channel_at(ps, index, generation) : NULL;
+        if (!endpoint || (c && c->receiver != vm->isolate)) {
+            *found = e;
+            *error = c ? anothers[by] : not_receive_endpoint[by];
+            return NULL;
+        }
+        if (!c || c->count || c->closed) {
+            *found = e;
+            return c;
+        }
+        if (by == BY_RECEIVE)
+            return NULL;
+    }
+}
+
 /* (channel.receive R), or with `any`, (channel.receive-any Rs), which gives [R Message]; at the end of
    a stream, shen-jit.end-of-stream, which the port turns into what each gives then. */
 static V receive(VM *vm, Isolates *ps, V endpoints, bool any)
@@ -1142,45 +1119,15 @@ static V receive(VM *vm, Isolates *ps, V endpoints, bool any)
     vm_root(vm, &from);
     vm_root(vm, &got);
     const char *error = NULL;
-    V offender = V_NIL;
     pthread_mutex_lock(&ps->lock);
     for (;;) {
-        if (killed_now(vm, ps)) {
-            error = "killed";
+        if ((error = stopped(vm, ps)))
             break;
-        }
-        if (interrupted_now(vm, ps)) {
-            error = "interrupted";
-            break;
-        }
-        size_t n = 0;
-        Channel *ready = NULL;
-        for (V l = endpoints; !ready && (any ? is_pair(l) : n == 0); n++) {
-            size_t index;
-            uint32_t generation;
-            from = any ? ptr(l)[0] : l;
-            if (any)
-                l = ptr(l)[1];
-            if (!handle_of(from, ps->tag_receiver, &index, &generation)) {
-                error = any ? "channel.receive-any: ~S is not a receive endpoint"
-                            : "channel.receive: ~S is not a receive endpoint";
-                offender = from;
-                break;
-            }
-            Channel *c = channel_at(ps, index, generation);
-            if (!c) {
-                error = "channel closed";
-                break;
-            }
-            if (c->receiver != vm->isolate) {
-                error = any ? "channel.receive-any: ~S belongs to another isolate"
-                            : "channel.receive: ~S belongs to another isolate";
-                offender = from;
-                break;
-            }
-            if (c->count || c->closed)
-                ready = c;
-        }
+        Channel *ready = first_ready(ps, vm, endpoints, any ? BY_RECEIVE_ANY : BY_RECEIVE, &from, &error);
+        if (!error && from != V_NIL && !ready)
+            error = "channel closed";
+        if (!error && any && !is_pair(endpoints))
+            error = "channel.receive-any: no channels";
         if (error) {
             pthread_mutex_unlock(&ps->lock);
             break;
@@ -1198,18 +1145,13 @@ static V receive(VM *vm, Isolates *ps, V endpoints, bool any)
             got = ps->end;
             break;
         }
-        if (!n) {
-            pthread_mutex_unlock(&ps->lock);
-            error = "channel.receive-any: no channels";
-            break;
-        }
         waiting(ps, endpoints, any, true);
-        wait_turn(ps, vm);
+        wait_turn_until(ps, vm, NULL);
         waiting(ps, endpoints, any, false);
     }
     V result = got;
     if (error) {
-        result = offender == V_NIL ? sj_raise(vm, error) : sj_raise_value(vm, error, offender);
+        result = raise_copy(vm, error, from);
     } else if (got != V_CLEARED && any) {
         V tail = make_pair(vm, got, V_NIL);
         result = tail == V_CLEARED ? V_CLEARED : make_pair(vm, from, tail);
@@ -1233,13 +1175,10 @@ static V send(VM *vm, Isolates *ps, V sender, V v)
         return raise_copy(vm, error, offender);
     pthread_mutex_lock(&ps->lock);
     for (;;) {
-        if (killed_now(vm, ps)) {
+        const char *why = stopped(vm, ps);
+        if (why) {
             fragment_free(f);
-            return sj_raise(vm, "killed");
-        }
-        if (interrupted_now(vm, ps)) {
-            fragment_free(f);
-            return sj_raise(vm, "interrupted");
+            return sj_raise(vm, why);
         }
         Channel *c = channel_at(ps, index, generation);
         if (!c || c->closed) {
@@ -1251,19 +1190,16 @@ static V send(VM *vm, Isolates *ps, V sender, V v)
         bool listed = false;
         for (size_t i = 0; i < c->nsenders; i++)
             listed |= c->senders[i] == vm->isolate;
-        if (!listed && c->nsenders == c->senders_cap) {
-            size_t cap = c->senders_cap ? 2 * c->senders_cap : 4;
-            Isolate **senders = realloc(c->senders, cap * sizeof *senders);
+        if (!listed) {
+            Isolate **senders = grow_array(c->senders, &c->senders_cap, c->nsenders, sizeof *senders, 4);
             if (!senders) {
                 error = "out of memory";
                 break;
             }
             c->senders = senders;
-            c->senders_cap = cap;
-        }
-        if (!listed)
             c->senders[c->nsenders++] = vm->isolate;
-        wait_turn(ps, vm);
+        }
+        wait_turn_until(ps, vm, NULL);
     }
     pthread_mutex_unlock(&ps->lock);
     if (error) {
@@ -1273,67 +1209,59 @@ static V send(VM *vm, Isolates *ps, V sender, V v)
     return v;
 }
 
-static V monitor(VM *vm, Isolates *ps, V isolate)
+/* A channel this isolate receives on: its receive endpoint, or V_CLEARED, with nothing left of it,
+   without memory. */
+static V new_receiver(VM *vm, Isolates *ps, size_t capacity)
 {
     pthread_mutex_lock(&ps->lock);
-    Isolate *p = isolate_at(ps, isolate);
-    size_t i = channel_new(ps, 1, vm->isolate);
-    uint32_t generation = i == SIZE_MAX ? 0 : ps->channels[i].generation;
-    bool ended = !p || p->ended; /* one ending tells this too, once it has ended */
-    /* One that has ended gives its reason, if its record says it, and otherwise ended. */
-    V reason = ended && p && !p->end_text && p->end_symbol != V_CLEARED ? p->end_symbol : ps->ended;
-    char *text = NULL;
-    size_t length = ended && p && p->end_text ? p->end_length : 0;
-    if (ended && p && p->end_text && (text = malloc(length ? length : 1)))
-        memcpy(text, p->end_text, length);
-    if (i != SIZE_MAX && !ended) {
-        if (p->nmonitors == p->monitors_cap)
-            p->nmonitors = live_monitors(ps, p->monitors, p->nmonitors);
-        if (p->nmonitors == p->monitors_cap) {
-            size_t cap = p->monitors_cap ? 2 * p->monitors_cap : 4;
-            uint64_t *monitors = realloc(p->monitors, cap * sizeof *monitors);
-            if (monitors) {
-                p->monitors = monitors;
-                p->monitors_cap = cap;
-            }
-        }
-        if (p->nmonitors < p->monitors_cap) {
-            p->monitors[p->nmonitors++] = (uint64_t)i << 32 | generation;
-        } else { /* not told at all, nor told while it runs: no monitor */
-            channel_free(ps, &ps->channels[i]);
-            i = SIZE_MAX;
-        }
-    }
+    size_t i = channel_new(ps, capacity, vm->isolate);
+    uint32_t g = i == SIZE_MAX ? 0 : ps->channels[i].generation;
     pthread_mutex_unlock(&ps->lock);
-    if (i == SIZE_MAX) {
-        free(text);
-        return sj_raise(vm, "out of memory");
-    }
-    V r = V_NIL;
-    vm_root(vm, &isolate);
-    vm_root(vm, &r);
-    vm_root(vm, &reason);
-    r = handle(vm, ps->tag_receiver, i, generation);
-    if (ended && r != V_CLEARED && text && (reason = make_string(vm, text, length)) == V_CLEARED)
-        reason = ps->ended;
-    free(text);
-    if (ended && r != V_CLEARED) { /* already over: down at once */
-        V down = down_message(vm, ps, isolate, reason);
-        Fragment *f = down == V_CLEARED ? NULL : message(vm, down);
+    V r = i == SIZE_MAX ? V_CLEARED : handle(vm, ps->tag_receiver, i, g);
+    if (r == V_CLEARED && i != SIZE_MAX) { /* no endpoint reaches it */
         pthread_mutex_lock(&ps->lock);
-        tell_monitor(ps, isolate_at(ps, isolate), channel_at(ps, i, generation), f);
-        pthread_mutex_unlock(&ps->lock);
-    }
-    vm_unroot(vm, 3);
-    if (r == V_CLEARED) { /* no endpoint reaches it: freed, and a registration left matches nothing */
-        pthread_mutex_lock(&ps->lock);
-        Channel *c = channel_at(ps, i, generation);
+        Channel *c = channel_at(ps, i, g);
         if (c)
             channel_free(ps, c);
         pthread_mutex_unlock(&ps->lock);
-        return sj_raise(vm, "out of memory");
     }
     return r;
+}
+
+/* A monitor: listed to be told when the isolate ends (end_now), or, as it has, told at once, with
+   why if its record still says, and otherwise ended. The isolate is found by the number its handle
+   gave, as making the endpoint may move the handle; nothing allocates in the heap after that. */
+static V monitor(VM *vm, Isolates *ps, V isolate)
+{
+    size_t index;
+    uint32_t generation;
+    if (!handle_of(isolate, ps->tag_isolate, &index, &generation))
+        return sj_raise_value(vm, "isolate.monitor: ~S is not an isolate", isolate);
+    V r = new_receiver(vm, ps, 1);
+    if (r == V_CLEARED)
+        return sj_raise(vm, "out of memory");
+    size_t i = (size_t)fixval(ptr(r)[2]);
+    uint32_t g = (uint32_t)fixval(ptr(r)[3]);
+    pthread_mutex_lock(&ps->lock);
+    Channel *c = channel_at(ps, i, g);
+    Isolate *p = isolate_numbered(ps, index, generation);
+    bool listed = true;
+    if (p && !p->ended) {
+        if (p->nmonitors == p->monitors_cap)
+            p->nmonitors = live_monitors(ps, p->monitors, p->nmonitors);
+        uint64_t *monitors = grow_array(p->monitors, &p->monitors_cap, p->nmonitors, sizeof *monitors, 4);
+        if (monitors) {
+            p->monitors = monitors;
+            p->monitors[p->nmonitors++] = (uint64_t)i << 32 | g;
+        } else { /* not told at all, nor told while it runs: no monitor */
+            channel_free(ps, c);
+            listed = false;
+        }
+    } else {
+        tell_monitor(c, p ? down_of(ps, p) : down_fragment(ps, index, generation, ps->ended, NULL, 0));
+    }
+    pthread_mutex_unlock(&ps->lock);
+    return listed ? r : sj_raise(vm, "out of memory");
 }
 
 /* (isolate.share V): a copy of V in the program space, which crosses to any isolate by pointer,
@@ -1358,29 +1286,6 @@ static V share(VM *vm, V v)
     return root == V_CLEARED ? sj_raise(vm, "out of memory") : root;
 }
 
-/* With the lock held: the first of the endpoints that a receive would not wait on, as it has a
-   message, is closed or has gone, or V_NIL; or one that is not this isolate's receive endpoint,
-   with *error saying so. */
-static V first_ready(Isolates *ps, VM *vm, V endpoints, const char **error)
-{
-    for (V l = endpoints; is_pair(l); l = ptr(l)[1]) {
-        size_t index;
-        uint32_t generation;
-        if (!handle_of(ptr(l)[0], ps->tag_receiver, &index, &generation)) {
-            *error = "channel.wait-any: ~S is not a receive endpoint";
-            return ptr(l)[0];
-        }
-        Channel *c = channel_at(ps, index, generation);
-        if (c && c->receiver != vm->isolate) {
-            *error = "channel.wait-any: ~S belongs to another isolate";
-            return ptr(l)[0];
-        }
-        if (!c || c->count || c->closed)
-            return ptr(l)[0];
-    }
-    return V_NIL;
-}
-
 /* (channel.wait-any Rs Ms): the first of the receive endpoints Rs that a receive would not wait
    on, as it has a message or is closed, after at most Ms milliseconds, or () if none is by then.
    It receives nothing. */
@@ -1388,30 +1293,23 @@ static V wait_any(VM *vm, Isolates *ps, V endpoints, V ms)
 {
     if (!is_fix(ms) || fixval(ms) < 0 || fixval(ms) > 86400000)
         return sj_raise_value(vm, "channel.wait-any: ~S is not a number of milliseconds up to a day", ms);
-    struct timespec until;
-    clock_gettime(CLOCK_REALTIME, &until);
-    until.tv_sec += fixval(ms) / 1000;
-    until.tv_nsec += fixval(ms) % 1000 * 1000000;
-    if (until.tv_nsec >= 1000000000) {
-        until.tv_sec++;
-        until.tv_nsec -= 1000000000;
-    }
+    struct timespec until = after_ms(fixval(ms));
     const char *error = NULL;
     V found = V_NIL;
     pthread_mutex_lock(&ps->lock);
     for (bool late = false;; late = true) {
-        if (killed_now(vm, ps))
-            return sj_raise(vm, "killed");
-        if (interrupted_now(vm, ps))
-            return sj_raise(vm, "interrupted");
-        found = first_ready(ps, vm, endpoints, &error);
+        const char *why = stopped(vm, ps);
+        if (why)
+            return sj_raise(vm, why);
+        first_ready(ps, vm, endpoints, BY_WAIT_ANY, &found, &error);
         if (found != V_NIL || late || fixval(ms) == 0)
             break;
         waiting(ps, endpoints, true, true);
         int waited = 0;
         const char *later = NULL;
+        V seen = V_NIL;
         while (waited == 0 && !vm->isolate->kill_pending && vm->interrupted != INTERRUPT &&
-               first_ready(ps, vm, endpoints, &later) == V_NIL)
+               (first_ready(ps, vm, endpoints, BY_WAIT_ANY, &seen, &later), seen == V_NIL))
             waited = wait_turn_until(ps, vm, &until);
         waiting(ps, endpoints, true, false);
     }
@@ -1423,7 +1321,7 @@ static V wait_any(VM *vm, Isolates *ps, V endpoints, V ms)
    it if it waits on a channel. */
 static void kill_isolate(Isolates *ps, Isolate *p)
 {
-    if (p && p != ps->table[0] && !p->ended && !p->ending) {
+    if (p && p != ps->table[0] && !p->ended) {
         p->killed = p->kill_pending = true;
         pthread_cond_signal(&p->wake);
     }
@@ -1437,10 +1335,10 @@ bool sj_isolate_killed(VM *vm)
     if (!ps || !vm->isolate)
         return false;
     pthread_mutex_lock(&ps->lock);
-    if (killed_now(vm, ps))
-        return true;
+    bool killed = vm->isolate->kill_pending;
+    vm->isolate->kill_pending = false;
     pthread_mutex_unlock(&ps->lock);
-    return false;
+    return killed;
 }
 
 V sj_isolate(VM *vm)
@@ -1473,19 +1371,7 @@ V sj_isolate(VM *vm)
     case OP_CHANNEL: {
         if (!is_fix(a) || fixval(a) < 1 || fixval(a) > (1 << 24))
             return sj_raise_value(vm, "channel.new: ~S is not a capacity from 1 to 2^24", a);
-        pthread_mutex_lock(&ps->lock);
-        size_t i = channel_new(ps, (size_t)fixval(a), vm->isolate);
-        uint32_t g = i == SIZE_MAX ? 0 : ps->channels[i].generation;
-        pthread_mutex_unlock(&ps->lock);
-        V r = i == SIZE_MAX ? V_CLEARED : handle(vm, ps->tag_receiver, i, g);
-        if (r == V_CLEARED && i != SIZE_MAX) { /* no endpoint reaches it */
-            pthread_mutex_lock(&ps->lock);
-            Channel *c = channel_at(ps, i, g);
-            if (c)
-                channel_free(ps, c);
-            pthread_mutex_unlock(&ps->lock);
-        }
-        return made(vm, r);
+        return made(vm, new_receiver(vm, ps, (size_t)fixval(a)));
     }
     case OP_SENDER:
     case OP_GIVE:
@@ -1506,14 +1392,10 @@ V sj_isolate(VM *vm)
             pthread_mutex_unlock(&ps->lock);
             return sj_raise_value(vm, "channel.close: ~S belongs to another isolate", a);
         }
-        if (c && receiver) {
+        if (c && receiver)
             channel_free(ps, c);
-        } else if (c && !c->closed) {
-            c->closed = true;
-            wake_senders(c);
-            if (c->receiver_waiting)
-                pthread_cond_signal(&c->receiver->wake);
-        }
+        else if (c && !c->closed)
+            close_sending(c);
         pthread_mutex_unlock(&ps->lock);
         return a;
     }

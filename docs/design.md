@@ -382,23 +382,24 @@ ending waits for it to have ended, as the isolate counts as running until then. 
 what its argument holds, and wakes it if it waits on a channel: an isolate needs no safe points,
 and code compiled for one is what any program runs. What waits on
 something else, as the I/O library's socket waits do in slices of 100 ms, calls
-`isolate.check-kill` between them; in the builder, or before isolates exist, it does nothing. An isolate that
-cannot start, for want of memory for its context, tells its monitors too, with a message laid out by hand, as it has
-no heap to make one in; so does one whose down message cannot be made, and if even that cannot be, the monitor is
-closed, so that nothing waits on it for ever. An isolate that ends first runs, once, what it
-registered with `shen-jit.at-end`; then what it registered with `shen-jit.at-guards-dead`, as the
-handle library's sweep, in rounds: a collection finds dead the guarded pointers nothing reaches, and
-a release may use another handle, which outlives it until that release has run and so dies in a
-later round. Only what dies is released, so always in that order and with the globals a release may
-read still there; what the argument slots of calls to C and the error last caught hold is dead by then,
-and cleared before each round, and rounds go on while a collection finds a guard dead. A
-collection inside a release may find more dead; they stay queued for the next round. What
-its globals still hold is left to the system, as a program's is when it ends. Then it tells its monitors,
-closes its files
-and the channels it receives on, and frees its context; its record keeps why it ended, as a symbol
-or an error's text, so that a monitor that comes after, as one made just after a spawn can, is
-told at once with the same reason, until the record is used again with a new generation. Then,
-or for one that could not start, the reason is `ended`.
+`isolate.check-kill` between them; in the builder, or before isolates exist, it does nothing. An
+isolate that cannot start, for want of memory for its context, tells its monitors too. A down
+message is laid out by hand outside every heap, from the record, so that it is made under the lock
+that tells the monitors; if it cannot be made, the monitor is closed all the same, so that nothing
+waits on it for ever. An isolate that ends first runs, once, what it registered with
+`shen-jit.at-end`; then what it registered with `shen-jit.at-guards-dead`, as the handle library's
+sweep, in rounds: a collection finds dead the guarded pointers nothing reaches, and a release may
+use another handle, which outlives it until that release has run and so dies in a later round. Only
+what dies is released, so always in that order and with the globals a release may read still there;
+what the argument slots of calls to C and the error last caught hold is dead by then, and cleared
+before each round, and rounds go on while a collection finds a guard dead. A collection inside a
+release may find more dead; they stay queued for the next round. What its globals still hold is left
+to the system, as a program's is when it ends. Then it closes its files, keeps why it ended in its
+record, and in one hold of the lock tells its monitors, frees the channels it receives on and counts
+as ended; then its context goes. The record keeps why it ended, as a symbol or an error's text, so
+that a monitor that comes after, as one made just after a spawn can, is told at once with the same
+reason, until the record is used again with a new generation. Then, or for one that could not start,
+the reason is `ended`.
 
 **The program is fixed while isolates run.** Defining, foreign definitions and arities are
 refused while an isolate other than the builder has not ended, so nothing patches the code
