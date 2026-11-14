@@ -107,21 +107,37 @@
   X -> (if (= (error-to-string X) "channel closed") skip (simple-error (error-to-string X))))
 
 \\ Starts the owning isolate: [Db Monitor], Db for the handlers and Monitor for the owning isolate's end.
-\\ A failure before it starts closes its channel; after, closing the send endpoint ends it.
+\\ What it makes is kept in Cell, [Requests Owner Monitor], by stores, which do not allocate, under one
+\\ cleanup made first, so that a failure anywhere, even making the result, undoes it: before the owning
+\\ isolate starts, by closing its channel; after, by closing the send endpoint, which ends it, and once it is
+\\ monitored, by waiting for its end.
 (define counter-app.open
-  Path -> (let R (channel.new 64)
-               Requests (shen-jit.on-error (freeze (channel.sender R)) (freeze (channel.close R)))
-               I (shen-jit.on-error (freeze (isolate.spawn counter-app.owner [Path (channel.give R)]))
-                                    (freeze (channel.close R)))
-               Monitor (shen-jit.on-error (freeze (isolate.monitor I)) (freeze (channel.close Requests)))
-            [[Path Requests I] Monitor]))
+  Path -> (let Cell (address-> (address-> (address-> (absvector 3) 0 []) 1 []) 2 [])
+               R (channel.new 64)
+            (shen-jit.on-error
+              (freeze (let Requests (counter-app.kept Cell 0 (channel.sender R))
+                           I (counter-app.kept Cell 1 (isolate.spawn counter-app.owner [Path (channel.give R)]))
+                           Monitor (counter-app.kept Cell 2 (isolate.monitor I))
+                        [[Path Requests I] Monitor]))
+              (freeze (counter-app.undo-open R Cell)))))
+
+(define counter-app.kept
+  Cell I X -> (do (address-> Cell I X) X))
+
+(define counter-app.undo-open
+  R Cell -> (cases (empty? (<-address Cell 1)) (channel.close R)
+                   (empty? (<-address Cell 2)) (channel.close (<-address Cell 0))
+                   true (counter-app.end-owner (<-address Cell 0) (<-address Cell 2))))
 
 (define counter-app.db
   [Db _] -> Db)
 
 \\ Ends the owning isolate's stream, which it reads to its end, and waits for it to close the database.
 (define counter-app.close
-  [[_ Requests _] Monitor] -> (do (channel.close Requests) (channel.receive Monitor) (channel.close Monitor) true))
+  [[_ Requests _] Monitor] -> (counter-app.end-owner Requests Monitor))
+
+(define counter-app.end-owner
+  Requests Monitor -> (do (channel.close Requests) (channel.receive Monitor) (channel.close Monitor) true))
 
 (define counter-app.list
   Db -> (counter-app.json 200 (map (function counter-app.row-json) (counter-app.do Db [list]))))
@@ -266,14 +282,22 @@
   _ _ [invalid] -> (counter-app.error 400 "expected an object with one decimal integer value in 0..1000000000000")
   Db Name [ok N] -> (counter-app.found (counter-app.do Db [set Name N])))
 
-\\ The owner, and a server whose handler F is called with Db and the request: [Owner Server].
+\\ The owner, and a server whose handler F is called with Db and the request: [Owner Server]. Each is
+\\ kept in Cell as it is made, so that a failure after it, even making the result, stops the server,
+\\ which closes its listener, and ends the owning isolate.
 (define counter-app.start
   Path Host Port F Options ->
     (let _ (counter-app.initialize Path)
-         Owner (counter-app.open Path)
-         S (shen-jit.on-error (freeze (http.listen Host Port [F (counter-app.db Owner)] Options))
-                              (freeze (counter-app.close Owner)))
-      [Owner S]))
+         Cell (address-> (address-> (absvector 2) 0 []) 1 [])
+      (shen-jit.on-error
+        (freeze (let Owner (counter-app.kept Cell 0 (counter-app.open Path))
+                     S (counter-app.kept Cell 1 (http.listen Host Port [F (counter-app.db Owner)] Options))
+                  [Owner S]))
+        (freeze (counter-app.undo-start Cell)))))
+
+(define counter-app.undo-start
+  Cell -> (do (if (empty? (<-address Cell 1)) true (do (http.stop (<-address Cell 1)) (http.run (<-address Cell 1))))
+              (if (empty? (<-address Cell 0)) true (counter-app.close (<-address Cell 0)))))
 
 \\ Serves until a handler stops the server, each connection in an isolate of its own, then ends the
 \\ owner. The owner holds the database open meanwhile, so the log stays between requests: the last

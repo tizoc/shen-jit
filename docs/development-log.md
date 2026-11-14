@@ -2105,6 +2105,20 @@ connection starts, which no test makes.
   twice when making the endpoint fails, as `io.socket` closes it then, and the number could by then be another
   isolate's.
 
+### What an eighth review found (2026-11-13, Apple M3 Max, against the commit before)
+
+One, fixed. The reviewer found the seventh's fixes sound, and nothing more worth its code.
+
+- **The `sqlite-http` example's startup.** `counter-app.open` made its result, and the cleanups of its later steps,
+  after the owning isolate had started, and `counter-app.start` made `[Owner S]` after the listener; a failure to
+  allocate there lost them, leaving that isolate waiting on its stream for ever with the database open, and the
+  program fixed. As `spawn-each` does now, each keeps what it made in a vector made first, under one cleanup that
+  covers making the result: closing the channel before the owning isolate starts, closing its stream after, and
+  waiting for its end once it is monitored; `start` also stops a server it made, which closes the listener. New cases:
+  a start that cannot listen, as its port is taken, ends the owning isolate, and the cleanup given a live one and a
+  server that never ran ends it and gives back the port; both leave the program free to change. Neither lands a
+  failure in the gap itself, as the seventh's entry explains.
+
 ### What a seventh review found (2026-11-13, Apple M3 Max, against the commit before)
 
 Two. One was the sixth's HTTP fix closing a socket twice, corrected in that fix, whose entry says what stayed.

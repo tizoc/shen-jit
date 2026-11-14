@@ -87,7 +87,8 @@ would need separate runtime/library support; this example uses an explicit appli
 dependencies and passes the command-line arguments. Applications can instead load `main.shen` and call
 `(counter-app.start Path Host Port F Options)`, which starts the database's owner and a server whose handler is `F`,
 called with `Db`, what reaches the owning isolate, and the request, such as `counter-app.handle`: a handler runs in an
-isolate of its connection's, which inherits no globals. It gives `[Owner S]`, which the caller serves with
+isolate of its connection's, which inherits no globals. If it fails, it ends the owning isolate and closes the
+server it made. It gives `[Owner S]`, which the caller serves with
 `(counter-app.await Owner S)` until it is stopped, which then ends the owning isolate. The `/shutdown` control route
 is supplied by `counter-app.run`.
 

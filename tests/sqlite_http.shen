@@ -107,4 +107,26 @@
   (counter-test.check "a request after the owning isolate has gone raises" true
     (freeze (counter-test.raises? (freeze (counter-app.do Db [list]))))))
 
+\\ A start that fails ends the owning isolate it started, and stops a server it made, giving back its port; the
+\\ program can change again after each, as no isolate is left. A port taken makes listening fail.
+(define counter-test.changes?
+  Name -> (trap-error (do (eval [define Name -> changed]) (eval [Name])) (/. E (error-to-string E))))
+
+(let Taken (socket.listen "127.0.0.1" 0)
+     Why (trap-error (counter-app.start (value counter-test.path) "127.0.0.1" (socket.port Taken) counter-app.control [])
+                     (/. E failed))
+     _ (socket.c-close Taken)
+  (counter-test.check "a start that cannot listen ends the owning isolate" [failed changed]
+    (freeze [Why (counter-test.changes? counter-test.after-listen)])))
+
+(let Cell (address-> (address-> (absvector 2) 0 []) 1 [])
+     Owner (counter-app.kept Cell 0 (counter-app.open (value counter-test.path)))
+     S (counter-app.kept Cell 1 (http.listen "127.0.0.1" 0 [counter-app.control (counter-app.db Owner)] []))
+     Port (http.port S)
+     _ (counter-app.undo-start Cell)
+     Again (socket.listen "127.0.0.1" Port)
+     _ (socket.c-close Again)
+  (counter-test.check "undoing a start stops its server and ends the owning isolate" changed
+    (freeze (counter-test.changes? counter-test.after-undo))))
+
 (output "~A passed, ~A failed~%" (value counter-test.passed) (value counter-test.failed))
