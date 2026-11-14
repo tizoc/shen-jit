@@ -199,4 +199,28 @@
         (freeze (if (= Ready [timeout]) Ready (let Down (channel.receive M) [(hd Down) (hd (tl (tl Down)))]))))
       (socket.close L)))
 
+\\ And one finishing a connection. A listening socket never becomes writable, nor has an error, so it
+\\ stands in for a connection that stays pending.
+(define socket-test.connect-forever
+  [L Out] -> (do (channel.send Out ready) (socket.finish-connecting L)))
+
+(let L (socket-test.listener)
+     R (channel.new 1)
+     I (isolate.spawn socket-test.connect-forever [L (channel.sender R)])
+     M (isolate.monitor I)
+     _ (channel.receive R)
+     _ (isolate.kill I)
+     Ready (channel.wait-any [M] 5000)
+  (do (socket-test.check "a kill reaches an isolate finishing a connection" [down killed]
+        (freeze (if (= Ready [timeout]) Ready (let Down (channel.receive M) [(hd Down) (hd (tl (tl Down)))]))))
+      (socket.close L)))
+
+\\ A kill, raised once, ends a connect at the address it reached, rather than trying the next.
+(let Tried (address-> (absvector 1) 0 [])
+     Got (trap-error (socket.first-working (/. A (do (address-> Tried 0 [A | (<-address Tried 0)]) (simple-error "killed")))
+                                           [a b] "none")
+                     (/. E (error-to-string E)))
+  (socket-test.check "a kill is not taken for an address that failed" ["killed" [a]]
+    (freeze [Got (<-address Tried 0)])))
+
 (output "~A passed, ~A failed~%" (value socket-test.*passed*) (value socket-test.*failed*))

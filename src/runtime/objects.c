@@ -236,19 +236,21 @@ bool symbol_table_put(SymbolTable *t, V sym)
 {
     if (2 * (t->count + 1) > t->cap) {
         size_t cap = t->cap ? 2 * t->cap : 1024;
-        V *slots = calloc(cap, sizeof *slots);
-        V **retired = t->shared ? realloc(t->retired, (t->nretired + 1) * sizeof *retired) : NULL;
-        if (!slots || (t->shared && !retired)) {
-            free(slots);
-            return false;
+        if (t->shared) { /* kept as soon as it moves, whatever fails next */
+            V **retired = realloc(t->retired, (t->nretired + 1) * sizeof *retired);
+            if (!retired)
+                return false;
+            t->retired = retired;
         }
+        V *slots = calloc(cap, sizeof *slots);
+        if (!slots)
+            return false;
         SymbolTable grown = {slots, cap, 0, false, NULL, 0};
         for (size_t i = 0; i < t->cap; i++)
             if (t->slots[i])
                 symbol_table_put(&grown, t->slots[i]);
         if (t->shared) {
-            retired[t->nretired++] = t->slots;
-            t->retired = retired;
+            t->retired[t->nretired++] = t->slots;
         } else {
             free(t->slots);
         }
@@ -310,17 +312,30 @@ V cell_symbol(VM *vm, size_t cell)
     return V_NIL;
 }
 
-V published_find(VM *vm, const char *bytes, size_t len)
-{
-    return table_find(&vm->program->published, hash_bytes(bytes, len), bytes, len);
-}
-
 /* New symbols and global numbers, once isolates exist: any isolate makes them. */
 static pthread_mutex_t shared_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* For a walk of the program space that must not meet an object half made (jit.c). */
 void program_shared_lock(void) { pthread_mutex_lock(&shared_lock); }
 void program_shared_unlock(void) { pthread_mutex_unlock(&shared_lock); }
+
+/* For a lookup that makes nothing and must not miss: a miss while another isolate grows the
+   published table is looked up again under the lock that growth takes. */
+static V published_sure(VM *vm, V found, uint64_t hash, const char *bytes, size_t len)
+{
+    if (found || !vm->program->isolates)
+        return found;
+    pthread_mutex_lock(&shared_lock);
+    found = table_find(&vm->program->published, hash, bytes, len);
+    pthread_mutex_unlock(&shared_lock);
+    return found;
+}
+
+V published_find(VM *vm, const char *bytes, size_t len)
+{
+    uint64_t hash = hash_bytes(bytes, len);
+    return published_sure(vm, table_find(&vm->program->published, hash, bytes, len), hash, bytes, len);
+}
 
 /* A new cell, both entries cleared, or SIZE_MAX. */
 static size_t new_cell(VM *vm)
@@ -338,16 +353,6 @@ static size_t new_cell(VM *vm)
     return entry / 2;
 }
 
-/* Room in the program space for data any isolate shares (isolate.c, isolate.share), under the
-   lock that guards it while isolates make symbols there. */
-uint64_t *program_alloc_shared(VM *vm, size_t words)
-{
-    pthread_mutex_lock(&shared_lock);
-    uint64_t *at = program_alloc(vm, words);
-    pthread_mutex_unlock(&shared_lock);
-    return at;
-}
-
 /* Once isolates exist, a new symbol is published as it is made, its name copied into the program
    space, under the lock: every isolate sees one symbol for a name. */
 static V intern_shared(VM *vm, V name, uint64_t hash)
@@ -359,6 +364,11 @@ static V intern_shared(VM *vm, V name, uint64_t hash)
     size_t words = obj_words(ptr(name)[0]);
     uint64_t *copy = p ? program_alloc(vm, words) : NULL;
     size_t cell = copy ? new_cell(vm) : SIZE_MAX;
+    if (p && cell == SIZE_MAX) { /* what it took goes back, as the space's walks read every word */
+        if (copy)
+            program_unalloc(vm, copy, words);
+        program_free_symbol(vm, p);
+    }
     if (cell != SIZE_MAX) {
         memcpy(copy, ptr(name), words * sizeof(uint64_t));
         p[0] = HEADER(T_SYMBOL, 0);
@@ -370,7 +380,9 @@ static V intern_shared(VM *vm, V name, uint64_t hash)
         if (symbol_table_put(&vm->program->published, sym)) {
             if (cell >= vm->program->published_top)
                 vm->program->published_top = cell + 1;
-        } else {
+        } else { /* outside the table, it would come back from an image as a second symbol */
+            program_unalloc(vm, copy, words);
+            program_free_symbol(vm, p);
             sym = 0;
         }
     }
@@ -462,7 +474,8 @@ V intern_string(VM *vm, V string) { return intern_name(vm, string); }
 /* The symbol of that name if there is one, or []: this makes nothing. */
 V symbol_find(VM *vm, const char *bytes, size_t len)
 {
-    V s = find(vm, hash_bytes(bytes, len), bytes, len);
+    uint64_t hash = hash_bytes(bytes, len);
+    V s = published_sure(vm, find(vm, hash, bytes, len), hash, bytes, len);
     return s ? s : V_NIL;
 }
 

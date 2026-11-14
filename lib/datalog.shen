@@ -4957,9 +4957,7 @@
                 Owners (shen.dict 64)
                 _ (own-keys Keys 0 K Owners)
                 Split (split-parts Facts Derived Owners K (part-facts Keys 0 K (absvector K)))
-             Launched (launch-parts Shared Split K)
-             [parts Name (shen-jit.on-error (freeze (gather-parts Launched)) (freeze (stop-launched Launched)))
-                    Derived Facts]))))
+             [parts Name (part-databases Shared Split K) Derived Facts]))))
 
 (define rule-keys
   [] _ Acc -> Acc
@@ -5027,10 +5025,23 @@
               | (map (/. R [rule (hd R) [[part-key (hd (tl (hd R)))] | (map (function literal->data) (hd (tl R)))]])
                      Rules)]))
 
-\\ An isolate for each part, with a channel for its database and a monitor for its end.
-(define launch-parts
-  Shared Split K -> (let Replies (part-replies 0 K)
-                      (with-replies Replies (isolate.spawn-each run-part (part-args Shared Split Replies 0)))))
+\\ The parts' databases, from an isolate for each part, with a channel for its database and a
+\\ monitor for its end. What spawn-each gives is stored in Cell at once, a store allocating
+\\ nothing, so that whatever fails after it, even making the list, stops the isolates: each is
+\\ killed and waited for, and the replies' channels are closed, some of which the wait closed
+\\ already. If a spawn fails, spawn-each stops those it started. After a Ctrl-C, the REPL kills
+\\ them instead.
+(define part-databases
+  Shared Split K
+  -> (let Replies (part-replies 0 K)
+          Cell (address-> (absvector 1) 0 [])
+       (shen-jit.on-error
+         (freeze (gather-parts (with-replies Replies (started Cell (isolate.spawn-each run-part
+                                                                      (part-args Shared Split Replies 0))))))
+         (freeze (do (isolate.stop-each (<-address Cell 0)) (close-quietly Replies))))))
+
+(define started
+  Cell Started -> (do (address-> Cell 0 Started) Started))
 
 (define part-replies
   K K -> []
@@ -5045,14 +5056,9 @@
   [] [] -> []
   [Reply | Replies] [[P | Down] | Started] -> [[Reply Down P] | (with-replies Replies Started)])
 
-\\ What a wait that raised leaves: each isolate killed and waited for, and its channels closed, some
-\\ of which the wait closed already. After a Ctrl-C, the REPL kills them instead.
-(define stop-launched
-  Launched -> (do (isolate.stop-each (map (/. L [(nth 3 L) | (nth 2 L)]) Launched))
-                  (close-quietly (map (function hd) Launched))))
-
 (define close-quietly
-  Endpoints -> (map (/. E (trap-error (channel.close E) (/. X skip))) Endpoints))
+  [] -> true
+  [E | Endpoints] -> (do (trap-error (channel.close E) (/. X skip)) (close-quietly Endpoints)))
 
 (define run-part
   [Shared Facts Out] -> (channel.send Out (cleared (run (use Shared) Facts))))
@@ -5125,10 +5131,13 @@
   -> (let Shared (joins-shared Name)
           Grid (join-grid 0 N (absvector N))
           Reply (channel.new N)
-          Isolates (isolate.spawn-each join-isolate (joined-args Shared Facts Grid (channel.sender Reply) 0 N))
-          Monitors (map (function tl) Isolates)
-          Got (shen-jit.on-error (freeze (gather-joined Reply Monitors (map (function hd) Isolates) [] []))
-                                 (freeze (do (isolate.stop-each Isolates) (close-quietly [Reply]))))
+          Cell (address-> (absvector 1) 0 [])
+          Got (shen-jit.on-error
+                (freeze (let Isolates (started Cell (isolate.spawn-each join-isolate
+                                                      (joined-args Shared Facts Grid (channel.sender Reply) 0 N)))
+                          (gather-joined Reply (map (function tl) Isolates) (map (function hd) Isolates) [] [])))
+                (freeze (do (isolate.stop-each (<-address Cell 0))
+                            (close-quietly [Reply | (grid-channels Grid 0 0 N)]))))
           _ (channel.close Reply)
        (joined-db Got Facts)))
 
@@ -5205,6 +5214,14 @@
   N N Grid -> Grid
   J N Grid -> (do (address-> Grid J (join-row 0 J N (absvector N))) (join-grid (+ J 1) N Grid)))
 
+\\ The grid's channels, for a run that fails: those given to isolates it started are theirs, and
+\\ end with them, and closing one raises, which close-quietly drops.
+(define grid-channels
+  _ N _ N -> []
+  Grid J N N -> (grid-channels Grid (+ J 1) 0 N)
+  Grid J I N -> (let C (<-address (<-address Grid J) I)
+                  (if (= C none) (grid-channels Grid J (+ I 1) N) [C | (grid-channels Grid J (+ I 1) N)])))
+
 (define join-row
   N _ N Row -> Row
   I J N Row -> (do (address-> Row I (if (= I J) none (channel.new 2))) (join-row (+ I 1) J N Row)))
@@ -5237,7 +5254,9 @@
                              (if (= J 0) (cleared (with-facts Db [])) [])])))
 
 \\ What each isolate sent, once every one has ended; or the first error one raised, the others
-\\ killed, as they would wait for it.
+\\ killed, as they would wait for it. One whose reply came did its part, whatever its monitor says:
+\\ one that ended before its monitor was made, its record then taken by another spawn, is told
+\\ `ended`. Its reply is here by then, as it sent it before ending and the receive takes Reply first.
 (define gather-joined
   Reply [] _ Got Failure -> (drain-joined Reply Got Failure)
   Reply Monitors Isolates Got Failure
@@ -5245,11 +5264,15 @@
           From (hd Next)
        (if (= From Reply)
            (gather-joined Reply Monitors Isolates [(hd (tl Next)) | Got] Failure)
-           (let Reason (nth 3 (hd (tl Next)))
+           (let Down (hd (tl Next))
+                Reason (nth 3 Down)
                 _ (channel.close From)
-                Failed (and (empty? Failure) (not (= Reason normal)))
+                Failed (and (empty? Failure) (not (= Reason normal)) (not (replied? (position (nth 2 Down) Isolates 0) Got)))
                 _ (if Failed (map (/. P (trap-error (isolate.kill P) (/. E skip))) Isolates) skip)
              (gather-joined Reply (remove From Monitors) Isolates Got (if Failed [Reason] Failure))))))
+
+(define replied?
+  J Got -> (some? (/. G (= (hd G) J)) Got))
 
 (define drain-joined
   Reply Got [] -> (if (= (channel.wait-any [Reply] 0) [timeout]) Got (drain-joined Reply [(channel.receive Reply) | Got] []))

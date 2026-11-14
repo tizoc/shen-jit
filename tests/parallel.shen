@@ -56,4 +56,12 @@
 (define par.later X -> X)
 (par.check "defining after a map" ok (freeze (par.later ok)))
 
+\\ A map whose spawn fails closes the channels it made for replies.
+(par.check "a failed launch's replies are closed" "channel closed"
+  (freeze (let R (channel.new 1)
+               _ (parallel.close-replies [R])
+            (trap-error (channel.receive R) (/. E (error-to-string E))))))
+(par.check "a map whose argument cannot cross raises" true
+  (freeze (trap-error (do (parallel.map 2 [par.square (/. X X)] [1 2]) false) (/. E true))))
+
 (output "~A passed, ~A failed (parallel)~%" (value par.passed) (value par.failed))

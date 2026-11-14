@@ -861,6 +861,8 @@ static int api_vector_set(shen_vm *sv, shen_value v, int64_t i, shen_value x)
     checked(vm, x, "shen_vector_set was given");
     if (!has_type(v, T_VECTOR) || i < 0 || (uint64_t)i >= hdr_size(ptr(v)[0]))
         return 0;
+    if (hdr_shared(ptr(v)[0]) || in_program(vm, ptr(v))) /* never changes, nor points into a heap */
+        return 0;
     ptr(v)[1 + i] = x;
     return 1;
 }

@@ -22,6 +22,7 @@ void profile_code(const void *start, size_t size, const char *name, size_t len) 
 #include "vm.h"
 
 #include <dlfcn.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,15 +37,17 @@ void profile_code(const void *start, size_t size, const char *name, size_t len) 
 enum { MAX_SAMPLES = 1 << 20, PROFILE_LINES = 30 };
 
 static uintptr_t *samples;
-static volatile size_t nsamples, dropped;
+static size_t nsamples; /* past MAX_SAMPLES, the samples not recorded */
 
 typedef struct {
     uintptr_t start, end;
     char *name;
 } Range;
 
+/* Isolates compiling add to them while the report, from an isolate ending the program, reads them. */
 static Range *ranges;
 static size_t nranges, ranges_cap;
+static pthread_mutex_t ranges_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static uintptr_t pc_of(void *context)
 {
@@ -63,33 +66,39 @@ static uintptr_t pc_of(void *context)
 #endif
 }
 
-/* Only stores the address: nothing here may allocate or touch the VM. */
+/* Only stores the address: nothing here may allocate or touch the VM. Isolates' threads take
+   samples at once, so each takes its slot, and stores into it, atomically. A slot still 0 is one
+   whose handler has not stored yet, which the report, from another thread, passes over. */
 static void on_sample(int sig, siginfo_t *info, void *context)
 {
-    if (nsamples < MAX_SAMPLES)
-        samples[nsamples++] = pc_of(context);
-    else
-        dropped++;
+    size_t i = __atomic_fetch_add(&nsamples, 1, __ATOMIC_RELAXED);
+    if (i < MAX_SAMPLES)
+        __atomic_store_n(&samples[i], pc_of(context), __ATOMIC_RELAXED);
 }
 
 void profile_code(const void *start, size_t size, const char *name, size_t len)
 {
     if (!samples)
         return;
-    if (nranges == ranges_cap) {
-        size_t cap = ranges_cap ? 2 * ranges_cap : 1024;
-        Range *r = realloc(ranges, cap * sizeof *r);
-        if (!r)
-            return;
-        ranges = r;
-        ranges_cap = cap;
-    }
     char *copy = malloc(len + 1);
     if (!copy)
         return;
     memcpy(copy, name, len);
     copy[len] = 0;
+    pthread_mutex_lock(&ranges_lock);
+    if (nranges == ranges_cap) {
+        size_t cap = ranges_cap ? 2 * ranges_cap : 1024;
+        Range *r = realloc(ranges, cap * sizeof *r);
+        if (!r) {
+            pthread_mutex_unlock(&ranges_lock);
+            free(copy);
+            return;
+        }
+        ranges = r;
+        ranges_cap = cap;
+    }
     ranges[nranges++] = (Range){(uintptr_t)start, (uintptr_t)start + size, copy};
+    pthread_mutex_unlock(&ranges_lock);
 }
 
 typedef struct {
@@ -140,21 +149,36 @@ static void report(void)
 {
     struct itimerval off = {{0, 0}, {0, 0}};
     setitimer(ITIMER_PROF, &off, NULL);
-    size_t n = nsamples;
-    qsort(samples, n, sizeof *samples, by_address);
-    qsort(ranges, nranges, sizeof *ranges, by_address); /* start comes first */
-    Entry *e = malloc((n ? n : 1) * sizeof *e);
-    if (!e)
+    /* A handler already running goes on after the timer stops, so the report sorts a copy of the
+       slots stored, and leaves the samples to the handlers. */
+    size_t taken = __atomic_load_n(&nsamples, __ATOMIC_RELAXED);
+    size_t claimed = taken < MAX_SAMPLES ? taken : MAX_SAMPLES;
+    uintptr_t *got = malloc((claimed ? claimed : 1) * sizeof *got);
+    Entry *e = malloc((claimed ? claimed : 1) * sizeof *e);
+    if (!got || !e) {
+        free(got);
+        free(e);
         return;
+    }
+    size_t n = 0;
+    for (size_t i = 0; i < claimed; i++) {
+        uintptr_t pc = __atomic_load_n(&samples[i], __ATOMIC_RELAXED);
+        if (pc)
+            got[n++] = pc;
+    }
+    qsort(got, n, sizeof *got, by_address);
+    pthread_mutex_lock(&ranges_lock);
+    qsort(ranges, nranges, sizeof *ranges, by_address); /* start comes first */
     size_t m = 0;
     for (size_t i = 0; i < n;) { /* one lookup per distinct address */
         size_t j = i;
-        while (j < n && samples[j] == samples[i])
+        while (j < n && got[j] == got[i])
             j++;
-        e[m] = name_of(samples[i]);
+        e[m] = name_of(got[i]);
         e[m++].count = j - i;
         i = j;
     }
+    pthread_mutex_unlock(&ranges_lock);
     qsort(e, m, sizeof *e, by_name);
     size_t k = 0;
     for (size_t i = 0; i < m; i++) {
@@ -166,20 +190,21 @@ static void report(void)
     qsort(e, k, sizeof *e, by_count);
     fprintf(stderr, "shen-jit: profile of %zu samples over %.2f s of CPU time", n,
             (double)clock() / CLOCKS_PER_SEC);
-    if (dropped)
-        fprintf(stderr, " (%zu more not recorded)", (size_t)dropped);
+    if (taken > claimed)
+        fprintf(stderr, " (%zu more not recorded)", taken - claimed);
     fprintf(stderr, "\n");
     for (size_t i = 0; i < k && i < PROFILE_LINES; i++)
         fprintf(stderr, "%6.1f%% %7zu  %s%s\n", 100.0 * (double)e[i].count / (double)n, e[i].count,
                 e[i].name, e[i].c ? " (C)" : "");
     free(e);
+    free(got);
 }
 
 bool profile_running(void) { return samples != NULL; }
 
 bool profile_start(void)
 {
-    samples = malloc(MAX_SAMPLES * sizeof *samples);
+    samples = calloc(MAX_SAMPLES, sizeof *samples);
     struct sigaction sa;
     memset(&sa, 0, sizeof sa);
     sa.sa_sigaction = on_sample;

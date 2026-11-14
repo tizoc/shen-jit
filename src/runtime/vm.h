@@ -278,7 +278,7 @@ static inline bool in_symbols(const VM *vm, const void *at)
 bool program_init(Space *p);
 void program_release(Space *p);
 uint64_t *program_alloc(VM *vm, size_t words);
-uint64_t *program_alloc_shared(VM *vm, size_t words);
+void program_unalloc(VM *vm, uint64_t *at, size_t words);
 uint64_t *program_symbol_slot(VM *vm);
 void program_free_symbol(VM *vm, uint64_t *slot);
 bool program_reserve(VM *vm, size_t symbol_words, size_t object_words);
@@ -305,6 +305,7 @@ static inline bool vm_is_builder(const VM *vm) { return vm->program->owner == vm
    contexts made in heap.c and the published names and strings they read in objects.c and program.c. */
 VM *vm_create_context(Program *program, size_t semispace_words, size_t stack_words);
 V sj_isolate(VM *vm);
+bool sj_isolate_killed(VM *vm);
 bool isolates_commit_globals(Program *program, size_t n);
 bool isolates_free(Program *program);
 bool isolates_running(Program *program);

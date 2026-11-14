@@ -1,6 +1,7 @@
 /* Optional libcurl adapter over the public Shen C API. No Shen access between shen_release and shen_acquire. */
 #include "shen.h"
 #include <curl/curl.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -35,13 +36,14 @@ typedef struct {
     char error[CURL_ERROR_SIZE];
 } Transfer;
 
-/* Initialization precedes any transfer. */
-static bool initialized;
+/* Initialization precedes any transfer. Isolates may make the first calls at once: libcurl's own
+   initialization is safe then, where it says so, and the flag is atomic. */
+static atomic_bool initialized;
 static CURLcode initialize(void)
 {
-    if (initialized) return CURLE_OK;
+    if (atomic_load_explicit(&initialized, memory_order_acquire)) return CURLE_OK;
     CURLcode rc = curl_global_init(CURL_GLOBAL_DEFAULT);
-    if (!rc) initialized = true;
+    if (!rc) atomic_store_explicit(&initialized, true, memory_order_release);
     return rc;
 }
 

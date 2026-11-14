@@ -226,4 +226,117 @@
 (handle.close (value h))
 (handle.close (value on-m))
 
+\\ An isolate releases what its handles still hold as it ends, whether its function returns or a kill
+\\ ends it, so that a server's connections leak nothing.
+(define handle-test.hold
+  [Out Wait] -> (let H (handle.wrap (memory.alloc 64) (/. M (do (memory.free M) (channel.send Out released))))
+                  (if Wait (channel.receive (channel.new 1)) (shen-jit.u8! H 0 1))))
+
+(define handle-test.released
+  Wait -> (let R (channel.new 2)
+               I (isolate.spawn handle-test.hold [(channel.sender R) Wait])
+               M (isolate.monitor I)
+               _ (if Wait (do (channel.wait-any [R] 200) (isolate.kill I)) skip)
+               Down (channel.receive M)
+            [(hd (tl (tl Down))) (if (= (channel.wait-any [R] 5000) [timeout]) unreleased (channel.receive R))]))
+
+\\ A release that uses another handle runs before that one's, as a collection orders them: the
+\\ outer one, made last, holds the inner one in its release.
+(define handle-test.nested
+  [Out _] -> (let Inner (handle.wrap (memory.alloc 8) (/. M (do (memory.free M) (channel.send Out inner))))
+                  Outer (handle.wrap (memory.alloc 8) (/. M (do (shen-jit.u8 Inner 0) (memory.free M) (channel.send Out outer))))
+               (shen-jit.u8! Outer 0 1)))
+
+(define handle-test.order
+  -> (let R (channel.new 2)
+          M (isolate.monitor (isolate.spawn handle-test.nested [(channel.sender R) []]))
+          _ (channel.receive M)
+          A (if (= (channel.wait-any [R] 5000) [timeout]) none (channel.receive R))
+          B (if (= (channel.wait-any [R] 5000) [timeout]) none (channel.receive R))
+       [A B]))
+
+(handle-test.check "an isolate that returns releases its handles" [normal released]
+  (freeze (handle-test.released false)))
+(handle-test.check "and one that is killed" [killed released] (freeze (handle-test.released true)))
+(handle-test.check "a release that uses another handle runs first" [outer inner] (freeze (handle-test.order)))
+
+\\ Handles a global still holds as the isolate ends are left, as a program's are when it ends, so
+\\ that no release runs out of order or without the globals it reads; what it registered with
+\\ shen-jit.at-end runs once.
+(define handle-test.boxed
+  [Out _] -> (let Box (absvector 1)
+                  Older (handle.wrap (memory.alloc 8)
+                          (/. M (do (shen-jit.u8 (<-address Box 0) 0) (memory.free M) (channel.send Out older))))
+                  Newer (handle.wrap (memory.alloc 8) (/. M (do (memory.free M) (channel.send Out newer))))
+                  _ (address-> Box 0 Newer)
+                  _ (set handle-test.kept [Older Newer])
+                  _ (set handle-test.out Out)
+               (shen-jit.at-end handle-test.ended)))
+
+(define handle-test.ended
+  -> (channel.send (value handle-test.out) ended))
+
+(define handle-test.boxed-order
+  -> (let R (channel.new 4)
+          M (isolate.monitor (isolate.spawn handle-test.boxed [(channel.sender R) []]))
+          _ (channel.receive M)
+       (handle-test.drain R)))
+
+(define handle-test.drain
+  R -> (if (= (channel.wait-any [R] 0) [timeout]) [] [(channel.receive R) | (handle-test.drain R)]))
+
+(handle-test.check "handles a global holds are left, and the at-end function runs once" [ended]
+  (freeze (handle-test.boxed-order)))
+
+\\ A handle the isolate's last call to C took, which an argument slot held, is released too.
+(define handle-test.last-call
+  [Out _] -> (let H (handle.wrap (memory.alloc 64) (/. M (do (memory.free M) (channel.send Out released))))
+               (shen-jit.pointer! H 0 H)))
+
+\\ So too when the outer release passes the inner handle to C, or catches an error that holds it:
+\\ neither keeps it from the next round.
+(define handle-test.passing
+  [Out How] -> (let Inner (handle.wrap (memory.alloc 8) (/. M (do (memory.free M) (channel.send Out inner))))
+                    Outer (handle.wrap (memory.alloc 8)
+                            (/. M (do (memory.free M) (channel.send Out outer) (handle-test.use How Inner))))
+                 (shen-jit.u8! Outer 0 1)))
+
+(define handle-test.use
+  c Inner -> (shen-jit.pointer! Inner 0 Inner)
+  caught Inner -> (trap-error (cn Inner "x") (/. E skip)))
+
+(define handle-test.released-by
+  How -> (let R (channel.new 2)
+              M (isolate.monitor (isolate.spawn handle-test.passing [(channel.sender R) How]))
+              _ (channel.receive M)
+           (handle-test.drain R)))
+
+(handle-test.check "an inner handle passed to C in a release is released after" [outer inner]
+  (freeze (handle-test.released-by c)))
+(handle-test.check "and one held by an error a release caught" [outer inner]
+  (freeze (handle-test.released-by caught)))
+\\ And when a release lets go of the inner handle and collects, finding it dead, it is released in
+\\ the next round. The outer one holds the inner one in a box, which its release empties.
+(define handle-test.collecting
+  [Out _] -> (let Box (absvector 1)
+                  _ (address-> Box 0 (handle.wrap (memory.alloc 8) (/. M (do (memory.free M) (channel.send Out inner)))))
+                  Outer (handle.wrap (memory.alloc 8) (/. M (handle-test.let-go M Box Out)))
+               (shen-jit.u8! Outer 0 1)))
+
+(define handle-test.let-go
+  M Box Out -> (do (shen-jit.u8 (<-address Box 0) 0) (address-> Box 0 0) (memory.free M) (channel.send Out outer)
+                   (shen-jit.collect)))
+
+(handle-test.check "and when a release collects, finding the inner one dead" [outer inner]
+  (freeze (let R (channel.new 2)
+               M (isolate.monitor (isolate.spawn handle-test.collecting [(channel.sender R) []]))
+               _ (channel.receive M)
+            (handle-test.drain R))))
+
+(handle-test.check "a handle its last call to C took is released" released
+  (freeze (let R (channel.new 2)
+               M (isolate.monitor (isolate.spawn handle-test.last-call [(channel.sender R) []]))
+               _ (channel.receive M)
+            (if (= (channel.wait-any [R] 5000) [timeout]) unreleased (channel.receive R)))))
+
 (output "~A passed, ~A failed~%" (value handle-test.*passed*) (value handle-test.*failed*))

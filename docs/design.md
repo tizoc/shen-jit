@@ -312,13 +312,14 @@ fit, so that a stale pointer fails at once. `SHEN_JIT_SLOW_PRIMS` compiles every
 A program runs as isolates over one program: each runs the program's definitions on an OS thread
 of its own, with its own heap, globals and property list, inherits nothing, and talks to others
 only through channels. Only the builder, the isolate a program starts as, defines: it alone
-installs code, records arities and gives globals their numbers, and in any other VM `eval`,
-`eval-kl`, installing, foreign definitions and recording an arity raise an error.
+installs code and records arities, and in any other VM `eval`, `eval-kl`, installing, foreign
+definitions and recording an arity raise an error. Any isolate may give a global its number, as
+below.
 
 The runtime is split the same way. What every isolate will share is a `Program`: the program space,
 the published symbols, function cells with arities, constant slots, global numbering, and the JIT
 with its native code. A `VM` is one context, pointing at its program: heap, stack, handlers, global
-slots and dictionary, its own symbols and C roots. Emitted code reads only the context through the
+slots, its own symbols and C roots. Emitted code reads only the context through the
 VM register, and reaches cells and constants at addresses that never move. The program's roots may
 point into one heap, its owner's, the builder's, whose collections alone scan and sweep them.
 
@@ -327,8 +328,7 @@ symbols in the program space, arities beside function cells, and global numbers.
 name's lambda form when first asked, from the arity, and keeps it in the property vector: the
 builder compiles it, as before, and an isolate, which cannot evaluate, makes it from a template
 whose last call reads the name's function cell inline. A primitive's cell holds a definition
-made from a code object at startup, so a template can call primitives too. An isolate gives a value to a global
-with no number in a dictionary of its own, since only the builder numbers.
+made from a code object at startup, so a template can call primitives too.
 
 An isolate starts as a program does: its globals are unbound, the program's constants are
 put back, the standard streams made, and the port's `shen-jit.start-isolate` sets the run
@@ -376,7 +376,8 @@ next run. At the end of a stream the primitive gives a marker,
 time limit for `channel.wait-any`, which looks at several receive endpoints without receiving,
 so that a supervisor can wake for whichever of its connections ends and still look at a socket
 or a clock now and then. A monitor is a channel of capacity 1 that gets `[down I Reason]` when I
-ends. `kill` marks the isolate, which raises "killed", once, at its next channel operation or
+ends, and is closed then, so that what reads it again does not wait for ever; one made while I is
+ending waits for it to have ended, as the isolate counts as running until then. `kill` marks the isolate, which raises "killed", once, at its next channel operation or
 `isolate.check-kill`, even if the kill came before it started, so that its handlers clean up
 what its argument holds, and wakes it if it waits on a channel: an isolate needs no safe points,
 and code compiled for one is what any program runs. What waits on
@@ -384,7 +385,16 @@ something else, as the I/O library's socket waits do in slices of 100 ms, calls
 `isolate.check-kill` between them; in the builder, or before isolates exist, it does nothing. An isolate that
 cannot start, for want of memory for its context, tells its monitors too, with a message laid out by hand, as it has
 no heap to make one in; so does one whose down message cannot be made, and if even that cannot be, the monitor is
-closed, so that nothing waits on it for ever. An isolate that ends tells its monitors, closes its files
+closed, so that nothing waits on it for ever. An isolate that ends first runs, once, what it
+registered with `shen-jit.at-end`; then what it registered with `shen-jit.at-guards-dead`, as the
+handle library's sweep, in rounds: a collection finds dead the guarded pointers nothing reaches, and
+a release may use another handle, which outlives it until that release has run and so dies in a
+later round. Only what dies is released, so always in that order and with the globals a release may
+read still there; what the argument slots of calls to C and the error last caught hold is dead by then,
+and cleared before each round, and rounds go on while a collection finds a guard dead. A
+collection inside a release may find more dead; they stay queued for the next round. What
+its globals still hold is left to the system, as a program's is when it ends. Then it tells its monitors,
+closes its files
 and the channels it receives on, and frees its context; its record keeps why it ended, as a symbol
 or an error's text, so that a monitor that comes after, as one made just after a spawn can, is
 told at once with the same reason, until the record is used again with a new generation. Then,
@@ -428,12 +438,14 @@ once that it asked to stop. Once the grace has passed it kills the connections l
 kill reaches in their next socket wait.
 
 **Shared storage.** `isolate.share` copies a value into a fragment as a send does, refusing
-what a send refuses, then lays the fragment out in one run of the program space, taken under
-the lock that guards making symbols there, and marks each vector and byte buffer in it shared,
+what a send refuses, then lays the fragment out in one run of the program space, taken and filled
+under the lock that guards making symbols there, which an image's save and the REPL's walk of the
+space hold too, and marks each vector and byte buffer in it shared,
 by bit 7 of its header. Nothing in it points into a heap, so collections neither scan nor move
 it, any isolate reads it by pointer, and an image saves it with the program. Nothing changes
 it: code that stores into a vector or buffer tests the header's whole low byte, which a shared
-one fails, and C refuses it, as it refuses changing a shared dictionary, while code that reads
+one fails, and C refuses it, `shen_vector_set` too, as it refuses changing a dictionary whose
+buckets or entries are shared, even through an unshared copy of its wrapper, while code that reads
 masks the bit out, so neither pays for it. That replaced testing on every store whether the
 address lies in the program space, which would have added the space's bounds, a subtraction and
 a comparison to every store. It is never freed. C given a shared buffer must not write into it.
@@ -443,9 +455,14 @@ an interrupt is the program's, as its code is shared: only code compiled once th
 Ctrl-C does, by any isolate, and everything is compiled again then, under the compile lock and the
 lock under which isolates add to the program space, which the walk reads. The builder waits on a
 channel in slices of 50 ms, as a signal handler cannot wake it, and raises "interrupted" between
-them. Each REPL input notes how many isolates had been spawned, the count that numbers their
-gensyms, and a Ctrl-C that stops it kills those numbered after. `SIGPIPE` has a handler that does nothing, set at startup, so that a write to a closed pipe
-fails and raises; being a handler and not `SIG_IGN`, exec resets it, and a child finds the default.
+them. Isolates read standard input one at a time, through one buffer: the one whose turn it is waits
+for input in slices of 100 ms, between which a kill reaches it, and one waiting for its turn tries
+every 10 ms, so that a Ctrl-C or a kill reaches it too, which waiting on a mutex would not let it.
+On Windows the read itself waits, which a kill cannot end: one reaches an isolate waiting for input
+once input comes. Each REPL input notes how many isolates had been spawned, the count that numbers
+their gensyms, and a Ctrl-C that stops it kills those numbered after. `SIGPIPE` has a handler that
+does nothing, set at startup, so that a write to a closed pipe fails and raises; being a handler and
+not `SIG_IGN`, exec resets it, and a child finds the default.
 
 **Not yet.** A channel whose receive endpoint is dropped stays until its receiver ends.
 

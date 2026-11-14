@@ -277,18 +277,19 @@ bool ra_push(RootArray *ra, V v, size_t *index)
     if (ra->count == ra->nchunks * RA_CHUNK) {
         if (ra->nchunks == ra->chunks_cap) {
             size_t cap = ra->chunks_cap ? 2 * ra->chunks_cap : 8;
-            V **chunks = malloc(cap * sizeof *chunks);
-            V ***retired = ra->chunks ? realloc(ra->retired, (ra->nretired + 1) * sizeof *retired) : ra->retired;
-            if (!chunks || (ra->chunks && !retired)) {
-                free(chunks);
-                return false;
-            }
-            if (ra->nchunks)
-                memcpy(chunks, ra->chunks, ra->nchunks * sizeof *chunks);
-            if (ra->chunks) {
-                retired[ra->nretired++] = ra->chunks;
+            if (ra->chunks) { /* kept as soon as it moves, whatever fails next */
+                V ***retired = realloc(ra->retired, (ra->nretired + 1) * sizeof *retired);
+                if (!retired)
+                    return false;
                 ra->retired = retired;
             }
+            V **chunks = malloc(cap * sizeof *chunks);
+            if (!chunks)
+                return false;
+            if (ra->nchunks)
+                memcpy(chunks, ra->chunks, ra->nchunks * sizeof *chunks);
+            if (ra->chunks)
+                ra->retired[ra->nretired++] = ra->chunks;
             __atomic_store_n(&ra->chunks, chunks, __ATOMIC_RELEASE);
             ra->chunks_cap = cap;
         }
