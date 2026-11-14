@@ -689,6 +689,19 @@ else
     echo "FAIL profile: tak is not the first line of:"
     sed 's/^/    /' "$dir/profile.out"
 fi
+# And as isolates compile, adding to the names of code that the report, from the builder ending the
+# program, sorts.
+cat > "$dir/compiling.shen" <<'EOF'
+(define make-fns N -> (if (= N 0) done (do (eval [define (intern (cn "f" (str N))) (intern "X") -> [+ (intern "X") N]]) (make-fns (- N 1)))))
+(make-fns 3000)
+(define call-all N -> (if (= N 0) done (do ((function (intern (cn "f" (str N)))) 1) (call-all (- N 1)))))
+(define worker K -> (call-all 3000))
+(do (map (/. K (isolate.spawn worker K)) [1 2 3 4]) ok)
+(channel.wait-any [(channel.new 1)] 5)
+(shen-jit.exit 0)
+EOF
+SHEN_JIT_PROFILE=1 "$SHEN" script "$dir/compiling.shen" > "$dir/compiling.out" 2>&1 < /dev/null
+contains profile-isolates-compiling "$dir/compiling.out" "shen-jit: profile of"
 fi
 
 # (shen-jit.save-executable Path Entry) writes a binary and ends the process.
@@ -891,6 +904,19 @@ check saved-endpoint-stale "$dir/ends.out" "channel closed x"
 # An isolate that ends the program reports statistics without counting the builder's heap.
 SHEN_JIT_STATS=1 "$SHEN" eval -e '(define ex X -> (shen-jit.exit 0))' -e '(isolate.spawn ex 0)' -e '(channel.receive (channel.new 1))' > "$dir/exstats.out" 2>&1 < /dev/null
 contains isolate-exit-statistics "$dir/exstats.out" "live heap not counted, as an isolate ended the program"
+# Isolates ending the program at once: the first reports, once, and the others wait for the end. Two
+# once ran the reports together, which printed them twice or not at all in about one run in ten.
+printf '(define quit X -> (shen-jit.exit 3))\n(map (/. X (isolate.spawn quit X)) [1 2 3 4 5 6 7 8])\n(channel.receive (channel.new 1))\n' > "$dir/exits.shen"
+n=0
+once=0
+while [ $n -lt 50 ]; do
+    SHEN_JIT_STATS=1 "$SHEN" script "$dir/exits.shen" > "$dir/exits.out" 2>&1 < /dev/null
+    status=$?
+    if [ $status -eq 3 ] && [ "$(grep -c ' collections, ' "$dir/exits.out")" -eq 1 ]; then once=$((once + 1)); fi
+    n=$((n + 1))
+done
+echo "reported once: $once" > "$dir/exits.count"
+check isolates-exit-at-once "$dir/exits.count" "reported once: 50"
 # Shared data is saved with the program, and stays shared once loaded.
 printf '(set shared (isolate.share (@v 1 [a "b"] (shen-jit.string->bytes "c") <>)))\n' > "$dir/share.shen"
 "$SHEN" --save "$dir/share.img" script "$dir/share.shen" > /dev/null 2>&1 < /dev/null
@@ -981,6 +1007,33 @@ check interrupt-program-reading "$dir/held.out" "(1-) interrupted"
 check interrupt-program-reading-continues "$dir/held.out" "(2-) 11"
 check interrupt-prompt-beside-isolate "$dir/held.out" "(5-) interrupted"
 check interrupt-prompt-beside-isolate-continues "$dir/held.out" "(5-) 15"
+
+# Ctrl-C reaches the REPL while it waits for its turn to read, as an isolate waits for input: it
+# says so before the input comes, which then goes to the isolate, then to the REPL.
+mkfifo "$dir/turns"
+"$SHEN" < "$dir/turns" > "$dir/turns.out" 2>&1 &
+pid=$!
+exec 3> "$dir/turns"
+wait_for "(0-) " "$dir/turns.out"
+printf '(define take-x X -> (if (= (read-byte (stinput)) 120) done (take-x X)))\n' >&3
+printf '(let I (isolate.spawn take-x 0) _ (channel.wait-any [(channel.new 1)] 300) waiting)\n' >&3
+wait_for "(1-) waiting" "$dir/turns.out"
+sleep 0.2
+interrupts_to 1 "$dir/turns.out"
+cp "$dir/turns.out" "$dir/turns.before"
+printf 'x(+ 1 2)\n' >&3
+wait_for "(2-) 3" "$dir/turns.out"
+exec 3>&-
+ends
+check interrupt-waiting-turn "$dir/turns.before" "(2-) interrupted"
+check interrupt-waiting-turn-continues "$dir/turns.out" "(2-) 3"
+# And a kill reaches an isolate waiting for input that does not come.
+mkfifo "$dir/quiet"
+printf '(define take X -> (read-byte (stinput)))\n(let I (isolate.spawn take 0) M (isolate.monitor I) _ (channel.wait-any [(channel.new 1)] 200) _ (isolate.kill I) R (channel.wait-any [M] 3000) (output "reading: ~A~%%" (if (= R [timeout]) timeout (hd (tl (tl (channel.receive M)))))))\n' > "$dir/kill-read.shen"
+exec 4<> "$dir/quiet"
+"$SHEN" script "$dir/kill-read.shen" < "$dir/quiet" > "$dir/kill-read.out" 2>&1
+exec 4>&-
+check kill-reading "$dir/kill-read.out" "reading: killed"
 
 # Ctrl-C ends the REPL's wait on a channel, in receive and in wait-any, which a signal cannot wake,
 # and a parallel map's wait for its isolates; the REPL goes on, and kills the map's isolates, so

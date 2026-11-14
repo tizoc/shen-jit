@@ -200,8 +200,8 @@ static inline shen_value shen_make_pointer(shen_vm *vm, void *address, const cha
     return (*vm)->make_pointer(vm, address, kind);
 }
 
-/* Writing, the only way to store a value in an object. Gives 0 if it is not a vector or the index
-   is out of range. Does not allocate. */
+/* Writing, the only way to store a value in an object. Gives 0 if it is not a vector, the index is
+   out of range, or the vector is shared (isolate.share), as nothing changes one. Does not allocate. */
 static inline int shen_vector_set(shen_vm *vm, shen_value v, int64_t i, shen_value x) { return (*vm)->vector_set(vm, v, i, x); }
 
 /* Roots for a call: the local must hold a value already, and stays up to date while rooted. */

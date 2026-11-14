@@ -368,6 +368,12 @@ shen_value copy_string(shen_vm *vm, shen_value *args)
     return shen_make_string(vm, s, n);
 }
 
+/* A store of args[1] at element 0 of args[0], and whether it was made. */
+shen_value vector_set_first(shen_vm *vm, shen_value *args)
+{
+    return shen_make_bool(shen_vector_set(vm, args[0], 0, args[1]));
+}
+
 shen_value vector_set_out_of_range(shen_vm *vm, shen_value *args)
 {
     return shen_make_bool(shen_vector_set(vm, args[0], 99, SHEN_NIL) || shen_vector_set(vm, shen_make_fixnum(1), 0, SHEN_NIL));

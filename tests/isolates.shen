@@ -41,6 +41,13 @@
 (define pt.third
   [_ _ X] -> X)
 
+\\ Whether a message ends with a text, as a dictionary's printed form varies.
+(define pt.message-of
+  Text -> [ends Text])
+
+(define pt.message-of-text
+  M -> (if (and (string? M) (>= (pt.length M) 28)) [ends (pt.suffix M 28)] [ends M]))
+
 (define pt.ready
   [ready R] -> R)
 
@@ -493,6 +500,71 @@
   ["#<procedure> cannot be sent: only the program's functions can" "can move only at spawn, through channel.give"]
   [(pt.message (freeze (isolate.share [(/. X X)])))
    (pt.suffix (pt.message (freeze (isolate.share (channel.new 1)))) 44)])
+
+\\ A monitor is closed once its one message is queued: a receive after that raises rather than
+\\ waits, and stop-each passes over a monitor already read. An isolate prints what the kernel's
+\\ printers print, whose lambda forms it has not got.
+(define pt.id
+  X -> X)
+
+(define pt.printed
+  [_ Out] -> (channel.send Out [(make-string "~S" (@p 1 2)) (make-string "~S" (shen.dict 2))]))
+
+(pt.check "a monitor's second receive raises rather than waits" "channel closed"
+  (let M (isolate.monitor (isolate.spawn pt.id 1))
+       _ (channel.receive M)
+    (pt.message (freeze (channel.receive M)))))
+
+(pt.check "stop-each passes over a monitor already read" true
+  (let Started (isolate.spawn-each pt.id [1 2 3])
+       _ (channel.receive (tl (hd Started)))
+    (isolate.stop-each Started)))
+
+\\ The two that started wait for ever, so the program could not change unless they were stopped.
+(pt.check "spawn-each stops those it started when one cannot start" [refused done]
+  (let Why (pt.message (freeze (isolate.spawn-each pt.block [1 2 (/. X X)])))
+       _ (eval [define pt.after-each -> done])
+    [(if (string? Why) refused Why) (pt.after-each)]))
+
+(pt.check "an isolate prints tuples and dictionaries" ["(@p 1 2)" "(dict ...)"] (pt.ask pt.printed []))
+
+\\ What an isolate registers with shen-jit.at-end runs once as it ends. A shared exception formats
+\\ alike each time, keeping nothing of a heap.
+(define pt.tell-end
+  -> (channel.send (value pt.out) ended-once))
+
+(define pt.register-end
+  [_ Out] -> (do (set pt.out Out) (shen-jit.at-end pt.tell-end) done))
+
+(pt.check "an at-end function runs once" [ended-once [timeout]]
+  (let R (channel.new 4)
+       M (isolate.monitor (isolate.spawn pt.register-end [[] (channel.sender R)]))
+       _ (channel.receive M)
+       X (if (= (channel.wait-any [R] 0) [timeout]) none (channel.receive R))
+    [X (channel.wait-any [R] 0)]))
+
+\\ A dictionary that is not shared but holds the buckets of one that is cannot change them.
+(define pt.unshared-wrapper
+  D -> (let W (absvector 3)
+            _ (address-> W 0 (<-address D 0))
+            _ (address-> W 1 (<-address D 1))
+            _ (address-> W 2 (<-address D 2))
+         W))
+
+(pt.check "a copy of a shared dictionary cannot change its buckets"
+  [(pt.message-of "is shared, and cannot change") (pt.message-of "is shared, and cannot change")
+   (pt.message-of "is shared, and cannot change")]
+  (let D (shen.dict 4)
+       _ (shen.dict-> D a 1)
+       W (pt.unshared-wrapper (isolate.share D))
+    (map (/. F (pt.message-of-text (pt.message F)))
+         [(freeze (shen.dict-> W a 2)) (freeze (shen.dict-> W b 2)) (freeze (shen.dict-rm W a))])))
+
+(pt.check "a shared exception formats alike each time" ["three: 3" "three: 3"]
+  (let E (isolate.share (trap-error (error "three: ~A" 3) (/. X X)))
+       A (error-to-string E)
+       _ (shen-jit.collect)
+    [A (error-to-string E)]))
 
 \\ ---------------------------------------------------------------------------------------------
 \\ Many at once, and many in turn.

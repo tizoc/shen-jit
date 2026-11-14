@@ -204,10 +204,10 @@
 (define run
   S -> (let _ (owner-check S)
             Result (server.result S)
-         (if (empty? Result)
-             (do (if (empty? (server.events S)) (open-events S) true)
-                 (supervisor S))
-             Result)))
+         (cases (not (empty? Result)) Result
+                (and (server.stopping S) (empty? (server.events S))) (finish S)
+                true (do (if (empty? (server.events S)) (open-events S) true)
+                         (supervisor S)))))
 
 \\ Each connection tells at most once that it failed and once that a handler stopped the server,
 \\ and the supervisor takes all that is waiting at every turn.
@@ -276,29 +276,40 @@
             ((io.socket-again? Code) true)
             (true (note-error S (io.socket-error accept "HTTP listener" Code))))))
 
-\\ The connection's isolate owns the socket from its start, and the supervisor never touches it.
+\\ The connection's isolate owns the socket and its stop channel from its start, and the supervisor
+\\ never touches the socket. Until then a failure closes both; after, it kills the isolate, which
+\\ closes them as it ends, as a connection that is not listed could not be stopped.
 (define launch
   S Peer ->
-    (let Stop (channel.new 1)
-         Sender (channel.sender Stop)
-         P (socket.closing-on-error Peer
-             (freeze (isolate.spawn connection-isolate
-                       [Peer (server.handler S) (request-options S) (server.port S) (server.control S)
-                        (channel.give Stop)])))
-         Cs [[P (isolate.monitor P) Sender] | (server.connections S)]
-         _ (server.connections-> S Cs)
-         _ (server.accepted-> S (+ 1 (server.accepted S)))
-      (if (> (length Cs) (server.peak S)) (server.peak-> S (length Cs)) true)))
+    (let Stop (socket.closing-on-error Peer (freeze (channel.new 1)))
+         P (shen-jit.on-error
+             (freeze (socket.closing-on-error Peer
+                       (freeze (isolate.spawn connection-isolate
+                                 [Peer (server.handler S) (request-options S) (server.port S) (server.control S)
+                                  (channel.give Stop)]))))
+             (freeze (trap-error (channel.close Stop) (/. E skip))))
+      (shen-jit.on-error (freeze (listed S P Stop)) (freeze (isolate.kill P)))))
+
+(define listed
+  S P Stop -> (let Sender (channel.sender Stop)
+                   M (isolate.monitor P)
+                   Cs (shen-jit.on-error (freeze [[P M Sender] | (server.connections S)])
+                                         (freeze (trap-error (channel.close M) (/. E skip))))
+                   _ (server.connections-> S Cs)
+                   _ (server.accepted-> S (+ 1 (server.accepted S)))
+                (if (> (length Cs) (server.peak S)) (server.peak-> S (length Cs)) true)))
 
 \\ A connection's requests, under its limits and deadlines, until it ends; once the server stops,
 \\ it closes after its active response is written. A failure ends it and is counted, not raised.
+\\ The connection is set up inside the endpoint, which closes the socket however it ends; io.socket
+\\ closes it if the endpoint cannot be made.
 (define connection-isolate
   [Peer Handler Options Port Control Stop] ->
-    (let _ (set *serving* (handler-copy Port Control))
-         Result (trap-error
+    (let Result (trap-error
                   (io.with-endpoint (io.socket Peer "HTTP peer")
-                    (/. E (serve-controlled E (handler-function Handler) Options
-                            (freeze (ready? Stop)))))
+                    (/. E (do (set *serving* (handler-copy Port Control))
+                              (serve-controlled E (handler-function Handler) Options
+                                (freeze (ready? Stop))))))
                   (/. X [error (io.error serve "HTTP connection" (error-to-string X))]))
       (if (= (hd Result) error) (tell Control failed) true)))
 
@@ -330,11 +341,12 @@
   _ [ok] -> true
   S [error Error] -> (do (note-error S Error) true))
 
+\\ A server stopped before it ever ran has no connections or events, and closes its listener before
+\\ allocating anything, so that a rollback that runs it under memory pressure still closes it.
 (define finish
   S ->
     (let _ (close-listener S)
-         _ (take-events S)
-         _ (channel.close (server.events S))
+         _ (if (empty? (server.events S)) true (do (take-events S) (channel.close (server.events S))))
          _ (server.phase-> S stopped)
          Error (server.error S)
          Result (if (empty? Error) [ok] [error Error])

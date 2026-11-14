@@ -156,7 +156,8 @@ line. This does not work on Windows.
 A library can act after each form a load evaluates: `(shen-jit.after-form F)` registers `F`, a function of no
 arguments, to run then, and `(shen-jit.loading?)` says whether a load is going on. The kernel expands a whole file
 before it evaluates any of it, so what needs the definitions before it waits for this, as the grammar library
-compiling its loops does.
+compiling its loops does. `(shen-jit.at-end F)` registers `F` to run once as the isolate that registers it ends,
+after its function returns or raises.
 
 ```shen
 #!/usr/bin/env -S shen-jit script
@@ -318,13 +319,14 @@ are other programs.
   apply to each isolate's heap, and `SHEN_JIT_SEMISPACE` to the builder's alone.
 - **The end:** an isolate ends when its function returns, or raises an error that nothing catches, which is printed to
   stderr. `(isolate.monitor I)` returns a receive endpoint that gets `[down I Reason]` when `I` ends, or at once if it
-  has, the reason being `normal`, the error's message, `killed`, or `ended` for one that could not start or ended long
+  has, and is then closed, so that a second receive raises "channel closed", the reason being `normal`, the error's message, `killed`, or `ended` for one that could not start or ended long
   enough ago that its record was used again. `(isolate.kill I)` raises "killed" at `I`'s next channel operation,
   waking it if it waits on a channel, so that its handlers can clean up; an isolate busy elsewhere goes on until then,
-  or until it calls `(isolate.check-kill)`, as socket waits do every 100 ms at most. Killing the builder, or an
-  isolate that has ended, does nothing.
+  or until it calls `(isolate.check-kill)`, as socket waits, connecting included, and reading standard input do
+  every 100 ms at most; on Windows, a kill reaches an isolate waiting for standard input only once input comes.
+  Killing the builder, or an isolate that has ended, does nothing.
   `(isolate.self)` is the isolate running. The program ends when the builder does, or when any isolate calls
-  `(shen-jit.exit N)`.
+  `(shen-jit.exit N)`; if several end it at once, the first does, and its status is the program's.
 - **The program is fixed while isolates run:** defining raises an error in the builder until every other isolate has
   ended, as a monitor tells. Define everything first, then spawn.
 - **Isolates for the parts of a call:** `(isolate.spawn-each F Args)` spawns `F` with each of `Args`, each with a
@@ -829,8 +831,9 @@ reaches the handle:
 shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l lib/mmap.shen -l lib/handle.shen -l program.shen
 ```
 
-- **It is released some time later:** in the next `handle.wrap` or `(handle.sweep)` after a collection finds it dead, and
-  not at all if the program ends first, which leaves it to the system. Handles count what they hold, so that memory
+- **It is released some time later:** in the next `handle.wrap` or `(handle.sweep)` after a collection finds it dead, or
+  as the isolate that holds it ends, unless one of the isolate's globals holds it then; and not at all if the program
+  ends first, which leaves it to the system. Handles count what they hold, so that memory
   outside the heap brings collections too.
 - **`(handle.close H)` releases it now,** for what should not wait: on Windows, a mapped file cannot be deleted. H then
   raises when used, and closing it again does nothing.

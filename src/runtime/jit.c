@@ -533,9 +533,10 @@ static void *h_compile(VM *vm)
             fatal("native compilation failed");
         __atomic_store_n(&code[CODE_NATIVE], (uint64_t)(uintptr_t)native, __ATOMIC_RELEASE);
     }
-    __atomic_store_n(&p[PROC_ENTRY], code[CODE_NATIVE], __ATOMIC_RELEASE);
+    uint64_t entry = code[CODE_NATIVE]; /* read before the lock goes, as the REPL's recompiling clears it */
+    __atomic_store_n(&p[PROC_ENTRY], entry, __ATOMIC_RELEASE);
     program_compile_unlock(vm);
-    return (void *)(uintptr_t)code[CODE_NATIVE];
+    return (void *)(uintptr_t)entry;
 }
 
 /* Emitting a code object. */

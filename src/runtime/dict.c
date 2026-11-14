@@ -28,6 +28,20 @@ static V *buckets(V d, size_t *n)
 
 static bool entry_cell(V c) { return is_pair(c) && is_pair(ptr(c)[0]); }
 
+/* Whether o lies in the program space: shared (isolate.share), and so never changed, though a
+   dictionary that is not shared may hold its buckets or entries, as a copy of one that is. */
+static bool fixed(VM *vm, V o) { return in_program(vm, ptr(o)); }
+
+/* Whether any bucket cell or entry of b is fixed, which growing would relink. */
+static bool any_fixed(VM *vm, V *b, size_t n)
+{
+    for (size_t i = 0; i < n; i++)
+        for (V c = b[i]; entry_cell(c); c = ptr(c)[1])
+            if (fixed(vm, c) || fixed(vm, ptr(c)[0]))
+                return true;
+    return false;
+}
+
 /* The entry for k, [] if there is none, or V_CLEARED if the bucket is
    malformed. */
 static V find(V *b, size_t n, V k, uint64_t h)
@@ -100,6 +114,8 @@ V sj_dict_put(VM *vm)
     if (e == V_CLEARED)
         return sj_raise_value(vm, "~S is not a dictionary", vm->args[0]);
     if (e != V_NIL) {
+        if (fixed(vm, e))
+            return sj_raise_value(vm, "~S is shared, and cannot change", vm->args[0]);
         ptr(e)[1] = vm->args[2];
         return vm->args[2];
     }
@@ -107,6 +123,8 @@ V sj_dict_put(VM *vm)
     bool full = (size_t)fixval(ptr(vm->args[0])[DICT_COUNT]) + 1 > n;
     if (full && entries(b, n) < 0)
         return sj_raise_value(vm, "~S is not a dictionary", vm->args[0]);
+    if (fixed(vm, ptr(vm->args[0])[DICT_BUCKETS]) || (full && any_fixed(vm, b, n)))
+        return sj_raise_value(vm, "~S is shared, and cannot change", vm->args[0]);
     uint64_t *p = vm_alloc(vm, 4); /* the entry and its bucket cell */
     if (!p)
         return sj_raise(vm, "out of memory");
@@ -135,11 +153,14 @@ V sj_dict_remove(VM *vm)
     if (!b)
         return sj_raise_value(vm, "~S is not a dictionary", vm->args[0]);
     V *link = &b[sj_hash(k) & (n - 1)];
-    for (V c = *link; c != V_NIL; link = &ptr(c)[1], c = *link) {
+    V holder = ptr(d)[DICT_BUCKETS]; /* what link lies in: the buckets, then the cell before */
+    for (V c = *link; c != V_NIL; holder = c, link = &ptr(c)[1], c = *link) {
         if (!entry_cell(c))
             return sj_raise_value(vm, "~S is not a dictionary", vm->args[0]);
         V e = ptr(c)[0];
         if (ptr(e)[0] == k || sj_equal(ptr(e)[0], k)) {
+            if (fixed(vm, holder))
+                return sj_raise_value(vm, "~S is shared, and cannot change", d);
             *link = ptr(c)[1];
             ptr(d)[DICT_COUNT] = fix(fixval(ptr(d)[DICT_COUNT]) - 1);
             break;

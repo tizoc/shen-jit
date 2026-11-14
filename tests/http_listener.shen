@@ -118,6 +118,7 @@
      Result (http.run S)
   (do (listener-test.check "nothing runs before http.run" [pending] (freeze Before))
       (listener-test.check "empty listener stops" [ok] (freeze Result))
+      (listener-test.check "without making its events channel" [] (freeze (http.server.events S)))
       (listener-test.check "stopped state" stopped (freeze (http.state S)))
       (listener-test.check "empty statistics" [0 0 0 0 0 0] (freeze (http.stats S)))
       (listener-test.check "wait gives the final result" [ok] (freeze (http.wait S 0)))

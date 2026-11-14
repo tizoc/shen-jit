@@ -1960,6 +1960,124 @@ What the review of the branch had left as low, and what reading the documents ag
 - **Not done:** a cheaper check of ended connections in the HTTP supervisor, which the review gave as mattering only
   near 1,024 connections at once, the exceptional case.
 
+### One owner for the `sqlite-http` example's database (2026-11-13, Apple M3 Max, against the leftovers above)
+
+- **One owning isolate.** Each request opened a connection of its own, in its connection's isolate, and concurrent
+  writers waited in SQLite's busy handler, which sleeps a millisecond or more for a write of tens of microseconds
+  (above, "A write-ahead log"). The database now belongs to one isolate, which holds it open while the server runs and
+  does each request's work in turn: a handler sends it `[Job Reply]` and waits for `[ok Result]` or `[error Message]`.
+  A path alone still works, each job opening the database, as the in-builder tests use it; an export keeps a
+  connection of its own, which the write-ahead log lets it hold while the owning isolate writes. 64 `POST /counters/x`
+  from 8 Python clients, the same binary, two rounds alternating with the version before: one at a time 15 to 26 ms
+  before and 11 to 17 after; 8 at once, ten runs, 9 to 31 ms with a median of 13 to 15 before, and 6 to 7 with a
+  median of 6 after.
+- **A request waits on the owning isolate's end too,** through a monitor of it, so that one queued to an owner that
+  then ended raises rather than waits for ever; 64 writes from 8 clients took a median of 6 ms with the monitor and
+  without. The owner drops only "channel closed" from a reply's send, so a kill still ends it.
+- **Starting and stopping it.** `counter-app.open` and `counter-app.start` keep what they make, the stream, the owning
+  isolate, its monitor and the server, in a vector made first, by stores, which do not allocate, under one cleanup
+  that covers making the result too: before the owning isolate starts it closes the channel; after, it closes the
+  stream, which ends that isolate, and waits for its end once it is monitored; a server made is stopped and run, which
+  closes its listener before allocating anything, and the owning isolate is ended however that ends. Cases: a start
+  that cannot listen ends the owning isolate, and the cleanup given a live one and a server that never ran ends it and
+  gives back the port.
+
+### What reviews of the isolates found (2026-11-13 and 14, Apple M3 Max, each against the commit before)
+
+After the review of the branch and its leftovers, above, twelve more rounds: mostly another model, which traced each
+finding through the code, and a Fable review cut short, which reproduced two. Each finding was checked against the
+code and fixed, with a case that fails before where one could be made; none found a speed-up worth its code. By topic,
+with what was tried and rejected:
+
+- **Handles as an isolate ends.** What an isolate registers with `shen-jit.at-end` runs once as it ends; then what it
+  registers with `shen-jit.at-guards-dead`, the handle library's sweep, runs in rounds: a collection finds dead the
+  guarded pointers nothing reaches, and a release that uses another handle keeps it alive until it has run, so only
+  what dies is released, in that order, with the globals a release may read still there. The argument slots of calls
+  to C and the last error caught are cleared before each collection, the rounds go on while one finds a guard dead,
+  and what a release's own collection finds stays queued for the next round. What the globals still hold is left to
+  the system, as a program's is when it ends. Before it, all counted dead at once, oldest first, ran a release after
+  the one it used (`[inner outer]`); the hooks ran only inside the rounds, so never for an isolate with no guards; and
+  dropping the isolate's globals, so that the collector would order what they held, did too little and too much: the
+  argument slots of its last call to C kept a handle reached, which the forced last step then released out of order,
+  and releases run after the globals went lost what they read, as `mmap.close` lost `*os*` and never unmapped.
+  Rejected: ordering what is left by tracing which handles each release reaches, apart from the isolate's other roots,
+  a reachability pass of 60 to 100 lines for an isolate that ends holding handles in globals. Cases, each `[outer]` or
+  out of order before and `[outer inner]` after: a release that uses the inner handle, passes it to C, catches an
+  error naming it, or lets go of it and collects; and a hook with no guards runs, and handles a global holds are left.
+- **Monitors.** One is closed once told, so a second receive raises "channel closed": `isolate.stop-each` waited for
+  ever on one already read, which the cut-short review reproduced. One made while its isolate ends waits for the end,
+  and all are told in one hold of the isolates' lock, so a first one is never read while the isolate still counts as
+  running. One that cannot be listed raises "out of memory" rather than being told at once; one whose endpoint cannot
+  be made frees its channel; and closed ones leave their isolate's list, where the `sqlite-http` owner, watched once
+  by each request, kept one per request for its life.
+- **Races in the runtime.** `isolate.share` fills its room in the program space under the lock a save and the REPL's
+  walk hold; `h_compile` reads the native entry it returns under the compile lock, which the REPL's recompiling could
+  clear; a spawn reads the child's generation under the isolates' lock, as a child that ended at once could have its
+  record reused; the start and end functions, and the C API's names, are looked up once at the first spawn, as a
+  lookup could miss while another isolate grew the symbol table. A shared exception, whose message slot kept the text
+  `error-to-string` made, a pointer from the program space into a heap, is formatted each time. Isolates calling
+  `shen-jit.exit` at once each ran the end-of-program reports, so `SHEN_JIT_STATS` printed twice or not at all in 19
+  of 200 runs of eight; the first exit takes a lock it keeps until the process ends, and 200 printed once, which a
+  case runs 50 times. The profiler's report sorted the names of compiled code while an isolate compiling added to
+  them, and read samples a handler still running after the timer stopped could write: the names have a lock of their
+  own, as the report has no VM to take the compile lock with, and samples take their slots and store into them
+  atomically, the report sorting a copy of those stored; no crash was seen in 40 runs before or after. The curl
+  adapter's initialized flag, which two isolates' first calls could read and write at once, is atomic.
+- **Starting, and failures to allocate.** An isolate whose slots could not catch up with globals numbered meanwhile
+  ran on without them; it ends as one that could not start, as does one whose context cannot be made, its context
+  going before it is told ended, and both free the channels given to them. A spawn made the handle it returns after
+  the child ran, so a failure there left a child no one could stop; the handle is made first. Growing a root array or
+  a shared symbol table keeps the moved list of retired tables at once; promotion and interning give back the program
+  space, and the symbol slot, they took before failing, which a save and the REPL's walk read as pairs, and an image
+  would bring back as a second symbol; a message's large blocks and small objects are checked against
+  `SHEN_JIT_MAX_HEAP` together. Destroying the builder while isolates ran left its record pointing at the freed
+  context, which the next global's commit wrote to; the record lets go of it.
+- **Writes into shared storage.** `shen_vector_set` stored into a shared vector, which no collection scans, and a
+  dictionary checked only its own wrapper, so an unshared copy of a shared one's wrapper, made with `absvector`, could
+  change its buckets; both refuse now, on paths that already test their argument, and stores from compiled code are
+  unchanged.
+- **What a call starts, kept where its cleanup finds it.** `isolate.spawn-each` kept what it had started in its
+  arguments, and `parallel.map` and Datalog's parts and joins built on its result before their cleanup took hold, so a
+  failure to allocate in between lost isolates that would wait on each other for ever, and keep the program fixed.
+  Each keeps what it started in a vector made before the first spawn, by stores, under one cleanup that covers making
+  the result. Spawns that failed left the channels made for replies, and for joins the grid, until the builder ended;
+  they are closed. A join isolate that replied and ended before its monitor was made, its record then taken by another
+  spawn, is told `ended`, which the joins took for a failure though its reply was in; the monitor's isolate is matched
+  with the replies, and one that replied did its part. Tried: a test that lands an allocation failure in a gap, by
+  filling the heap under `SHEN_JIT_MAX_HEAP` and freeing a pair at a time, which failed four times, none after a
+  spawn, as the reserve kept for the error and the collection after it move the failure further than a pair; a hook to
+  fail the Nth allocation would do it, and is not worth its code for this.
+- **The HTTP listener.** A connection's stop channel was made before its socket was guarded, and neither closed on
+  every failure, and a running connection could go unlisted; a failure before the spawn closes both, and after it
+  kills the connection, and a monitor whose listing fails is closed. A connection's isolate set up its handler's state
+  before its socket became an endpoint, so a failure there left the peer open; it does so inside the endpoint now,
+  which closes the socket however it ends; another closer around `io.socket` would close the socket twice when making
+  the endpoint fails, as `io.socket` closes it then, and the number could by then be another isolate's. `http.run` of
+  a server stopped before it ran closes the listener and finishes before allocating anything, which a case checks by
+  the events channel it no longer makes.
+- **Ctrl-C and kills that waited.** Isolates take turns reading standard input under a mutex, which the one whose turn
+  it is held while it waited for input, so the builder, waiting on the mutex, saw no Ctrl-C until input came. One that
+  cannot have the mutex tries it every 10 ms, raising "interrupted", or "killed" in an isolate, between tries, and the
+  one waiting for input waits in slices of 100 ms while isolates exist, so a kill reaches it; output is flushed before
+  either wait. Keeping the mutex only around the buffer would need a second state, whose reader fills it, and a way to
+  wait on it. `socket.connect`'s wait for a pending connection checks for a kill each slice, and a kill at one address
+  is passed on rather than taken for that address failing. Cases: the REPL interrupted while waiting for its turn, a
+  kill reaching a reader without input, one reaching a pending connection, for which a listening socket stands in, and
+  one at the first of two addresses.
+- **Printing in isolates.** `shen.tuple`, `shen.pvar` and `shen.dictionary` had lambda forms but no arity, so an
+  isolate, whose `fn` makes forms from templates, could not print a tuple, a Prolog variable or a dictionary; their
+  arities are recorded.
+- **Left as they are.** On Windows a kill reaches an isolate waiting for standard input only once input comes, as the
+  read waits in `ReadFile`; ending it needs `CancelSynchronousIo` from the killing thread, with a retry around the
+  read and a race at its start to close, about 30 to 60 lines testable only on Windows, and the guide and the design
+  say so instead. In an isolate, `read-from-string` fails with "shen.*source-form-handlers* has no value" rather than
+  saying it is the builder's; that reader expands, which only the builder does. Freeing a channel whose receive
+  endpoint is dropped would need each heap to track its endpoints weakly, as guards are, and to free a channel once
+  none survives in its receiver's heap; but a channel can have two endpoints there, the receive endpoint and one
+  marked by `channel.give`, and must stay until a spawn takes the marked one, after which the child's copy must be
+  tracked: tracking in the collector, the copier and the channel table, for a leak that closing the endpoint, or the
+  receiver ending, avoids. It stays a documented limit.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on

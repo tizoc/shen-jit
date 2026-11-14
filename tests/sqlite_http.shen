@@ -77,4 +77,56 @@
   (freeze (hd (counter-test.put "{c#34;valuec#34;:1}" "text/plain"))))
 (counter-test.check "invalid updates leave the stored value alone" [200 "{c#34;valuec#34;:43}"]
   (freeze (counter-test.response "GET" "/counters/body")))
+\\ The same routes through the database's owning isolate, which holds it open and does each job in turn;
+\\ a failed job's error reaches the handler, and the owning isolate goes on.
+(define counter-test.owned
+  Db Method Target ->
+    (let Response (counter-app.route Db Method Target)
+      [(http.buffered-response.status Response) (buffer.string (http.buffered-response.body Response))]))
+
+(let Owner (counter-app.open (value counter-test.path))
+     Db (counter-app.db Owner)
+  (do (counter-test.check "owner reads what was written without it" [200 "{c#34;valuec#34;:43}"]
+        (freeze (counter-test.owned Db "GET" "/counters/body")))
+      (counter-test.check "owner increments" [200 "{c#34;valuec#34;:44}"]
+        (freeze (counter-test.owned Db "POST" "/counters/body")))
+      (counter-test.check "owner deletes" [204 ""] (freeze (counter-test.owned Db "DELETE" "/counters/body")))
+      (counter-test.check "owner reports a missing counter" [404 "{c#34;errorc#34;:c#34;counter not foundc#34;}"]
+        (freeze (counter-test.owned Db "GET" "/counters/body")))
+      (counter-test.check "a failed job raises in the handler" true
+        (freeze (counter-test.raises? (freeze (counter-app.do Db [set "below" -1])))))
+      (counter-test.check "and the owning isolate goes on" [200 "{c#34;valuec#34;:1}"]
+        (freeze (counter-test.owned Db "POST" "/counters/after")))
+      (counter-test.check "closing ends the owning isolate" true (freeze (counter-app.close Owner)))))
+
+\\ A request to an owning isolate that has gone raises rather than waits.
+(let Owner (counter-app.open (value counter-test.path))
+     Db (counter-app.db Owner)
+     _ (isolate.kill (hd (tl (tl Db))))
+     _ (channel.receive (hd (tl Owner)))
+  (counter-test.check "a request after the owning isolate has gone raises" true
+    (freeze (counter-test.raises? (freeze (counter-app.do Db [list]))))))
+
+\\ A start that fails ends the owning isolate it started, and stops a server it made, giving back its port; the
+\\ program can change again after each, as no isolate is left. A port taken makes listening fail.
+(define counter-test.changes?
+  Name -> (trap-error (do (eval [define Name -> changed]) (eval [Name])) (/. E (error-to-string E))))
+
+(let Taken (socket.listen "127.0.0.1" 0)
+     Why (trap-error (counter-app.start (value counter-test.path) "127.0.0.1" (socket.port Taken) counter-app.control [])
+                     (/. E failed))
+     _ (socket.c-close Taken)
+  (counter-test.check "a start that cannot listen ends the owning isolate" [failed changed]
+    (freeze [Why (counter-test.changes? counter-test.after-listen)])))
+
+(let Cell (address-> (address-> (absvector 2) 0 []) 1 [])
+     Owner (counter-app.kept Cell 0 (counter-app.open (value counter-test.path)))
+     S (counter-app.kept Cell 1 (http.listen "127.0.0.1" 0 [counter-app.control (counter-app.db Owner)] []))
+     Port (http.port S)
+     _ (counter-app.undo-start Cell)
+     Again (socket.listen "127.0.0.1" Port)
+     _ (socket.c-close Again)
+  (counter-test.check "undoing a start stops its server and ends the owning isolate" changed
+    (freeze (counter-test.changes? counter-test.after-undo))))
+
 (output "~A passed, ~A failed~%" (value counter-test.passed) (value counter-test.failed))
