@@ -5,22 +5,23 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.8] - 2026-11-14
+
 ### Added
 
-- Isolates: `(isolate.spawn F X)` runs a function the program defined on an OS thread of its own, with its own
-  heap, globals and property list, so isolates run on several cores at once. They talk through channels
-  (`channel.new`, `channel.sender`, `channel.send`, `channel.receive`, `channel.receive-any`, `channel.next`,
-  `channel.wait-any`, `channel.close`, and `channel.give` for a receive endpoint a spawn hands over), which copy
-  what is sent, a large byte buffer or string
-  once, in the sender; `isolate.self` is the one running, `isolate.monitor` watches them,
-  and `isolate.kill` stops one at its next channel operation or `isolate.check-kill`, which socket waits call.
-  Only the first isolate, the builder, defines, and the program is fixed while other isolates run:
-  defining raises until they have ended. Symbols are the same in every isolate. `(isolate.spawn-each F Args G)`
-  starts an isolate for each part of a call and gives `G`'s value over them, stopping them, as `isolate.stop-each`
-  does, if anything raises. Ctrl-C at the REPL
-  ends a wait on a channel, and kills the isolates the interrupted input spawned. `isolate` and `channel` are
-  namespaces of the image, with types for typed programs: `isolate`, `(receiver A)` and `(sender A)`, and datatypes
-  for results.
+- Isolates: `(isolate.spawn F X)` runs a function the program defined on an OS thread of its own, with its own heap,
+  globals and property list, so isolates run on several cores at once. They talk through channels (`channel.new`,
+  `channel.sender`, `channel.send`, `channel.receive`, `channel.receive-any`, `channel.next`, `channel.wait-any`,
+  `channel.close`, and `channel.give` for a receive endpoint a spawn hands over), which copy what is sent, a large
+  byte buffer or string once, in the sender; `isolate.self` is the one running, `isolate.monitor` watches them, and
+  `isolate.kill` stops one at its next channel operation or `isolate.check-kill`, which socket waits, connecting and
+  reading standard input call every 100 ms; on Windows, a kill reaches an isolate reading standard input only once
+  input comes. Only the first isolate, the builder, defines, and the program is fixed while other isolates run:
+  defining raises until they have ended. Symbols are the same in every isolate. `(isolate.spawn-each F Args G)` starts
+  an isolate for each part of a call and gives `G`'s value over them, stopping them, as `isolate.stop-each` does, if
+  anything raises. Ctrl-C at the REPL ends a wait on a channel, or for standard input another isolate is reading, and
+  kills the isolates the interrupted input spawned. `isolate` and `channel` are namespaces of the image, with types
+  for typed programs: `isolate`, `(receiver A)` and `(sender A)`, and datatypes for results.
 - `(isolate.share X)` copies `X` once into storage outside every heap, which isolates read by pointer rather than
   as copies; nothing changes it, as stores into its vectors and byte buffers raise, and it is never freed.
 - `(parallel.map N F Xs)` in `lib/parallel.shen`, over isolates: a function named `F` mapped over `Xs` with at most
@@ -48,18 +49,16 @@ All notable changes to this project are documented in this file. The format is b
 
 - The HTTP listener serves each connection in an isolate of its own, in parallel, supervised by the program that calls
   the new `http.run` until the server is stopped, and gives its result; `http.listen` binds and returns the server
-  without serving, and `http.wait`, with nothing left to wait for, is removed. A handler goes by name, as `f` or `[f Arg ...]`, which
-  is called with the arguments and then the request, rather than as a closure, and stops its server with
-  `(http.stop (http.current-server))`. Connections left once `shutdown-grace` has passed are killed. The
-  `sqlite-http` example keeps a write-ahead log, and its database belongs to one isolate, which holds it open while
-  it serves and does each request's work in turn, reached through a handler argument: writers no longer wait in
-  SQLite's busy handler.
+  without serving, and `http.wait`, with nothing left to wait for, is removed. A handler goes by name, as `f` or
+  `[f Arg ...]`, which is called with the arguments and then the request, rather than as a closure, and stops its
+  server with `(http.stop (http.current-server))`. Connections left once `shutdown-grace` has passed are killed. The
+  `sqlite-http` example keeps a write-ahead log, and its database belongs to one isolate, which holds it open while it
+  serves and does each request's work in turn, reached through a handler argument: writers no longer wait in SQLite's
+  busy handler.
 - A `blocking` foreign call passes byte buffers where they are, rather than copies, and the flag changes nothing now,
   nor do `shen_release` and `shen_acquire` in the C API.
 - A definition whose code holds a value with no syntax, such as a vector put into a form given to `eval`, or a
   native `(const E)` whose value is one, is refused when it is defined.
-- A grammar's loops compile after the form defining the rule, in a load, and at once outside one, rather than at
-  their first call; a guard that calls a function defined after the rule is tested in place, without a table.
 - Installed definitions, with what their code reaches, and every symbol now live in a program space that
   collections neither copy nor scan, so collections no longer copy the program. A redefined function's old
   versions stay there. `SHEN_JIT_STATS` reports the program space.
@@ -460,7 +459,8 @@ All notable changes to this project are documented in this file. The format is b
 
 - Initial release
 
-[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.7...HEAD
+[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.8...HEAD
+[0.8]: https://github.com/tizoc/shen-jit/compare/v0.7...v0.8
 [0.7]: https://github.com/tizoc/shen-jit/compare/v0.6...v0.7
 [0.6]: https://github.com/tizoc/shen-jit/compare/v0.5...v0.6
 [0.5]: https://github.com/tizoc/shen-jit/compare/v0.4...v0.5
