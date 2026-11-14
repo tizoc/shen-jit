@@ -982,6 +982,33 @@ check interrupt-program-reading-continues "$dir/held.out" "(2-) 11"
 check interrupt-prompt-beside-isolate "$dir/held.out" "(5-) interrupted"
 check interrupt-prompt-beside-isolate-continues "$dir/held.out" "(5-) 15"
 
+# Ctrl-C reaches the REPL while it waits for its turn to read, as an isolate waits for input: it
+# says so before the input comes, which then goes to the isolate, then to the REPL.
+mkfifo "$dir/turns"
+"$SHEN" < "$dir/turns" > "$dir/turns.out" 2>&1 &
+pid=$!
+exec 3> "$dir/turns"
+wait_for "(0-) " "$dir/turns.out"
+printf '(define take-x X -> (if (= (read-byte (stinput)) 120) done (take-x X)))\n' >&3
+printf '(let I (isolate.spawn take-x 0) _ (channel.wait-any [(channel.new 1)] 300) waiting)\n' >&3
+wait_for "(1-) waiting" "$dir/turns.out"
+sleep 0.2
+interrupts_to 1 "$dir/turns.out"
+cp "$dir/turns.out" "$dir/turns.before"
+printf 'x(+ 1 2)\n' >&3
+wait_for "(2-) 3" "$dir/turns.out"
+exec 3>&-
+ends
+check interrupt-waiting-turn "$dir/turns.before" "(2-) interrupted"
+check interrupt-waiting-turn-continues "$dir/turns.out" "(2-) 3"
+# And a kill reaches an isolate waiting for input that does not come.
+mkfifo "$dir/quiet"
+printf '(define take X -> (read-byte (stinput)))\n(let I (isolate.spawn take 0) M (isolate.monitor I) _ (channel.wait-any [(channel.new 1)] 200) _ (isolate.kill I) R (channel.wait-any [M] 3000) (output "reading: ~A~%%" (if (= R [timeout]) timeout (hd (tl (tl (channel.receive M)))))))\n' > "$dir/kill-read.shen"
+exec 4<> "$dir/quiet"
+"$SHEN" script "$dir/kill-read.shen" < "$dir/quiet" > "$dir/kill-read.out" 2>&1
+exec 4>&-
+check kill-reading "$dir/kill-read.out" "reading: killed"
+
 # Ctrl-C ends the REPL's wait on a channel, in receive and in wait-any, which a signal cannot wake,
 # and a parallel map's wait for its isolates; the REPL goes on, and kills the map's isolates, so
 # that it can define again.

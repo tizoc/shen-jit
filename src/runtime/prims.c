@@ -1142,33 +1142,49 @@ bool sj_take_interrupt(VM *vm)
 
 /* Standard input is read here rather than through stdio, whose read would
    restart after a Ctrl-C (SA_RESTART, which writes need) and which does not say
-   when it is about to wait. The wait is in select, which a signal always ends.
+   when it is about to wait. The wait is in select, which a signal always ends,
+   in slices of 100 ms while isolates exist, so that a kill reaches one waiting.
    Isolates reading at once take turns over the buffer (read_stdin). */
 static unsigned char input[4096];
 static size_t input_next, input_end;
 
 #ifndef _WIN32
-static bool input_ready(bool wait)
+/* Waits at most ms, or for ever if it is negative. */
+static bool input_ready(long ms)
 {
     fd_set in;
     FD_ZERO(&in);
     FD_SET(STDIN_FILENO, &in);
-    struct timeval now = {0, 0};
-    int ready = select(STDIN_FILENO + 1, &in, NULL, NULL, wait ? NULL : &now);
+    struct timeval limit = {ms / 1000, ms % 1000 * 1000};
+    int ready = select(STDIN_FILENO + 1, &in, NULL, NULL, ms < 0 ? NULL : &limit);
     return ready > 0 || (ready < 0 && errno != EINTR); /* a bad descriptor: read reports it */
 }
 #endif
 
 static V read_stdin_waiting(VM *vm);
 
-/* Isolates read it one at a time (isolate.c). */
+/* Isolates read it one at a time (isolate.c). One waiting for its turn, while another waits for
+   input, still takes a Ctrl-C or a kill: it tries the lock every 10 ms, which a mutex's wait could
+   not let it do. Two reading at once are rare, and the wait is for input anyway. */
 static pthread_mutex_t input_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static V read_stdin(VM *vm)
 {
+    fflush(stdout);
     if (!vm->program->isolates)
         return read_stdin_waiting(vm);
-    pthread_mutex_lock(&input_lock);
+    while (pthread_mutex_trylock(&input_lock) != 0) {
+        if (vm->interrupted == INTERRUPT && sj_take_interrupt(vm))
+            return sj_raise(vm, "interrupted");
+        if (sj_isolate_killed(vm))
+            return sj_raise(vm, "killed");
+#ifdef _WIN32
+        win_sleep_briefly();
+#else
+        struct timespec pause = {0, 10000000};
+        nanosleep(&pause, NULL);
+#endif
+    }
     V v = read_stdin_waiting(vm);
     pthread_mutex_unlock(&input_lock);
     return v;
@@ -1176,11 +1192,12 @@ static V read_stdin(VM *vm)
 
 static V read_stdin_waiting(VM *vm)
 {
-    fflush(stdout);
     while (input_next == input_end) {
         /* A Ctrl-C is for the builder, which the REPL runs in. */
         if (vm->interrupted == INTERRUPT && sj_take_interrupt(vm))
             return sj_raise(vm, "interrupted");
+        if (sj_isolate_killed(vm))
+            return sj_raise(vm, "killed");
 #ifdef _WIN32
         /* select is for sockets there, so the read itself waits, and a Ctrl-C ends it. */
         static bool input_busy;
@@ -1199,14 +1216,14 @@ static V read_stdin_waiting(VM *vm)
         if (n == 0)
             return fix(-1);
 #else
-        if (input_ready(false)) {
+        if (input_ready(0)) {
             ssize_t n = read(STDIN_FILENO, input, sizeof input);
             if (n <= 0)
                 return fix(-1);
             input_next = 0;
             input_end = (size_t)n;
         } else {
-            input_ready(true);
+            input_ready(vm->program->isolates ? 100 : -1);
         }
 #endif
     }

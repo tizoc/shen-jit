@@ -455,7 +455,9 @@ an interrupt is the program's, as its code is shared: only code compiled once th
 Ctrl-C does, by any isolate, and everything is compiled again then, under the compile lock and the
 lock under which isolates add to the program space, which the walk reads. The builder waits on a
 channel in slices of 50 ms, as a signal handler cannot wake it, and raises "interrupted" between
-them. Each REPL input notes how many isolates had been spawned, the count that numbers their
+them. Isolates read standard input one at a time, through one buffer: the one whose turn it is waits
+for input in slices of 100 ms, between which a kill reaches it, and one waiting for its turn tries
+every 10 ms, so that a Ctrl-C or a kill reaches it too, which waiting on a mutex would not let it. Each REPL input notes how many isolates had been spawned, the count that numbers their
 gensyms, and a Ctrl-C that stops it kills those numbered after. `SIGPIPE` has a handler that does nothing, set at startup, so that a write to a closed pipe
 fails and raises; being a handler and not `SIG_IGN`, exec resets it, and a child finds the default.
 

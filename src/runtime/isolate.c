@@ -1429,20 +1429,24 @@ static void kill_isolate(Isolates *ps, Isolate *p)
     }
 }
 
+/* Whether a kill came, which the caller then raises: what waits on something else, such as a
+   socket or standard input, asks now and then. It does not start isolates. */
+bool sj_isolate_killed(VM *vm)
+{
+    Isolates *ps = vm->program->isolates;
+    if (!ps || !vm->isolate)
+        return false;
+    pthread_mutex_lock(&ps->lock);
+    if (killed_now(vm, ps))
+        return true;
+    pthread_mutex_unlock(&ps->lock);
+    return false;
+}
+
 V sj_isolate(VM *vm)
 {
-    /* What waits on something else, such as a socket, asks now and then whether it was killed,
-       which does not start isolates. */
-    if (vm->args[0] == fix(OP_CHECK_KILL)) {
-        Isolates *ps = vm->program->isolates;
-        if (!ps || !vm->isolate)
-            return V_FALSE;
-        pthread_mutex_lock(&ps->lock);
-        if (killed_now(vm, ps))
-            return sj_raise(vm, "killed");
-        pthread_mutex_unlock(&ps->lock);
-        return V_FALSE;
-    }
+    if (vm->args[0] == fix(OP_CHECK_KILL))
+        return sj_isolate_killed(vm) ? sj_raise(vm, "killed") : V_FALSE;
     /* The REPL marks each input with how many isolates had been spawned, and after a Ctrl-C kills
        those spawned since, but not the caller; neither starts isolates. */
     if (vm->args[0] == fix(OP_SINCE)) {

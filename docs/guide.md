@@ -322,8 +322,8 @@ are other programs.
   has, and is then closed, so that a second receive raises "channel closed", the reason being `normal`, the error's message, `killed`, or `ended` for one that could not start or ended long
   enough ago that its record was used again. `(isolate.kill I)` raises "killed" at `I`'s next channel operation,
   waking it if it waits on a channel, so that its handlers can clean up; an isolate busy elsewhere goes on until then,
-  or until it calls `(isolate.check-kill)`, as socket waits do every 100 ms at most. Killing the builder, or an
-  isolate that has ended, does nothing.
+  or until it calls `(isolate.check-kill)`, as socket waits, connecting included, and reading standard input do
+  every 100 ms at most. Killing the builder, or an isolate that has ended, does nothing.
   `(isolate.self)` is the isolate running. The program ends when the builder does, or when any isolate calls
   `(shen-jit.exit N)`.
 - **The program is fixed while isolates run:** defining raises an error in the builder until every other isolate has

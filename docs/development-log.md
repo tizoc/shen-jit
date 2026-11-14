@@ -2105,6 +2105,25 @@ connection starts, which no test makes.
   twice when making the endpoint fails, as `io.socket` closes it then, and the number could by then be another
   isolate's.
 
+### What a tenth review found (2026-11-13, Apple M3 Max, against the commit before)
+
+Two, both fixed, each with cases that fail on the commit before.
+
+- **Ctrl-C while another isolate reads standard input.** Readers take turns under a mutex, which the one whose turn it
+  is holds while it waits for input, so the builder, waiting on the mutex, could not see a Ctrl-C until input came. It
+  now tries the mutex every 10 ms when it cannot have it, and raises "interrupted", or "killed" in an isolate, between
+  tries; the one waiting for input waits in slices of 100 ms while isolates exist, so a kill reaches it too. Two
+  readers at once are rare, and wait for input anyway, so polling costs nothing that matters there. Keeping the mutex
+  only around the buffer would have needed a second state, whose reader fills it, and a way to wait on it. The output
+  is also flushed before the turn is waited for, not after, so a prompt shows while it waits. The cases: a REPL
+  waiting for its turn says "interrupted" before input comes, and then evaluates it, and a kill ends an isolate
+  waiting for input that does not come.
+- **A kill while connecting.** `socket.connect`'s wait for a pending connection polled in slices of 100 ms without
+  checking for a kill, and a kill raised while trying one address was taken for that address failing, so the next was
+  tried. It checks each slice, and passes a kill on. The cases: a listening socket, never writable and with no error,
+  stands in for a pending connection, which a kill now ends, and a kill at the first of two addresses is raised
+  without trying the second.
+
 ### What a ninth review found (2026-11-13, Apple M3 Max, against the commit before)
 
 Two, both fixed, each with a case that fails on the commit before.

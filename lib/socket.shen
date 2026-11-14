@@ -249,11 +249,15 @@
            (shen-jit.pointer->bytes Address 0 (shen-jit.u32 Info 16))]
           | (read-addresses (shen-jit.bytes->pointer Info 40 addrinfo))]))
 
-\\ The first address on which F works, or the last error.
+\\ The first address on which F works, or the last error; a kill, raised once, is passed on.
 (define first-working
   F [] Last -> (simple-error Last)
   F [Address | Addresses] _
-  -> (trap-error (F Address) (/. E (first-working F Addresses (error-to-string E)))))
+  -> (trap-error (F Address) (/. E (next-working F Addresses (error-to-string E)))))
+
+(define next-working
+  _ _ "killed" -> (simple-error "killed")
+  F Addresses Message -> (first-working F Addresses Message))
 
 (define port
   S -> (let Address (shen-jit.bytes 128)
@@ -280,9 +284,10 @@
                       true (fail "connect")))
 
 \\ The socket's own error each time round, since on old versions of Windows a failure to connect
-\\ never shows in WSAPoll.
+\\ never shows in WSAPoll, and a kill, as for any wait.
 (define finish-connecting
-  S -> (let Ready (poll S (writable-event) 100)
+  S -> (let _ (isolate.check-kill)
+            Ready (poll S (writable-event) 100)
             Error (pending-error S)
          (cases (not (= Error 0)) (raise "connect" Error)
                 Ready S
