@@ -1,6 +1,7 @@
 # Shen/JIT guide
 
-A small implementation of [Shen](https://shenlanguage.org) that compiles every function to native code.
+A native implementation of [Shen](https://shenlanguage.org): every function compiles to machine code, with no host
+language underneath.
 
 Shen is a functional language with pattern matching, optional static types, macros and an embedded Prolog,
 built on a small core called KLambda. Shen/JIT lowers KLambda to a register bytecode, and a baseline JIT turns
@@ -161,10 +162,12 @@ after its function returns or raises.
 (output "~A~%" (tl (value *argv*)))
 ```
 
-### The language
+## The language
 
-Everything here is standard Shen, and the [Shen site](https://shenlanguage.org) teaches the language. A short
-taste, starting with functions defined by pattern matching:
+### Shen in brief
+
+Everything in this section is standard Shen, and the [Shen site](https://shenlanguage.org) teaches the language. A
+short taste, starting with functions defined by pattern matching:
 
 ```shen
 (define total
@@ -210,7 +213,178 @@ Prolog and a compiler-compiler are built in:
 (compile (fn <digits>) [1 0 1])    \\ [1 0 1]
 ```
 
-## Programs
+### Managed structs
+
+`defstruct` replaces numbered `absvector` slots with named fields and ordinary generated functions.
+It is available at startup. In a source file:
+
+```shen
+(defstruct entry
+  key
+  (mutable value))
+
+(define value-of
+  (:entry value <- V ...) -> V)
+
+(let E (:entry value <- 42 key <- "answer")
+  (do (entry.value-> E 43)
+      (value-of E)))    \\ 43
+```
+
+`(:entry f <- V ...)` constructs a record with labelled fields in any order, and as a pattern matches
+one, with `...` leaving out the fields it does not name. One function can match records of several
+structs, a clause each, and `(struct.union shape circle rect)` makes such a set a type for typed code.
+
+Fields are read-only by default; mutable fields get `->` setters that return the record. Fields may have
+types, `(x : number)`, which typed code then checks. A record prints
+as `#<entry key: "answer" value: 43>`, or through a function of its own, `(printer F)`. Construction
+allocates one managed vector and can trigger GC; field reads and writes allocate nothing on success.
+The [struct reference](https://github.com/tizoc/shen-jit/blob/main/docs/structs.md) covers positional
+constructors, construction and matching, namespace exports, reload rules and the current limitations.
+
+### Cleaning up
+
+`(shen-jit.finally Body Cleanup)` thaws Body, then Cleanup however Body ended, and gives Body's value.
+`(shen-jit.on-error Body Cleanup)` thaws Cleanup only if Body raised, for something its caller keeps once Body
+returns, as a function that opens one does. Either way the error raised is Body's, after Cleanup, and one that
+Cleanup raises too is added to its message, as in `"body; cleanup: close"`, so that it is neither lost nor put in
+Body's place.
+
+```shen
+(define first-byte
+  Path -> (let S (open Path in)
+            (shen-jit.finally (freeze (read-byte S)) (freeze (close S)))))
+```
+
+Their type is `(lazy A) --> (lazy B) --> A`. The libraries' scopes, such as `sqlite.with-database`, are built on
+them.
+
+### Sealing
+
+Kernel and port functions are sealed: calls to them are direct, and redefining one raises an error:
+`F is sealed and cannot be redefined`, or for the names the kernel exports, `F is a system function`. Your definitions are open: you can redefine them at any time, and their
+callers see the new definition.
+
+With `--seal`, `SHEN_JIT_SEAL=1` or `(shen-jit.seal +)`, new definitions are sealed too, so calls to them are
+direct, and they cannot be redefined. `(shen-jit.seal -)` turns that off. This gains little, as open calls are
+inlined too, and patched when a function is redefined.
+
+### Differences from Shen/Scheme
+
+- **Code holds only what the reader makes.** A definition whose code holds a value with no syntax, such as a vector
+  put into a form given to `eval`, is refused, where Shen/Scheme keeps the value as a constant.
+- **No stlib in the default image.** Only the kernel and its extensions for features, programmable pattern matching, namespaces and the launcher are in use: see
+  [The standard library](#the-standard-library).
+- **Integers are 62-bit, without bignums.** An integer result outside that range raises `integer overflow`, where
+  Shen/Scheme goes on in bignums. Reals are IEEE doubles, as there.
+- **Sealing.** Internal kernel functions cannot be redefined, where Shen/Scheme accepts such definitions.
+- **Numbers hash by value.** A real and an integer that are `=` have the same `hash`, where Shen/Scheme's tells them apart.
+- **No `thread`.** Shen/Scheme's `(thread Frozen)` is not provided. [Isolates](#isolates) run in parallel, each
+  with a heap of its own.
+- **Definitions are factorised,** as with `(factorise +)`: a guard that consecutive clauses share runs once, so
+  guards should have no effects, and a vector pattern may read its first element before a clause that does not
+  need it, which raises if that element was never set.
+- **On Windows,** a few things differ: see [On Windows](#on-windows).
+
+[docs/semantics.md](https://github.com/tizoc/shen-jit/blob/main/docs/semantics.md) defines the behaviour in full, and
+marks each difference with *Deviation*.
+
+## Isolates
+
+### Spawning and channels
+
+`(isolate.spawn F X)` runs `F`, a function of one argument that the program defined, in an isolate of its own on an
+OS thread of its own, with a copy of `X`, and returns the isolate. Isolates share the program's code and nothing
+else: each has its own heap, globals and property list, and they talk through channels. They run on several cores at
+once, within one operating-system process; [subprocesses](https://github.com/tizoc/shen-jit/blob/main/docs/processes.md)
+are other programs.
+
+```shen
+(define fib 0 -> 0 1 -> 1 N -> (+ (fib (- N 1)) (fib (- N 2))))
+(define fib-of [N Out] -> (channel.send Out [N (fib N)]))
+
+(let Replies (channel.new 4)
+     Out (channel.sender Replies)
+     _ (map (/. N (isolate.spawn fib-of [N Out])) [27 28 29 30])
+  (map (/. I (channel.receive Replies)) [1 2 3 4]))
+\\ [[27 196418] [28 317811] [29 514229] [30 832040]], in the order they finish
+```
+
+- **Channels:** `(channel.new N)` makes a channel that holds up to `N` messages, from 1 to 2^24, and returns its
+  receive endpoint, which only the isolate that made it reads. `(channel.sender R)` gives a send endpoint, which can go
+  anywhere.
+  `channel.send` waits while the channel is full and `channel.receive` while it is empty;
+  `(channel.receive-any [R1 R2 ...])` gives `[R Message]` from the first that has one, and
+  `(channel.wait-any [R1 R2 ...] Ms)` gives `[ready R]` for the first that has a message or is closed, waiting at
+  most `Ms` milliseconds, a whole number up to a day, or `[timeout]` if none has by then, and receives nothing.
+- **Closing:** a sender's `(channel.close S)` ends the stream: the receiver gets what was queued, and then a receive
+  raises "channel closed". `(channel.next R)` reads a stream instead, giving `[ok Message]` for each message and
+  `[closed]` at its end. The receiver's close drops what is queued. Sending on a closed channel raises "channel
+  closed". A channel is freed when its receiver closes it, reads its end, or ends, and not before.
+- **What crosses:** an argument or a message is copied, with its sharing and cycles. Symbols are the same in every
+  isolate, so a function goes by its name, and the isolate that gets it calls `(fn F)`. Closures made as the program runs, `fn`'s
+  among them, streams and pointers are refused. A receive endpoint moves to a new isolate only in its argument,
+  marked with `(channel.give R)`, and its old holder can no longer read it.
+- **An isolate starts as a program does:** its globals are unbound and its property list is empty, so it takes what
+  it needs from its argument. Only the program's first isolate, the builder, defines: `eval`, `load` and the like
+  raise an error in any other. Its heap starts at 128 KB and grows; `SHEN_JIT_MAX_HEAP` and `SHEN_JIT_GC_STRESS`
+  apply to each isolate's heap, and `SHEN_JIT_SEMISPACE` to the builder's alone.
+- **The program is fixed while isolates run:** defining raises an error in the builder until every other isolate has
+  ended, as a monitor tells. Define everything first, then spawn. Isolates cannot compile either, so a program whose
+  isolates parse with grammars calls `(grammar.finish)` before it spawns them, as `http.listen` does.
+- **Symbols are shared:** a symbol made in any isolate is the program's, and stays for as long as it runs, so names
+  that come from outside, such as a request's, belong in strings.
+
+### Ending and killing
+
+An isolate ends when its function returns, or raises an error that nothing catches, which is printed to stderr.
+`(isolate.monitor I)` returns a receive endpoint that gets `[down I Reason]` when `I` ends, or at once if it has, and
+is then closed, so that a second receive raises "channel closed", the reason being `normal`, the error's message,
+`killed`, or `ended` for one that could not start or ended long enough ago that its record was used again.
+
+`(isolate.kill I)` raises "killed" at `I`'s next channel operation, waking it if it waits on a channel, so that its
+handlers can clean up; an isolate busy elsewhere goes on until then, or until it calls `(isolate.check-kill)`, as
+socket waits, connecting included, and reading standard input do every 100 ms at most; on Windows, a kill reaches an
+isolate waiting for standard input only once input comes. Killing the builder, or an isolate that has ended, does
+nothing.
+
+`(isolate.self)` is the isolate running. The program ends when the builder does, or when any isolate calls
+`(shen-jit.exit N)`; if several end it at once, the first does, and its status is the program's.
+
+### Parts of a call
+
+`(isolate.spawn-each F Args G)` spawns `F` with each of `Args`, each with a monitor, and gives `(G Started)`,
+`Started` being `[[I | Monitor] ...]`. If a spawn fails, or anything after it raises, `G` included, it stops those it
+started, as `(isolate.stop-each Started)` does: kills them, waits for each to end and closes the monitors, so that
+none is left waiting on one that is gone.
+
+[`lib/parallel.shen`](https://github.com/tizoc/shen-jit/blob/main/docs/parallel.md) gives `(parallel.map N F Xs)`,
+which maps a function named `F` over `Xs` with at most `N` isolates.
+
+### Sharing data
+
+`(isolate.share X)` copies `X` once, with its sharing and cycles, into storage outside every heap, and gives the copy,
+which crosses to isolates by pointer rather than being copied again, as a large table many isolates read would. Any
+isolate can share. Nothing changes a shared value: a store into one of its vectors or byte buffers raises, and a
+shared dictionary cannot change. It is never freed. What cannot be sent cannot be shared.
+
+### Types, namespaces and saving
+
+- **Types and namespaces:** an isolate has type `isolate`, and endpoints have types `(receiver A)` and `(sender A)`,
+  `A` being what crosses them. A typed function crosses by its name, which typechecks as the function: `(isolate.spawn
+  f X)` with `f : (A --> B)` and `X : A`. A lambda typechecks too, but cannot cross. Results have datatypes:
+  `isolate.down` for a monitor's message, whose reason is an `isolate.reason`, `isolate.started` for what
+  `spawn-each` gives, and `(channel.next A)`, `(channel.got A)` and `(channel.ready A)` for what `channel.next`,
+  `channel.receive-any` and `channel.wait-any` give. `isolate` and `channel` are namespaces: their functions are
+  system functions, which any namespace names as they are, and a client can also write `(use channel => c)` and
+  `(c.send S X)`. In a namespace, keep the types `isolate`, `receiver` and `sender`, and the tags `ok`, `closed`,
+  `ready`, `timeout`, `down`, `normal`, `killed` and `ended`, with `externals`.
+- **Saving:** `shen-jit.save-executable` refuses while other isolates run, and in any isolate but the builder.
+  `--save` writes the builder's image even so, as the program ends then: what isolates hold is not saved, and what
+  they add to the program meanwhile waits until the image is written. An endpoint or isolate saved in an image
+  belongs to the run that saved it: once loaded, a receive on it raises "channel closed".
+
+## Shipping programs
 
 ### The standard library
 
@@ -275,133 +449,6 @@ source, one appended to the runtime makes an executable of its own:
 cat build/runtime app.img > app && chmod +x app
 ./app eval -e '(main)'
 ```
-
-### Isolates
-
-`(isolate.spawn F X)` runs `F`, a function of one argument that the program defined, in an isolate of its own on an
-OS thread of its own, with a copy of `X`, and returns the isolate. Isolates share the program's code and nothing
-else: each has its own heap, globals and property list, and they talk through channels. They run on several cores at
-once, within one operating-system process; [subprocesses](https://github.com/tizoc/shen-jit/blob/main/docs/processes.md)
-are other programs.
-
-```shen
-(define fib 0 -> 0 1 -> 1 N -> (+ (fib (- N 1)) (fib (- N 2))))
-(define fib-of [N Out] -> (channel.send Out [N (fib N)]))
-
-(let Replies (channel.new 4)
-     Out (channel.sender Replies)
-     _ (map (/. N (isolate.spawn fib-of [N Out])) [27 28 29 30])
-  (map (/. I (channel.receive Replies)) [1 2 3 4]))
-\\ [[27 196418] [28 317811] [29 514229] [30 832040]], in the order they finish
-```
-
-- **Channels:** `(channel.new N)` makes a channel that holds up to `N` messages, from 1 to 2^24, and returns its
-  receive endpoint, which only the isolate that made it reads. `(channel.sender R)` gives a send endpoint, which can go
-  anywhere.
-  `channel.send` waits while the channel is full and `channel.receive` while it is empty;
-  `(channel.receive-any [R1 R2 ...])` gives `[R Message]` from the first that has one, and
-  `(channel.wait-any [R1 R2 ...] Ms)` gives `[ready R]` for the first that has a message or is closed, waiting at
-  most `Ms` milliseconds, a whole number up to a day, or `[timeout]` if none has by then, and receives nothing.
-- **Closing:** a sender's `(channel.close S)` ends the stream: the receiver gets what was queued, and then a receive
-  raises "channel closed". `(channel.next R)` reads a stream instead, giving `[ok Message]` for each message and
-  `[closed]` at its end. The receiver's close drops what is queued. Sending on a closed channel raises "channel
-  closed". A channel is freed when its receiver closes it, reads its end, or ends, and not before.
-- **What crosses:** an argument or a message is copied, with its sharing and cycles. Symbols are the same in every
-  isolate, so a function goes by its name, and the isolate that gets it calls `(fn F)`. Closures made as the program runs, `fn`'s
-  among them, streams and pointers are refused. A receive endpoint moves to a new isolate only in its argument,
-  marked with `(channel.give R)`, and its old holder can no longer read it.
-- **An isolate starts as a program does:** its globals are unbound and its property list is empty, so it takes what
-  it needs from its argument. Only the program's first isolate, the builder, defines: `eval`, `load` and the like
-  raise an error in any other. Its heap starts at 128 KB and grows; `SHEN_JIT_MAX_HEAP` and `SHEN_JIT_GC_STRESS`
-  apply to each isolate's heap, and `SHEN_JIT_SEMISPACE` to the builder's alone.
-- **The end:** an isolate ends when its function returns, or raises an error that nothing catches, which is printed to
-  stderr. `(isolate.monitor I)` returns a receive endpoint that gets `[down I Reason]` when `I` ends, or at once if it
-  has, and is then closed, so that a second receive raises "channel closed", the reason being `normal`, the error's message, `killed`, or `ended` for one that could not start or ended long
-  enough ago that its record was used again. `(isolate.kill I)` raises "killed" at `I`'s next channel operation,
-  waking it if it waits on a channel, so that its handlers can clean up; an isolate busy elsewhere goes on until then,
-  or until it calls `(isolate.check-kill)`, as socket waits, connecting included, and reading standard input do
-  every 100 ms at most; on Windows, a kill reaches an isolate waiting for standard input only once input comes.
-  Killing the builder, or an isolate that has ended, does nothing.
-  `(isolate.self)` is the isolate running. The program ends when the builder does, or when any isolate calls
-  `(shen-jit.exit N)`; if several end it at once, the first does, and its status is the program's.
-- **The program is fixed while isolates run:** defining raises an error in the builder until every other isolate has
-  ended, as a monitor tells. Define everything first, then spawn.
-- **Isolates for the parts of a call:** `(isolate.spawn-each F Args G)` spawns `F` with each of `Args`, each with
-  a monitor, and gives `(G Started)`, `Started` being `[[I | Monitor] ...]`. If a spawn fails, or anything after it
-  raises, `G` included, it stops those it started, as `(isolate.stop-each Started)` does: kills them, waits for each
-  to end and closes the monitors, so that none is left waiting on one that is gone.
-- **Symbols are shared:** a symbol made in any isolate is the program's, and stays for as long as it runs, so names
-  that come from outside, such as a request's, belong in strings.
-- **A parallel map:** [`lib/parallel.shen`](https://github.com/tizoc/shen-jit/blob/main/docs/parallel.md) gives
-  `(parallel.map N F Xs)`, which maps a function named `F` over `Xs` with at most `N` isolates.
-- **Sharing data:** `(isolate.share X)` copies `X` once, with its sharing and cycles, into storage outside every
-  heap, and gives the copy, which crosses to isolates by pointer rather than being copied again, as a large table
-  many isolates read would. Any isolate can share. Nothing changes a shared value: a store into one of its vectors
-  or byte buffers raises, and a shared dictionary cannot change. It is never freed. What cannot be sent cannot be
-  shared.
-- **Saving:** `shen-jit.save-executable` refuses while other isolates run, and in any isolate but the builder.
-  `--save` writes the builder's image even so, as the program ends then: what isolates hold is not saved, and what
-  they add to the program meanwhile waits until the image is written. An endpoint or isolate saved in an image
-  belongs to the run that saved it: once loaded, a receive on it raises "channel closed".
-- **Types and namespaces:** an isolate has type `isolate`, and endpoints have types `(receiver A)` and `(sender A)`,
-  `A` being what crosses them. A typed function crosses by its name, which typechecks as the function: `(isolate.spawn
-  f X)` with `f : (A --> B)` and `X : A`. A lambda typechecks too, but cannot cross. Results have datatypes:
-  `isolate.down` for a monitor's message, whose reason is an `isolate.reason`, `isolate.started` for what
-  `spawn-each` gives, and `(channel.next A)`, `(channel.got A)` and `(channel.ready A)` for what `channel.next`,
-  `channel.receive-any` and `channel.wait-any` give. `isolate` and `channel` are namespaces: their functions are
-  system functions, which any namespace names as they are, and a client can also write `(use channel => c)` and
-  `(c.send S X)`. In a namespace, keep the types `isolate`, `receiver` and `sender`, and the tags `ok`, `closed`,
-  `ready`, `timeout`, `down`, `normal`, `killed` and `ended`, with `externals`.
-
-### Cleaning up
-
-`(shen-jit.finally Body Cleanup)` thaws Body, then Cleanup however Body ended, and gives Body's value.
-`(shen-jit.on-error Body Cleanup)` thaws Cleanup only if Body raised, for something its caller keeps once Body
-returns, as a function that opens one does. Either way the error raised is Body's, after Cleanup, and one that
-Cleanup raises too is added to its message, as in `"body; cleanup: close"`, so that it is neither lost nor put in
-Body's place.
-
-```shen
-(define first-byte
-  Path -> (let S (open Path in)
-            (shen-jit.finally (freeze (read-byte S)) (freeze (close S)))))
-```
-
-Their type is `(lazy A) --> (lazy B) --> A`. The libraries' scopes, such as `sqlite.with-database`, are built on
-them.
-
-### Sealing
-
-Kernel and port functions are sealed: calls to them are direct, and redefining one raises an error:
-`F is sealed and cannot be redefined`, or for the names the kernel exports, `F is a system function`. Your definitions are open: you can redefine them at any time, and their
-callers see the new definition.
-
-With `--seal`, `SHEN_JIT_SEAL=1` or `(shen-jit.seal +)`, new definitions are sealed too, so calls to them are
-direct, and they cannot be redefined. `(shen-jit.seal -)` turns that off. This gains little, as open calls are
-inlined too, and patched when a function is redefined.
-
-## Managed structs
-
-`defstruct` replaces numbered `absvector` slots with named fields and ordinary generated functions.
-It is available at startup. In a source file:
-
-```shen
-(defstruct entry key (mutable value))
-(define value-of (:entry value <- V ...) -> V)
-(let E (:entry value <- 42 key <- "answer")
-  (do (entry.value-> E 43) (value-of E)))    \\ 43
-```
-
-`(:entry f <- V ...)` constructs a record with labelled fields in any order, and as a pattern matches
-one, with `...` leaving out the fields it does not name. One function can match records of several
-structs, a clause each, and `(struct.union shape circle rect)` makes such a set a type for typed code.
-
-Fields are read-only by default; mutable fields get `->` setters that return the record. Fields may have
-types, `(x : number)`, which typed code then checks. A record prints
-as `#<entry key: "answer" value: 43>`, or through a function of its own, `(printer F)`. Construction
-allocates one managed vector and can trigger GC; field reads and writes allocate nothing on success.
-The [struct reference](https://github.com/tizoc/shen-jit/blob/main/docs/structs.md) covers positional
-constructors, construction and matching, namespace exports, reload rules and the current limitations.
 
 ## Libraries
 
@@ -1009,25 +1056,6 @@ flat profile at exit, and `SHEN_JIT_STATS=1` prints the collector's work and the
 | `SHEN_JIT_SLOW_PRIMS=1` | Sends every primitive to C, for testing |
 
 `SHEN_JIT_PROFILE`, `SHEN_JIT_STATS`, `SHEN_JIT_PERF_MAP` and `SHEN_JIT_SLOW_PRIMS` are on when set to anything, even 0.
-
-### Differences from Shen/Scheme
-
-- **Code holds only what the reader makes.** A definition whose code holds a value with no syntax, such as a vector
-  put into a form given to `eval`, is refused, where Shen/Scheme keeps the value as a constant.
-- **No stlib in the default image.** Only the kernel and its extensions for features, programmable pattern matching, namespaces and the launcher are in use: see
-  [The standard library](#the-standard-library).
-- **Fixnums only.** Integers are 62-bit, and a result outside that range raises `integer overflow`.
-- **Sealing.** Internal kernel functions cannot be redefined, where Shen/Scheme accepts such definitions.
-- **Numbers hash by value.** A real and an integer that are `=` have the same `hash`, where Shen/Scheme's tells them apart.
-- **No `thread`.** Shen/Scheme's `(thread Frozen)` is not provided. [Isolates](#isolates) run in parallel, each
-  with a heap of its own.
-- **Definitions are factorised,** as with `(factorise +)`: a guard that consecutive clauses share runs once, so
-  guards should have no effects, and a vector pattern may read its first element before a clause that does not
-  need it, which raises if that element was never set.
-- **On Windows,** a few things differ: see [On Windows](#on-windows).
-
-[docs/semantics.md](https://github.com/tizoc/shen-jit/blob/main/docs/semantics.md) defines the behaviour in full, and
-marks each difference with *Deviation*.
 
 ### Building and testing
 

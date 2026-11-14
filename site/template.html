@@ -75,6 +75,7 @@ body:not(.doc) main > p:first-of-type { font-size: 1.25rem; line-height: 1.5; ma
 main > h1 { font: 600 2.125rem/1.2 var(--mono); margin: 0 0 1rem; letter-spacing: -0.02em; }
 main > h1 i { color: var(--slash); font-style: normal; }
 section.level1 > h1 { margin: 3.5rem 0 -1.25rem; }
+section.level1 > h1 + :not(section) { margin-top: 2.5rem; } /* a group with no sections starts below its label, as a section does */
 section.level2 { padding-top: 2.5rem; }
 section.level2 > h2 { font: 600 1.4375rem/1.3 var(--mono); margin: 0 0 0.85rem; letter-spacing: -0.01em; text-wrap: balance; }
 section.level2 > h2::before { content: "/ "; color: var(--slash); }

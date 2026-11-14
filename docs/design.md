@@ -1,6 +1,6 @@
 # How Shen/JIT works
 
-Shen/JIT is a small implementation of Shen in C. KLambda is lowered to a register bytecode by a
+Shen/JIT implements Shen in C, with its own runtime. KLambda is lowered to a register bytecode by a
 lowerer written in Shen, every function is compiled to native code by a whole-function baseline JIT built on
 SLJIT, memory is managed by a copying collector, and the system starts from a heap image.
 
