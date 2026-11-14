@@ -325,7 +325,14 @@ Lowering rules, the collector and the kernel port have their own sections.
   failing `hd`, `tl`, `<-address`, `address->`, `value` and `set` jump to it. `value` under `trap-error` 6.1 to 1.8
   ns, failing `<-address` 5.5 to 1.85 ns, canonical 0.95 open and 0.946 sealed.
 - **No handler stack at all** (2026-11-02, M3 Max, A/B). When only those jumps can reach the handler. `<-address`
-  1.87 to 1.37 ns (earlier prototype 1.21), canonical 0.993.
+  1.87 to 1.37 ns (earlier prototype 1.21), canonical 0.993. Undone on 2026-11-14, below.
+- **A record for every handler again** (2026-11-14, Apple M3 Max and Linux x86-64 on a Ryzen 5, against the build
+  with virtual handlers, two interleaved rounds each). Every `trap-error` pushes its record once more: the walk that
+  found handlers only jumps could reach, their flag and their own push, pop and catch are gone, 54 lines of `jit.c`.
+  Quiet handlers, the jumps to them and lazy C errors stay. Open and sealed suites, kernel, stlib and THORN gave
+  1.016, 1.005, 1.013, 0.976 and 0.997 on arm64, and 0.996, 1.002, 1.001, 0.982 and 0.997 on x86-64. A million
+  `(trap-error (hd X) (/. E false))` cost more, about 1.3 to 1.5 times on x86-64 whether `hd` succeeds or fails,
+  and unsteadily on arm64, but in samples of 1 to 3 ms: a loop that does little but catch pays for the record.
 
 ### Compile time and code memory
 

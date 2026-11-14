@@ -217,7 +217,7 @@ by a status check, and `setjmp` and `longjmp` are not used.
 
 The kernel raises in ordinary control flow, so this stays cheap. A handler that never reads its exception is quiet, and
 an error raised while it is innermost builds no exception at all. Under a quiet handler of the same code, a primitive that would
-raise jumps to it directly, popping the record, and if nothing else in the protected code can raise, no record is pushed at all.
+raise jumps to it directly, popping the record.
 
 ### Re-entry and stack growth
 

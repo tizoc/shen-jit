@@ -842,56 +842,11 @@ static uint32_t quiet_catch(const Emit *e)
     return e->nhandlers ? e->handlers[e->nhandlers - 1] : NONE;
 }
 
-/* A quiet handler that is never pushed (virtual_handler) is marked by this
-   bit in e->handlers and catch_label: its errors jump to it, and there is
-   nothing to pop. */
-#define VIRTUAL 0x80000000u
-
 static void jump_to_catch(Emit *e, uint32_t label)
 {
-    if (!(label & VIRTUAL))
-        sljit_emit_op2(e->c, SLJIT_SUB, VMF(nhandlers), VMF(nhandlers), IMM(1));
+    sljit_emit_op2(e->c, SLJIT_SUB, VMF(nhandlers), VMF(nhandlers), IMM(1));
     e->fixups[e->nfixups].jump = sljit_emit_jump(e->c, SLJIT_JUMP);
-    e->fixups[e->nfixups++].label = label & ~VIRTUAL;
-}
-
-/* Whether the quiet handler pushed at words[i] can stay off the handler
-   stack: up to its pop-handler there are only moves, constants, jumps
-   within, and primitives that either never raise or, under a quiet handler
-   of this code, raise by jumping to it. Nothing there can then reach the
-   handler but those jumps, and nothing reads the handler stack. */
-static bool virtual_handler(const uint32_t *w, size_t i, size_t n, const size_t *label_pos)
-{
-    size_t far = 0;
-    for (i += insn_length(w + i); i < n; i += insn_length(w + i)) {
-        const uint32_t *p = w + i;
-        switch (p[0]) {
-        case OP_POP_HANDLER:
-            return far < i;
-        case OP_JUMP:
-            far = label_pos[p[1]] > far ? label_pos[p[1]] : far;
-            break;
-        case OP_JUMP_IF_FALSE:
-            far = label_pos[p[2]] > far ? label_pos[p[2]] : far;
-            break;
-        case OP_MOVE: case OP_CONST: case OP_CAPTURE: case OP_LABEL:
-            break;
-        case OP_PRIM:
-            switch (p[2]) {
-            case P_HD: case P_TL: case P_GET_ADDRESS: case P_SET_ADDRESS: case P_VALUE:
-            case P_SET: case P_SIMPLE_ERROR: case P_EQ: case P_CONSP: case P_FIXNUMP: case P_SYMBOLP:
-            case P_ABSVECTORP: case P_STRINGP: case P_NUMBERP: case P_TAGGEDP: case P_VECTORP:
-            case P_PVAR: case P_PVARP: case P_PVAR_OFFSET: case P_SAMEP:
-                break;
-            default:
-                return false;
-            }
-            break;
-        default:
-            return false;
-        }
-    }
-    return false;
+    e->fixups[e->nfixups++].label = label;
 }
 
 /* The bodies inlined at this point, interned once per stack. */
@@ -3887,14 +3842,6 @@ static void *compile_code(VM *vm, V code)
             const uint32_t *h = words + label_pos[p[1]];
             h += insn_length(h);
             size_t quiet = h >= words + nwords || h[0] != OP_EXCEPTION;
-            if (quiet && !e.slow_prims && virtual_handler(words, i, nwords, label_pos)) {
-                e.handlers[e.nhandlers++] = p[1] | VIRTUAL;
-                e.at_label[p[1]].seen = true;
-                e.at_label[p[1]].cached = NONE; /* reached by jumps from slow paths */
-                e.at_label[p[1]].kept[0] = e.at_label[p[1]].kept[1] = NONE;
-                e.at_label[p[1]].pairs = 0;
-                break;
-            }
             e.handlers[e.nhandlers++] = quiet ? p[1] : NONE;
             sljit_emit_op1(c, SLJIT_MOV, R0, VMF(nhandlers));
             struct sljit_jump *full = sljit_emit_cmp(c, SLJIT_GREATER_EQUAL, R0, VMF(handlers_cap));
@@ -3924,9 +3871,8 @@ static void *compile_code(VM *vm, V code)
             break;
         }
         case OP_POP_HANDLER: {
-            uint32_t top = e.handlers[--e.nhandlers];
-            if (top == NONE || !(top & VIRTUAL)) /* NONE: a handler that reads the exception */
-                sljit_emit_op2(c, SLJIT_SUB, VMF(nhandlers), VMF(nhandlers), IMM(1));
+            e.nhandlers--;
+            sljit_emit_op2(c, SLJIT_SUB, VMF(nhandlers), VMF(nhandlers), IMM(1));
             break;
         }
         case OP_EXCEPTION:
