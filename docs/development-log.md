@@ -2139,6 +2139,27 @@ isolates, with about 250 lines to spare; what went is below, and the suites pass
   dropping the check that a definition can be promoted before any of it is (about 50 lines, leaving published symbols
   and partial copies behind a refused one).
 
+### A balanced parallel map (2026-11-14, Apple M3 Max, against the map with one run for each isolate)
+
+`parallel.map` gave each isolate one run of `Xs`, so the map waited for the slowest run, however idle the others.
+It now cuts `Xs` into up to four runs for each isolate and sends an isolate the next as it replies, on a channel of
+its own that the spawn gives it; replies come back on one channel, with the monitors behind it, as before. Once a
+run fails no further run starts, and an isolate whose run failed ends; the first error in the order of `Xs` is still
+the one raised, as every run before a failed one was sent before it. 86 lines of code became 134, without comments
+and blank lines.
+
+- **Checked:** with 2 isolates, 16 elements and the first taking 100 ms, the isolate with the slow element ran 2,
+  its own run, where one run each gave it 8; the map took 0.101 s. A case in `tests/parallel.shen` checks it.
+- **A kill caught as `F` runs:** the first version went back to wait for a run after replying with the error, so an
+  interrupted map, which kills its isolates, left them waiting and the REPL could not define again; `tests/cli.sh`
+  caught it. Ending an isolate after a failed run fixed it.
+- **Timed** (the best of 5 in a process, three processes for each library in alternation): 64 elements, each
+  counting down from 100,000 times its value, took 33.9 ms with 4 isolates for rising values where one run each
+  took 47.9, 30.2 against 48.0 for falling ones, and 17.7 against 26.4 with 8 isolates; a plain `map` over the
+  rising values took 105 to 113 ms. 64 equal elements took 45.9 against 45.1, within the noise. Incrementing
+  1,000,000 numbers took 29.5 against 35.4 with 4 isolates and 29.4 against 30.3 with 8, probably because copying
+  smaller runs overlaps the isolates' work.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on

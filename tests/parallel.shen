@@ -24,11 +24,24 @@
 (define par.range
   N N -> []
   I N -> [I | (par.range (+ I 1) N)])
+(define par.spin Until -> (if (> (get-time unix) Until) done (par.spin Until)))
+(define par.who
+  slow -> (do (par.spin (+ (get-time unix) 0.1)) (isolate.self))
+  _ -> (isolate.self))
+(define par.count
+  _ [] -> 0
+  X [X | Xs] -> (+ 1 (par.count X Xs))
+  X [_ | Xs] -> (par.count X Xs))
 
 (set *par.global* builder)
 
 (par.check "squares, in order" (map (function par.square) (par.range 0 100))
   (freeze (parallel.map 7 par.square (par.range 0 100))))
+\\ A run of two for each of eight: the other isolate takes the rest while the slow one runs, where
+\\ a run of eight each would leave the slow one eight.
+(par.check "a slow element holds up only its own run" true
+  (freeze (let Who (parallel.map 2 par.who [slow q q q q q q q q q q q q q q q])
+            (< (par.count (hd Who) Who) 8))))
 (par.check "more isolates than elements" [1 4 9] (freeze (parallel.map 16 par.square [1 2 3])))
 (par.check "one isolate" [1 4 9] (freeze (parallel.map 1 par.square [1 2 3])))
 (par.check "nothing to map" [] (freeze (parallel.map 4 par.square [])))
@@ -59,7 +72,7 @@
 \\ A map whose spawn fails closes the channels it made for replies.
 (par.check "a failed launch's replies are closed" "channel closed"
   (freeze (let R (channel.new 1)
-               _ (parallel.close-replies [R])
+               _ (parallel.close-quietly [R])
             (trap-error (channel.receive R) (/. E (error-to-string E))))))
 (par.check "a map whose argument cannot cross raises" true
   (freeze (trap-error (do (parallel.map 2 [par.square (/. X X)] [1 2]) false) (/. E true))))

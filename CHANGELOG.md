@@ -9,6 +9,9 @@ All notable changes to this project are documented in this file. The format is b
 
 - The example applications and the examples in `tools/` use namespaces, as the libraries do; their names are
   unchanged.
+- `parallel.map` sends each isolate a run at a time, up to four runs for each, the next as it finishes one, rather
+  than one run each, so that slow elements hold up only the isolate that has them. No run starts after one has
+  failed.
 
 ## [0.8] - 2026-11-14
 

@@ -1118,7 +1118,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-jit`, `make test-ops` | The JIT and the instructions, on small programs |
 | `make test-kl` | The `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
 | `make test-isolates` | Isolates: what one starts with, spawning, channels, monitors, kill, sharing, what crosses, types and namespace clients, and the same with a collection at every allocation in `make test-isolates-stress` |
-| `make test-parallel` | `parallel.map` over isolates: order, errors, what crosses and shared arguments |
+| `make test-parallel` | `parallel.map` over isolates: order, balance, errors, what crosses and shared arguments |
 | `make test-kernel` | The kernel's test suite, the extension tests, the contract examples and `tests/cli.sh` |
 | `make test-stlib` | The executable with the standard library |
 | `make test-thorn` | THORN, from the kernel, with no time limit: its inference counts and what goes unproved, as on Shen/Scheme |
