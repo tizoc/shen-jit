@@ -2078,6 +2078,31 @@ with what was tried and rejected:
   tracked: tracking in the collector, the copier and the channel table, for a leak that closing the endpoint, or the
   receiver ending, avoids. It stays a documented limit.
 
+### Less code for isolates (2026-11-14, Apple M3 Max, against the commit before)
+
+Two reviews read the branch for size, not bugs, and found it proportionate to going from a global lock to parallel
+isolates, with about 250 lines to spare; what went is below, and the suites pass as before.
+
+- **Down messages, one way.** They were made in the ending isolate's heap and copied out, between two holds of the
+  lock, with an `ending` flag for monitors made in between, and laid out by hand only for an isolate that could not
+  start. They are all laid out by hand now, from the record that keeps why it ended, as a symbol or text, in one hold
+  of the lock that tells the monitors, frees the channels and marks it ended; an isolate that could not start ends the
+  same way, and so does a monitor of one that has ended. Monitoring what is not an isolate raises, where it gave
+  `[down X ended]`.
+- **Smaller pieces.** One `grow_array` for the doubling arrays, nine of them; a message's blocks keep their use alone,
+  as one larger than a block is alone in it, so a large string or byte buffer is found without a search; one scan of
+  endpoints serves receive, receive-any and wait-any; one `stopped` for a kill or an interrupt; promotion derives its
+  slot ranges from the code it copied, keeps one undo array, and ends through one function, which gives the foreign
+  path the undo it lacked; loading an image no longer rebuilds the list of free global numbers, which cells never had
+  either, at the cost of numbers dead at the save staying unused. With the down messages, the runtime is 154 lines
+  shorter, `isolate.c` 1,614 lines to 1,494.
+- **Rejected:** always waking a channel's receiver, dropping `receiver_waiting` (15 lines, but an isolate blocked in a
+  send would wake for every message to any of its channels); receive-any in the port over wait-any and receive (one
+  more lock round trip a message); running Datalog's parts through `parallel.map` (a library dependency); dropping
+  parts mode (about 170 lines, but measured 3.4 and 4.8 times faster on the skewed join and the sparse closure); and
+  dropping the check that a definition can be promoted before any of it is (about 50 lines, leaving published symbols
+  and partial copies behind a refused one).
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on

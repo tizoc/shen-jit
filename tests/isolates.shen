@@ -510,6 +510,9 @@
 (define pt.printed
   [_ Out] -> (channel.send Out [(make-string "~S" (@p 1 2)) (make-string "~S" (shen.dict 2))]))
 
+(pt.check "monitoring what is not an isolate raises" "isolate.monitor: 5 is not an isolate"
+  (pt.message (freeze (isolate.monitor 5))))
+
 (pt.check "a monitor's second receive raises rather than waits" "channel closed"
   (let M (isolate.monitor (isolate.spawn pt.id 1))
        _ (channel.receive M)

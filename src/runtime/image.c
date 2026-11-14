@@ -381,29 +381,6 @@ VM *image_load(const char *path, size_t min_semispace_words, size_t stack_words,
         if (symbol_published(sym) && symbol_global(sym) >= vm->program->published_global_top)
             vm->program->published_global_top = symbol_global(sym) + 1;
     }
-    /* The numbers no symbol holds are free. */
-    unsigned char *held = calloc(vm->program->nglobals, 1);
-    if (!held)
-        goto fail;
-    for (uint64_t *s = p->base; s < p->symbols_next; s += SYM_WORDS)
-        if (s[0] && symbol_global(tagged(s, TAG_SYMBOL)) < vm->program->nglobals)
-            held[symbol_global(tagged(s, TAG_SYMBOL))] = 1;
-    for (size_t n = 1; n < vm->program->nglobals; n++) {
-        if (held[n])
-            continue;
-        if (vm->program->nfree_globals == vm->program->free_globals_cap) {
-            size_t cap = 2 * vm->program->free_globals_cap + 64;
-            size_t *list = realloc(vm->program->free_globals, cap * sizeof *list);
-            if (!list) {
-                free(held);
-                goto fail;
-            }
-            vm->program->free_globals = list;
-            vm->program->free_globals_cap = cap;
-        }
-        vm->program->free_globals[vm->program->nfree_globals++] = n;
-    }
-    free(held);
     /* The code objects take their constant slots again (heap.c), those of the program for good. */
     for (uint64_t *s = vm->space; s < vm->live_end; s += is_header(*s) ? obj_words(*s) : 2)
         if (is_header(*s) && hdr_type(*s) == T_CODE)

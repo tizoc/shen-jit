@@ -5,7 +5,22 @@
 #include "value.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+
+/* Room for one more item in an array of n of them, each of size bytes, with room for *cap: the
+   array, moved if it had to grow, doubling from first, or NULL, leaving it as it was, without
+   memory. */
+static inline void *grow_array(void *array, size_t *cap, size_t n, size_t size, size_t first)
+{
+    if (n < *cap)
+        return array;
+    size_t c = *cap ? 2 * *cap : first;
+    void *grown = realloc(array, c * size);
+    if (grown)
+        *cap = c;
+    return grown;
+}
 
 /* Root arrays: values outside the heap whose cells never move. They grow by
    adding chunks; the chunk directory is replaced when it fills, and the old one
