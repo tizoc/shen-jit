@@ -931,6 +931,11 @@ all that Shen/Scheme and the earlier prototype replace.
   `shen.+string?` testing the type first: failing patterns 0.57-0.62.
 - **Reader rules** (2026-11-02, Apple M3 Max). Loops over runs of bytes where the kernel's rules build a parse result
   per byte. Reading 1,000 definitions 10.6 → 5.8 ms; 13 packaged kernel sources 26 → 22 ms (Shen/Scheme 86).
+  Removing them was tried again on 2026-11-14 (Apple M3 Max, four alternating rounds, the best of 7 in each), as
+  the kernel suite, the stlib build and THORN, which read little source, had moved within 3% without them in a
+  triage, and rejected: without them, reading 1,000 generated definitions took 13.3 ms against 11.0, the 16 kernel
+  sources 26.3 against 24.8 and 26 of the libraries 140 against 133, while loading the HTTP stack took 119 ms
+  against 118.
 - **Strings to byte lists** (2026-11-07, Apple M3 Max, against the build before, three interleaved rounds).
   Reported by @pyrex41 in #16. The kernel's `shen.str->bytes` takes `tlstr` at every byte, copying the rest
   of the string each time. The port now reads one byte buffer backwards into a list. Five passes of
