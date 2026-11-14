@@ -400,7 +400,7 @@ int main(int argc, char **argv)
     vm = vm_create(1 << 22, 1 << 16);
     if (!vm || !jit_init(vm) || !load_stage0_dir(argv[1]) || !sj_init_host(vm))
         return 1;
-    *cell_value(vm, symbol_cell(intern_cstr(vm, "shen.*gensym*"))) = fix(0);
+    *global_slot_new(vm, intern_cstr(vm, "shen.*gensym*")) = fix(0);
     bool stress = argc > 3 && strcmp(argv[3], "--stress") == 0;
     vm->stress = stress;
     run_cases(argv[2]);

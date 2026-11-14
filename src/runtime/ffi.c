@@ -230,31 +230,27 @@ static void *resolve(VM *vm, uint64_t *f)
         sj_raise_text(vm, text);
         return NULL;
     }
-    f[FOREIGN_ADDRESS] = (uint64_t)(uintptr_t)address;
+    /* Isolates may find it at once: they store the same address. */
+    __atomic_store_n(&f[FOREIGN_ADDRESS], (uint64_t)(uintptr_t)address, __ATOMIC_RELAXED);
     return address;
 }
 #endif
 
-/* What a call's arguments became. Strings go in space, or in blocks if they are too long. A
-   call that gives up the lock works on copies of its byte buffers, in blocks too, since another
-   thread's collection may move them: argument says which each one copies, or -1. */
+/* What a call's arguments became. Strings go in space, or in blocks if they are too long. Byte
+   buffers are passed where they are: nothing else moves this heap during a call. */
 typedef struct {
     Call call;
     char space[STRING_SPACE];
     size_t used;
     char *block[MAX_WORDS];
-    int argument[MAX_WORDS];
     unsigned nblocks;
-    bool copy_buffers;
 } Converted;
 
-static char *new_block(Converted *c, size_t size, int argument)
+static char *new_block(Converted *c, size_t size)
 {
     char *p = malloc(size ? size : 1);
-    if (p) {
-        c->block[c->nblocks] = p;
-        c->argument[c->nblocks++] = argument;
-    }
+    if (p)
+        c->block[c->nblocks++] = p;
     return p;
 }
 
@@ -306,7 +302,7 @@ static V convert(VM *vm, Converted *c, unsigned type, V v, int i)
         if (c->used + length + 1 <= STRING_SPACE) {
             to = c->space + c->used;
             c->used += length + 1;
-        } else if (!(to = new_block(c, length + 1, -1))) {
+        } else if (!(to = new_block(c, length + 1))) {
             return sj_raise(vm, "out of memory");
         }
         memcpy(to, string_bytes(v), length);
@@ -327,19 +323,7 @@ static V convert(VM *vm, Converted *c, unsigned type, V v, int i)
     case F_BYTES: {
         if (!is_object(v) || obj_type(v) != T_BYTES)
             return sj_raise_value(vm, "foreign: ~S is not a byte buffer", v);
-        char *to = string_bytes(v);
-        if (c->copy_buffers) {
-            /* A buffer given twice is one copy, which goes back once. */
-            for (unsigned k = 0; k < c->nblocks; k++)
-                if (c->argument[k] >= 0 && vm->fp[2 + c->argument[k]] == v) {
-                    put_word(&c->call, (W)(uintptr_t)c->block[k]);
-                    return V_NIL;
-                }
-            if (!(to = new_block(c, string_length(v), i)))
-                return sj_raise(vm, "out of memory");
-            memcpy(to, string_bytes(v), string_length(v));
-        }
-        put_word(&c->call, (W)(uintptr_t)to);
+        put_word(&c->call, (W)(uintptr_t)string_bytes(v));
         return V_NIL;
     }
     default:
@@ -372,22 +356,19 @@ V h_foreign(VM *vm)
     size_t n = vm->count;
     if (n != f[FOREIGN_ARITY])
         return sj_raise_arity(vm, desc[DESC_NAME], (size_t)f[FOREIGN_ARITY], n);
-    void *function = (void *)(uintptr_t)f[FOREIGN_ADDRESS];
+    void *function = (void *)(uintptr_t)__atomic_load_n(&f[FOREIGN_ADDRESS], __ATOMIC_RELAXED);
     if (!function && !(function = resolve(vm, f)))
         return V_CLEARED;
     int64_t flags = fixval(desc[DESC_FLAGS]);
     unsigned result = (unsigned)fixval(desc[DESC_RESULT]), fixed = (unsigned)(flags >> FLAG_FIXED_SHIFT);
-    if (result == F_LIMIT && vm->worker_owner)
-        return sj_raise(vm, "worker: C API procedures and callbacks are not supported");
     if (result == F_LIMIT)
         return call_procedure(vm, function, n);
     Converted c;
     memset(&c.call, 0, sizeof c.call);
     c.used = 0;
     c.nblocks = 0;
-    /* Without other threads, nothing can happen while it waits, so it just waits. */
-    bool blocking = (flags & FLAG_BLOCKING) && vm->threads;
-    c.copy_buffers = blocking;
+    /* A call that may wait (FLAG_BLOCKING) is an ordinary call: nothing else moves this heap
+       meanwhile, so buffers are passed as they are. */
     bool buffers = false;
     for (size_t i = 0; i < n; i++) {
         unsigned type = (unsigned)fixval(desc[DESC_TYPES + i]);
@@ -398,7 +379,6 @@ V h_foreign(VM *vm)
         }
     }
 
-    Thread *t = blocking ? thread_leave(vm) : NULL;
     W word = 0;
     D real = 0;
     if (fixed)
@@ -412,17 +392,9 @@ V h_foreign(VM *vm)
 #else
     int error = errno, c_error = error;
 #endif
-    if (t)
-        thread_enter(t);
     vm->foreign_error = error;
     vm->foreign_c_error = c_error;
 
-    /* Everything read from the heap before the call may have moved, but the slots are up to date. */
-    for (unsigned i = 0; i < c.nblocks; i++)
-        if (c.argument[i] >= 0) {
-            V buffer = vm->fp[2 + c.argument[i]];
-            memcpy(string_bytes(buffer), c.block[i], string_length(buffer));
-        }
 
     V out;
     switch (result) {
@@ -431,7 +403,7 @@ V h_foreign(VM *vm)
     case F_UINT32: out = fix((uint32_t)word); break;
     case F_BOOL: out = (word & 0xFF) ? V_TRUE : V_FALSE; break;
     case F_DOUBLE: out = make_real(vm, real); break;
-    case F_STRING: out = result_string(vm, (const char *)(uintptr_t)word, buffers && !blocking); break;
+    case F_STRING: out = result_string(vm, (const char *)(uintptr_t)word, buffers); break;
     case F_POINTER:
         out = word ? make_pointer(vm, word, ptr(ptr(vm->fp[1])[FOREIGN_DESC])[1 + DESC_KIND]) : V_NIL;
         break;
@@ -454,6 +426,10 @@ V h_foreign(VM *vm)
 static V define_foreign(VM *vm)
 {
     V name = vm->args[0], desc = vm->args[1];
+    if (!vm_is_builder(vm))
+        return sj_raise(vm, "only the builder can define functions");
+    if (isolates_running(vm->program))
+        return sj_raise(vm, "the program cannot change while other isolates run");
     if (!is_symbol(name))
         return sj_raise_value(vm, "shen-jit.foreign: ~S is not a symbol", name);
     if (symbol_sealed(name))
@@ -494,10 +470,14 @@ static V define_foreign(VM *vm)
     V proc = make_foreign(vm, desc, arity);
     if (proc == V_CLEARED)
         return sj_raise(vm, "out of memory");
+    const char *why = NULL;
+    proc = program_promote_foreign(vm, proc, &why);
+    if (proc == V_CLEARED)
+        return sj_raise_text_value(vm, why, vm->args[0]);
     name = vm->args[0]; /* it may have moved */
     size_t cell = symbol_cell(name);
-    if (vm->redefine)
-        vm->redefine(vm, cell);
+    if (vm->program->redefine)
+        vm->program->redefine(vm, cell);
     *cell_function(vm, cell) = proc;
     if (vm->seal_user)
         symbol_seal(name);
@@ -648,7 +628,7 @@ static void misuse(VM *vm, const char *who, const char *what)
 
 static void check_pointer(VM *vm, V v, const char *who)
 {
-    if (is_ptr(v) && !vm_in_heap(vm, ptr(v)))
+    if (is_ptr(v) && !vm_in_heap(vm, ptr(v)) && !in_program(vm, ptr(v)))
         misuse(vm, who, "a value from before a collection: see rule 1 in shen.h");
 }
 
@@ -766,7 +746,7 @@ static shen_value api_global(shen_vm *sv, const char *name)
 {
     VM *vm = vm_of(sv);
     V symbol = symbol_find(vm, name, strlen(name));
-    V value = symbol == V_NIL ? V_CLEARED : *cell_value(vm, symbol_cell(symbol));
+    V value = symbol == V_NIL ? V_CLEARED : global_value(vm, symbol);
     return value == V_CLEARED ? V_NONE : value;
 }
 
@@ -880,6 +860,8 @@ static int api_vector_set(shen_vm *sv, shen_value v, int64_t i, shen_value x)
     VM *vm = vm_of(sv);
     checked(vm, x, "shen_vector_set was given");
     if (!has_type(v, T_VECTOR) || i < 0 || (uint64_t)i >= hdr_size(ptr(v)[0]))
+        return 0;
+    if (hdr_shared(ptr(v)[0]) || in_program(vm, ptr(v))) /* never changes, nor points into a heap */
         return 0;
     ptr(v)[1 + i] = x;
     return 1;
@@ -1010,14 +992,14 @@ static shen_value api_exception_message(shen_vm *sv)
 
 static void *api_release(shen_vm *sv)
 {
-    VM *vm = vm_of(sv);
-    return vm->threads ? thread_leave(vm) : NULL;
+    (void)sv; /* nothing else runs on this isolate's heap, so C waits as it likes */
+    return NULL;
 }
 
 static void api_acquire(shen_vm *sv, void *token)
 {
-    if (token)
-        thread_enter(token);
+    (void)sv;
+    (void)token;
 }
 
 static const struct shen_api api_table = {

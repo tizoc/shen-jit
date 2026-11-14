@@ -5,6 +5,81 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- Isolates: `(isolate.spawn F X)` runs a function the program defined on an OS thread of its own, with its own
+  heap, globals and property list, so isolates run on several cores at once. They talk through channels
+  (`channel.new`, `channel.sender`, `channel.send`, `channel.receive`, `channel.receive-any`, `channel.next`,
+  `channel.wait-any`, `channel.close`, and `channel.give` for a receive endpoint a spawn hands over), which copy
+  what is sent, a large byte buffer or string
+  once, in the sender; `isolate.self` is the one running, `isolate.monitor` watches them,
+  and `isolate.kill` stops one at its next channel operation or `isolate.check-kill`, which socket waits call.
+  Only the first isolate, the builder, defines, and the program is fixed while other isolates run:
+  defining raises until they have ended. Symbols are the same in every isolate. `isolate.spawn-each` and
+  `isolate.stop-each` start an isolate for each part of a call and stop them if its wait raises. Ctrl-C at the REPL
+  ends a wait on a channel, and kills the isolates the interrupted input spawned. `isolate` and `channel` are
+  namespaces of the image, with types for typed programs: `isolate`, `(receiver A)` and `(sender A)`, and datatypes
+  for results.
+- `(isolate.share X)` copies `X` once into storage outside every heap, which isolates read by pointer rather than
+  as copies; nothing changes it, as stores into its vectors and byte buffers raise, and it is never freed.
+- `(parallel.map N F Xs)` in `lib/parallel.shen`, over isolates: a function named `F` mapped over `Xs` with at most
+  `N` isolates, the results in order. It replaces the library's worker scopes and `lib/parallel-map.shen`.
+- Tree-sitter languages loaded in the builder parse in any isolate.
+- Datalog programs run in isolates: `(datalog.share Name)` prepares a program and gives it as a shared value, which an
+  isolate takes up with `(datalog.use Shared)`. An isolate joins in the orders the builder's runs chose, and otherwise in
+  the order with no sizes to go by.
+- `(datalog.run-parallel N Name Facts)` runs a program whose rules keep the key of their first column in at most `N`
+  isolates, each for some of the keys, and gives a database of the parts, which counts, membership and queries read;
+  `datalog.partition` says whether a program runs so. A recursive program that cannot run so runs its joins in the
+  isolates instead: each holds the whole database and takes part of each round's new tuples, and the result is a
+  database as `datalog.run` gives; `datalog.partition` gives `[joins Reason]` for it. It does so in as many isolates as
+  the program's last run says pay, or runs it whole. Others run as `datalog.run` does.
+- The `source-deps` example's batch queries, with `--workers N`, run in isolates over the graph shared once; no
+  worker image is needed.
+- Grammars work in isolates: a load compiles a rule's loops after the form defining it, and prepares the streaming
+  reads that code names. `shen-jit.after-form` registers a function to run after each form of a load, and
+  `shen-jit.at-end` one to run once as the registering isolate ends, and `shen-jit.at-guards-dead` one to run then
+  as its guarded pointers die, in rounds.
+- The handle library releases what an isolate's handles hold as the isolate ends, but for handles its globals still
+  hold, which are left to the system, as a program's are when it ends.
+
+### Changed
+
+- The HTTP listener serves each connection in an isolate of its own, in parallel, supervised by the program that calls
+  the new `http.run` until the server is stopped; `http.listen` binds and returns the server without serving, and
+  `http.wait` gives the result once `http.run` has returned. A handler goes by name, as `f` or `[f Arg ...]`, which
+  is called with the arguments and then the request, rather than as a closure, and stops its server with
+  `(http.stop (http.current-server))`. Connections left once `shutdown-grace` has passed are killed. The
+  `sqlite-http` example keeps a write-ahead log, and its database belongs to one isolate, which holds it open while
+  it serves and does each request's work in turn, reached through a handler argument: writers no longer wait in
+  SQLite's busy handler.
+- A `blocking` foreign call passes byte buffers where they are, rather than copies, and the flag changes nothing now,
+  nor do `shen_release` and `shen_acquire` in the C API.
+- A definition whose code holds a value with no syntax, such as a vector put into a form given to `eval`, or a
+  native `(const E)` whose value is one, is refused when it is defined.
+- A grammar's loops compile after the form defining the rule, in a load, and at once outside one, rather than at
+  their first call; a guard that calls a function defined after the rule is tested in place, without a table.
+- Installed definitions, with what their code reaches, and every symbol now live in a program space that
+  collections neither copy nor scan, so collections no longer copy the program. A redefined function's old
+  versions stay there. `SHEN_JIT_STATS` reports the program space.
+- A global's value is kept in a slot of the runtime's own, which a symbol gets once code names it as a global or it
+  is set; `SHEN_JIT_STATS` reports function cells and global slots.
+- Arities are kept beside function cells, not in the property vector: `(get F arity)` finds none. `arity` and `fn`
+  are unchanged. A primitive's function cell now holds a definition, so it is a procedure as any function is.
+- Calling a definition's procedure, as `shen-jit.function` gives it, with all its arguments at once now works, where
+  it applied them one at a time and failed.
+- The byte primitives read strings as they read byte buffers, and refuse to store into one. `shen-jit.bytes?` is
+  still false for a string, `buffer.wrap` still refuses one as storage, and the FFI's `bytes` arguments take byte
+  buffers alone.
+
+### Removed
+
+- `thread`, and the threads under a global lock it started: isolates run in parallel instead.
+- The worker scopes, `lib/parallel.shen`'s scopes and byte API, `lib/parallel-map.shen` with
+  `tools/parallel-map.shen`, and `lib/datalog-parallel.shen`, with their primitives and the shared read-only view, and
+  the `source-deps` example's batch queries over them, which run over isolates now, with a parallel map and runs of
+  Datalog in parts. `--worker-image` is gone from `source-deps`.
+
 ## [0.7] - 2026-11-10
 
 ### Added

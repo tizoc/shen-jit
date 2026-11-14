@@ -117,22 +117,4 @@
       (io-file-test.check "whole-file helper closes after unexpected exception" 1
         (freeze (<-address Closed 0)))))
 
-\\ Force the blocking FFI path to copy while another task moves the heap.
-(define io-file-test.collecting
-  -> (if (value io-file-test.stop) (set io-file-test.worker done)
-         (do (shen-jit.bytes 128) (shen-jit.collect) (io-file-test.collecting))))
-(define io-file-test.wait
-  Name -> (if (= (value Name) waiting) (io-file-test.wait Name) (value Name)))
-(set io-file-test.stop false)
-(set io-file-test.started waiting)
-(set io-file-test.worker waiting)
-(thread (freeze (do (set io-file-test.started ready) (io-file-test.collecting))))
-(io-file-test.wait io-file-test.started)
-(let V (buffer.new 131089) _ (buffer.u8! V 131088 73) Path (io-file-test.path "threaded")
-     Written (io.write-file Path V) Read (io.read-file Path 131089)
-     _ (set io-file-test.stop true) _ (io-file-test.wait io-file-test.worker)
-  (do (io-file-test.check "blocking write with concurrent collections" [ok 131089] (freeze Written))
-      (io-file-test.check "blocking read with concurrent collections" true
-        (freeze (buffer.equal? V (io-file-test.ok Read))))))
-
 (output "~A passed, ~A failed~%" (value io-file-test.passed) (value io-file-test.failed))

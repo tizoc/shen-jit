@@ -631,11 +631,11 @@ b" (n->string 0) (n->string 255)] (o.strings)))
 (define o.three
   X Y Z -> [X Y Z])
 
-\\ fn makes a form when first asked for it, where the kernel's reads what the definition stored: the port
-\\ gives a form to both by asking first.
+\\ The port's fn makes a closure from the arity, where the kernel's reads the lambda form a definition
+\\ stored, which the port no longer stores: the kernel's gets the forms it would have.
 (define o.fn
   All -> (let Names [o.zero o.one o.three hd tl cons + address-> @p vector fn append shen.dict shen-jit.u8 missing-function]
-              _ (map (/. F (trap-error (fn F) (/. E skip))) Names)
+              _ (map (/. F (trap-error (shen.set-lambda-form-entry (shen.lambda-entry F)) (/. E skip))) Names)
            (o.run-post fn 1 (/. R (o.saturate R))
                        (o.cases1 (append (map (/. N (o.v N)) Names) All)))))
 
@@ -969,7 +969,7 @@ b" (n->string 0) (n->string 255)] (o.strings)))
 (define o.lambdatable-side
   Update F N
   -> (let _ (eval-kl [defun F (o.take N [a b c d]) [cons 7 (o.list-form (o.take N [a b c d]))]])
-          _ (put F arity N (value *property-vector*))
+          _ (shen-jit.set-arity F N)
           G (value shen.*gensym*)
           R (Update F N)
           Moved (- (value shen.*gensym*) G)
@@ -1091,7 +1091,10 @@ b" (n->string 0) (n->string 255)] (o.strings)))
 \\ The sessions that these three wire together are for tests/cli.sh: they read the REPL's input, display
 \\ what reaches the top and end the process.
 (define o.left-out
-  -> [shen.read-evaluate-print shen.toplevel-display-exception shen.x.launcher.main])
+  -> [shen.read-evaluate-print shen.toplevel-display-exception shen.x.launcher.main
+      \\ They change the program, which a check must not: arities, eval, and a load's forms.
+      eval shen.load-help shen.eval-and-print shen.work-through shen.execute-store-arity update-lambda-table
+      shen.update-lambda-table/precompiled])
 
 (define o.tested
   -> (append (o.single-names) (append (o.dict-group) (append (o.prolog-group) [integer?]))))

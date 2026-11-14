@@ -224,8 +224,8 @@ the read buffer, as by default, a head is read in place as it arrives; a larger 
 Unknown, duplicate and invalid options raise before ownership transfers. Each phase gets an absolute
 deadline spanning short progress, capped by the total connection budget. Handler execution cannot be
 interrupted; its elapsed time is charged to that total and checked before output. This convenience
-does not accept a second request or add an accept loop. The [bounded listener](http-listener.md) uses
-the persistent variant below with a connection cap and controlled shutdown.
+does not accept a second request or add an accept loop. The [listener](http-listener.md) uses
+the persistent variant below, serving each connection in an isolate of its own until stopped.
 The [streaming response reference](http-streaming.md) covers source ownership and output chunk limits.
 
 `read-buffer-size` bounds the connection's input reader and the chunks its reads borrow. It is independent
@@ -263,8 +263,8 @@ shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.sh
 
 Send a request from another terminal, for example `curl --http1.1 --data-binary 'hello' http://127.0.0.1:9000/`.
 The process handles that connection and exits. TLS, proxy requests, streaming request bodies, routing
-policy and authentication are separate work. Persistent connections and streaming responses are described below. The bounded listener supplies
-connection limits and shutdown.
+policy and authentication are separate work. Persistent connections and streaming responses are described below. The listener supplies
+an accept loop and shutdown.
 
 ## Persistent connections
 
@@ -294,7 +294,7 @@ written. Other successful responses omit Connection and remain reusable. Every p
 output/cleanup failure ends the connection and stops queued requests. No bytes are interpreted as a new
 request after a framing failure. `http.serve-one` remains a one-request, always-closing convenience.
 
-The [bounded listener](http-listener.md) uses this persistent driver and adds admission/shutdown.
+The [listener](http-listener.md) uses this persistent driver and adds an accept loop and shutdown.
 Its statistics count connections, including all requests handled on each connection.
 
 Public declarations cover `http.request`, `http.body-reader`, `http.response`, server options and I/O result

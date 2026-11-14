@@ -225,7 +225,6 @@ enum Prim {
     P_DECIMAL, /* shen-jit.decimal: a literal past the fixnum range, for the reader */
     /* Prolog variables as immediate values (docs/bytecode.md). */
     P_PVAR, P_PVARP, P_PVAR_OFFSET, P_DEREF, P_SAMEP, P_NEWPV, P_GC,
-    P_THREAD, /* shen-jit.thread: runs a procedure in a new thread (thread.c) */
     /* C functions and pointers (ffi.c), in this order. */
     P_FOREIGN, /* shen-jit.foreign: makes a name a C function */
     P_POINTERP, P_POINTER_KIND, P_POINTER_ADDRESS, P_BYTES_POINTER, P_POINTER_STRING, P_POINTER_BYTES,
@@ -233,7 +232,12 @@ enum Prim {
     P_POINTER_GUARD, P_POINTER_OWNER, P_POINTERS_DEAD, P_POINTER_READ_ONLY,
     P_COLLECT, /* shen-jit.collect */
     P_WRITE_BYTES, /* shen-jit.write-bytes: a range of a buffer to a stream, at once */
-    P_WORKER_SCOPE, P_WORKER_BATCH, P_WORKER_INDEX, P_WORKER_LIVE, P_WORKER_CANCELLED, P_WORKER_SHARED_VIEW,
+    /* Arities, which are program, and calls by name, for fn (docs/design.md, "The builder and isolates"). */
+    P_ARITY,     /* shen-jit.arity: a name's arity, or -1 */
+    P_SET_ARITY, /* shen-jit.set-arity: records a name's arity, -1 for none; the builder's alone */
+    P_FUNCTION,  /* shen-jit.function: the procedure a name has now, inline (jit.c) */
+    P_APPLY,     /* shen-jit.apply: calls a name's procedure, or a procedure, with a list */
+    P_ISOLATE,   /* shen-jit.isolate: spawning, channels, monitors and kill (isolate.c) */
     P_COUNT
 };
 #define PRIM_RAISE_COND P_COUNT

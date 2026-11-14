@@ -26,7 +26,7 @@
   [_ Input Output | Options] ->
     (source-deps.finish
       (source-deps.run Input Output (source-deps.query-option Options) (source-deps.limits)))
-  _ -> (error "usage: source-deps FACTS OUTPUT [--reach FILE NAME [BYTE] | --impact FILE NAME [BYTE] | --batch QUERIES [--workers COUNT (0..64) --worker-image IMAGE]]"))
+  _ -> (error "usage: source-deps FACTS OUTPUT [--reach FILE NAME [BYTE] | --impact FILE NAME [BYTE] | --batch QUERIES [--workers COUNT (0..64)]]"))
 
 (define source-deps.entry
   -> (trap-error (source-deps.main (value *argv*))

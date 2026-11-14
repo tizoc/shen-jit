@@ -96,7 +96,8 @@ struct Jit {
     void *foreign;
     void *stubs;
     FILE *perf_map; /* address, size and name of each compiled code object */
-    bool slow_prims; /* compilation policy belongs to this VM, including legacy threads */
+    bool slow_prims; /* compilation policy, for every VM of the program */
+    bool interruptible; /* the REPL catches SIGINT: loops test interrupted, in code any VM compiles */
     /* For backtraces: the return address of every call in compiled code,
        with the call's window offset in slots, in an open-addressing table
        (0 is an empty entry). */
@@ -184,7 +185,7 @@ static size_t chain_names(VM *vm, uint32_t chain, V *names, size_t n, size_t max
 {
     if (!chain)
         return n;
-    const size_t *c = vm->jit->chains + chain - 1;
+    const size_t *c = vm->program->jit->chains + chain - 1;
     for (size_t k = 0; k < c[0]; k++, n++)
         if (n < max)
             names[n] = cell_symbol(vm, c[1 + k]);
@@ -232,7 +233,7 @@ static void emit_patch_nop(struct sljit_compiler *c)
 static void patch_put(VM *vm, void *native, size_t cell, sljit_uw at, sljit_uw target)
 {
 #if PATCH_SELF
-    Jit *jit = vm->jit;
+    Jit *jit = vm->program->jit;
     Patch p = {(uintptr_t)native, cell, (uint8_t *)at, 0, {0}};
 #if (defined SLJIT_CONFIG_ARM_64 && SLJIT_CONFIG_ARM_64)
     uint32_t insn;
@@ -304,8 +305,8 @@ static void patches_drop(Jit *jit, bool redefined, uintptr_t key)
 
 static void redefine(VM *vm, size_t cell)
 {
-    if (vm->jit->npatches)
-        patches_drop(vm->jit, true, cell);
+    if (vm->program->jit->npatches)
+        patches_drop(vm->program->jit, true, cell);
 }
 
 /* The names of the frames on the stack, innermost first: from vm->fp, each
@@ -318,18 +319,15 @@ static void redefine(VM *vm, size_t cell)
    is returned, and *evaluated says whether the walk reached the expression
    being evaluated, so that the error came from running code rather than,
    say, the reader or the typechecker working on the input. */
-size_t jit_backtrace(VM *vm, V *names, size_t max, bool *evaluated)
+static size_t backtrace_frames(VM *vm, V *names, size_t max, bool *evaluated)
 {
     size_t n = 0;
-    *evaluated = false;
-    if (!vm->jit)
-        return 0;
     V *floor = vm->trace_floor == SIZE_MAX ? vm->stack : vm->stack + vm->trace_floor + 1;
     /* Each frame's code may have inlined bodies where it is: at the site of
        the C helper that raised, for the innermost, and at its call for the
        others. Their names come first. */
     uint32_t window, chain = 0;
-    if (!vm->site || !site_get(vm->jit, (uintptr_t)vm->site, &window, &chain))
+    if (!vm->site || !site_get(vm->program->jit, (uintptr_t)vm->site, &window, &chain))
         chain = 0;
     for (V *fp = vm->fp; fp >= floor && fp + 1 < vm->stack + vm->stack_words;) {
         V proc = fp[1];
@@ -350,11 +348,23 @@ size_t jit_backtrace(VM *vm, V *names, size_t max, bool *evaluated)
         if (n < max)
             names[n] = name;
         n++;
-        if (!site_get(vm->jit, (uintptr_t)fp[0], &window, &chain) || window == 0 ||
+        if (!site_get(vm->program->jit, (uintptr_t)fp[0], &window, &chain) || window == 0 ||
             window > (size_t)(fp - vm->stack))
             break;
         fp -= window;
     }
+    return n;
+}
+
+/* The sites it reads are the Jit's, which an isolate compiling adds to. */
+size_t jit_backtrace(VM *vm, V *names, size_t max, bool *evaluated)
+{
+    *evaluated = false;
+    if (!vm->program->jit)
+        return 0;
+    program_compile_lock(vm);
+    size_t n = backtrace_frames(vm, names, max, evaluated);
+    program_compile_unlock(vm);
     return n;
 }
 
@@ -441,11 +451,7 @@ static V h_resolve(VM *vm, V *slot)
    frame or loop check comes here. */
 static V h_grow(VM *vm, size_t frame)
 {
-    if (vm->interrupted == PREEMPT) {
-        thread_preempted(vm);
-    } else if (vm->interrupted && vm->thread && !vm->thread->main) {
-        thread_yield(vm); /* a Ctrl-C is for the main thread, which the REPL runs in */
-    } else if (vm->interrupted && sj_take_interrupt(vm)) {
+    if (vm->interrupted && sj_take_interrupt(vm)) {
         return sj_raise(vm, "interrupted");
     }
     size_t need = (size_t)(vm->fp - vm->stack) + frame;
@@ -518,16 +524,19 @@ static void *compile_code(VM *vm, V code);
 /* Entered through a closure whose entry is still the compile stub. */
 static void *h_compile(VM *vm)
 {
+    program_compile_lock(vm); /* isolates share code (isolate.c) */
     uint64_t *p = ptr(vm->fp[1]);
     uint64_t *code = ptr(p[CLO_CODE]);
     if (!code[CODE_NATIVE]) {
         void *native = compile_code(vm, p[CLO_CODE]);
         if (!native)
             fatal("native compilation failed");
-        code[CODE_NATIVE] = (uint64_t)(uintptr_t)native;
+        __atomic_store_n(&code[CODE_NATIVE], (uint64_t)(uintptr_t)native, __ATOMIC_RELEASE);
     }
-    p[PROC_ENTRY] = code[CODE_NATIVE];
-    return (void *)(uintptr_t)code[CODE_NATIVE];
+    uint64_t entry = code[CODE_NATIVE]; /* read before the lock goes, as the REPL's recompiling clears it */
+    __atomic_store_n(&p[PROC_ENTRY], entry, __ATOMIC_RELEASE);
+    program_compile_unlock(vm);
+    return (void *)(uintptr_t)entry;
 }
 
 /* Emitting a code object. */
@@ -738,7 +747,7 @@ static void load_for_label(Emit *e, uint32_t label)
 
 static void to_unwind(Emit *e, struct sljit_jump *jump)
 {
-    sljit_set_target(jump, (sljit_uw)e->vm->jit->unwind);
+    sljit_set_target(jump, (sljit_uw)e->vm->program->jit->unwind);
 }
 
 /* Slot n where the code keeps it: its register in a loop that keeps its
@@ -761,7 +770,7 @@ static sljit_sw slot_offset(const Emit *e, uint32_t n)
    never moves. OPND gives SLJIT's operand pair. */
 static V *operand_cell(const Emit *e, uint32_t x)
 {
-    return ra_at(&e->vm->consts, e->cbase + (x & ~OPERAND_CONST));
+    return ra_at(&e->vm->program->consts, e->cbase + (x & ~OPERAND_CONST));
 }
 
 static sljit_s32 operand_kind(const Emit *e, uint32_t x)
@@ -890,7 +899,7 @@ static uint32_t inline_chain(Emit *e)
 {
     if (!e->ninl || e->chain)
         return e->ninl ? e->chain : 0;
-    Jit *jit = e->vm->jit;
+    Jit *jit = e->vm->program->jit;
     if (jit->nchains + 1 + e->ninl > jit->chains_cap) {
         size_t cap = jit->chains_cap ? 2 * jit->chains_cap : 256;
         size_t *chains = realloc(jit->chains, cap * sizeof *chains);
@@ -932,7 +941,7 @@ static int self_tail_call(const Emit *e, const uint32_t *p)
     uint32_t op = p[0], n = op == OP_TAIL_CALL_VALUE ? p[2] : p[3];
     if (n != e->arity || op == OP_TAIL_CALL_VALUE)
         return OTHER_CALLEE;
-    V self = op == OP_TAIL_CALL_SEALED ? *ra_at(&e->vm->consts, p[2]) : V_NIL;
+    V self = op == OP_TAIL_CALL_SEALED ? *ra_at(&e->vm->program->consts, p[2]) : V_NIL;
     if (is_proc(self) && hdr_type(ptr(self)[0]) == T_CLOSURE && ptr(self)[CLO_CODE] == e->code)
         return SEALED_SELF;
     if (op == OP_TAIL_CALL_SEALED && self == ptr(e->code)[CODE_NAME])
@@ -1136,14 +1145,14 @@ static void emit_memory_caches(Emit *e)
         sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R1), -TAG_OBJECT);
         sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));
         struct sljit_jump *bytes = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(T_BYTES << 3 | TAG_HEADER));
+        struct sljit_jump *string = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(T_STRING << 3 | TAG_HEADER));
+        struct sljit_jump *shared = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(SHARED_BIT | T_BYTES << 3 | TAG_HEADER));
         struct sljit_jump *pointer = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(T_POINTER << 3 | TAG_HEADER));
-        struct sljit_jump *shared = sljit_emit_cmp(c, SLJIT_EQUAL, R3, IMM(T_SHARED_BYTES << 3 | TAG_HEADER));
         sljit_emit_op1(c, SLJIT_MOV, R1, IMM(0));
         sljit_emit_op1(c, SLJIT_MOV, R3, IMM(0));
         sljit_emit_op1(c, SLJIT_MOV, R4, IMM(0));
         struct sljit_jump *other = sljit_emit_jump(c, SLJIT_JUMP);
         sljit_set_label(pointer, sljit_emit_label(c));
-        sljit_set_label(shared, sljit_emit_label(c));
         sljit_emit_op1(c, SLJIT_MOV, R3, SLJIT_MEM1(SLJIT_R1), POINTER_LENGTH * WORD - TAG_OBJECT);
         sljit_emit_op1(c, SLJIT_MOV, R4, R3);
         struct sljit_jump *writable = sljit_emit_cmp(c, SLJIT_EQUAL, R2, IMM(T_POINTER << 3 | TAG_HEADER));
@@ -1154,6 +1163,13 @@ static void emit_memory_caches(Emit *e)
         sljit_set_label(bytes, sljit_emit_label(c));
         sljit_emit_op2(c, SLJIT_LSHR, R3, R2, IMM(8));
         sljit_emit_op1(c, SLJIT_MOV, R4, R3);
+        struct sljit_jump *based = sljit_emit_jump(c, SLJIT_JUMP);
+        struct sljit_label *read_only = sljit_emit_label(c); /* no store length */
+        sljit_set_label(string, read_only);
+        sljit_set_label(shared, read_only);
+        sljit_emit_op2(c, SLJIT_LSHR, R3, R2, IMM(8));
+        sljit_emit_op1(c, SLJIT_MOV, R4, IMM(0));
+        sljit_set_label(based, sljit_emit_label(c));
         sljit_emit_op2(c, SLJIT_ADD, R1, R1, IMM(WORD - TAG_OBJECT));
         struct sljit_label *store = sljit_emit_label(c);
         sljit_set_label(done, store);
@@ -1625,7 +1641,7 @@ static void load_callee(Emit *e, uint32_t op, uint32_t target, uint32_t window)
     if (op == OP_CALL || op == OP_TAIL_CALL)
         sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM0(), (sljit_sw)cell_function(e->vm, target));
     else if (op == OP_CALL_SEALED || op == OP_TAIL_CALL_SEALED) {
-        V *slot = ra_at(&e->vm->consts, target);
+        V *slot = ra_at(&e->vm->program->consts, target);
         if (is_symbol(*slot) && is_proc(*cell_function(e->vm, symbol_cell(*slot))))
             *slot = *cell_function(e->vm, symbol_cell(*slot)); /* defined since */
         sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM0(), (sljit_sw)slot);
@@ -1665,12 +1681,13 @@ static void emit_call(Emit *e, const uint32_t *p)
 }
 
 /* A loop back to the body skips the entry checks, so it tests for a pending
-   interrupt itself, in code compiled once the REPL catches Ctrl-C or the first
-   thread starts: elsewhere SIGINT ends the process, and the test would only
-   cost time. Either one has everything compiled again (jit_recompile). */
+   interrupt itself, in code compiled once the REPL catches Ctrl-C, by any VM,
+   as code is shared: elsewhere SIGINT ends the program, and the test would
+   only cost time. The REPL's catching has everything compiled again
+   (jit_catch_interrupts). */
 static void emit_loop_check(Emit *e)
 {
-    if (!e->vm->interruptible)
+    if (!e->vm->program->jit->interruptible)
         return;
     Slow *s = slow_path(e, SLOW_LOOP, sljit_emit_cmp(e->c, SLJIT_NOT_EQUAL | SLJIT_32, VMF(interrupted), IMM(0)));
     s->back = sljit_emit_label(e->c);
@@ -1912,7 +1929,7 @@ static Test emit_type_test(Emit *e, uint32_t prim, const uint32_t *arg)
     if (prim == P_TAGGEDP) {
         t.no[0] = tag_cmp(c, SLJIT_NOT_EQUAL, R1, r, 0, TAG_OBJECT);
         sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(r), -TAG_OBJECT);
-        sljit_emit_op2(c, SLJIT_AND, R1, R2, IMM(0xFF));
+        sljit_emit_op2(c, SLJIT_AND, R1, R2, IMM(0xFF & ~SHARED_BIT));
         t.no[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(T_VECTOR << 3 | TAG_HEADER));
         t.no[2] = sljit_emit_cmp(c, SLJIT_LESS, R2, IMM(1 << 8)); /* length 0 */
         sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, arg[1]));
@@ -1927,8 +1944,11 @@ static Test emit_type_test(Emit *e, uint32_t prim, const uint32_t *arg)
     t.no[0] = tag_cmp(c, SLJIT_NOT_EQUAL, R1, r, 0, tag);
     if (tag == TAG_OBJECT) {
         unsigned type = prim == P_ABSVECTORP ? T_VECTOR : prim == P_STRINGP ? T_STRING : T_REAL;
-        /* The header's low byte holds its tag and the type. */
+        /* The header's low byte holds its tag and the type, and for a vector whether it is
+           shared. */
         sljit_emit_op1(c, SLJIT_MOV_U8, R1, SLJIT_MEM1(r), -TAG_OBJECT);
+        if (type == T_VECTOR)
+            sljit_emit_op2(c, SLJIT_AND, R1, R1, IMM(0xFF & ~SHARED_BIT));
         t.no[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(type << 3 | TAG_HEADER));
     }
     return t;
@@ -1944,7 +1964,7 @@ static struct sljit_jump *emit_vector_test(Emit *e, const uint32_t *arg, struct 
     sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, arg[0]));
     no[0] = tag_cmp(c, SLJIT_NOT_EQUAL, R1, R0, TAG_OBJECT);
     sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), -TAG_OBJECT);
-    sljit_emit_op2(c, SLJIT_AND, R1, R2, IMM(0xFF));
+    sljit_emit_op2(c, SLJIT_AND, R1, R2, IMM(0xFF & ~SHARED_BIT));
     no[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(T_VECTOR << 3 | TAG_HEADER));
     no[2] = sljit_emit_cmp(c, SLJIT_LESS, R2, IMM(1 << 8)); /* length 0 */
     sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM1(SLJIT_R0), sizeof(V) - TAG_OBJECT);
@@ -2005,8 +2025,14 @@ static Slow *emit_memory_base(Emit *e, uint32_t memory, SlowKind kind, bool stor
     sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, memory));
     Slow *slow = slow_path(e, kind, tag_cmp(c, SLJIT_NOT_EQUAL, R2, R0, TAG_OBJECT));
     sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), -TAG_OBJECT);
-    sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));
-    Slow *pointer = slow_path(e, SLOW_POINTER, sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM(T_BYTES << 3 | TAG_HEADER)));
+    /* A read takes a string too, laid out as a byte buffer, and a shared buffer: the mask leaves
+       out the type bits in which the two differ and the shared bit, and of the types it lets
+       through, only those are ever objects. A store takes an unshared byte buffer alone; a string
+       or a shared buffer goes to C, which refuses it. */
+    uint64_t mask = store ? 0xFF : 0xE7 & ~SHARED_BIT;
+    sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(mask));
+    Slow *pointer = slow_path(e, SLOW_POINTER,
+                              sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM((T_BYTES << 3 | TAG_HEADER) & mask)));
     pointer->prim = slow;
     pointer->store = store;
     sljit_emit_op2(c, SLJIT_LSHR, R2, R2, IMM(8)); /* the length */
@@ -2498,34 +2524,39 @@ static void emit_prim(Emit *e, const uint32_t *p)
     }
     case P_VALUE:
     case P_SET: {
-        /* Global cells never move (vm.h): a constant symbol's value cell has
-           a fixed address, and another symbol's is found from the index in
-           its cell word, through the chunk directory, which may move.
-           Anything but a symbol, and an unbound symbol for value, goes to
-           C, which raises. */
-        sljit_s32 cell = SLJIT_MEM1(SLJIT_R3);
+        /* A global's value is in the VM's slots, by its number (vm.h): a constant symbol,
+           numbered as its code is compiled, is one load at a fixed offset from the VM's
+           register, and another symbol's number is in its cell word. A symbol with no number
+           goes to C, which numbers it for set and raises for value, as it does for anything
+           but a symbol, and for an unbound value. */
+        sljit_s32 cell = SLJIT_MEM1(VMR);
         sljit_sw at = 0;
-        if ((arg[0] & OPERAND_CONST) && is_symbol(*operand_cell(e, arg[0]))) {
-            cell = SLJIT_MEM0();
-            at = (sljit_sw)cell_value(e->vm, symbol_cell(*operand_cell(e, arg[0])));
+        V *slot = (arg[0] & OPERAND_CONST) && is_symbol(*operand_cell(e, arg[0]))
+                      ? global_slot_new(e->vm, *operand_cell(e, arg[0])) : NULL;
+        if (slot) {
+            at = (sljit_sw)((char *)slot - (char *)e->vm);
         } else {
             sljit_s32 r = operand_reg(e, arg[0]);
             slow = slow_path(e, SLOW_PRIM, tag_cmp(c, SLJIT_NOT_EQUAL, R1, r, 0, TAG_SYMBOL));
             sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM1(r), SYM_CELL * sizeof(V) - TAG_SYMBOL);
-            sljit_emit_op2(c, SLJIT_AND, R1, R1, IMM((UINT64_C(1) << 56) - 1));
-            sljit_emit_op2(c, SLJIT_SHL, R1, R1, IMM(1)); /* the value cell, 2 * index */
-            sljit_emit_op2(c, SLJIT_LSHR, R2, R1, IMM(RA_CHUNK_BITS));
-            sljit_emit_op2(c, SLJIT_AND, R1, R1, IMM(RA_CHUNK - 1));
-            sljit_emit_op1(c, SLJIT_MOV, R3, SLJIT_MEM1(VMR), (sljit_sw)offsetof(VM, cells.chunks));
-            sljit_emit_op1(c, SLJIT_MOV, R3, SLJIT_MEM2(SLJIT_R3, SLJIT_R2), 3);
-            sljit_emit_op2(c, SLJIT_SHL, R1, R1, IMM(3));
-            sljit_emit_op2(c, SLJIT_ADD, R3, R3, R1);
+            sljit_emit_op2(c, SLJIT_LSHR, R1, R1, IMM(CELL_BITS));
+            /* Slot 0 is always unbound, so a value read there goes to C as any unbound one does;
+               only a store must not land there. */
+            if (prim == P_SET) {
+                sljit_emit_op2(c, SLJIT_AND | SLJIT_SET_Z, R1, R1, IMM(CELL_MASK));
+                slow->from[1] = sljit_emit_jump(c, SLJIT_ZERO);
+            } else {
+                sljit_emit_op2(c, SLJIT_AND, R1, R1, IMM(CELL_MASK));
+            }
+            sljit_emit_op2(c, SLJIT_ADD, R3, VMR, 0, IMM(offsetof(VM, globals)));
+            cell = SLJIT_MEM2(SLJIT_R3, SLJIT_R1);
+            at = 3;
         }
         if (prim == P_VALUE) {
             sljit_emit_op1(c, SLJIT_MOV, R0, cell, at);
             struct sljit_jump *unbound = sljit_emit_cmp(c, SLJIT_EQUAL, R0, IMM(V_CLEARED));
             if (slow)
-                slow->from[1] = unbound;
+                slow->from[2] = unbound;
             else
                 slow = slow_path(e, SLOW_PRIM, unbound);
         } else {
@@ -2534,6 +2565,27 @@ static void emit_prim(Emit *e, const uint32_t *p)
         }
         if (slow)
             slow->catch_label = quiet_catch(e);
+        store_result(e, dst);
+        break;
+    }
+    case P_FUNCTION: {
+        /* The procedure in a symbol's function cell, through its index and the chunk
+           directory, which may move: fn's templates make their last call with it, so that a
+           redefinition is seen. Anything else, or a cell with no procedure, goes to C, which
+           raises. */
+        sljit_s32 r = operand_reg(e, arg[0]);
+        slow = slow_path(e, SLOW_PRIM, tag_cmp(c, SLJIT_NOT_EQUAL, R1, r, 0, TAG_SYMBOL));
+        sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM1(r), SYM_CELL * sizeof(V) - TAG_SYMBOL);
+        sljit_emit_op2(c, SLJIT_AND, R1, R1, IMM(CELL_MASK));
+        sljit_emit_op2(c, SLJIT_SHL, R1, R1, IMM(1)); /* the function entry, 2 * index */
+        sljit_emit_op2(c, SLJIT_LSHR, R2, R1, IMM(RA_CHUNK_BITS));
+        sljit_emit_op2(c, SLJIT_AND, R1, R1, IMM(RA_CHUNK - 1));
+        sljit_emit_op1(c, SLJIT_MOV, R3, SLJIT_MEM1(VMR), (sljit_sw)offsetof(VM, program));
+        sljit_emit_op1(c, SLJIT_MOV, R3, SLJIT_MEM1(SLJIT_R3), (sljit_sw)offsetof(Program, cells.chunks));
+        sljit_emit_op1(c, SLJIT_MOV, R3, SLJIT_MEM2(SLJIT_R3, SLJIT_R2), 3);
+        sljit_emit_op1(c, SLJIT_MOV, R0, SLJIT_MEM2(SLJIT_R3, SLJIT_R1), 3);
+        slow->from[1] = tag_cmp(c, SLJIT_NOT_EQUAL, R1, SLJIT_R0, 0, TAG_PROC);
+        slow->catch_label = quiet_catch(e);
         store_result(e, dst);
         break;
     }
@@ -2621,7 +2673,8 @@ static void emit_prim(Emit *e, const uint32_t *p)
         slow = slow_path(e, SLOW_PRIM, tag_cmp(c, SLJIT_NOT_EQUAL, R2, R0, TAG_OBJECT));
         slow->catch_label = quiet_catch(e); /* C raises wherever these checks fail */
         sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), -TAG_OBJECT);
-        sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));
+        /* A read takes a shared vector too; a store sends one to C, which refuses it. */
+        sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(prim == P_GET_ADDRESS ? 0xFF & ~SHARED_BIT : 0xFF));
         slow->from[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM(T_VECTOR << 3 | TAG_HEADER));
         sljit_emit_op2(c, SLJIT_LSHR, R2, R2, IMM(8));
         if (fixnum_operand(e, arg[1]) && (uint64_t)*operand_cell(e, arg[1]) < fix(4096)) {
@@ -3204,25 +3257,17 @@ static void emit_slow_paths(Emit *e)
                 sljit_set_label(s->from[j], here);
         switch (s->kind) {
         case SLOW_POINTER: {
-            /* Not a byte buffer, with its header in R2 and that's low byte in R3. A pointer goes
-               back to the byte primitive with its length and base, and the rest to raise. A store
-               tests the whole header, which a read-only pointer's differs in. */
-            struct sljit_jump *other = sljit_emit_cmp(c, SLJIT_NOT_EQUAL,
-                s->store ? SLJIT_R2 : SLJIT_R3, 0, IMM(T_POINTER << 3 | TAG_HEADER));
-            if (s->store)
-                sljit_set_label(other, s->prim->start);
-            struct sljit_label *read = sljit_emit_label(c);
+            /* Not a byte buffer, nor for a read a string, with its header in R2, and its low byte
+               in R3 for a store; a read masked it, so it is taken again. A pointer goes back to
+               the byte primitive with its length and base, and the rest to raise. A store tests
+               the whole header, which a read-only pointer's differs in. */
+            if (!s->store)
+                sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));
+            sljit_set_label(sljit_emit_cmp(c, SLJIT_NOT_EQUAL, s->store ? SLJIT_R2 : SLJIT_R3, 0,
+                                            IMM(T_POINTER << 3 | TAG_HEADER)), s->prim->start);
             sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), POINTER_LENGTH * (sljit_sw)sizeof(V) - TAG_OBJECT);
             sljit_emit_op1(c, SLJIT_MOV, R0, SLJIT_MEM1(SLJIT_R0), POINTER_ADDRESS * (sljit_sw)sizeof(V) - TAG_OBJECT);
             go_back(e, s);
-            if (!s->store) {
-                /* Ordinary pointers keep their old path. Check scoped views
-                   only after that test misses. */
-                sljit_set_label(other, sljit_emit_label(c));
-                sljit_set_label(sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3,
-                    IMM(T_SHARED_BYTES << 3 | TAG_HEADER)), s->prim->start);
-                sljit_set_label(sljit_emit_jump(c, SLJIT_JUMP), read);
-            }
             break;
         }
         case SLOW_PRIM: {
@@ -3309,7 +3354,10 @@ static void emit_slow_paths(Emit *e)
                 differ[0] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R2, IMM(T_REAL << 3 | TAG_HEADER));
                 struct sljit_jump *real = sljit_emit_jump(c, SLJIT_JUMP);
                 sljit_set_label(two, sljit_emit_label(c));
-                differ[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R2, SLJIT_MEM1(SLJIT_R1), -TAG_OBJECT);
+                /* A shared vector or buffer equals an unshared one with the same contents. */
+                sljit_emit_op2(c, SLJIT_XOR, R3, R2, SLJIT_MEM1(SLJIT_R1), -TAG_OBJECT);
+                sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R3, IMM(~(sljit_sw)SHARED_BIT));
+                differ[1] = sljit_emit_jump(c, SLJIT_NOT_ZERO);
                 /* Two strings with the same header: compare the words, whose
                    padding is always 0. */
                 sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));
@@ -3474,8 +3522,8 @@ static void emit_slow_paths(Emit *e)
             sljit_set_label(sljit_emit_jump(c, SLJIT_JUMP), s->back);
             break;
         case SLOW_LOOP:
-            /* A loop's check, with the arguments in place: another thread may
-               collect here, so all that is live goes to the frame and back. */
+            /* A loop's check, with the arguments in place: raising the interrupt may
+               collect, so all that is live goes to the frame and back. */
             if (e->entry == 2)
                 sljit_emit_op1(c, SLJIT_MOV, HOME(e, 2), CACHE);
             publish(e);
@@ -3585,7 +3633,7 @@ static void *compile_code(VM *vm, V code)
             if (words[i] == OP_LABEL || words[i] == OP_LOOP)
                 label_pos[words[i + 1]] = i;
 
-    Emit e = {.vm = vm, .c = sljit_create_compiler(NULL), .slow_prims = vm->jit->slow_prims,
+    Emit e = {.vm = vm, .c = sljit_create_compiler(NULL), .slow_prims = vm->program->jit->slow_prims,
               .frame = co[CODE_FRAME],
               .arity = co[CODE_ARITY] & UINT32_MAX, .cbase = co[CODE_CBASE], .nconst = co[CODE_NCONST],
               .code = code, .cached = NONE, .post = NONE, .kept = {NONE, NONE}, .kept_post = {NONE, NONE},
@@ -3617,7 +3665,7 @@ static void *compile_code(VM *vm, V code)
     struct sljit_jump *one = NULL;
     if (all) {
         one = sljit_emit_cmp(c, SLJIT_EQUAL, R2, IMM(e.arity));
-        sljit_set_target(sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R2, IMM(all)), (sljit_uw)vm->jit->arity);
+        sljit_set_target(sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R2, IMM(all)), (sljit_uw)vm->program->jit->arity);
         sljit_emit_op2(c, SLJIT_ADD, R0, FP, 0, IMM((e.frame + LEAF_FRAME) * sizeof(V)));
         Slow *s = slow_path(&e, SLOW_GROW, sljit_emit_cmp(c, SLJIT_GREATER, R0, VMF(check_limit)));
         s->words = all;
@@ -3627,14 +3675,14 @@ static void *compile_code(VM *vm, V code)
         sljit_set_label(one, sljit_emit_label(c));
     } else {
         sljit_set_target(sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R2, IMM(e.arity)),
-                         (sljit_uw)vm->jit->arity);
+                         (sljit_uw)vm->program->jit->arity);
     }
     /* Every frame that calls reserves a leaf's frame beyond its own, so code
        that calls nothing, with a frame no larger, needs no check: it runs
        below a caller's reservation, or jit_call's margin. Unless the REPL
        catches Ctrl-C, tail calls do not count. */
     Slow *grow = NULL;
-    if (!leaf(words, nwords, !vm->interruptible) || e.frame > LEAF_FRAME) {
+    if (!leaf(words, nwords, !vm->program->jit->interruptible) || e.frame > LEAF_FRAME) {
         sljit_emit_op2(c, SLJIT_ADD, R0, FP, 0, IMM((e.frame + LEAF_FRAME) * sizeof(V)));
         grow = slow_path(&e, SLOW_GROW, sljit_emit_cmp(c, SLJIT_GREATER, R0, VMF(check_limit)));
         grow->words = e.arity;
@@ -3688,7 +3736,7 @@ static void *compile_code(VM *vm, V code)
             put_result(&e, p[1], OPND(&e, p[2]));
             break;
         case OP_CONST: {
-            V *cell = ra_at(&vm->consts, e.cbase + p[2]);
+            V *cell = ra_at(&vm->program->consts, e.cbase + p[2]);
             if (is_ptr(*cell))
                 put_result(&e, p[1], SLJIT_MEM0(), (sljit_sw)cell);
             else
@@ -3711,12 +3759,12 @@ static void *compile_code(VM *vm, V code)
             alloc->back = restart;
             sljit_emit_op1(c, SLJIT_MOV, HP, R1);
             sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0), 0, IMM(HEADER(T_CLOSURE, n)));
-            V *code_cell = ra_at(&vm->consts, e.cbase + e.nconst + p[2]);
+            V *code_cell = ra_at(&vm->program->consts, e.cbase + e.nconst + p[2]);
             sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM0(), (sljit_sw)code_cell);
             sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0), CLO_CODE * sizeof(V), R1);
             sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM1(SLJIT_R1), CODE_NATIVE * sizeof(V) - TAG_OBJECT);
             struct sljit_jump *compiled = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(0));
-            sljit_emit_op1(c, SLJIT_MOV, R1, IMM(vm->compile_stub));
+            sljit_emit_op1(c, SLJIT_MOV, R1, IMM(vm->program->compile_stub));
             sljit_set_label(compiled, sljit_emit_label(c));
             sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0), PROC_ENTRY * sizeof(V), R1);
             for (uint32_t i = 0; i < n; i++) {
@@ -3786,17 +3834,29 @@ static void *compile_code(VM *vm, V code)
             emit_raw(&e, p);
             break;
         case OP_JUMP_UNLESS_ENTRY: {
-            /* Falls through only for a closure whose code takes p[2]
-               arguments at once (OP_ENTRY). */
+            /* Falls through only for a procedure that takes p[2] arguments at once: a
+               closure whose code has (entry p[2] _), or whose code takes exactly that many,
+               which only a definition's does, and a foreign function of that arity. Applied
+               one argument at a time, the last two would fail: fn's templates call them so
+               (shen-jit.function). */
             sljit_emit_op1(c, SLJIT_MOV, R0, OPND(&e, p[1]));
             to_label(&e, tag_cmp(c, SLJIT_NOT_EQUAL, R1, R0, TAG_PROC), p[3]);
             sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM1(SLJIT_R0), -TAG_PROC);
             sljit_emit_op2(c, SLJIT_AND, R1, R1, IMM(0xFF));
+            struct sljit_jump *foreign = sljit_emit_cmp(c, SLJIT_EQUAL, R1, IMM(T_FOREIGN << 3 | TAG_HEADER));
             to_label(&e, sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(T_CLOSURE << 3 | TAG_HEADER)), p[3]);
             sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM1(SLJIT_R0), CLO_CODE * sizeof(V) - TAG_PROC);
             sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM1(SLJIT_R1), CODE_ARITY * sizeof(V) - TAG_OBJECT);
+            struct sljit_jump *exact = sljit_emit_cmp(c, SLJIT_EQUAL, R1, IMM(p[2]));
             sljit_emit_op2(c, SLJIT_LSHR, R1, R1, IMM(32));
             to_label(&e, sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(p[2])), p[3]);
+            struct sljit_jump *done = sljit_emit_jump(c, SLJIT_JUMP);
+            sljit_set_label(foreign, sljit_emit_label(c));
+            sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM1(SLJIT_R0), FOREIGN_ARITY * sizeof(V) - TAG_PROC);
+            to_label(&e, sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(p[2])), p[3]);
+            struct sljit_label *taken = sljit_emit_label(c);
+            sljit_set_label(exact, taken);
+            sljit_set_label(done, taken);
             break;
         }
         case OP_JUMP_IF_FALSE: {
@@ -3918,7 +3978,7 @@ static void *compile_code(VM *vm, V code)
         fprintf(stderr, "shen-jit: SLJIT error %d\n", sljit_get_compiler_error(c));
     else if ((generated = sljit_generate_code(c, 0, NULL))) {
         native = (void *)sljit_get_label_addr(entry);
-        vm->jit->ncompiled++;
+        vm->program->jit->ncompiled++;
         /* The entry starts the code, so a collection can free it once the
            code object is dead. */
         if (native == generated)
@@ -3926,10 +3986,10 @@ static void *compile_code(VM *vm, V code)
     }
     if (native)
         for (size_t i = 0; i < e.ncalls; i++)
-            site_put(vm->jit, (uintptr_t)sljit_get_label_addr(e.calls[i].back), e.calls[i].window,
+            site_put(vm->program->jit, (uintptr_t)sljit_get_label_addr(e.calls[i].back), e.calls[i].window,
                      e.calls[i].chain);
     for (size_t i = 0; native && i < e.nraises; i++)
-        site_put(vm->jit, (uintptr_t)sljit_get_label_addr(e.raises[i].ret), 0, e.raises[i].chain);
+        site_put(vm->program->jit, (uintptr_t)sljit_get_label_addr(e.raises[i].ret), 0, e.raises[i].chain);
     for (size_t i = 0; native && i < e.nselfs; i++)
         patch_put(vm, native, symbol_cell(co[CODE_NAME]), JUMP_INSN(e.selfs[i].jump),
                   sljit_get_label_addr(e.selfs[i].other));
@@ -3940,10 +4000,10 @@ static void *compile_code(VM *vm, V code)
         V name = ptr(co[CODE_NAME])[SYM_NAME];
         size_t size = sljit_get_generated_code_size(c);
         profile_code(native, size, string_bytes(name), string_length(name));
-        if (vm->jit->perf_map) {
-            fprintf(vm->jit->perf_map, "%llx %llx %.*s\n", (unsigned long long)(uintptr_t)native, (unsigned long long)size,
+        if (vm->program->jit->perf_map) {
+            fprintf(vm->program->jit->perf_map, "%llx %llx %.*s\n", (unsigned long long)(uintptr_t)native, (unsigned long long)size,
                     (int)string_length(name), string_bytes(name));
-            fflush(vm->jit->perf_map);
+            fflush(vm->program->jit->perf_map);
         }
     }
 
@@ -4073,34 +4133,51 @@ void *jit_foreign_stub(Jit *jit) { return jit->foreign; }
    profiler and the perf map. */
 static void free_native(VM *vm, uint64_t *code)
 {
-    if (vm->jit->perf_map || profile_running())
+    if (vm->program->jit->perf_map || profile_running())
         return;
-    patches_drop(vm->jit, false, (uintptr_t)code[CODE_NATIVE]);
+    patches_drop(vm->program->jit, false, (uintptr_t)code[CODE_NATIVE]);
     sljit_free_code((void *)(uintptr_t)code[CODE_NATIVE], NULL);
-    vm->jit->nfreed++;
+    vm->program->jit->nfreed++;
 }
 
 void jit_stats(VM *vm, size_t *compiled, size_t *freed)
 {
-    *compiled = vm->jit ? vm->jit->ncompiled : 0;
-    *freed = vm->jit ? vm->jit->nfreed : 0;
+    *compiled = vm->program->jit ? vm->program->jit->ncompiled : 0;
+    *freed = vm->program->jit ? vm->program->jit->nfreed : 0;
 }
 
-void jit_recompile(VM *vm)
+static void uncompile(VM *vm, uint64_t *from, uint64_t *to)
 {
-    vm_collect(vm, 0); /* so that the heap can be walked */
-    for (uint64_t *s = vm->space; s < vm->live_end;) {
+    for (uint64_t *s = from; s < to;) {
         if (!is_header(*s)) {
             s += 2;
             continue;
         }
         if (hdr_type(*s) == T_CLOSURE)
-            s[PROC_ENTRY] = (uint64_t)(uintptr_t)vm->compile_stub;
+            s[PROC_ENTRY] = (uint64_t)(uintptr_t)vm->program->compile_stub;
         else if (hdr_type(*s) == T_CODE)
             s[CODE_NATIVE] = 0;
         s += obj_words(*s);
     }
-    vm->nnatives = 0; /* never freed: frames may be running it */
+}
+
+/* From now on loops test for an interrupt, so everything compiled before is compiled again when
+   next called. Under the compile lock, as an isolate may be compiling, and the lock under which an
+   isolate adds to the program space, as the walk reads it. */
+void jit_catch_interrupts(VM *vm)
+{
+    Jit *jit = vm->program->jit;
+    if (jit->interruptible)
+        return;
+    program_compile_lock(vm);
+    jit->interruptible = true;
+    vm_collect(vm, 0); /* so that the heap can be walked */
+    program_shared_lock();
+    uncompile(vm, vm->space, vm->live_end);
+    uncompile(vm, vm->program->space.objects, vm->program->space.objects_next);
+    vm->program->nnatives = 0; /* never freed: frames may be running it */
+    program_shared_unlock();
+    program_compile_unlock(vm);
 }
 
 void jit_attach(VM *vm, Jit *jit)
@@ -4113,11 +4190,11 @@ void jit_attach(VM *vm, Jit *jit)
         jit->perf_map = sj_fopen(path, "w");
     }
     jit->slow_prims = getenv("SHEN_JIT_SLOW_PRIMS") != NULL;
-    vm->jit = jit;
-    vm->compile_stub = jit->compile;
-    vm->foreign_stub = jit->foreign;
-    vm->free_native = free_native;
-    vm->redefine = redefine;
+    vm->program->jit = jit;
+    vm->program->compile_stub = jit->compile;
+    vm->program->foreign_stub = jit->foreign;
+    vm->program->free_native = free_native;
+    vm->program->redefine = redefine;
 }
 
 bool jit_init(VM *vm)
@@ -4130,14 +4207,14 @@ bool jit_init(VM *vm)
 
 void jit_destroy(VM *vm)
 {
-    if (vm->jit) {
-        for (size_t i = 0; i < vm->nnatives; i++)
-            sljit_free_code((void *)(uintptr_t)ptr(vm->natives[i])[CODE_NATIVE], NULL);
-        vm->nnatives = 0;
-        vm->free_native = NULL;
-        vm->redefine = NULL;
-        jit_dispose(vm->jit);
-        vm->jit = NULL;
+    if (vm->program->jit) {
+        for (size_t i = 0; i < vm->program->nnatives; i++)
+            sljit_free_code((void *)(uintptr_t)ptr(vm->program->natives[i])[CODE_NATIVE], NULL);
+        vm->program->nnatives = 0;
+        vm->program->free_native = NULL;
+        vm->program->redefine = NULL;
+        jit_dispose(vm->program->jit);
+        vm->program->jit = NULL;
     }
 }
 
@@ -4172,7 +4249,7 @@ V jit_call(VM *vm, V proc, size_t n, const V *args)
     vm->count = n;
     vm->top = base + n + 2;
     size_t handlers = vm->nhandlers;
-    V result = vm->jit->adapter(vm);
+    V result = vm->program->jit->adapter(vm);
     vm->nhandlers = handlers;
     /* The stack may have moved while guest code ran. */
     vm->top = vm->stack + offset;

@@ -6,10 +6,10 @@
 #include "ops.h"
 #include "reader.h"
 #include "vm.h"
-#include "worker.h"
 
 #include <errno.h>
 #include <math.h>
+#include <pthread.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -110,7 +110,6 @@ const Primitive primitive_table[] = {
     {"shen-jit.same?", 2, NULL},
     {"shen-jit.newpv", 2, NULL},
     {"shen-jit.gc", 2, NULL},
-    {"shen-jit.thread", 1, NULL},
     {"shen-jit.foreign", 2, NULL},
     {"shen-jit.pointer?", 1, NULL},
     {"shen-jit.pointer-kind", 1, NULL},
@@ -129,12 +128,11 @@ const Primitive primitive_table[] = {
     {"shen-jit.pointer-read-only", 1, NULL},
     {"shen-jit.collect", 0, NULL},
     {"shen-jit.write-bytes", 4, NULL},
-    {"shen-jit.worker-scope", 5, NULL},
-    {"shen-jit.worker-batch", 2, NULL},
-    {"shen-jit.worker-index", 0, NULL},
-    {"shen-jit.worker-live", 0, NULL},
-    {"shen-jit.worker-cancelled?", 0, NULL},
-    {"shen-jit.worker-shared-view", 0, NULL},
+    {"shen-jit.arity", 1, NULL},
+    {"shen-jit.set-arity", 2, NULL},
+    {"shen-jit.function", 1, NULL},
+    {"shen-jit.apply", 2, NULL},
+    {"shen-jit.isolate", 3, NULL},
 };
 
 const size_t primitive_count = sizeof primitive_table / sizeof primitive_table[0];
@@ -188,7 +186,8 @@ static void capture_trace(VM *vm)
         return;
     bool evaluated;
     size_t n = jit_backtrace(vm, NULL, 0, &evaluated);
-    if (!evaluated || n == 0)
+    /* An isolate does not evaluate, so its errors all come from running code. */
+    if ((!evaluated && vm->program->owner == vm) || n == 0)
         return; /* not from running code, or raised where it was written */
     size_t k = n < TRACE_FRAMES ? n : TRACE_FRAMES;
     V t = make_vector(vm, 1 + k, V_NIL);
@@ -361,7 +360,7 @@ bool sj_equal_at(V a, V b, unsigned depth)
                : is_fix(b) ? equal_fix_real(fixval(b), real_value(a))
                            : real_value(a) == real_value(b);
     if ((is_type(a, T_STRING) && is_type(b, T_STRING)) || (is_type(a, T_BYTES) && is_type(b, T_BYTES))) {
-        if (ptr(a)[0] != ptr(b)[0])
+        if ((ptr(a)[0] ^ ptr(b)[0]) & ~SHARED_BIT)
             return false;
         for (size_t i = 1, n = byte_object_words(hdr_size(ptr(a)[0])); i < n; i++)
             if (ptr(a)[i] != ptr(b)[i])
@@ -778,7 +777,6 @@ static void show(VM *vm, Show *s, V v)
         put_text(s, v == V_TRUE ? "true" : v == V_FALSE ? "false" : v == V_NIL ? "[]"
                     : is_proc(v) ? "#<procedure>" : is_type(v, T_STREAM) ? "#<stream>"
                     : is_type(v, T_BYTES) ? "#<bytes>"
-                    : is_type(v, T_SHARED_BYTES) ? "#<shared-bytes>"
                     : is_type(v, T_EXCEPTION) ? "#<exception>" : "#<value>");
     }
 }
@@ -821,7 +819,9 @@ V exception_message(VM *vm, V e)
     vm_root(vm, &e);
     V string = make_string(vm, text, n);
     vm_unroot(vm, 1);
-    if (string != V_CLEARED) {
+    /* Kept for the next time, unless the exception was shared: the program space, which no
+       collection scans, must not point into a heap. */
+    if (string != V_CLEARED && !in_program(vm, ptr(e))) {
         ptr(e)[EXC_MESSAGE] = string;
         ptr(e)[EXC_VALUE] = V_CLEARED;
     }
@@ -864,8 +864,6 @@ static V to_string(VM *vm, V v)
         text = "#<stream>";
     else if (is_type(v, T_BYTES))
         text = "#<bytes>";
-    else if (is_type(v, T_SHARED_BYTES))
-        text = "#<shared-bytes>";
     else if (is_type(v, T_EXCEPTION))
         text = "#<exception>";
     else if (is_type(v, T_POINTER))
@@ -882,8 +880,6 @@ static FILE *stream_file(VM *vm, V s, bool output)
 {
     /* An image can retain aliases to its original standard streams, even
        after sj_init_host replaces the three standard-stream globals. */
-    if (vm->worker_owner)
-        return NULL;
     if (!is_type(s, T_STREAM))
         return NULL;
     uint64_t flags = ptr(s)[STREAM_FLAGS];
@@ -901,7 +897,7 @@ static char *home_path(VM *vm)
     V home_symbol = intern_cstr(vm, "*home-directory*");
     if (home_symbol == V_CLEARED)
         return NULL;
-    V home = *cell_value(vm, symbol_cell(home_symbol)), path = vm->args[0];
+    V home = global_value(vm, home_symbol), path = vm->args[0];
     size_t lh = is_type(home, T_STRING) ? string_length(home) : 0, lp = string_length(path);
     char *name = malloc(lh + lp + 1);
     if (!name)
@@ -930,10 +926,10 @@ static FILE *open_path(VM *vm, const char *mode)
    is written beside Path and renamed, so a binary can replace itself. */
 static V save_executable(VM *vm)
 {
-    if (vm->worker_owner || vm->worker_scope)
-        return sj_raise(vm, "worker: saving an executable is a host-only operation");
-    if (!thread_is_only(vm))
-        return sj_raise(vm, "save-executable: other threads are running");
+    if (!vm_is_builder(vm))
+        return sj_raise(vm, "save-executable: only the builder can save");
+    if (isolates_running(vm->program))
+        return sj_raise(vm, "save-executable: other isolates are running");
     V path = vm->args[0], entry = vm->args[1];
     if (!is_type(path, T_STRING))
         return sj_raise_value(vm, "~S is not a path", path);
@@ -948,23 +944,29 @@ static V save_executable(VM *vm)
     char *name = home_path(vm), *temporary = name ? malloc(strlen(name) + 5) : NULL;
     if (temporary)
         sprintf(temporary, "%s.tmp", name);
-    size_t home = symbol_cell(intern_cstr(vm, "*home-directory*"));
-    size_t hush = symbol_cell(intern_cstr(vm, "*hush*"));
-    size_t argv = symbol_cell(intern_cstr(vm, "*argv*"));
+    /* Symbols never move, and these have values, so nothing drops them. */
+    V *home = global_slot_new(vm, intern_cstr(vm, "*home-directory*"));
+    V *hush = global_slot_new(vm, intern_cstr(vm, "*hush*"));
+    V *argv = global_slot_new(vm, intern_cstr(vm, "*argv*"));
     V empty = make_string(vm, "", 0);
-    if (!temporary || empty == V_CLEARED || !image_copy_runtime(vm->self, temporary)) {
+    if (!temporary || !home || !hush || !argv || empty == V_CLEARED || !image_copy_runtime(vm->self, temporary)) {
         free(name);
         free(temporary);
         return sj_raise_value(vm, "save-executable: cannot write ~S", vm->args[0]);
     }
-    *cell_value(vm, home) = empty; /* where it was built means nothing where it runs */
+    *home = empty; /* where it was built means nothing where it runs */
     /* Nothing else keeps this symbol alive, so its value is set before anything can
-       collect: a cell kept across an allocation may be freed and used again. */
-    size_t entry_cell = symbol_cell(intern_cstr(vm, "shen-jit.*entry*"));
-    *cell_value(vm, entry_cell) = vm->args[1]; /* after the intern, which may move it */
+       collect, which would drop it. */
+    V *entry_slot = global_slot_new(vm, intern_cstr(vm, "shen-jit.*entry*"));
+    if (!entry_slot) {
+        free(name);
+        free(temporary);
+        return sj_raise(vm, "out of memory");
+    }
+    *entry_slot = vm->args[1];
     V *base = vm->stack + vm->launch_base; /* as the launcher's caller keeps them */
-    *cell_value(vm, hush) = base[0];
-    *cell_value(vm, argv) = base[1];
+    *hush = base[0];
+    *argv = base[1];
     vm->fp = vm->top = base;
     /* The old file is replaced only by a whole new one. */
     bool written = image_append(vm, temporary) && chmod(temporary, 0755) == 0;
@@ -983,8 +985,6 @@ static V save_executable(VM *vm)
 
 static V open_file(VM *vm)
 {
-    if (vm->worker_owner)
-        return sj_raise(vm, "worker: a worker cannot open streams");
     V out = intern_cstr(vm, "out"), in = intern_cstr(vm, "in");
     V path = vm->args[0], direction = vm->args[1];
     if (out == V_CLEARED || in == V_CLEARED)
@@ -1113,8 +1113,6 @@ static V append(VM *vm)
 
 static V close_stream(VM *vm, V s)
 {
-    if (vm->worker_owner)
-        return sj_raise(vm, "worker: a worker cannot close streams");
     if (!is_type(s, T_STREAM))
         return sj_raise_value(vm, "close: ~S is not a stream", s);
     uint64_t *o = ptr(s);
@@ -1144,36 +1142,65 @@ bool sj_take_interrupt(VM *vm)
 
 /* Standard input is read here rather than through stdio, whose read would
    restart after a Ctrl-C (SA_RESTART, which writes need) and which does not say
-   when it is about to wait. The wait is in select, which a signal always ends.
-   Only the wait is without the lock, so threads reading at once take turns over
-   the buffer: others run meanwhile, and whoever gets the lock first reads. */
+   when it is about to wait. The wait is in select, which a signal always ends,
+   in slices of 100 ms while isolates exist, so that a kill reaches one waiting.
+   Isolates reading at once take turns over the buffer (read_stdin). */
 static unsigned char input[4096];
 static size_t input_next, input_end;
 
 #ifndef _WIN32
-static bool input_ready(bool wait)
+/* Waits at most ms, or for ever if it is negative. */
+static bool input_ready(long ms)
 {
     fd_set in;
     FD_ZERO(&in);
     FD_SET(STDIN_FILENO, &in);
-    struct timeval now = {0, 0};
-    int ready = select(STDIN_FILENO + 1, &in, NULL, NULL, wait ? NULL : &now);
+    struct timeval limit = {ms / 1000, ms % 1000 * 1000};
+    int ready = select(STDIN_FILENO + 1, &in, NULL, NULL, ms < 0 ? NULL : &limit);
     return ready > 0 || (ready < 0 && errno != EINTR); /* a bad descriptor: read reports it */
 }
 #endif
 
+static V read_stdin_waiting(VM *vm);
+
+/* Isolates read it one at a time (isolate.c). One waiting for its turn, while another waits for
+   input, still takes a Ctrl-C or a kill: it tries the lock every 10 ms, which a mutex's wait could
+   not let it do. Two reading at once are rare, and the wait is for input anyway. */
+static pthread_mutex_t input_lock = PTHREAD_MUTEX_INITIALIZER;
+
 static V read_stdin(VM *vm)
 {
     fflush(stdout);
-    while (input_next == input_end) {
-        /* A Ctrl-C is for the main thread, which the REPL runs in. */
-        if (vm->interrupted == INTERRUPT && (!vm->thread || vm->thread->main) && sj_take_interrupt(vm))
+    if (!vm->program->isolates)
+        return read_stdin_waiting(vm);
+    while (pthread_mutex_trylock(&input_lock) != 0) {
+        if (vm->interrupted == INTERRUPT && sj_take_interrupt(vm))
             return sj_raise(vm, "interrupted");
+        if (sj_isolate_killed(vm))
+            return sj_raise(vm, "killed");
 #ifdef _WIN32
-        /* select is for sockets there, so the read itself waits, without the lock,
-           and a Ctrl-C ends it. One thread reads at a time; the others look again. */
+        win_sleep_briefly();
+#else
+        struct timespec pause = {0, 10000000};
+        nanosleep(&pause, NULL);
+#endif
+    }
+    V v = read_stdin_waiting(vm);
+    pthread_mutex_unlock(&input_lock);
+    return v;
+}
+
+static V read_stdin_waiting(VM *vm)
+{
+    while (input_next == input_end) {
+        /* A Ctrl-C is for the builder, which the REPL runs in. */
+        if (vm->interrupted == INTERRUPT && sj_take_interrupt(vm))
+            return sj_raise(vm, "interrupted");
+        if (sj_isolate_killed(vm))
+            return sj_raise(vm, "killed");
+#ifdef _WIN32
+        /* select is for sockets there, so the read itself waits, and a Ctrl-C ends it. */
         static bool input_busy;
-        Thread *t = vm->threads ? thread_leave(vm) : NULL;
         long n = 1;
         if (input_busy) {
             win_sleep_briefly();
@@ -1186,22 +1213,17 @@ static V read_stdin(VM *vm)
                 input_end = (size_t)n;
             }
         }
-        if (t)
-            thread_enter(t);
         if (n == 0)
             return fix(-1);
 #else
-        if (input_ready(false)) {
+        if (input_ready(0)) {
             ssize_t n = read(STDIN_FILENO, input, sizeof input);
             if (n <= 0)
                 return fix(-1);
             input_next = 0;
             input_end = (size_t)n;
         } else {
-            Thread *t = vm->threads ? thread_leave(vm) : NULL;
-            input_ready(true);
-            if (t)
-                thread_enter(t);
+            input_ready(vm->program->isolates ? 100 : -1);
         }
 #endif
     }
@@ -1242,10 +1264,7 @@ static void catch_interrupts(VM *vm)
     if (interrupt_vm == vm)
         return;
     interrupt_vm = vm;
-    if (!vm->interruptible) {
-        vm->interruptible = true;
-        jit_recompile(vm);
-    }
+    jit_catch_interrupts(vm);
 #ifdef _WIN32
     win_catch_interrupts(on_interrupt);
 #else
@@ -1301,21 +1320,21 @@ bool sj_init_host(VM *vm)
                {"*sterror*", STREAM_STDERR | STREAM_OUTPUT | STREAM_OPEN}};
     FILE *files[] = {stdin, stdout, stderr};
     for (size_t i = 0; i < 3; i++) {
-        V s = make_stream(vm, vm->worker_owner ? 0 : std[i].flags,
-                         vm->worker_owner ? NULL : files[i]);
+        V s = make_stream(vm, std[i].flags, files[i]);
         if (s == V_CLEARED)
             return false;
         vm_root(vm, &s); /* interning may collect */
         V g = intern_cstr(vm, std[i].global);
         vm_unroot(vm, 1);
-        if (g == V_CLEARED)
+        V *slot = g == V_CLEARED ? NULL : global_slot_new(vm, g);
+        if (!slot)
             return false;
-        *cell_value(vm, symbol_cell(g)) = s;
+        *slot = s;
     }
     V home = intern_cstr(vm, "*home-directory*");
     if (home == V_CLEARED)
         return false;
-    if (*cell_value(vm, symbol_cell(home)) == V_CLEARED) {
+    if (global_value(vm, home) == V_CLEARED) {
         V empty = make_string(vm, "", 0);
         if (empty == V_CLEARED)
             return false;
@@ -1324,11 +1343,32 @@ bool sj_init_host(VM *vm)
         vm_root(vm, &empty);
         home = intern_cstr(vm, "*home-directory*");
         vm_unroot(vm, 1);
-        if (home == V_CLEARED)
+        V *slot = home == V_CLEARED ? NULL : global_slot_new(vm, home);
+        if (!slot)
             return false;
-        *cell_value(vm, symbol_cell(home)) = empty;
+        *slot = empty;
     }
     return true;
+}
+
+/* (shen-jit.apply F Args): F's procedure, or F if it is one, called with the elements of a
+   list, through a nested call. fn's templates use it for arities above those they spell out. */
+static V apply_function(VM *vm, V f, V list)
+{
+    V proc = is_symbol(f) ? *cell_function(vm, symbol_cell(f)) : f;
+    if (!is_proc(proc))
+        return is_symbol(f) ? sj_raise_value(vm, "undefined function ~S", f)
+                            : sj_raise_value(vm, "~S is not a function", f);
+    V args[256];
+    size_t n = 0;
+    for (; is_pair(list); list = ptr(list)[1]) {
+        if (n == 256)
+            return sj_raise(vm, "shen-jit.apply: more than 256 arguments");
+        args[n++] = ptr(list)[0];
+    }
+    if (list != V_NIL)
+        return sj_raise_value(vm, "shen-jit.apply: ~S is not a list", vm->args[1]);
+    return jit_call_nested(vm, proc, n, args);
 }
 
 static bool vector_index(V v, V i)
@@ -1523,10 +1563,11 @@ static V bytes_primitive(VM *vm, unsigned prim)
             return sj_raise_value(vm, "bytes: ~S is not a byte buffer", a);
         if (!bytes_range(length, b, c))
             return sj_raise_value(vm, "shen-jit.bytes->string: ~S is not a valid range", b);
-        /* substring reads the buffer again after allocating, which may move it. A pointer's
-           memory stays where it is. */
-        return is_type(a, T_BYTES) ? substring(vm, (size_t)fixval(b), (size_t)fixval(c))
-                                   : made(vm, make_string(vm, base + fixval(b), (size_t)fixval(c)));
+        /* substring reads the buffer or string again after allocating, which may move it. A
+           pointer's memory stays where it is. */
+        return is_type(a, T_BYTES) || is_type(a, T_STRING)
+                   ? substring(vm, (size_t)fixval(b), (size_t)fixval(c))
+                   : made(vm, make_string(vm, base + fixval(b), (size_t)fixval(c)));
     default: /* P_COPY_BYTES: to, its start, from, its start, how many */
         if (!memory_of(a, &base, &length))
             return sj_raise_value(vm, "bytes: ~S is not a byte buffer", a);
@@ -1656,18 +1697,22 @@ V sj_primitive(VM *vm, size_t index)
         if (!vector_index(a, b))
             return is_type(a, T_VECTOR) ? sj_raise_value(vm, "address->: ~S is not a valid index", b)
                                         : sj_raise_value(vm, "address->: ~S is not an absvector", a);
+        if (hdr_shared(ptr(a)[0]))
+            return sj_raise_value(vm, "address->: ~S is shared, and cannot change", a);
         ptr(a)[1 + fixval(b)] = vm->args[2];
         return a;
-    case P_SET:
+    case P_SET: {
         if (!is_symbol(a))
             return sj_raise_value(vm, "set: ~S is not a symbol", a);
-        return *cell_value(vm, symbol_cell(a)) = b;
+        V *slot = global_slot_new(vm, a);
+        return slot ? (*slot = b) : sj_raise(vm, "out of memory");
+    }
     case P_VALUE:
         if (!is_symbol(a))
             return sj_raise_value(vm, "value: ~S is not a symbol", a);
-        if (*cell_value(vm, symbol_cell(a)) == V_CLEARED)
+        if (global_value(vm, a) == V_CLEARED)
             return sj_raise_value(vm, "~S has no value", a);
-        return *cell_value(vm, symbol_cell(a));
+        return global_value(vm, a);
     case P_SIMPLE_ERROR:
         if (!is_type(a, T_STRING))
             return sj_raise_value(vm, "simple-error: ~S is not a string", a);
@@ -1771,8 +1816,6 @@ V sj_primitive(VM *vm, size_t index)
                        number(ptr(a)[1]) >= 0);
     case P_QUIETP: return boolean(quiet_handler(vm));
     case P_MARK_TOPLEVEL:
-        if (vm->worker_owner)
-            return sj_raise(vm, "worker: a worker cannot install a REPL interrupt handler");
         vm->trace_floor = (size_t)(vm->fp - vm->stack);
         vm->trace = V_NIL;
         vm->repl_handlers = vm->nhandlers;
@@ -1818,12 +1861,10 @@ V sj_primitive(VM *vm, size_t index)
             return made(vm, v);
         }
     case P_EXIT:
-        if (vm->worker_owner || vm->worker_scope)
-            return sj_raise(vm, "worker: exit is a host-only operation");
         if (!is_fix(a) || fixval(a) < 0 || fixval(a) > 255)
             return sj_raise_value(vm, "~S is not an exit status", a);
-        if (vm->threads)
-            thread_exit(vm, (int)fixval(a));
+        if (vm->program->isolates)
+            program_exit(vm, (int)fixval(a)); /* other isolates may be blocked reading a stream */
         exit((int)fixval(a)); /* flushes every open stream */
     case P_SAVE_EXECUTABLE: return save_executable(vm);
     case P_BYTESP: return boolean(is_type(a, T_BYTES));
@@ -1847,7 +1888,7 @@ V sj_primitive(VM *vm, size_t index)
         /* A new variable in the vector of bindings a, whose element 1 is the
            next offset: its binding becomes b, which marks none, and the
            offset moves on, as the kernel's shen.newpv does. */
-        if (!is_type(a, T_VECTOR) || hdr_size(ptr(a)[0]) < 2)
+        if (!is_type(a, T_VECTOR) || hdr_size(ptr(a)[0]) < 2 || hdr_shared(ptr(a)[0]))
             return sj_raise_value(vm, "shen-jit.newpv: ~S is not a vector of bindings", a);
         V n = ptr(a)[2];
         if (!is_fix(n) || fixval(n) < 0 || (uint64_t)fixval(n) >= hdr_size(ptr(a)[0]))
@@ -1862,22 +1903,39 @@ V sj_primitive(VM *vm, size_t index)
            that variable's, as the kernel's shen.gc does. */
         if (b != V_FALSE)
             return b;
-        if (!is_type(a, T_VECTOR) || hdr_size(ptr(a)[0]) < 2 || !is_fix(ptr(a)[2]))
+        if (!is_type(a, T_VECTOR) || hdr_size(ptr(a)[0]) < 2 || !is_fix(ptr(a)[2]) || hdr_shared(ptr(a)[0]))
             return sj_raise_value(vm, "shen-jit.gc: ~S is not a vector of bindings", a);
         ptr(a)[2] = fix(fixval(ptr(a)[2]) - 1);
         return V_FALSE;
-    case P_THREAD: return thread_start(vm);
-    case P_WORKER_SCOPE: return worker_scope(vm);
-    case P_WORKER_BATCH: return worker_batch(vm);
-    case P_WORKER_INDEX: return worker_index(vm);
-    case P_WORKER_LIVE: return worker_live(vm);
-    case P_WORKER_CANCELLED: return worker_cancelled(vm);
-    case P_WORKER_SHARED_VIEW: return worker_shared_view(vm);
+    case P_ISOLATE: return sj_isolate(vm);
     case P_FOREIGN: case P_POINTERP: case P_POINTER_KIND: case P_POINTER_ADDRESS: case P_BYTES_POINTER:
     case P_POINTER_STRING: case P_POINTER_BYTES: case P_ERRNO: case P_C_ERRNO: case P_POINTER_KILL:
     case P_POINTER_SIZED: case P_SET_POINTER: case P_POINTER_GUARD: case P_POINTER_OWNER: case P_POINTERS_DEAD:
     case P_POINTER_READ_ONLY:
         return ffi_primitive(vm, (unsigned)index);
+    case P_ARITY: {
+        V n = is_symbol(a) ? *cell_arity(vm, symbol_cell(a)) : V_CLEARED;
+        return n == V_CLEARED ? fix(-1) : n;
+    }
+    case P_SET_ARITY:
+        if (!vm_is_builder(vm))
+            return sj_raise(vm, "only the builder can define functions");
+        if (isolates_running(vm->program))
+            return sj_raise(vm, "the program cannot change while other isolates run");
+        if (!is_symbol(a))
+            return sj_raise_value(vm, "shen-jit.set-arity: ~S is not a symbol", a);
+        if (!is_fix(b) || fixval(b) < -1 || fixval(b) > 255)
+            return sj_raise_value(vm, "shen-jit.set-arity: ~S is not an arity", b);
+        *cell_arity(vm, symbol_cell(a)) = fixval(b) < 0 ? V_CLEARED : b;
+        return b;
+    case P_FUNCTION: {
+        V f = is_symbol(a) ? *cell_function(vm, symbol_cell(a)) : V_CLEARED;
+        if (is_proc(f))
+            return f;
+        return is_symbol(a) ? sj_raise_value(vm, "undefined function ~S", a)
+                            : sj_raise_value(vm, "~S is not a symbol", a);
+    }
+    case P_APPLY: return apply_function(vm, a, b);
     case P_COLLECT:
         vm_collect(vm, 0);
         return V_TRUE;

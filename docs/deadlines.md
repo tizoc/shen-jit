@@ -47,7 +47,7 @@ This returns 10. Clock injection also makes boundary and progress tests independ
 converting the timespec to integer milliseconds. Windows uses
 [GetTickCount64](https://learn.microsoft.com/en-us/windows/win32/api/sysinfoapi/nf-sysinfoapi-gettickcount64),
 whose timer resolution is normally 10–16 ms. Millisecond units do not promise millisecond resolution.
-Suspend accounting follows the selected host clock. Wall-clock adjustments do not define these budgets. OS scheduling and reacquiring the VM lock can delay
+Suspend accounting follows the selected host clock. Wall-clock adjustments do not define these budgets. OS scheduling can delay
 observation of expiry; a deadline is not a hard real-time completion guarantee.
 
 The system clock needs dynamically loadable libraries. It does not add a clock primitive or kernel I/O

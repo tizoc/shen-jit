@@ -1,7 +1,7 @@
 \\ Memory outside the Shen heap, in Shen alone over lib/ffi.shen, which has to be loaded first.
 \\
-\\ A block stays where it is, so C may keep its address, and a blocking call uses it without a
-\\ copy. The collector neither copies nor scans it, and does not free it: only memory.free
+\\ A block stays where it is, so C may keep its address, and passes as a pointer with no copy.
+\\ The collector neither copies nor scans it, and does not free it: only memory.free
 \\ does, as with malloc in C. A block is a pointer with a length, so what reads a byte buffer
 \\ reads it too: shen-jit.u8, shen-jit.f64, shen-jit.copy-bytes and the rest, each checked
 \\ against the length. Give it to C as a `pointer`. A saved image holds it dead, and reading one

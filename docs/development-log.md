@@ -436,6 +436,128 @@ Nothing in the runtime changes for it alone.
   collection on short lists at 4 MB took about 217 µs instead of 330, where a fifth was hoped for: reading 700 KB through
   cold caches is bound by memory as well. Reverted.
 
+### The program space (2026-11-12, Apple M3 Max, against 0.7)
+
+Step 1 of the parallelism redesign, on the `new-parallelism` branch, to evaluate it. Every symbol has a slot of a
+reserved range per VM that never moves, in one of two tables, published or not, and an installed definition is copied
+there with all it reaches. A pointer into the range is one test in the copier and is not followed, and the constant
+slots of code there are neither scanned nor freed. `program.c` is 450 lines with its comments, and about 490 lines
+changed elsewhere, images included.
+
+- **How it differs from the image region tried twice** (above): no barrier and no scan. Only what cannot change is
+  copied, so nothing there points into the heap; a definition that reaches anything else, such as a grammar loop's
+  byte table, stays in the heap, and a check before copying makes sure it leaves nothing behind.
+- **Live heap at startup** 824 to 149 KB; 595 KB of objects and 1,713 published symbols in the space.
+- **Collection time,** median of 7, alternating: kernel suite 17.0 to 13.0 ms (wall 181.4 to 180.7 ms); loading
+  `lib/datalog.shen` 6.0 to 3.0 ms (79.1 to 77.6); startup 4.4 to 4.0 ms.
+- **Workloads never used for tuning,** 7 rounds: startup 0.87, kernel suite 0.98, extension tests 0.95, stlib install
+  1.01, contract examples 0.97, THORN set 1.03, L 0.90, schubert 0.94, ec 0.92. A symbol reached is marked in place
+  instead of copied, which the provers' terms are full of.
+- **Benchmark suite,** best of 12 samples each: 0.98 overall, median 0.99; `vector create (big)` 0.81 and `absvector
+  create (big)` 0.80, the rows whose collections copied the program most often; nothing above 1.02 but the equality
+  group's control loop, 1.08, which runs nothing.
+- **Given up, as decided:** code replaced there is never freed. `tests/cli.sh`'s check that native code goes back to the
+  JIT now evaluates expressions instead of redefining a function. A small definition's inline body names its
+  parameters, so those symbols are published with it, bounded by the code kept.
+- **A bug on the way.** A promotion that failed halfway left copies of nested code in the space, naming the slots of the
+  heap code they came from. An image then marked those slots as the program's, so collections stopped scanning a live
+  heap definition's constants, and a grammar loop's byte table moved under it. `make test-lib-stress` caught it, in the
+  JSON image test. The check before copying keeps it from happening, and a copy that still fails, out of memory, names
+  no slots and puts back those it changed.
+- **Found in passing:** `tests/cli.sh`'s constant-reuse check fails to run on `main` too: its script stops on a free
+  variable, `X`, so the check passes without testing anything.
+
+### Global slots in the VM (2026-11-12, Apple M3 Max, against the program space above)
+
+Step 2 of the parallelism redesign, on the same branch. A global's value leaves the root array for a slot inline after
+the VM, in its own block of address space, committed as numbers grow. A symbol gets a number when code names it as a
+global or it is set, and a dropped symbol's number is reused, with those above the last one kept trimmed as cells are.
+Function cells stay in the root array, one per symbol instead of two entries. So a constant global is one load at a
+fixed offset from the VM's register, and each VM has its own values, which isolates will need.
+
+- **Roots:** 60 global slots at startup, where every one of 1,719 symbols had a value cell.
+- **Reading and writing a global,** 50M iterations, 5 runs alternating: a constant global read 47 ms either way, a set
+  26.9 against 27.7 ms, under 0.02 ns an iteration. A read through a symbol known only at run time was 54 to 60 ms with a
+  test for a symbol with no number; slot 0 is always unbound, so a read needs no such test and goes to C as an unbound
+  one does, and without it 54 either way. Only a store tests.
+- **Workloads never used for tuning,** 7 rounds: 0.97 to 1.02 (THORN 1.01 to 1.02, kernel suite 1.00). Benchmark suite,
+  best of 12 samples: 1.00. Neutral, as the design expected.
+- **Left for the step that adds isolates,** as they do nothing without them: a dictionary for an isolate's own symbols,
+  which have no number, the port's isolate start, empty property lists with the arity table moved into the program
+  space, and the proposed `fn` templates, guards on installing and `gensym` ranges. The owner asked for them at once,
+  below.
+
+### What an isolate needs without the builder (2026-11-12, Apple M3 Max, against the global slots above)
+
+The rest of step 2, built before isolates exist, so `test_kl --isolate` starts one in a VM
+that was the builder: its globals cleared, the program's constants put back, `sj_start_isolate` and the port's
+`shen-jit.start-isolate` setting the run state. Twenty checks run a program there: printing, Prolog, `gensym` counting
+from the isolate's base, `fn` at one, two and five arguments and on a primitive, arities, a property list and globals
+of its own (one through the dictionary), and `eval`, `eval-kl` and installing refused. They pass, under a collection
+at every allocation too.
+
+- **The builder flag and guards:** a VM is the builder until an isolate starts in it. Installing, foreign definitions and
+  recording an arity refuse elsewhere, in C; `eval` and `eval-kl` refuse first, in the port, on `shen-jit.*isolate*`,
+  which only an isolate sets, so the builder needs nothing set before its startup evaluates.
+- **The dictionary:** where only the builder numbers globals, an isolate keeps the value of a global with no number by
+  symbol, in an open-addressing table that collections walk, needing no rehash as a symbol's hash comes from its name.
+- **Arities beside function cells:** two entries per symbol again, function and arity, with `shen-jit.arity` and
+  `shen-jit.set-arity`; six kernel functions read or wrote the property.
+- **`fn`.** Templates over the arity, whose last call reads the name's function cell inline (`shen-jit.function`),
+  were tried first, in place of lambda forms. 20M calls through a one-argument closure took 46 ms against 27, as a
+  compiled form inlines a small callee, and through a two-argument one 117 against 49, as stage 0 code has no
+  `entry`. Lowering the templates of two to four at startup brought that to 84. A template made per `fn` call also
+  allocated, and the kernel suite read 1.04 alone, with a collection more. So `fn` makes the form when first asked
+  and keeps it, as the port did before: compiled in the builder, from a template in an isolate. The builder is back to
+  27 and 49; making 2M closures through `fn` takes 36 ms against 31, a lookup more.
+- **Two things a template needed.** Calling a symbol's value does not call its function, so `shen-jit.function` reads
+  the cell; a primitive's cell was empty, as compiled code calls it in line, so each gets a definition made from a code
+  object at startup. And a value call with several arguments went one at a time unless the closure had an `entry`, which
+  a definition's never has, so it failed: `jump-unless-entry` now also lets through a closure whose code takes exactly
+  that many, and a foreign function of that arity. Past four arguments a template uses `shen-jit.apply`, a nested call.
+- **Workloads never used for tuning,** 7 rounds against the global slots above: 0.96 to 1.01. Benchmark suite, best
+  of 12 samples: 1.00, median 1.00; `symbol equality (true)`, `shen.sysfunc? (false)` and a control loop at 1.05
+  to 1.06, rows that move with placement. The machine had a load of 4 to 5 from other work; the runs alternated.
+
+### The program apart from the VM (2026-11-12, Apple M3 Max, against the build above)
+
+The first piece of step 3: what isolates will share moves out of `VM` into `Program`, which a VM points at: the
+program space, published symbols, function cells and arities, constant slots, global numbering, the native-code list
+and the JIT. A VM is now a context: heap, stack, handlers, global slots, the dictionary, its own symbols and the
+rest. Emitted code reads only the context through the VM register, except `shen-jit.function`, which loads the
+program pointer first. The program's roots may point into one heap, its owner's, the builder's, and only that
+context's collections scan and sweep them. About 300 references changed, mechanically.
+
+- **Cost,** alternating against the build above: workloads never used for tuning 0.97 to 1.02; benchmark suite,
+  best of 12 samples, 1.00, median 1.00, no row above 1.04. Nothing.
+
+- **What would not be shared,** listed with a program that walks every function cell: at startup, none of 1,225
+  definitions stays in the heap. With the I/O, socket, JSON and Datalog libraries loaded, 34 of 2,611 do, all foreign
+  functions, whose descriptor is a vector, which promotion refuses as mutable. A JSON parse then compiles grammar
+  loops, and four stay, each for its byte table. Both need a way to be shared before isolates can call them.
+
+### Foreign functions and byte tables in the program space (2026-11-12, Apple M3 Max, against the split above)
+
+So that isolates can call them, the two kinds of definition that stayed in the heap go into the program space.
+
+- **Foreign functions:** `shen-jit.foreign` copies the procedure and its description there. The description is a
+  vector, which promotion refuses in general, but the FFI library makes it fresh, fills it once and keeps nothing
+  (`ffi.define`), and only the runtime reads it. The address found at the first call is a raw field.
+- **Byte tables:** the byte primitives read strings, and refuse to store into one, and the grammar library makes each
+  table a string. A string is laid out as a byte buffer, so the inline read tests the type through a mask that lets
+  both through, with no more instructions; stores keep the exact test. Considered: an immutable vector type, which
+  would duplicate shared storage, step 5's way to make any value immutable; and read-only byte buffers, which would add
+  a test to every store.
+- **Result:** with the I/O, socket, JSON and Datalog libraries loaded and a JSON parse run, none of 2,611 definitions
+  stays in the heap.
+- **A bug on the way:** the read compared the masked header with the unmasked constant, so every inline read went to
+  C. Strings and buffers still read right, slowly; `tests/native.shen` caught it, where a slow path assumed a failure.
+- **Parsing:** 30 parses of 270 KB of JSON, five runs alternating, 3.93 to 3.96 s with tables as strings against 3.95
+  to 4.14 s with byte buffers, a first run of 5.5 s left out.
+- **Elsewhere,** alternating against the split: workloads never used for tuning 0.97 to 1.02 over 11 rounds, where a
+  first run of 7, with the machine at a load of 3, read 1.04 to 1.06 on three rows; the kernel suite alone 0.99;
+  benchmark suite 1.00.
+
 ### Copying (2026-11-02, M3 Max, against the build before)
 
 - **No `memcpy` per object,** about 10 lines. `memmove` was 61% of a run that spent 63.5% collecting. Kernel suite
@@ -1301,6 +1423,18 @@ machine on a Ryzen 5 5600X with Ubuntu 20.04, gcc 9.4 and glibc 2.31. A bare rat
   exception, but `vm->trace` was one for all, and a trace is not captured over another: once one thread's error had
   one, every later thread's error showed it. A thread keeps its own now, as it keeps its exception.
 
+- **Removed (2026-11-12),** with isolates in its place, which run in parallel (design D). Nothing in the runtime
+  swaps a thread's stack, handlers and roots any more, collections scan one stack, and the ticker and `PREEMPT` are
+  gone, with `thread.c`'s 355 lines; what stayed of it, the C stack bounds and leaving with `_exit` while other
+  threads may be blocked on a stream, moved to `isolate.c`. A `blocking` foreign call no longer copies its byte
+  buffers, as nothing else moves the heap during it. Until isolates serve HTTP connections, the listener serves
+  them one at a time, in the program that calls `http.run`, until a handler stops it. Tests that ran a peer in a
+  thread take turns instead, a loopback connection waiting in the listen backlog and a short message in the socket,
+  or run the peer in an isolate where waiting is the point, as for an 8 MB send; those that had another thread collect
+  while C waited were dropped, as no other thread collects an isolate's heap.
+  Against the build with isolates, alternating, the benchmark suite's geometric means were 0.99 and 1.00 over two
+  rounds; `make test-libs` took 39 s against 92 s, the worker suites gone.
+
 ### Structured workers (2026-11-08 to 2026-11-10, Apple M3 Max)
 
 Parallel Datalog queries, as fork/join over a relation split in shards, with the whole lookup relation in each.
@@ -1343,6 +1477,698 @@ Parallel Datalog queries, as fork/join over a relation split in shards, with the
   a temporary buffer view, 78,475 of them per result: writing into one buffer the encoder owns took encoding a
   real result from 10.001 to 1.225 ms, and 4 workers on the source-deps queries from 8.527 to 3.912 ms warm, still
   above packed bytes, which that example's CLI keeps.
+
+- **Removed (2026-11-12),** with `parallel.map`, parallel Datalog and the `source-deps` example's batches over them,
+  to come back over isolates: `worker.c`'s 447 lines, six primitives, the shared view's object type and its two
+  branches in the JIT's byte paths, three libraries and their tests and page.
+
+### Isolates (2026-11-12, Apple M3 Max with 16 cores, against foreign functions in the program space)
+
+Step 3 of design D: isolates on OS threads over the builder's program, spawned by name, with one copier for
+arguments and messages, channels, `receive-any`, monitors, `kill`, the compile lock, installs by rendezvous, and
+publication hooks, which the grammar library uses. About 1,310 lines in `isolate.c`, comments included, and 350
+elsewhere, against an estimate of 850 in all.
+
+- **Parallel work:** `fib 32` eight times took 105 to 122 ms in sequence, 13 to 15 ms in one isolate, and 15 to 18 ms
+  in eight at once, with the machine at a load of 3.
+- **Messages:** a small message there and back 3.4 to 4.1 µs; a list of 40,000 elements, numbers, strings and reals,
+  there and back 3.1 to 3.4 ms.
+- **Spawning:** a spawn with a reply and the isolate's end first took 285 to 311 µs, nearly all in reserving and
+  releasing three 64 GiB heap regions: alone, reserving, touching and releasing 192 GiB took 202 µs, and 24 GiB 32 µs.
+  An isolate reserves 8 GiB a region, and the whole took 42 to 48 µs. What is left is mostly address space, clearing a
+  new stack and global slots, and starting a thread. **Not tried:** keeping ended contexts for new isolates.
+- **Channels:** a profile of 200,000 spawns, each leaving its reply channel open, showed the search for a free slot,
+  linear then. A free list replaced it. Such channels stay until their receiver ends, as the spec says; freeing a
+  channel once its receive endpoint is dropped would need the collector to track endpoints, as it tracks files.
+- **Defining beside isolates:** 200 definitions took 4.8 ms beside four busy isolates and 0.7 ms alone, about 20 µs a
+  rendezvous.
+- **Without isolates,** nothing in emitted code changes: the growth stub compares one more value, and compiling at a
+  first call takes a lock only once isolates exist. Benchmark suite, alternating with the build before, geometric
+  means 1.01 and 1.00 over two rounds, a 1.20 on one compile-pipeline row in the first round reading 1.01 in the second.
+- **Deadlocks found before running:** an isolate waiting for the compile lock, which the builder holds for a whole
+  rendezvous, counted as running, so the builder would wait for it for ever; it now waits inside a blocking region,
+  and the lock is recursive, as the builder collects while it holds it. An isolate starting during a rendezvous counted
+  as running too; it is counted from its first turn. An isolate clearing its interrupt just as the builder set it could
+  keep the limit the builder cleared, and frame checks would miss it, so the builder asks again every millisecond.
+- **The fix-up:** a name published while an isolate holds its own symbol for it must not give that isolate two symbols.
+  The isolate collects once with the fix-up on before anything published can reach it: at its next safe point, and as
+  it receives or interns, which may collect anyway.
+- **Handles print themselves:** an endpoint or isolate is an absvector whose first element is a tag. With the
+  primitive's name as a tag, printing one failed, as the printer calls an absvector's first element when it names a
+  function; the tags are now port functions that print them.
+- **A bug on the way:** a collection raised the count of function cells to cover cell 0, the reserved one, even in a VM
+  that had made none, and its next collection read a chunk that did not exist; `test_runtime` caught it.
+- **Checks:** 34 cases, 20 runs in a row, under a collection at every allocation (10 s), and under ThreadSanitizer,
+  which reports only the builder's writes of an isolate's interrupt and limit, the protocol Ctrl-C and the thread
+  ticker use.
+- **Rejected: letting `(fn F)` cross.** Made in the builder, it is a closure compiled into the builder's heap, which
+  the spec had crossing by pointer; that would need the builder's lambda forms in the program space. Passing the name
+  is enough, as the isolate gets the function with `fn` itself, so a function crosses by its name.
+- **Open:** a definition whose promotion failed stays in the builder's heap, where an isolate must not call it, though
+  none of 2,611 does with the libraries loaded.
+- **The name:** isolates, as what sets them apart is a heap, globals and a property list of their own, with values
+  crossing only as copies or shared immutable data, and the name does not tie them to OS threads. Rejected: process,
+  which `lib/process.shen` uses for the operating-system processes it starts, with its own `process.kill` and `make
+  test-process`; thread, the name of the global-lock feature they replace, which also suggests a shared heap; worker,
+  after the worker scopes they replace; actor, since messages go to channels, not to the isolate; fiber or task, which
+  suggest many cheap cooperative ones on one thread, a name kept for that if it ever comes.
+
+### Isolates made simpler (2026-11-12, Apple M3 Max, against the build without threads)
+
+The owner's decisions after step 3 (design D's spec, "Simplifications"), each taking machinery out:
+
+- **The program is fixed while isolates run.** Defining, foreign definitions and arities raise in the builder until
+  every other isolate has ended. Gone: the rendezvous, the blocking regions around foreign calls, C's release, stdin
+  and the compile lock, the re-asking every millisecond, and the publication counter. Few programs need to define
+  beside running isolates; one that does defines first, or waits for its isolates' ends.
+- **One table of symbols for every isolate.** At the first spawn the builder's own symbols are published, and from
+  then on a new name's symbol is made in the program space under a lock, by whichever isolate interns it; any
+  isolate numbers globals under the same lock. Gone: isolates' heap symbols, the fix-up collection, the per-isolate
+  dictionary of unnumbered globals with its sweep, and symbols crossing by name. **Cost:** no symbol is freed once
+  isolates exist. Two races ThreadSanitizer found in the lock-free lookup, on a test of eight isolates interning
+  and numbering 3,000 shared names each: a lookup re-read the empty entry where its probe stopped, which another
+  isolate could have filled with a different name, and without ordering; it now returns what the probe read. The
+  count of global numbers is read atomically by collections. With those, it reports nothing.
+- **`kill` at channel operations only.** A safe-point `kill` would need a loop check compiled into every loop once an
+  isolate exists, which cost 0.54 ns against 0.43 an empty loop turn on the Ryzen VM when threads needed it (under
+  "Threads"). A killed isolate now raises at its next send or receive, or before it starts, and is woken if it
+  waits; `ATTEND` and the recompiling at the first spawn are gone. A bug on the way: `send` checked only while the
+  channel was full, so a killed isolate sending into room went on; GC stress showed it.
+- **A definition's code holds only what the reader makes.** One holding a vector, closure or other value with no
+  syntax is refused rather than left in the builder's heap, where an isolate calling it would have crashed. So
+  function cells point only into the program space, and collections no longer scan them. Rejected: copying such
+  constants as read-only values, which would have needed the store check on every vector store. Native code's
+  `(const E)` follows the same rule.
+- **Grammars compile after the form that defines them.** Compiling at the end of the outermost load, decided first,
+  fails for a script, which is one load: an isolate it spawns would find loops not compiled, and the builder cannot
+  compile beside it. Compiling at definition, during macro expansion, comes before any of the file's functions exist,
+  as the kernel expands a whole file before evaluating it, so every guard calling one would lose its table. So a load
+  runs functions registered with `shen-jit.after-form` after each form, and the grammar library compiles there the
+  loops of rules whose forms have run. No guard in the libraries loses its table; two test grammars whose guards are
+  defined after them are now tested in place. Laziness had saved about 10 ms of an 80 ms load of the HTTP and JSON
+  libraries, 92 loops.
+- **Size and speed:** the runtime lost about 220 lines net, `isolate.c` going from 1,377 to 1,182. Benchmark suite,
+  alternating: geometric means 0.99 and 1.00 over two rounds. A spawn with its reply and end 47 to 48 µs against 49
+  to 52, a small message's round trip 4.1 µs against 4.2 to 4.3, a 40,000-element list's 3.17 to 3.20 ms against 3.37
+  to 3.45.
+
+### The HTTP listener on isolates (2026-11-12, Apple M3 Max with 16 cores, against the listener serving in turn)
+
+Step 4 of design D. `http.run` supervises, in its caller, an isolate for each connection, at most `max-connections`,
+given the accepted descriptor, which it alone then uses. A handler goes by name, `f` or `[f Arg ...]`, as closures do
+not cross, and stops its server with `(http.stop (http.current-server))`, a copy that holds the supervisor's channel.
+The supervisor asks a connection to stop by closing a channel the connection looks at, and kills those left once the
+grace has passed. The runtime gained `shen-jit.wait-any`, a wait on several receive endpoints with a time limit that
+receives nothing, and `shen-jit.check-kill`, which the I/O library's socket waits call between their slices of
+100 ms, so that a kill reaches a connection waiting on its socket. The listener has 387 lines, against 327 over
+threads in 0.7 and 233 in turn; `isolate.c` 77 more.
+
+- **Requests:** 64 from 8 Python clients, each on a connection of its own, in milliseconds, three runs each:
+
+  | Handler | In turn | One connection at a time | 8 at once |
+  | --- | --- | --- | --- |
+  | `GET /health` of the `sqlite-http` example | 9 to 13 | 10 to 15 | 12 to 13 |
+  | A handler computing `fib 25`, about 0.5 ms | 35 to 37 | 39 to 41 | 12 to 13 |
+  | `POST /counters/x`, a SQLite write | 26 to 29 | 32 to 35 | 75 to 150 |
+
+  A connection costs about 30 µs more, its isolate's spawn. Concurrent writes to one SQLite database wait for each
+  other in SQLite's busy handler, which sleeps between its attempts; that is the application's to arrange, with WAL or
+  one writer (below). Serving in turn, a client that stalls holds every other back until its own timeout.
+- **Found on the way: a supervisor that sleeps when full.** Waiting 50 ms between looks once `max-connections` were
+  open, as the listener over threads did, made each request at one connection at a time cost 52 ms, 3.3 s for the 64,
+  as the next connection waited for the sleep to end. So the supervisor waits on its channel and the connections'
+  monitors with `wait-any`, which returns as soon as one ends or tells, and polls the listener only while there is
+  room.
+- **Rejected: an acceptor isolate** feeding the supervisor accepted descriptors through a channel, which would let the
+  supervisor wait on channels alone and never poll: one more isolate, and the descriptor would cross twice, for no
+  gain in latency, as the poll returns as soon as a connection arrives.
+- **Rejected: the supervisor in an isolate of its own**, so that `http.listen` returns with the server running, as in
+  0.7. `http.state`, `http.stats` and `http.wait` would become requests and replies, and the program beside it could
+  not define anyway, as the program is fixed while isolates run.
+- **Rejected: counting failures from the monitors' reasons.** A connection that fails would have to end with an error,
+  which an isolate prints on stderr; it tells the supervisor's channel once instead, before it ends, so the
+  supervisor takes the messages after the ends it has seen.
+- **Foreign functions:** their address, found at the first call, is stored and read atomically, as connections in
+  several isolates may find it at once; they store the same value.
+- **`lib/handle.shen`** counts what its handles hold in globals, unbound in an isolate: it now starts each isolate's
+  count from nothing.
+- **Known:** a connection killed before its function has started leaves its descriptor open; only a grace of 0 can
+  kill one that young.
+- **Checks:** 43 listener cases, 15 runs in a row and 24 at once on a loaded machine, and under ThreadSanitizer with
+  the 42 isolate cases, which reports nothing. The listener's saved image passes under a collection at every
+  allocation. The `sqlite-http` example's test has its stalled connections back.
+
+### A write-ahead log for the `sqlite-http` example (2026-11-12, Apple M3 Max, against the listener on isolates above)
+
+Writes from connections in several isolates had become slower than serving in turn, so the example's database keeps
+a write-ahead log. 64 `POST /counters/x` from 8 Python clients, in milliseconds:
+
+| | In turn, rollback journal | Isolates, rollback journal | Isolates, write-ahead log |
+| --- | --- | --- | --- |
+| One connection at a time | 27 to 30 | 32 to 35 | 18 to 21 |
+| 8 at once, ten runs | 26 to 30 | 75 to 150 | 26 to 101, median 46 |
+
+Reads and `GET /health` are unchanged. The example's 32 concurrent increments took 8 ms, against 383.
+
+- **The log must stay open.** Each request opens a connection of its own, and the last connection to close
+  checkpoints the log and removes it: alone, a write took 2 ms with the log against 0.32 ms without, and 76 µs once
+  another connection held the database. `sqlite3_open` reads nothing, so the connection that the server holds while
+  it runs (`counter-app.await`) reads the database once.
+- **Rejected: `synchronous=NORMAL`.** It gained nothing measurable, 26 to 101 ms for the 64 at once, for a commit that
+  can be lost on a power loss.
+- **Left: concurrent writers.** SQLite takes one writer at a time and makes the others retry in its busy handler, which
+  sleeps 1 ms or more for a write of 76 µs, hence the spread at 8 at once. The fix is one isolate owning the database,
+  to which the others send their writes, which also holds it open; left for later.
+
+### Shared storage (2026-11-13, Apple M3 Max, against the write-ahead log above)
+
+Step 5 of design D: `(shen-jit.share X)` copies `X` into the program space through the copier sends use, where any
+isolate reads it by pointer and nothing changes it. A fragment is laid out in one run of the program space, taken
+under the lock that guards making symbols there, so any isolate can share; the spec's rule that only the builder may
+share data holding its own symbols went with the one table of symbols. 77 lines more in the runtime, and the copier into a
+heap and into the program space are one function now.
+
+- **Immutable by a header bit, not a range test.** The spec had every store test whether its address lay in the
+  program space: the space's bounds, a subtraction and a comparison on every `address->` and byte store. Bit 7 of a
+  header, above the type's four bits (twelve types), marks a shared vector or byte buffer instead. Stores already
+  test the header's whole low byte, so a shared one fails that and goes to C, which refuses it; reads test it through
+  a mask, now without bit 7, with no more instructions. `absvector?`, which loads one byte, and `=` on two objects,
+  which compares headers before calling C, take one instruction more each, and a loop keeping a buffer's base and
+  length in registers compares once more on entry. C refuses stores through `is_read_only`, `address->`, Prolog's
+  binding vectors and dictionaries, whose entries are pairs that only they change.
+- **Cost:** benchmark suite, alternating with the build before, geometric means 1.00 and 0.99, no group outside 0.91
+  to 1.04. `absvector read` read 1.07 in one round; alone, alternating four times, 30 million reads of three
+  elements took 76 to 77 ms on both, `=` on two equal lists of a vector 29 to 30 against 30 to 32 ms, and 50
+  million `absvector?` 49.9 ms on both.
+- **Sharing:** a list of 40,000 numbers, strings and reals took 3.2 to 3.4 ms to share. A spawn with it there and back
+  took 49 to 56 µs shared, against 6.2 to 6.4 ms copied each way.
+- **Found on the way:** `tests/source_reference.py` counts calls outside functions in three of the runtime's files,
+  which include `value.h`, so a `_Static_assert` there that the type field stays below the bit counted three times; a
+  comment holds the rule instead. Two of the new isolate cases waited for ever on an isolate that had failed, the
+  suite's documented way of hanging.
+- **Checks:** 54 isolate cases, under a collection at every allocation too, an image that keeps shared data shared,
+  and ThreadSanitizer on the cases and on eight isolates sharing 2,000 values each while making new symbols, which
+  reports nothing.
+- **C may still write into a shared byte buffer it is given:** the FFI's `bytes` has no read-only form, and refusing
+  shared buffers there would refuse sending a shared response body to a socket; the documentation says C must not.
+
+### A parallel map, and Tree-sitter in isolates (2026-11-13, Apple M3 Max with 16 cores, against `map`)
+
+First part of step 6 of design D. `lib/parallel.shen` is back with one function, `(parallel.map N F Xs)`: at most `N`
+isolates, each mapping `F`, a name or `[F | Args]` as the HTTP listener's handlers are, over a run of `Xs`, with a
+channel for its reply and a monitor for its end, so that an isolate ending without a reply raises rather than waits.
+105 lines with comments, against 0.7's worker scopes, saved images and value codec. The number of isolates is explicit, as
+0.7's worker count was: the runtime has no count of cores, and the right number depends on the work.
+
+- **Speed:** `fib 30` eight times took 35 to 47 ms with `map`, 5.6 to 6.4 ms with 8 isolates and 9.5 to 11.3 ms
+  with 4. Incrementing 10,000 numbers took 35 µs with `map` and 0.7 to 1 ms in parallel, copying the runs there and
+  back and starting the isolates.
+- **Tree-sitter:** a language holds its foreign entry's name, and the library called it through `eval-kl`, which an
+  isolate refuses; it calls it with `shen-jit.apply` now, so a language loaded in the builder parses in any isolate,
+  each parse making its own parser.
+- **Left for later in step 6:** Datalog in isolates, which compiles plans and kernels as it runs and keeps state in
+  globals and property lists, and with it parallel Datalog and the `source-deps` batches.
+
+### Fixed or adaptive join orders, for Datalog in isolates (2026-11-13, Apple M3 Max, `make bench-datalog`)
+
+An isolate cannot compile, and Datalog chooses join orders as relations grow, compiling a plan for each, so the plans a
+run needs depend on its data. Measured before deciding how isolates get theirs: the same build, `*adaptive*` on and
+off, two rounds of the main workloads and one of the ordering cases.
+
+- **The main workloads do not care:** closures, same generation, mutual recursion, triangles, the skewed join, the
+  kernel's call graph and analysis, and the demand queries are within run-to-run noise both ways, the sparse closure
+  74 to 79 ms adaptive and 76 to 88 fixed, with 2 plans fixed against 11 adaptive. Their rules have little to
+  reorder.
+- **Rules with many atoms do, in their bad written order:**
+
+  | ms | Fixed | Adaptive |
+  | --- | --- | --- |
+  | Chain, order a / b | 4.8 / 6.8 | 4.9 / 4.9 |
+  | Points-to small, order a / b | 277 / 112 | 85 / 112 |
+  | Points-to large, order a / b | 5,189 / 506 | 372 / 424 |
+
+  Fixed orders cost up to 14 times as much, as on 2026-11-07, when the order a rule was written in is the bad one;
+  adaptive runs compiled 46 and 61 plans for points-to.
+- **So:** fixed orders alone would cost isolates up to that on such programs. Any order of a rule's atoms gives the
+  same tuples, so an isolate can choose among the plans compiled for it and fall back to one of them, at worst the
+  fixed order, when the one it would choose is missing: correct always, adaptive when the builder has met the plans,
+  and fixed at worst.
+
+### Datalog in isolates (2026-11-13, Apple M3 Max, against the builder's adaptive runs)
+
+The rest of step 6's design, on the hybrid chosen after measuring fixed against adaptive orders (above). An isolate
+cannot compile, so `(datalog.share Name)` prepares a program in the builder and gives it as a shared value, its plans
+included, and `(datalog.use Shared)` puts it in an isolate's own property list.
+
+- **Preparing:** a run on no facts with no sizes to go by compiles the plan of every rule and of every variant the
+  schedule has; the whole rule's plan with no sizes is compiled for every rule too, with the kernels and closures of the
+  indexes the plans look up, and those that loading facts, `holds?`, records, keyed relations, lattices and
+  equivalences call, for each arity.
+- **Choosing:** an isolate takes the plan the sizes choose if it was compiled, then the same with no sizes to go by, and
+  otherwise the whole rule's: `datalog.add` runs variants for whichever relations grew, which no run on no facts plans,
+  and the whole rule over all tuples gives what a variant does, with more derivations. A query on columns no prepared
+  index has reads every tuple, and a query by demand the builder never asked runs the whole program.
+- **Closures made with `eval-kl`:** six places made a closure of a kernel by evaluating a lambda, which an isolate
+  cannot. Each now installs a named function once, with its arity, and takes it with `fn`, in the builder as in an
+  isolate; plan functions are taken with `fn` too.
+- **Points-to, order a,** whose fixed order cost 3.3 and 14 times the adaptive one:
+
+  | ms | Builder, adaptive | Isolate, fixed plans only | Isolate, the builder's plans |
+  | --- | --- | --- | --- |
+  | Small | 86 | 299 | 85 |
+  | Large | 388 | 6,367 | 408; 379 with plans met on the small facts |
+
+  Plans the builder met on the small facts served the large ones.
+- **The builder pays nothing measurable:** the Datalog workloads with the library before and after, alternating, two
+  rounds, are within noise; `nonlinear, dense` read 3 to 4% slower in both, and alone, four times each, 130 to 133 ms
+  against 129 to 138.
+- **Found on the way:** an add's variants and the classes of an equivalence, laid out with an index kernel of their
+  own, needed what a run on no facts does not make; 60 generated programs, run, added to, removed from and queried
+  in isolates against the plain definition, showed both, and pass now, as 300 did once, also with a collection every
+  1,000 words.
+
+### Datalog runs in parts, and source-deps batches, over isolates (2026-11-13, Apple M3 Max with 16 cores, against `datalog.run` and batches in turn)
+
+The last of step 6. `(datalog.run-parallel N Name Facts)` takes 0.7's partition, a program whose derived relations
+share a first-column key that every rule keeps, with no negation, aggregate, record, equivalence or keyed relation,
+and runs it in at most `N` isolates: the builder defines and shares once a copy whose rules hold only for a part's
+keys, each isolate runs it on every input fact and its keys' derived facts, and sends back its database.
+
+- **Kept apart, not rebuilt:** 0.7 rebuilt one database in the parent, remapping each worker's interned values and
+  building every hash table again, which held its whole-call gain to 1.45 and 1.2 times on the closure and the skewed
+  join. Here a part's database is bytes but for its indexes, which hold closures and which it clears, so it crosses as
+  a copy of buffers, hash tables included, and the parent keeps the parts: counts add up, membership and queries read
+  them all, or the first for an input relation, which each part has whole. `add`, `remove`, `explain` and `stats`
+  raise on it, as merging or proving across parts would bring the rebuilding back. About 230 lines, with comments.
+- **Whole calls,** facts in memory, best of three after a warm-up, two rounds, in ms:
+
+  | | `datalog.run` | 4 parts | 8 parts | 12 parts |
+  | --- | --- | --- | --- | --- |
+  | Sparse closure, 1,388,324 paths | 72 to 76 | 28 to 30 | 21 to 22 | 15 to 16 |
+  | Dense closure, 88,803 paths | 4.9 to 5.1 | 3.3 to 3.9 | 3.5 to 3.7 | 4.9 to 5.6 |
+  | Skewed join, 2,222,705 pairs | 84 to 87 | 35 to 37 | 35 | 25 |
+
+  4.8 and 3.4 times at 12, against 1.45 and 1.2 in 0.7's whole call. The dense closure is too small to gain.
+- **source-deps batches:** the graph's adjacency is shared once (0.1 ms for 40,000 nodes), and `parallel.map` runs a
+  batch's BFS queries over it; 0.7's byte protocol, worker image and value transport are gone: 245 lines, against
+  370. 256 queries over 40,000 nodes and 60,000 edges: 133 ms in turn, 42, 22 and 16 ms in 4, 8 and 12
+  isolates.
+- **A bug on the way:** the partition's reasons are strings, and a test with `cons?` for one let every program through;
+  the tests that expected nonlinear and negated programs to run whole caught it.
+- **And one the namespace suite found:** the standard library, which `make stlib` loads, has a `partition` of its own,
+  with which `datalog.partition` clashed there; the library shadows it, and `lib/parallel.shen` joins that suite.
+- **Checks:** 17 runs in parts against `datalog.run`, with integer, symbol and string keys, constants, derived facts
+  given and programs that run whole; the batch's 108 checks against an independent BFS, with 0 to 5, 32 and 64
+  isolates giving the same ordered output.
+
+### Large messages taken over, and what was left before pushing (2026-11-13, Apple M3 Max, against the commit before)
+
+- **A received large buffer is taken, not copied.** A fragment gives an object of 256 KB or more a block of exactly
+  its size, the same shape as a heap's large object, so the receiver takes the blocks of byte buffers and strings into
+  its list of large objects as they are, and copies the rest; room for both is made first, so that nothing collects
+  once a block is taken. Before, a big message was copied into the young heap and copied again by each collection,
+  and the builder gathering a run in parts collected to make room for each part's database, copying the earlier ones
+  again. About 60 lines. Runs in parts, best of three, three rounds alternating: the sparse closure in 12 parts 14.7
+  to 14.8 → 11.9 to 12.0 ms, the skewed join in 12 parts 25.6 to 27.6 → 20.1 to 21.0, and in 4 parts 28 to 29 → 26
+  to 29 and 35 to 37 → 32 to 33.
+- **Ideas weighed with Fable**, which ranked the same first: taking the blocks of an isolate that is ending too, so
+  that not even the sender copies, would cut peak memory more than time, as the senders copy in parallel, and needs a
+  new operation; left until a measurement asks. Rejected: reference-counted buffers shared by the isolates, as an
+  Erlang binary is, which would freeze the sender's buffer at a send, need atomics and help only buffers; keeping the
+  parts' databases in their isolates, which makes every query N round trips and ties isolates' lives to
+  collections; and shared storage that can be freed, which needs every collector to report what it reaches, and still
+  copies once.
+- **Rejected: trimming a part's tuples to those it has before sending.** Relations grow by doubling, but the hash
+  tables, which cannot be trimmed, are most of what crosses: the builder kept 39.0 → 37.4 MB for the sparse closure
+  and 77.9 → 70.4 for the skewed join, at the same times within noise.
+- **An isolate that cannot start tells its monitors.** Without memory for its context it set its monitors to none, so
+  whatever waited on it waited for ever; it now queues `[down P ended]`, laid out by hand as no heap is there to make
+  it in. Checked once with the context's creation made to fail by hand after 50 ms, so that the monitor came first.
+- **A kill before an isolate started** raised before its function ran, so what its argument held was never cleaned
+  up: the HTTP listener, at a grace of 0, could leave a connection's socket open. Now it raises at the first channel
+  operation or `check-kill`, as any kill does, and the special case is gone.
+- **Ctrl-C at a REPL running an HTTP server**, which the listener's page said stopped it as a failure does, was not
+  tested; tested, it returned to the prompt with the server still listening: an interrupt is raised again until the
+  REPL's handler is the innermost, so the supervisor's cleanup cannot finish. The page now says what happens, that
+  running the server again goes on, and that a stop then a run closes it, which a CLI case checks.
+- **Found by ThreadSanitizer:** a new isolate took the GC-stress setting from the builder's record while the builder
+  set it to 0 for a moment, receiving; runs in parts start isolates as the builder receives. Isolates now read the
+  builder's settings from the isolates' own record, written as they start.
+- **`docs/semantics.md`** still listed the removed workers' shared view; it describes shared values now.
+
+### The isolates branch against main (2026-11-13, Apple M3 Max, against 0.7)
+
+The whole of design D's six steps, timed once against `main` at 0.7, which each step had only been timed against the
+commit before it, so that small losses would not add up unseen.
+
+- **Benchmark suite,** two rounds alternating: geometric means 0.99 and 0.98, medians 1.00. No row was more than 3%
+  slower in both rounds. Faster in both: `vector create (big)` and `absvector create (big)` 0.80 to 0.81, `match
+  string (multiple clauses, matching)` 0.83 to 0.90, `string (long) prepend long` 0.92.
+- **Independent workloads,** seven rounds, medians in ms, 0.7 then the branch: the kernel's test suite 179 → 175,
+  its extension tests 31 → 30, installing the standard library 56 → 56, the contract examples 14 → 13, startup 4 →
+  4, and THORN 237 → 233 (set), 200 → 184 (L), 202 → 186 (schubert) and 242 → 221 (ec). Loading and compiling did not
+  get slower for promoting definitions into the program space, and THORN, which mostly runs, is 2 to 8% faster.
+
+### Images under a limit on address space (2026-11-13, CI's Linux jobs and Linux arm64 in Docker)
+
+The branch's first CI run failed one CLI case on every Linux job: `limited-address-space`, which starts the
+executable under `ulimit -v 2000000` and expects it to run, crashed. The program space reserves 8 GB, halving until
+the reservation fits, and its objects start an eighth of the way in; an image stored every pointer into it as an
+offset from its start, so with the 1 GB that fit there, every pointer into the objects, symbols' names among them,
+landed past where they were. macOS does not enforce `ulimit -v`, so it never showed there. An image now stores a
+pointer into the symbols with bit 62 set and one into the objects with bit 61, each from its own start, and its
+version is 5. It starts at 2 GB, 1 GB and 600 MB of address space, and `test-kernel` passes in the container.
+
+### A monitor after an end, GC stress and a leak in CI (2026-11-13, CI's Linux jobs, Linux arm64 in Docker and x86-64)
+
+The branch's second CI run failed in three places, none of them the program space.
+
+- **A monitor made after an isolate ended was told `ended`,** not why it ended, as its record kept no reason.
+  Every caller spawns, then monitors, so an isolate that ends in between loses its reason: on arm64 a joined Datalog
+  run of a small generated program finished in every isolate before the builder monitored the last, and the
+  builder took `ended` for a failure; under GC stress on static arm64, the isolates test of an uncaught error got
+  `ended` for "failing with 5", the builder being slow to monitor; `parallel.map` could have reported an error so.
+  An isolate's record now keeps why it ended, the symbol or the error's text, until it is used again, and a monitor
+  that comes after is told that at once; `ended` is left for one that could not start, or whose record is used
+  again. The isolates tests monitor an ended isolate again for each reason, which no timing decides; on Linux
+  arm64 in Docker they pass plain and under GC stress, and the parallel Datalog suite passed 30 runs of 30.
+- **The CLI's Ctrl-C server case under GC stress** took 40 s to load the HTTP libraries, past its waits of 10 s,
+  so its interrupt came before the server ran. It runs without GC stress now, as the other slow cases do.
+- **And in the third run, a leak,** which only the static x86-64 job looks for, as macOS's AddressSanitizer does not:
+  the KL eval cases start isolates, and destroying the builder's VM freed the program but not the isolates'
+  record, their table and channels, 6,640 bytes. They are freed with it now, if no other isolate runs, as none does
+  when a program ends; one that ran would still use them. Reproduced and checked with LeakSanitizer on Linux arm64
+  in Docker, then CI's whole static x86-64 sequence ran on an Ubuntu 24.04 container on a Ryzen 5 5600X.
+
+### What a review of the branch found (2026-11-13, Apple M3 Max, against the branch before)
+
+A review of the whole branch, by a second model reading it cold, found no flaw in the symbol table, channels,
+monitors, kill, global numbering, adoption or the Datalog joins' partition and termination, and these at the edges.
+
+- **Loop checks were per VM, but code is shared.** An isolate's context compiled every loop with an interrupt test
+  and without tail-call leaves, even in a script, where nothing sets the flag it tests. Whether loops test is now
+  the program's, set once the REPL catches Ctrl-C, when everything is compiled again: under the compile lock and the
+  lock under which isolates add to the program space, which the walk reads and which a REPL started beside running
+  isolates left unlocked. Code first called in an isolate, in a script, three rounds alternating: a counting loop
+  89 to 94 → 75 to 78 ms, a list walk 95 to 103 → 93 to 96.
+- **Ctrl-C did not reach a builder waiting on a channel,** as a signal handler cannot wake a condition variable: a
+  parallel map or a Datalog run in isolates left the REPL dead. The builder now waits in slices of 50 ms and
+  raises "interrupted" between them; a CLI case checks receive, wait-any and a parallel map.
+- **Isolates left behind.** `shen-jit.spawn-each` and `shen-jit.stop-each` start a call's isolates and stop them,
+  waiting for each to end, if one cannot start or the call's wait raises; the parallel map, runs in parts and joins
+  use them. Not for Ctrl-C, though: the interrupt is raised again at every function entry until the REPL's handler
+  has it, so no cleanup runs. The REPL's handler kills them instead: each input notes how many isolates had been
+  spawned (a counter that numbers them already, for gensyms), and an interrupt kills those numbered after it, which
+  a dozen lines of C and four in the port do; earlier inputs' isolates go on. A CLI case defines after an
+  interrupted parallel map, which raised while its isolates were left waiting. Running cleanups with the
+  interrupt held back would also close what they hold, but needs the interrupt kept apart from the checks that
+  raise it; not tried.
+- **Smaller holes:** a given endpoint is recorded with its generation, so one of a channel closed since cannot move
+  the channel that took its place; the builder's collection writes a constant slot of shared code back only if what
+  it holds moved, as an isolate may bind it meanwhile; `--save` beside running isolates writes under the lock under
+  which they add to the program space, so the image is whole.
+- **Joins judged by what they share.** The count of isolates went by every derivation of the last run, but only
+  recursive rounds are shared out: a non-recursive rule of 4 million derivations beside a small nonlinear closure
+  chose 8 isolates and four times the time. It now goes by the derivations and new tuples of recursive rounds,
+  which `fixpoint` counts: that program runs whole, 66.7 ms against 68.8 for the call that now runs it so.
+- **Simpler:** the test-only start of an isolate in the builder's VM went, with `vm->builder`, whose four tests are
+  the program's owner, and its 20 checks run in a real isolate; one map from address to copy for the copier and
+  promotion; wait-any's scan of endpoints is the helper for its waits; `alloc_large` makes room through
+  `vm_large_room`; an isolate's state is whether it ended; the symbol count for `SHEN_JIT_STATS` is computed, as
+  isolates made it stale. Left as it is: a shared check of "a function's name, or a list of one and its first
+  arguments" for the parallel map and the HTTP listener, which would add to the port's API for a dozen lines each.
+- **And ThreadSanitizer,** run on the isolates, parallel map and Datalog suites after these, found two reads of
+  how many globals are numbered, by an isolate starting, unlocked against an isolate numbering one: harmless, as the
+  start commits again under the isolates' lock, but now atomic. Then 12 runs of the Datalog suite and the others
+  reported nothing.
+- **Left from the review,** low: allocation failures that raise nothing or tell no monitor, a walk of the symbol
+  table on an error path outside its reading protocol, and copying a message in without the map, estimated at 20 to
+  35% of large structured messages and not measured.
+
+### The isolate and channel interface (2026-11-13, Apple M3 Max, against the branch before)
+
+The functions were `shen-jit.spawn`, `shen-jit.channel` and so on, named after the runtime rather than what they do.
+They are two namespaces of the image now, `isolate` (`spawn`, `self`, `kill`, `monitor`, `check-kill`, `share`,
+`spawn-each`, `stop-each`) and `channel` (`new`, `sender`, `give`, `send`, `receive`, `next`, `receive-any`,
+`wait-any`, `close`), over the same primitive. Two namespaces, as messages go to channels and not to isolates.
+
+- **Typed.** An isolate is of type `isolate`, endpoints `(receiver A)` and `(sender A)`, and results have datatypes.
+  A typed function crosses by its name, which typechecks as the function. The types are Shen source that
+  `shen-jit.initialise` evaluates as the image is built, as the tool that compiles the port's Shen source takes
+  definitions only; what the datatypes define is left off `shen.*userdefs*`, where the kernel had put it.
+- **System functions.** Published exports alone left them qualified inside a library's namespace, `channel.new`
+  becoming `http.channel.new`, as `shen-jit.*` needed `(use shen-jit)`. As system functions, as the kernel's are,
+  every namespace names them as they are. The plain types and the tags stay ordinary words, kept with `externals`:
+  as system symbols, no program could define a function named `receiver`, `sender` or `isolate`.
+- **The end of a stream.** A receive gave a marker that `shen-jit.end?` recognised, which a typed receive could not
+  give, a `(receiver string)` handing back a symbol. `channel.receive` and `receive-any` now raise "channel closed"
+  there, as they did on the next receive, which suits replies, whose count is known; `channel.next` gives `[ok X]`
+  or `[closed]` for streams. `channel.wait-any` gives `[ready R]` or `[timeout]` for an endpoint or `()`. The
+  primitive is unchanged; the port tests for the marker. A million sends and receives in one isolate took 47.5 to
+  50.4 ms before and 47.5 to 50.2 after, five rounds alternating, under a load of 2 to 7.
+- **Found by reading the documents against the code:** `lib/socket.shen` said a kill reached an isolate between its
+  100 ms poll slices, but only `lib/io-socket.shen`'s waits checked; an isolate killed while waiting in
+  `socket.accept` never ended. Its waits call `isolate.check-kill` now, and a case kills one there. The rest were
+  documents: the HTTP listener said Ctrl-C left its connections served, where the REPL kills them, and two
+  libraries said their cleanup ran on Ctrl-C, where the REPL's kill does it.
+- **Rejected:** `lib/isolate.shen`, keeping the image's names to the kernel's and `shen-jit.*`: every program that
+  spawns, and four libraries, would load it, and the REPL's Ctrl-C and monitors are the runtime's anyway. One
+  `receive` giving `[ok X]` or `[closed]` always: a pair for every message, and every reply taken apart.
+
+### The review's leftovers (2026-11-13, Apple M3 Max, against the interface above)
+
+What the review of the branch had left as low, and what reading the documents against the code found after it.
+
+- **Copying in by forwarding.** A message was copied into the receiver's heap through a table from fragment
+  addresses to copies, for sharing and cycles. The fragment is the receiver's and is freed next, so its objects
+  are forwarded now, as a collection forwards; a large buffer the heap took over is recognised by its block, marked
+  taken. Receiving 200,000 lists of a number and a string took 17.4 to 18.7 ms and now 5.0 to 5.7, best of 10, three
+  rounds alternating; 100,000 tuples the same; `parallel.map` over 8 isolates each giving 40,000 rows, whole call,
+  65 to 68 ms and now 46 to 50. The review had guessed 20 to 35%. It also takes away the table's own failure.
+- **Out of memory.** A spawn, `channel.new`, `channel.sender`, `channel.give` and `isolate.self` could give the
+  unraised failure of a constructor; they raise "out of memory" now, and `channel.new` frees its channel then. An
+  isolate whose down message cannot be made tells its monitors `[down I ended]`, laid out by hand, and if even that
+  cannot be made, closes them, where they waited for ever. A global gets no number unless its slot is committed in
+  every isolate, where a failed commit faulted later. The first spawn says "out of memory" for that, not that
+  isolates start in the builder.
+- **Smaller:** `cell_symbol`, for "undefined function" errors and backtraces in isolates, reads the shared symbol
+  table as `table_find` does; an isolate that ends the program with `SHEN_JIT_STATS` no longer counts the builder's
+  heap, which a census would collect while the builder may run; the builder's `vm_destroy` leaves the program to the
+  system while isolates run it, as it left their records; and generations start from a seed per run, so an endpoint
+  saved in an image matched the next run's first channel, and now raises "channel closed". A case each for the last
+  two.
+- **Not done:** a cheaper check of ended connections in the HTTP supervisor, which the review gave as mattering only
+  near 1,024 connections at once, the exceptional case.
+
+### One owner for the `sqlite-http` example's database, and handles released as an isolate ends (2026-11-13, Apple M3 Max, against the leftovers above)
+
+- **One owning isolate.** Each request opened a connection of its own, in its connection's isolate, and concurrent
+  writers waited in SQLite's busy handler, which sleeps a millisecond or more for a write of tens of microseconds
+  (above, "A write-ahead log"). The database now belongs to one isolate, which holds it open while the server runs and
+  does each request's work in turn: a handler sends it `[Job Reply]` and waits for `[ok Result]` or `[error Message]`.
+  A path alone still works, each job opening the database, as the in-builder tests use it; an export keeps a
+  connection of its own, which the write-ahead log lets it hold while the owning isolate writes. 64 `POST /counters/x`
+  from 8 Python clients, the same binary, two rounds alternating with the version before: one at a time 15 to 26 ms
+  before and 11 to 17 after; 8 at once, ten runs, 9 to 31 ms with a median of 13 to 15 before, and 6 to 7 with a
+  median of 6 after.
+- **Handles released as an isolate ends.** An isolate that ended holding handles never released them: a leak for each
+  connection of a server that did not close its own. As an isolate ends, after its function returns or raises,
+  every guard now counts as dead, as if a collection had reached none, and the isolate runs what it registered with
+  the new `shen-jit.at-end`; the handle library registers its sweep there at an isolate's first `handle.wrap`. A
+  case for an isolate that returns and one that is killed, which the library before fails.
+- **Rejected for now: freeing a channel whose receive endpoint is dropped.** It would need each heap to track its
+  endpoints weakly, as guards are, and to free a channel once none survives in its receiver's heap. But a channel
+  can have two endpoints there, the receive endpoint and one marked by `channel.give`, and must stay until a spawn
+  takes the marked one, after which it belongs to the child, whose copy must be tracked from then on: tracking in the
+  collector, the copier and the channel table, for a leak that closing the endpoint, or the receiver ending, avoids.
+  It stays a documented limit.
+
+### What two more reviews found (2026-11-13, Apple M3 Max, against the commit before)
+
+A review by another model, which traced each finding through the code without reproducing the races, and the
+experiments of a Fable review that was cut short, which reproduced two. Eleven, all fixed:
+
+- **Races.** `isolate.share` took room in the program space under the shared lock and filled it after letting go, so
+  a save or the REPL's walk of the space, which hold that lock, could meet half-made objects; it fills it under the
+  lock now. `h_compile` read the native entry it returns after letting go of the compile lock, which the REPL's
+  recompiling, as it starts catching Ctrl-C, could clear in between; it is read under the lock. A spawn read the
+  child's generation after letting go of the isolates' lock, so a child that ended at once could have its record
+  reused and the parent a handle on another isolate; it is taken under the lock. A monitor made while an isolate was
+  ending was told at once, while the isolate still counted as running, so defining at once could fail; such monitors
+  wait for its end now. And the lookups of the isolate's start and end functions, and the C API's, could miss a name
+  while another isolate grew the symbol table, which the reading protocol allows; the two are found once at the first
+  spawn, and a miss is looked up again under the lock.
+- **Handles released at an isolate's end in dependency order.** All counted dead at once, the oldest first, so a
+  release that used another handle could run after that one's: in rounds now, as collections order them, and what is
+  left newest first. A case where the outer handle's release uses the inner one gave `[inner outer]` and now
+  `[outer inner]`.
+- **Monitors close after their message.** `isolate.stop-each` waited for ever on a monitor already read, as its one
+  message was gone and nothing closed it; a monitor is closed once told, so a second receive raises "channel closed".
+  Reproduced by the cut-short review; a case now.
+- **Printing in isolates.** `shen.tuple`, `shen.pvar` and `shen.dictionary`, the kernel's printers, had lambda forms
+  in the property vector but no arity, so an isolate, whose `fn` makes forms from templates, could not print a tuple, a
+  Prolog variable or a dictionary. Their arities are recorded; a case prints a tuple and a dictionary.
+- **Smaller:** destroying the builder while isolates ran left its record pointing at the freed context, which the
+  next global's commit wrote to; the record lets go of it, and the program of its owner. The `sqlite-http` owner
+  dropped every error of a reply's send, a kill too, and so outlived a Ctrl-C; it drops only "channel closed". A
+  `parallel.map` or Datalog run whose spawn failed left the channels it had made for replies, and for joins the grid,
+  until the builder ended; they are closed then.
+- **Left as it is:** in an isolate, `read-from-string` fails with "shen.*source-form-handlers* has no value" rather than
+  saying it is the builder's; that reader expands, which only the builder does.
+
+### What a third review found (2026-11-13, Apple M3 Max, against the commit before)
+
+The same reviewer again, on the fixes above. Ten, all fixed; it found no speed-up worth its code:
+
+- **The end of an isolate, again.** The at-end functions ran only inside the release rounds, so never for an isolate
+  with no guards, and once a round for one with them, and a guard already dead when none was left stayed unswept. And
+  handles a global held still went newest first at the last, where a release that uses another, through a box filled
+  after, ran after it. The at-end functions run once now; releases go through a registration of their own,
+  `shen-jit.at-guards-dead`, which the rounds call; and once no round frees more, the isolate's globals go, as they
+  die with it, and the rounds go on, so the collector orders those too; only a cycle goes at once. A case each: a
+  hook with no guards ran never, and with a handle in a global twice, its releases newest first.
+- **A shared exception** kept the text `error-to-string` made it in its message slot, a pointer from the program
+  space into a heap, which no collection updates; one in the program space is formatted each time now.
+- **Starting.** An isolate's slots catching up with globals numbered meanwhile ignored a failed commit, and ran on
+  with slots that were not there; it ends as one that could not start, as does one whose context cannot be made, and
+  both free the channels given to them, which stayed with a receiver that had gone. A spawn made the handle it
+  returns after the child ran, so a failure there left a child no one could stop, owning what it was given, as an
+  accepted connection's socket; the handle is made first.
+- **Monitors, again.** Telling the late ones let go of the lock between the first ones and the end, so a first one
+  could be read while the isolate still counted as running; all are told in one hold of the lock now. And a monitor
+  that could not be listed was told at once, though the isolate ran; it raises "out of memory" now.
+- **Cleanup after the fixes above.** `parallel`'s new close of a failed launch's replies called `map`, which that
+  namespace shadows with its own, and closed nothing. The HTTP listener made a connection's stop channel before the
+  socket was guarded, closed neither on every failure, and could leave a running connection unlisted; a failure before
+  the spawn closes both, and after it kills the connection. The `sqlite-http` owner, whose monitor failed to be made,
+  ran on; its stream is closed then.
+- **design.md** still said that only the builder numbers globals, and that an isolate keeps a dictionary for the rest.
+
+### What a fourth review found (2026-11-13, Apple M3 Max, against the commit before)
+
+The same reviewer, on the fixes above: eight, all fixed, and again no speed-up worth its code.
+
+- **Only what dies is released as an isolate ends.** Dropping the isolate's globals so that the collector would order
+  what they held did too little and too much: the argument slots of its last call to C, which collections also scan,
+  kept a handle reached, so it went at the forced last step, newest first, out of order, where none was a cycle; and a
+  release run after the globals went lost what it read, as `mmap.close` lost `*os*` and never unmapped. Rejected:
+  ordering what is left by tracing which handles each release reaches, apart from the isolate's other roots, a
+  reachability pass of 60 to 100 lines for an isolate that ends holding handles in globals. Instead the argument slots
+  are cleared, the globals stay, nothing is forced, and what the globals still hold is left to the system, as a
+  program's is when it ends. A case whose last call is `shen-jit.pointer!` on the handle: unreleased without the
+  clearing, released with it.
+- **Allocation failures.** An isolate whose slots could not catch up was told ended before its context went, so an
+  embedder could end the program first, which that context's end read; the context goes first now. Growing a root
+  array or a shared symbol table kept a moved list of retired tables only if the next allocation also succeeded; it
+  is kept at once. Promotion and interning took program space, then failed before filling it, leaving zeros that a
+  save and the REPL's walk read as pairs, out of step for an odd size; what they took goes back, and interning's
+  symbol slot too. A monitor whose endpoint could not be made kept its channel; it is freed.
+- **The SQLite owner and the listener.** A request queued to an owning isolate that then ended waited for ever on its
+  reply; it waits on a monitor of the owning isolate too, and raises, with a case, and 64 writes from 8 clients took
+  a median of 6 ms before and after. The listener could leave a connection's monitor behind when listing it failed; it closes
+  it.
+
+### What a fifth review found (2026-11-13, Apple M3 Max, against the commit before)
+
+Four, all fixed; the reviewer found the earlier fixes sound and no speed-up worth its code.
+
+- **The release rounds.** Argument slots were cleared once, before the first round, so a release that passed the next
+  handle to C left it in them, reached, and an error a release caught kept what it named; and the rounds stopped when
+  the count of guards had not changed, as when one died and its release made another. Both are cleared before each
+  collection now, and the rounds go on while a collection finds a guard dead. Two cases, an inner handle passed to C
+  in the outer one's release and one named by an error it caught, gave `[outer]` and now `[outer inner]`.
+- **Monitors a server makes and closes.** A closed monitor stayed in its isolate's list, so the `sqlite-http` owner,
+  watched once by each request, kept one entry per request for its life, and copied a message for each as it ended;
+  the closed ones are dropped when the list is full and as the isolate ends.
+- **Interning that failed late**, at the shared table, left a symbol outside it, which an image would bring back as a
+  second symbol of that name; its slot and name go back.
+- **A message's room.** Its large blocks were checked against `SHEN_JIT_MAX_HEAP` apart from the rest, so the two
+  together could pass the limit; the whole of it is checked now.
+
+### What a sixth review found (2026-11-13, Apple M3 Max, against the commit before)
+
+Four, all fixed; the first three have cases that fail on the commit before, while the last needs a failure as a
+connection starts, which no test makes.
+
+- **Writes into shared storage.** `shen_vector_set` stored into a shared vector, which no collection scans, so a
+  heap value stored there would dangle; it gives 0 now. A dictionary checked only its own wrapper, so an unshared
+  copy of a shared dictionary's wrapper, made with `absvector`, could add to, change or remove from its shared
+  buckets; any write that would land in the program space raises now. Both checks are on paths that already test
+  their argument, and stores from compiled code are unchanged.
+- **The release rounds dropped what a release's own collection found.** A release that collected put the handles
+  found dead on the list, and the round then emptied the whole list, so those were never released. The round now
+  empties it only if nothing was added; a case whose outer release lets go of the inner handle and collects gave
+  `[outer]` and now `[outer inner]`.
+- **An HTTP connection's isolate** set up its handler's state before its socket became an endpoint, so a failure
+  there left the peer open and went unreported; it is set up inside the endpoint now, which closes the socket however
+  it ends, and such a failure is counted as the others are. Another closer around `io.socket` would close the socket
+  twice when making the endpoint fails, as `io.socket` closes it then, and the number could by then be another
+  isolate's.
+
+### What a tenth review found (2026-11-13, Apple M3 Max, against the commit before)
+
+Two, both fixed, each with cases that fail on the commit before.
+
+- **Ctrl-C while another isolate reads standard input.** Readers take turns under a mutex, which the one whose turn it
+  is holds while it waits for input, so the builder, waiting on the mutex, could not see a Ctrl-C until input came. It
+  now tries the mutex every 10 ms when it cannot have it, and raises "interrupted", or "killed" in an isolate, between
+  tries; the one waiting for input waits in slices of 100 ms while isolates exist, so a kill reaches it too. Two
+  readers at once are rare, and wait for input anyway, so polling costs nothing that matters there. Keeping the mutex
+  only around the buffer would have needed a second state, whose reader fills it, and a way to wait on it. The output
+  is also flushed before the turn is waited for, not after, so a prompt shows while it waits. The cases: a REPL
+  waiting for its turn says "interrupted" before input comes, and then evaluates it, and a kill ends an isolate
+  waiting for input that does not come.
+- **A kill while connecting.** `socket.connect`'s wait for a pending connection polled in slices of 100 ms without
+  checking for a kill, and a kill raised while trying one address was taken for that address failing, so the next was
+  tried. It checks each slice, and passes a kill on. The cases: a listening socket, never writable and with no error,
+  stands in for a pending connection, which a kill now ends, and a kill at the first of two addresses is raised
+  without trying the second.
+
+### What a ninth review found (2026-11-13, Apple M3 Max, against the commit before)
+
+Two, both fixed, each with a case that fails on the commit before.
+
+- **Closing a server that never ran.** `http.run` of a server stopped before it ran made its events channel and its
+  sender before closing the listener, so the `sqlite-http` example's cleanup, which stops and runs the server it made,
+  could fail there under memory pressure, leaving the socket open, and skip ending the owning isolate after it. Such a
+  run now closes the listener and finishes before it allocates anything, which a case checks by the events channel it
+  no longer makes, and the example ends the owning isolate however closing the server ends.
+- **A join isolate told `ended` after it did its part.** One that sent its reply and ended between its spawn and its
+  monitor, its record then taken by another isolate's spawn, is told `ended`, as documented, and the joins took any
+  reason but `normal` for a failure, killing the others and raising though every reply was in. The reply comes before
+  the end, and the receive takes the reply channel first, so the monitor's isolate is matched with the replies, by its
+  index, and one that replied did its part. The case gives the gatherer a stand-in monitor that says `ended`: with the
+  reply it gives the database's part, and without one it raises, as before.
+
+### What an eighth review found (2026-11-13, Apple M3 Max, against the commit before)
+
+One, fixed. The reviewer found the seventh's fixes sound, and nothing more worth its code.
+
+- **The `sqlite-http` example's startup.** `counter-app.open` made its result, and the cleanups of its later steps,
+  after the owning isolate had started, and `counter-app.start` made `[Owner S]` after the listener; a failure to
+  allocate there lost them, leaving that isolate waiting on its stream for ever with the database open, and the
+  program fixed. As `spawn-each` does now, each keeps what it made in a vector made first, under one cleanup that
+  covers making the result: closing the channel before the owning isolate starts, closing its stream after, and
+  waiting for its end once it is monitored; `start` also stops a server it made, which closes the listener. New cases:
+  a start that cannot listen, as its port is taken, ends the owning isolate, and the cleanup given a live one and a
+  server that never ran ends it and gives back the port; both leave the program free to change. Neither lands a
+  failure in the gap itself, as the seventh's entry explains.
+
+### What a seventh review found (2026-11-13, Apple M3 Max, against the commit before)
+
+Two. One was the sixth's HTTP fix closing a socket twice, corrected in that fix, whose entry says what stayed.
+
+- **Isolates a call started, lost to a failed allocation.** `isolate.spawn-each` kept what it had started in its
+  arguments, so a failure to allocate after a spawn, making the monitor's pair, linking it or reversing the list, lost
+  the isolate, and so did `parallel.map` and Datalog's parts and joins between `spawn-each` returning and their
+  cleanup taking hold. Isolates that wait on each other would then run for ever and keep the program fixed. Each now
+  keeps what it started in a vector made before the first spawn, by stores, which do not allocate, under one cleanup
+  that also covers the result's making. A new case checks that the two of three that started are stopped when the
+  third cannot start; that path passed before too.
+- **Tried: a test that lands an allocation failure in that gap.** Filling the heap under `SHEN_JIT_MAX_HEAP`, then
+  freeing a pair at a time and trying `spawn-each` again, failed four times, none after a spawn: the reserve kept
+  for the error, and the collection after it, move the failure further than a pair. A hook to fail the Nth
+  allocation would do it, and is not worth its code for this.
 
 ### x86-64 and Linux (2026-11-03)
 
@@ -3986,6 +4812,96 @@ evaluation is also slower, 24.28 against 20.59 ms; the overall gap is not exclus
 Raw outputs, the small native claim adapter, instrumented runtimes and reports remain ignored under
 `build/`. Timings from different campaigns are identified above; no code gain is claimed from merely
 removing a diagnostic GC. All normal core/library checks passed before these source-identical trials.
+
+### Joins in isolates, for programs that do not run in parts (2026-11-13, Apple M3 Max with 16 cores, against `datalog.run` and the Soufflé 2.5 timings above)
+
+Runs in parts need every rule to keep its key, so a nonlinear closure, same generation or points-to ran whole,
+which left Soufflé's parallel runs ahead on them. `datalog.run-parallel` now runs such a program's joins in its
+isolates, when it has a recursive rule and only relations of symbols, strings and integers, with no equivalence,
+relation of one tuple a key or rule that makes a string, as interned values must agree; `datalog.partition` gives
+`[joins Reason]` for it. About 230 lines of code.
+
+- **How:** each of N isolates holds the whole database and runs every component, as `datalog.run` does. A
+  variant's plan, made again in the builder, reads only the new tuples an isolate owns: its outer loop, which reads
+  them, tests a hash of some of their columns, inline. After each round an isolate sends the tuples it derived,
+  each relation's as bytes, to every other, on a channel for each pair, and adds theirs with a native loop; all then
+  have the same tuples, if in another order, so they choose the same plans and stop together. The first sends its
+  database back, with every isolate's derivations in rounds added, so the result has the tuples and rounds of
+  `datalog.run`, and answers `add`, `remove`, `explain` and `stats` too. Its derivations differ by a few: a plan
+  whose relation grows derives its outer tuple's again, and each isolate grows at other times.
+- **Own by the next lookup's key, not the whole tuple.** With a hash of every column, derivations divided exactly
+  (points-to order a, on other facts than below: 11.4 million in one isolate, 5.7 in each of two, 2.85 in each of four), but each took longer:
+  22 ns in one isolate, 29 in two, 38 in four and 48 in eight, as each isolate read every key's tuples. Whole runs
+  side by side cost 1.10 times at two and 1.38 at eight, so contention was not most of it. Owning by the columns
+  the following lookup reads gives an isolate a key's tuples, and only its keys' part of the other relations: on
+  those facts, an isolate's compute at 8 went 110 → 81 ms, and at 12 103 → 56, and the whole call at 8 193 → 160.
+- **Adding what others derived, natively.** A KL loop calling the insert kernel took 85 of an isolate's 225 ms on
+  points-to at 8; a kernel looping over the bytes, as the insert kernel does one tuple, takes 49. It reads each
+  column from the bytes where it is used: read into registers first, as it was at first, a relation of 7 columns
+  or more needed more than the 16 word registers a kernel has, and every run of a program with one raised. Points-to
+  order c at 8 is the same either way, medians of six alternating runs 146 and 148 ms.
+- **Times** on the facts of `make bench-datalog-souffle`, whose `PARALLEL=N` now adds a column, best of three
+  after a run, ms; every result the same as `datalog.run`'s. Soufflé's are its 12 threads from "Against Soufflé"
+  above, on the same facts, dated and on a machine then loaded 3 to 4:
+
+  | Joins | `datalog.run` | 2 | 4 | 8 | 12 | Soufflé, 12 threads |
+  | --- | --- | --- | --- | --- | --- | --- |
+  | Nonlinear closure | 130.9 | 74.2 | 44.9 | 30.6 | 26.8 | 62 |
+  | Points-to large, order a | 320.3 | 234.5 | 177.4 | 146.9 | 149.3 | 1,491 |
+  | Points-to large, order b | 409.3 | 266.6 | 195.8 | 155.3 | 152.0 | over 100 s on one |
+  | Points-to large, order c | 316.4 | 235.2 | 177.6 | 146.3 | 144.6 | 168 |
+  | Points-to small, order c | 83.7 | 64.0 | 44.5 | 38.5 | 36.0 | 40.5 |
+  | Same generation | 9.1 | 7.8 | 7.6 | 8.7 | 11.7 | 9.2 |
+  | The call graph | 6.6 | 8.5 | 9.9 | 15.3 | 24.1 | 29.2 |
+  | Mutual recursion | 0.2 | 1.0 | 1.7 | 3.7 | 6.9 | |
+
+  The nonlinear closure is 4.9 times faster at 12, and points-to 2.2 to 2.7, so both are ahead of Soufflé's 12
+  threads. Same generation gains little, and the call graph, which keeps 126,304 of 282,967 derivations over 49
+  rounds, and mutual recursion lose, more with more isolates: each round is a send to and a receive from every
+  other. Starting the isolates is not it: the call graph with no facts takes 0.1, 0.4 and 0.7 ms at 2, 4 and 8.
+
+- **Left:** every isolate adds every new tuple, and the isolates' parts overlap, 1.58 times the distinct tuples on
+  points-to; at 8 that was about 49 of 160 ms. Sending each derived tuple first to the isolate that owns it, which
+  adds it once and sends on the new ones, would add each about once, for a second exchange each round. What is not
+  recursive runs in every isolate.
+- **Checks:** joins against `datalog.run` in 2, 3, 6 and 8 isolates, with the same rounds and plans, and
+  derivations to within 1%; two components with negation between them, of symbols and strings; mutual recursion;
+  tuples of 8 columns, with a variant that hashes them all;
+  `add`, `remove` and `explain` on the result; an error raised in the isolates, as `datalog.run` raises it; and 100
+  generated programs, 35 of which ran their joins in isolates, once a declared record type that no relation uses
+  no longer kept a program from them.
+
+### Joins only where they pay, and routing new tuples to owners rejected (2026-11-13, Apple M3 Max, against the joins above)
+
+- **Rejected: adding each new tuple once.** Isolates derive the same tuple in the same round, 1.58 times the
+  distinct ones on points-to, and each adds every copy it receives. Tried: each isolate sends each tuple it derived
+  only to the isolate that owns it, by a hash of all its columns, after a native pass that lays its new tuples out by
+  owner; each owner adds them and sends every other the new ones it owns, so each isolate adds each tuple about once.
+  It should have saved about 12 of points-to's 160 ms at 8, but the second exchange each round, another wait for the
+  slowest isolate, and the splitting cost more. Best of five, ms at 4 / 8 / 12, before and after, two rounds that
+  agreed: the nonlinear closure 44.6 / 28.8 / 25.2 → 49.8 / 34.1 / 30.3, points-to order c 246.5 / 194.1 / 189.3 →
+  294.8 / 228.5 / 222.5, the call graph 9.6 / 16.4 / 24.5 → 11.2 / 20.4 / 38.0, same generation even.
+- **Done: joins only where the last run says they pay.** Every isolate adds every new tuple, and each round's
+  exchange costs more with each isolate, so what decides is derivations per tuple kept and derivations per round.
+  `datalog.run` and joined runs record, for a run on facts, its rounds and the derivations and new tuples of its
+  recursive rounds, which are all that joins share out (counting every derivation at first made a heavy
+  non-recursive rule look like joins would pay, as a review found); `run-parallel` runs joins only if
+  derivations were four times the tuples kept, in as many isolates as get 50,000 derivations a round each, at most
+  N, and otherwise runs the program whole; with no run to go by, N.
+  The recursive rounds' counts, on facts from the benchmarks' generators: the nonlinear closure 26.4 million
+  derivations for 87,314 tuples in 4 rounds; points-to order c 24.7 million for 1.14 million in 26; same generation
+  1.0 million for 45,440 in 4, which gets 5 isolates; the call graph 279,225 for 121,862 in 49 and mutual recursion
+  36 for 31 in 16, which run whole. About 40 lines.
+- **On `make bench-datalog-souffle`'s facts,** best of three after a run, ms, `datalog.run` then 8 and 12
+  isolates, every result the same: same generation 9.4, 7.6, 7.2 (5 isolates; 8.7 and 11.7 before, in 8 and
+  12), the call graph 6.7, 6.9, 6.9 (whole; 15.3 and 24.1 before), mutual recursion 0.2 (whole; 3.7 and 6.9);
+  the nonlinear closure 131.7, 30.8, 27.8 and points-to order c 331.6, 146.9, 148.7, as before. So no program
+  there is slower in isolates than whole, and same generation is now ahead of Soufflé's 12 threads too (9.2, dated
+  above).
+- **Checks:** the count against set counts (none where derivations are short of four times the tuples kept, as many
+  as take 50,000 a round, at most N, none below 2, N with none to go by), that a run on no facts records nothing, and
+  that a right-linear closure over a line runs whole; the joins tests call the joined run directly, as
+  `run-parallel` now runs small programs whole.
 
 ## Benchmark results
 

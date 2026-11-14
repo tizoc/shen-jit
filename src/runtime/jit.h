@@ -10,7 +10,7 @@ typedef struct Jit Jit;
 Jit *jit_create(void);
 void *jit_compile_stub(Jit *jit);
 void *jit_foreign_stub(Jit *jit);
-/* Uses those stubs for a VM, setting vm->compile_stub and vm->foreign_stub. */
+/* Uses those stubs for a VM, setting vm->program->compile_stub and vm->program->foreign_stub. */
 void jit_attach(VM *vm, Jit *jit);
 /* Both, for a fresh VM. */
 bool jit_init(VM *vm);
@@ -18,9 +18,10 @@ void jit_destroy(VM *vm);
 void jit_dispose(Jit *jit); /* unattached stubs, e.g. after an image-load failure */
 /* For SHEN_JIT_STATS: code objects compiled, and those freed since. */
 void jit_stats(VM *vm, size_t *compiled, size_t *freed);
-/* Compile everything again on its next call, for a change in what code must
-   test. Frames running the old code finish in it, so it stays. */
-void jit_recompile(VM *vm);
+/* From now on loops test for an interrupt, in code any VM of the program
+   compiles: everything is compiled again on its next call. Frames running the
+   old code finish in it, so it stays. */
+void jit_catch_interrupts(VM *vm);
 
 /* Calls a procedure from C with arguments that the caller keeps rooted.
    Returns V_CLEARED, with the error in vm->exception, if an error is not

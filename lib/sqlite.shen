@@ -28,8 +28,8 @@
 \\ bits raises when it is read.
 \\
 \\ Errors raise, with SQLite's message. A database or statement that has been closed is dead, and
-\\ raises when used. Other threads run during sqlite.step and sqlite.exec, so a connection belongs
-\\ to one thread: some builds of SQLite, Apple's among them, do not allow two threads on one.
+\\ raises when used. A connection belongs to the isolate that opened it, as a pointer cannot be
+\\ sent.
 
 (shen.x.namespace sqlite
   (use shen-jit)

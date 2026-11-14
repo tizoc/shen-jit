@@ -82,7 +82,10 @@ static bool set_string(VM *vm, const char *global, const char *text)
     if (g == V_CLEARED)
         return false;
     vm->args[0] = s; /* keep it rooted while interning */
-    *cell_value(vm, symbol_cell(g)) = vm->args[0];
+    V *slot = global_slot_new(vm, g);
+    if (!slot)
+        return false;
+    *slot = vm->args[0];
     return true;
 }
 
@@ -182,18 +185,27 @@ static void print_stats(void)
     /* What stays live, by type, to help find memory growth. */
     static const char *const names[T_LIMIT] = {"pairs", "strings", "bytecode", "symbols", "reals",
                                                "absvectors", "closures", "foreign functions", "code",
-                                               "exceptions", "streams", "pointers", "shared views"};
+                                               "exceptions", "streams", "pointers"};
     size_t count[T_LIMIT] = {0}, words[T_LIMIT] = {0}, total = 0;
-    vm_census(stats_vm, count, words);
-    for (int t = 0; t < T_LIMIT; t++)
-        total += words[t];
-    fprintf(stderr, "shen-jit: live heap %zu KB:", total * sizeof(uint64_t) / 1024);
-    for (int t = 0; t < T_LIMIT; t++)
-        if (count[t])
-            fprintf(stderr, " %s %zu (%zu KB)%s", names[t], count[t], words[t] * sizeof(uint64_t) / 1024,
-                    t + 1 < T_LIMIT ? "," : "");
-    fprintf(stderr, "\nshen-jit: roots: %zu symbols, %zu global cells, %zu constant slots\n",
-            stats_vm->nsymbols, stats_vm->cells.count / 2, stats_vm->consts.count);
+    VM *exiting = program_exiting();
+    if (exiting && exiting != stats_vm) { /* the builder may be running: its heap is its own */
+        fprintf(stderr, "shen-jit: live heap not counted, as an isolate ended the program");
+    } else {
+        vm_census(stats_vm, count, words);
+        for (int t = 0; t < T_LIMIT; t++)
+            total += words[t];
+        fprintf(stderr, "shen-jit: live heap %zu KB:", total * sizeof(uint64_t) / 1024);
+        for (int t = 0; t < T_LIMIT; t++)
+            if (count[t])
+                fprintf(stderr, " %s %zu (%zu KB)%s", names[t], count[t], words[t] * sizeof(uint64_t) / 1024,
+                        t + 1 < T_LIMIT ? "," : "");
+    }
+    fprintf(stderr, "\nshen-jit: roots: %zu symbols, %zu function cells, %zu global slots, %zu constant slots\n",
+            stats_vm->program->published.count + stats_vm->own.count, stats_vm->program->cells.count / 2, stats_vm->program->nglobals - 1, stats_vm->program->consts.count);
+    const Space *p = &stats_vm->program->space;
+    fprintf(stderr, "shen-jit: program space: %zu KB of objects, %zu symbols published, %zu KB of symbol slots\n",
+            (size_t)(p->objects_next - p->objects) * sizeof(uint64_t) / 1024, stats_vm->program->published.count,
+            (size_t)(p->symbols_next - p->base) * sizeof(uint64_t) / 1024);
     size_t compiled, freed;
     jit_stats(stats_vm, &compiled, &freed);
     fprintf(stderr, "shen-jit: native code: %zu code objects compiled, %zu freed\n", compiled, freed);
@@ -255,15 +267,15 @@ static int run(int argc, char **argv)
     }
     jit_attach(vm, jit);
     vm->self = self;
-    thread_note_main_stack(vm);
+    vm_note_main_stack(vm);
     /* For testing: collect after every N words allocated. */
     const char *stress = getenv("SHEN_JIT_GC_STRESS");
     vm->stress = stress ? strtoul(stress, NULL, 10) : 0;
     vm->max_words = size_setting("SHEN_JIT_MAX_HEAP");
     /* A binary with an entry point (shen-jit.save-executable) is a program:
        its arguments are all its own, and it runs instead of the launcher. */
-    size_t entry = symbol_cell(intern_cstr(vm, "shen-jit.*entry*"));
-    bool program = is_symbol(*cell_value(vm, entry));
+    V entry = intern_cstr(vm, "shen-jit.*entry*");
+    bool program = entry != V_CLEARED && is_symbol(global_value(vm, entry));
     /* Options before the launcher's arguments, which it does not see:
        sealing of user definitions (shen-jit.seal), also SHEN_JIT_SEAL=1,
        and saving an image. */
@@ -284,7 +296,7 @@ static int run(int argc, char **argv)
     vm->seal_user = (seal && *seal && strcmp(seal, "0") != 0) || seal_flag;
     if (getenv("SHEN_JIT_STATS")) {
         stats_vm = vm;
-        thread_at_exit(print_stats);
+        at_program_exit(print_stats);
     }
     if (getenv("SHEN_JIT_PROFILE") && !profile_start())
         fprintf(stderr, "shen-jit: cannot start the profiler\n");
@@ -293,14 +305,17 @@ static int run(int argc, char **argv)
        Below them on the stack, where they stay rooted, are *hush* and *argv*
        as the image had them: -q and script set them for this run only, so a
        saved image gets them back. */
-    size_t hush = symbol_cell(intern_cstr(vm, "*hush*"));
-    size_t argv_cell = symbol_cell(intern_cstr(vm, "*argv*"));
+    /* Symbols never move, and these have values, so nothing drops them or their slots. */
+    V *hush = global_slot_new(vm, intern_cstr(vm, "*hush*"));
+    V *argv_slot = global_slot_new(vm, intern_cstr(vm, "*argv*"));
+    if (!hush || !argv_slot)
+        return 1;
     size_t base = (size_t)(vm->top - vm->stack);
     vm_stack_reserve(vm, base + 3);
     vm->launch_base = base;
     V *args = vm->stack + base;
-    args[0] = *cell_value(vm, hush);
-    args[1] = *cell_value(vm, argv_cell);
+    args[0] = *hush;
+    args[1] = *argv_slot;
     args[2] = V_NIL;
     vm->top = args + 3;
     for (int i = argc - 1; i >= 0; i--) {
@@ -314,23 +329,22 @@ static int run(int argc, char **argv)
     vm->top = args + 2;
     V result;
     if (program) {
-        *cell_value(vm, argv_cell) = list;
-        result = jit_call(vm, *cell_function(vm, symbol_cell(*cell_value(vm, entry))), 0, NULL);
+        *argv_slot = list;
+        result = jit_call(vm, *cell_function(vm, symbol_cell(global_value(vm, entry))), 0, NULL);
     } else {
         result = jit_call(vm, function(vm, "shen.x.launcher.main"), 1, &list);
     }
     fflush(stdout);
     if (result == V_CLEARED) {
         sj_report(vm, "uncaught error");
-        if (vm->threads)
-            thread_exit(vm, 1);
+        if (vm->program->isolates)
+            program_exit(vm, 1);
         return 1;
     }
     if (save) {
-        thread_forget_others(vm);
         args = vm->stack + base; /* the run may have moved the stack */
-        *cell_value(vm, hush) = args[0];
-        *cell_value(vm, argv_cell) = args[1];
+        *hush = args[0];
+        *argv_slot = args[1];
         /* No frames are live here, so the image holds just what the cells,
            constants and symbols reach. */
         vm->top = args;
@@ -339,8 +353,8 @@ static int run(int argc, char **argv)
             return 1;
         }
     }
-    if (vm->threads)
-        thread_exit(vm, 0); /* the other threads end with the process */
+    if (vm->program->isolates)
+        program_exit(vm, 0); /* the other isolates end with the program */
     return 0;
 }
 

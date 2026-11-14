@@ -1,9 +1,7 @@
 # Datalog
 
 `lib/datalog.shen` evaluates relations, facts and recursive rules bottom up, to a fixed point. It is not in the
-image. `datalog.run` evaluates sequentially. Optional `lib/datalog-parallel.shen` adds
-[opt-in parallel evaluation](#opt-in-parallel-evaluation), with automatic detection and sequential fallback.
-It needs `lib/native.shen`, and a macro applies only to files read after it, so load them first:
+image. It needs `lib/native.shen`, and a macro applies only to files read after it, so load them first:
 
 ```shen
 \\ deps.shen
@@ -33,10 +31,6 @@ and reverse impact queries.
 Configured translation-unit exports also require a preceding external declaration for cross-unit
 matches and keep build configurations separate.
 
-Its [batch queries](../example-apps/source-deps/README.md#batch-queries) can use
-[structured workers](parallel.md) for independent graph searches over one immutable index. Matching the
-source facts still runs Datalog sequentially; workers run the batch's BFS queries after that matching.
-
 ```text
 ((a b) (a c) (b c) (x x) (x y) (y x) (y y))
 ((a b) (a c))
@@ -64,6 +58,9 @@ false
 | `(datalog.plans Name)`, `(datalog.code Name)` | Each rule's order of joins with no sizes to go by, and the code that gives: each kernel as written for `lib/native.shen`, and the KL that calls it |
 | `(datalog.stats Db)` | The rounds, how many plans were made, and each relation's tuples, the derivations that made them and its indexes |
 | `(datalog.run-naive Name Facts)` | The same result by the plain definition, slowly: what the rest is tested against |
+| `(datalog.share Name)`, `(datalog.use Shared)` | A program prepared and shared, for isolates (below), and taken up in one, which gives its name |
+| `(datalog.run-parallel N Name Facts)` | The same as `datalog.run`, in at most `N` isolates: for a program that runs in parts (below), each runs the rules for some of the keys, and it gives a database of the parts, which answers `count`, `holds?`, `ask`, `match`, `tuples` and `sorted`; for one whose joins run in isolates (below), they share each round of its recursive rules, and it gives a database as `datalog.run` does |
+| `(datalog.partition Name)` | `[parts KeyType DerivedRelations]` if the program runs in parts, `[joins Reason]` if its joins run in isolates, with why it does not run in parts, or `[sequential Reason]` |
 
 - **Columns** are `symbol`, `string`, `integer` or a declared type, and a value of another type raises when it is given. An integer
   is 32 bits, signed: from -2147483648 to 2147483647.
@@ -220,125 +217,59 @@ shen-jit eval -l lib/native.shen -l lib/datalog.shen -l lib/ffi.shen -l lib/buff
 ```
 
   After what `deps.shen` prints, this prints `(ok 8)`, the bytes written, and the facts read back, in no particular order.
+- **Isolates:** an [isolate](guide.md#isolates) cannot compile, and a run compiles its plans as it goes, so the builder
+  prepares a program for isolates and shares it. `(datalog.share Name)` compiles the plan of every rule with no sizes to
+  go by, the variants a run uses too, and what loading facts, queries, records and keyed relations call, and gives the
+  program, with every plan made so far, as a shared value. An isolate passes it to `(datalog.use Shared)`, which gives the
+  program's name, and the rest works there as in the builder:
+
+  ```shen
+  (define count-depends
+    [Shared Facts Out] -> (let Name (datalog.use Shared)
+                            (channel.send Out (datalog.count (datalog.run Name Facts) depends))))
+
+  (let Shared (datalog.share dependencies)
+       R (channel.new 2)
+       _ (isolate.spawn count-depends [Shared [[imports a b] [imports b c]] (channel.sender R)])
+       _ (isolate.spawn count-depends [Shared [[imports x y]] (channel.sender R)])
+       A (channel.receive R)
+       B (channel.receive R)
+    (if (< A B) [A B] [B A]))
+  \\ [1 3]
+  ```
+
+  An isolate takes the order of joins the sizes choose if the builder made that plan, and otherwise the rule's order with no
+  sizes to go by, or for a variant that reads only new tuples, the whole rule's: any order gives the same tuples. So run the
+  program in the builder, on facts like those the isolates will have, before sharing it, and its isolates join as well as
+  the builder does. A query on columns the builder never looked up by reads every tuple of the relation, and a query by demand
+  the builder never asked runs the whole program. Define and share programs before spawning: the program cannot change while
+  isolates run.
+- **Runs in parts:** a program runs in parts when its derived relations all have a first column of one type, its key, and
+  each rule gives a head whose key is a constant or a variable a body atom reads, and reads derived relations only at that
+  key, with no negation, aggregate, record, equivalence or relation of one tuple a key, only relations of symbols,
+  strings and integers, and none named `part-key`, which the copy uses: a transitive closure from each node, say. Then no key's tuples need another's, and `(datalog.run-parallel N Name Facts)` gives the keys to at most `N`
+  isolates in turn, each running a copy of the program whose rules hold only for its keys, on every input fact and the
+  derived facts of its keys, and keeps the databases they send back. Counts, membership and queries read them all, or the
+  first for an input relation, which each has whole; `add`, `remove`, `explain` and `stats` raise, and `datalog.run` makes a
+  database that answers them. A program with fewer than two keys runs as `datalog.run` does. The first run in parts
+  defines and shares the copy, so it is made in the builder, while no other isolate runs.
+- **Joins in isolates:** a program that does not run in parts, but has a recursive rule, and only relations of symbols,
+  strings and integers, with no equivalence or relation of one tuple a key, and no rule that makes a string, runs its
+  joins in isolates instead: a nonlinear closure, say, or a points-to analysis. Each of `N` isolates holds the whole
+  database and runs every rule, and in each round of a recursive component takes only some of the new tuples, by a hash
+  of the columns the rule looks the next relation up by, so that one isolate reads a key's tuples; it then sends the
+  tuples it derived to every other and adds theirs, so that all start the next round with the same tuples. The first
+  sends its database back, which has the tuples and rounds `datalog.run` gives, and answers everything, `add`, `remove`,
+  `explain` and `stats` too; its derivations differ by a few, as a plan whose relation grows derives some again. What is
+  not recursive runs in every isolate, and every isolate adds every new tuple, so the gain is in rounds that derive many
+  more tuples than they keep, and each round's exchange costs more with each isolate. So `run-parallel` goes by the
+  program's last run on facts, by `datalog.run` or in isolates: it runs the joins only if that run's recursive rounds,
+  all that isolates share, derived four times the tuples they kept, in as many isolates as get 50,000 derivations a
+  round each, at most `N`, and otherwise runs the program whole, as a call graph's closure, which keeps most of what it
+  derives, is faster run. With no run to go by, it takes `N`. Each run shares the program again if the builder has made
+  plans since, so run it in the builder first, on facts like these, and start it there while no other isolate runs; the
+  isolates then join in the orders the sizes choose, in as many isolates as pay.
+- **Any other program,** or a count `N` of 1, runs as `datalog.run` does; `N` that is not a positive integer raises.
 - **Saving:** a program saved with `--save` runs in the saved image, and one saved as an executable runs on its own:
   [example-apps/depends](https://github.com/tizoc/shen-jit/blob/main/example-apps/depends/README.md) is a dependency analyser
   over Shen and KL sources, built so, which uses most of the above.
-
-## Opt-in parallel evaluation
-
-*Experimental,* as the [structured workers](parallel.md) it runs on are: this API is expected to change in a later release.
-
-Load `lib/native.shen`, `lib/datalog.shen`, `lib/buffer.shen`, `lib/parallel.shen`,
-`lib/parallel-map.shen` and `lib/datalog-parallel.shen`, in that order, under `(tc -)`.
-
-| Function | Meaning |
-| --- | --- |
-| `(datalog.parallel.run Name Facts Image Workers)` | Evaluate with a positive worker budget from 1 to 64. Return an ordinary, parent-owned database after joining all workers. |
-| `(datalog.parallel.plan Name)` | A structural plan: `[parallel KeyType DerivedRelations]`, or `[sequential Reason]`. Unknown programs raise. |
-| `(datalog.parallel.with-db Name Facts Image Workers Body)` | Evaluate once and call `Body` with a read-only view. Keep results in workers and reuse them for several queries; always join on exit. |
-| `(datalog.parallel.count View Relation)`, `(datalog.parallel.holds? View Fact)` | Read cardinality or membership without collecting the whole database. |
-| `(datalog.parallel.match View Pattern)`, `(datalog.parallel.tuples View Relation)` | Return owned tuples from the view. Input-only relations are returned once. |
-| `(datalog.parallel.match-many View Patterns)` | Answer a list of patterns in one worker dispatch, returning one tuple list per pattern in the same order. |
-| `(datalog.parallel.materialize View)` | Consume the view and return an ordinary database. Use this as the last operation when full local access or updates are needed. |
-
-Use a view when only counts or selected answers are needed:
-
-```shen
-(datalog.parallel.with-db paths Facts "parallel-paths" 4
-  (/. View [(datalog.parallel.count View path)
-           (datalog.parallel.match View [path 1 [var "Destination"]])]))
-```
-
-The view reuses its workers, evaluated relations and query indexes throughout the callback. Returned
-answers belong to the parent and survive joining. The view closes after the callback, on error, or
-when materialized; subsequent view operations raise. Save the materialized database or returned
-answers, rather than the view. Use `match-many` to amortize dispatch across several queries. It accepts
-up to 4,096 patterns; requests are at most 1 MiB, and replies share the 64 MiB batch budget equally
-among active workers. The per-worker reply budget applies to the whole batch, together with the
-codec's node/depth limits. `match` has the same reply budget for one query. Use separate queries, `tuples` or materialization
-for larger result sets.
-
-The planner recognizes positive programs over scalar columns whose derived relations preserve a common
-first-column key. Every derived body atom must have the head's key as its first term. All derived
-relations must use the same key type, and a head key must be a literal or a variable read from a body
-atom. Workers receive disjoint keys, replicate input-only relations, partition seeded derived facts,
-and run the existing evaluator independently to a fixed point. The caller need not annotate rules or
-partition facts.
-
-Programs outside this subset use `datalog.run`: cross-key recursion, negation, aggregates, records,
-equivalences, keyed relations and computed head keys. A budget of one, fewer than two candidate keys,
-or an input that exceeds the copied-value transport bounds also uses the sequential engine, without
-opening the image. Invalid facts still raise. The budget is an upper bound; fewer workers are used
-when fewer candidate keys exist.
-
-`Image` must be a compatible saved executable containing the six libraries above. It need not contain
-the program definition: the parent supplies the checked rules and facts. The named worker entry runs
-without invoking the executable's main function. A program can use its own executable, as here:
-
-```shen
-\\ parallel-paths.shen
-(defdatalog paths
-  (relation edge [integer integer])
-  (relation path [integer integer])
-  (rule (path X Y) <-- (edge X Y))
-  (rule (path X Z) <-- (path X Y) (edge Y Z)))
-
-(define paths.main
-  -> (let Facts [[edge 1 2] [edge 2 3] [edge 9 10] [edge 10 11]]
-          Db (datalog.parallel.run paths Facts (hd (value *argv*)) 4)
-       (do (set *hush* false) (output "~S~%" (datalog.sorted Db path)))))
-```
-
-```sh
-build/shen-jit eval -q -l lib/native.shen -l lib/datalog.shen -l lib/buffer.shen \
-  -l lib/parallel.shen -l lib/parallel-map.shen -l lib/datalog-parallel.shen \
-  -l parallel-paths.shen -e '(shen-jit.save-executable "parallel-paths" paths.main)'
-./parallel-paths
-```
-
-After return, the database supports the ordinary query, explanation, fact-file and image operations.
-`datalog.add` and `datalog.remove` update it sequentially. Packed tuples are copied back, symbol and
-string IDs are translated to the parent's interner, and normal hash tables and derivation ordering are
-restored. No worker view or runtime must remain alive to use the database. `datalog.stats` reports the
-largest worker round count and the sum of worker plans; these need not equal serial diagnostics.
-
-Detection establishes that partitioning is safe; it does not estimate whether starting workers will
-pay off. Short jobs can be faster sequentially. Each worker starts with a 16 MiB semispace and may grow
-to the runtime's 512 MiB child heap limit; replicated inputs, private indexes and the returned database
-consume additional memory. Shared input uses the value codec's 64 MiB, 262144-node and depth bounds.
-Snapshot decoding reads shared bytes directly; decoded facts and indexes still belong to each worker.
-The heap caps are per worker, not a total RSS budget; 64 workers permit up to 32 GiB of configured
-guest heap, with copying spaces, native allocations and the parent consuming additional memory.
-The high-level Datalog API uses these fixed defaults; choose fewer workers when memory is limited.
-Vocabulary pages normally fit 1 MiB and advance by encoded byte size, rather than just value count.
-A single larger vocabulary value can use its worker's full reply budget; a value exceeding that budget raises.
-Metadata and queries use the same per-worker share of the 64 MiB aggregate reply limit. Missing
-images, worker errors and exhausted resources after dispatch propagate; they are not silently retried
-sequentially. Cancellation is cooperative, and an evaluation may have to finish before a scope can join.
-The default `datalog.run` and the source-deps application retain their sequential behavior.
-
-`make test-datalog` includes parallel results, fallback, explanations, updates, image/GC checks and
-worker failure handling. It needs no external Datalog engine.
-
-## Comparing evaluation
-
-`tests/bench/datalog-workers.py` compares the public API with sequential evaluation and compiled Soufflé.
-It checks every returned tuple before timing, then shuffles fresh-process runs and verifies relation
-sizes in every sample. The public API's clock includes scope creation, image/JIT startup, evaluation,
-packed collection, parent index rebuilding and joining; the database is usable when that clock stops.
-The driver needs a 32-bit OpenMP build of Soufflé and its C++ compiler flags:
-
-```sh
-SOUFFLE_FLAGS='-I/path/to/souffle/include -fopenmp' \
-SOUFFLE_LIBS='-fopenmp' \
-python3 tests/bench/datalog-workers.py --souffle /path/to/souffle/bin/souffle \
-  --counts 4 12 16
-```
-
-Choose counts for the machine's CPUs and memory. Apple's clang instead needs `-Xpreprocessor -fopenmp`,
-libomp's include path, and `-L/path/to/libomp/lib -lomp` for linking. Facts are already in memory.
-Soufflé's C++ compilation and final destruction are outside its evaluation clock; destruction is
-reported separately. There is no startup subtraction. `--engines sequential workers souffle` instead
-isolates resident-worker evaluation with reused scopes and excludes parent result collection; those
-times do not measure `datalog.parallel.run`. Generated programs, complete outputs and individual
-timings stay under `build/`.

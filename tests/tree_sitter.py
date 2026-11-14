@@ -150,7 +150,7 @@ def images(executable, args, root):
                 '(ts-gc.run (value ts-test.language)) (output "tree-sitter image gc ok~%"))']
     result = run(restored, env={'SHEN_JIT_IMAGE': str(image), 'SHEN_JIT_GC_STRESS': '1'})
     assert 'tree-sitter image gc ok' in result.stdout
-    print('3 passed, 0 failed (saved language, snapshot and concurrent GC)', flush=True)
+    print('3 passed, 0 failed (saved language, snapshot and GC)', flush=True)
 
 
 def timeout(args, root):

@@ -1,97 +1,132 @@
+\\ A map over isolates (docs/parallel.md). No other library is needed.
+
 (shen.x.namespace parallel
   (use shen-jit)
-  (externals [buffer.owner buffer.offset buffer.length buffer.bytes buffer.wrap buffer.new buffer.view
-              parallel.config-state parallel.scope-state])
-  (shadow count)
-  (export bytes config scope check-count with-workers count batch reply replies shared
-          shared-length shared-u8 shared-u32 shared-copy cancelled? index)
+  (shadow map)
+  (export map)
 
-\\ Structured workers: private runtimes, copied messages and one
-\\ borrowed immutable input. Load buffer.shen first, under (tc -).
+\\ (parallel.map N F Xs): F applied to each element of Xs, in order, by at most N isolates, each
+\\ taking a run of Xs. F is a function's name, or [F | Args], called with Args and then the element:
+\\ an isolate inherits nothing, and closures do not cross. Each run and its results are copied; a
+\\ value shared once (isolate.share) crosses by pointer. It returns once every isolate has ended,
+\\ so the program can change again, and raises the first error, in the order of Xs, that F raised.
+\\ If its wait raises, it kills its isolates first; after a Ctrl-C, the REPL kills them.
+(define map
+  N F Xs -> (let _ (check N F Xs)
+              (if (empty? Xs)
+                  []
+                  (let Runs (split Xs (sizes (length Xs) (smaller N (length Xs))))
+                       Replies (replies Runs)
+                       Cell (address-> (absvector 1) 0 [])
+                    (shen-jit.on-error
+                      (freeze (gather (launched Replies (started Cell (isolate.spawn-each map-run (run-args F Runs Replies))))
+                                      [] []))
+                      (freeze (stop Cell Replies)))))))
 
-\\ A whole managed buffer needs no intermediate copy. Other views are
-\\ materialized explicitly before the runtime snapshots/sends their bytes.
-(define bytes
-  View -> (let Owner (buffer.owner View) Start (buffer.offset View)
-               Length (buffer.length View)
-            (if (and (= Start 0) (= Length (shen-jit.bytes-length Owner))
-                     (not (shen-jit.pointer? Owner)))
-                Owner (buffer.bytes View))))
+(define check
+  N F Xs ->
+    (do (if (and (integer? N) (> N 0)) true (error "parallel.map: ~S is not a number of isolates" N))
+        (if (list? Xs) true (error "parallel.map: ~S is not a list" Xs))
+        (function-check F)))
 
-(define config
-  Initial Maximum Input ->
-    (address-> (address-> (address-> (address-> (absvector 4)
-      0 parallel.config-state) 1 Initial) 2 Maximum) 3 (bytes Input)))
+(define function-check
+  F -> (arity-check F 0) where (symbol? F)
+  [F | Args] -> (arity-check F (length Args)) where (and (symbol? F) (list? Args))
+  F -> (error "parallel.map: ~S is not a function's name, or a list of one and its first arguments" F))
 
-(define config-check
-  C -> (if (shen-jit.tagged? C parallel.config-state) C (error "parallel: invalid configuration")))
+(define list?
+  [] -> true
+  [_ | Xs] -> (list? Xs)
+  _ -> false)
 
-(define check-count
-  Count -> (if (and (integer? Count) (> Count 0) (<= Count 64))
-               Count (error "parallel: expected an integer worker count from 1 to 64")))
+(define arity-check
+  F N -> (let A (arity F)
+           (if (or (= A -1) (= A (+ N 1)))
+               true
+               (error "parallel.map: ~A takes ~A arguments, not ~A and an element" F A N))))
 
-(define with-workers
-  Image Entry Count Config Body ->
-    (let C (config-check Config)
-         _ (check-count Count)
-      (shen-jit.worker-scope Image Entry Count
-        [(<-address C 1) (<-address C 2) (<-address C 3)]
-        (/. Token (Body (address-> (address-> (address-> (absvector 3)
-                          0 parallel.scope-state) 1 Token) 2 Count))))))
+(define smaller
+  A B -> (if (< A B) A B))
 
-(define scope-check
-  S -> (if (shen-jit.tagged? S parallel.scope-state) S (error "parallel: invalid scope")))
+\\ K runs whose lengths differ by one at most, the longer first.
+(define sizes
+  L K -> (sizes-from (shen.mod L K) (/ (- L (shen.mod L K)) K) K))
 
-(define count
-  Scope -> (<-address (scope-check Scope) 2))
+(define sizes-from
+  _ _ 0 -> []
+  Long Size K -> [(if (> Long 0) (+ Size 1) Size) | (sizes-from (- Long 1) Size (- K 1))])
 
-\\ Exactly one request per worker. Applications can pack multiple jobs in a
-\\ request, including an empty shard. Returned buffers belong to the parent.
-(define batch
-  Scope Requests ->
-    (map (function buffer.wrap)
-      (shen-jit.worker-batch (<-address (scope-check Scope) 1)
-        (map (function bytes) Requests))))
+(define split
+  _ [] -> []
+  Xs [N | Ns] -> (split-run Xs N [] Ns))
 
-(define reply
-  View -> [[(buffer.owner View) (buffer.offset View) (buffer.length View)]])
+(define split-run
+  Xs 0 Run Ns -> [(reverse Run) | (split Xs Ns)]
+  [X | Xs] N Run Ns -> (split-run Xs (- N 1) [X | Run] Ns))
+
+\\ An isolate for each run, with a channel for its reply and a monitor for its end: [Reply Down P].
+\\ What spawn-each gives is stored in Cell at once, a store allocating nothing, so that whatever
+\\ fails after it, even making the list, stops the isolates. If a spawn fails, spawn-each stops
+\\ those it started.
+(define started
+  Cell Started -> (do (address-> Cell 0 Started) Started))
+
+(define close-replies
+  [] -> true
+  [R | Replies] -> (do (trap-error (channel.close R) (/. E skip)) (close-replies Replies)))
 
 (define replies
-  Views -> (map (/. V [(buffer.owner V) (buffer.offset V) (buffer.length V)]) Views))
+  [] -> []
+  [_ | Runs] -> [(channel.new 1) | (replies Runs)])
 
-(define shared
-  -> (shen-jit.worker-shared-view))
+(define run-args
+  _ [] [] -> []
+  F [Run | Runs] [Reply | Replies] -> [[F Run (channel.sender Reply)] | (run-args F Runs Replies)])
 
-(define shared-length
-  Input -> (shen-jit.bytes-length Input))
+(define launched
+  [] [] -> []
+  [Reply | Replies] [[P | Down] | Started] -> [[Reply Down P] | (launched Replies Started)])
 
-(define shared-u8
-  Input Offset -> (shen-jit.u8 Input Offset))
+\\ Kills each isolate, waits for it to end, which closes its monitor, and closes the replies'
+\\ channels, some of which a wait may have closed already.
+(define stop
+  Cell Replies -> (do (isolate.stop-each (<-address Cell 0)) (close-replies Replies)))
 
-(define shared-u32
-  Input Offset -> (shen-jit.u32 Input Offset))
+(define map-run
+  [F Run Out] ->
+    (let Result (trap-error [done (each F Run [])] (/. E [failed (error-to-string E)]))
+      (trap-error (channel.send Out Result)
+        (/. E (channel.send Out [failed (error-to-string E)])))))
 
-(define shared-copy
-  Input Offset Count ->
-    (let Out (buffer.new Count)
-      (do (shen-jit.copy-bytes (buffer.owner Out) 0 Input Offset Count) Out)))
+(define each
+  _ [] Ys -> (reverse Ys)
+  F [X | Xs] Ys -> (each F Xs [(apply-to F X) | Ys]))
 
-(define cancelled? -> (shen-jit.worker-cancelled?))
-(define index -> (shen-jit.worker-index))
+(define apply-to
+  [F | Args] X -> (shen-jit.apply F (append Args [X]))
+  F X -> (shen-jit.apply F [X]))
 
-(declare config [number --> [number --> [buffer.view --> config]]])
-(declare with-workers
-  [string --> [symbol --> [number --> [config --> [[scope --> A] --> A]]]]])
-(declare count [scope --> number])
-(declare batch [scope --> [[list buffer.view] --> [list buffer.view]]])
-(declare reply [buffer.view --> reply])
-(declare replies [[list buffer.view] --> reply])
-(declare shared [--> shared])
-(declare shared-length [shared --> number])
-(declare shared-u8 [shared --> [number --> number]])
-(declare shared-u32 [shared --> [number --> number]])
-(declare shared-copy [shared --> [number --> [number --> buffer.view]]])
-(declare cancelled? [--> boolean])
-(declare index [--> number])
+\\ The replies in order, each once its isolate has ended. A reply is sent before its isolate ends,
+\\ and its channel is listed first, so an isolate that ends without one has failed.
+(define gather
+  [] Results [] -> (concatenate (reverse Results) [])
+  [] _ [Error | _] -> (error "parallel.map: ~A" Error)
+  [[Reply Down _] | Rest] Results Errors ->
+    (let Got (channel.receive-any [Reply Down])
+         End (if (= (hd Got) Reply) (channel.receive Down) (hd (tl Got)))
+         _ (channel.close Reply)
+         _ (channel.close Down)
+      (gather-reply Rest Results Errors (if (= (hd Got) Reply) (hd (tl Got)) [failed (ended End)]))))
+
+(define gather-reply
+  Rest Results Errors [done Ys] -> (gather Rest [Ys | Results] Errors)
+  Rest Results Errors [failed Message] -> (gather Rest Results (append Errors [Message])))
+
+(define ended
+  [_ _ Reason] -> (make-string "an isolate ended without a reply: ~A" Reason))
+
+(define concatenate
+  [] Ys -> Ys
+  [Xs | Xss] Ys -> (append Xs (concatenate Xss Ys)))
 
 )

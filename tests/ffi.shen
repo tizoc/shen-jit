@@ -325,36 +325,15 @@
 (ffi-test.check "three fixed" 12345 (freeze (var-three 1 2 3 4 5)))
 
 \\ ---------------------------------------------------------------------------
-\\ Calls that wait. With no other thread, an ordinary call.
+\\ Calls declared blocking, which may wait.
 
 (define-foreign slow-fill t "slow_fill" (bytes int64 int32 int32) --> int64 blocking)
-(ffi-test.check "blocking, alone" 8
+(ffi-test.check "a blocking call" 8
                 (freeze (let B (ffi-test.filled 4 2)
                              Before (slow-fill B 4 5 1)
                           (if (= (shen-jit.u8 B 0) 5) Before wrong))))
 
-\\ With another thread, which collects while C waits, so that the buffer moves: C works on a
-\\ copy, which comes back to wherever the buffer now is. And the error codes are per thread.
-(define ffi-test.wait
-  Name -> (if (= (value Name) waiting) (ffi-test.wait-more Name) (value Name)))
-(define ffi-test.wait-more
-  Name -> (do (ffi-test.churn 50 "") (ffi-test.wait Name)))
-
-(set ffi-test.moved waiting)
-(thread (freeze (let B (ffi-test.filled 64 2)
-                     Before (slow-fill B 64 7 100)
-                  (set ffi-test.moved [Before (shen-jit.u8 B 0) (shen-jit.u8 B 63)]))))
-(ffi-test.check "a buffer moved during the wait" [128 7 7] (freeze (ffi-test.wait ffi-test.moved)))
-
-(set ffi-test.other-error waiting)
-(set-c-error 5)
-(thread (freeze (do (set-c-error 6)
-                    (ffi-test.churn 2000 "")
-                    (set ffi-test.other-error (shen-jit.c-errno)))))
-(ffi-test.check "another thread's code" 6 (freeze (ffi-test.wait ffi-test.other-error)))
-(ffi-test.check "this thread's code" 5 (freeze (shen-jit.c-errno)))
-
-\\ With threads, one buffer given twice is one copy, so what C writes through one it reads through the other.
+\\ One buffer given twice: what C writes through one it reads through the other.
 (define-foreign alias-bytes t "alias_bytes" (bytes bytes) --> int32 blocking)
 (ffi-test.check "one buffer given twice" [42 42]
                 (freeze (let B (shen-jit.bytes 1)

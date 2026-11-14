@@ -191,7 +191,7 @@ bool profile_start(void)
         samples = NULL;
         return false;
     }
-    thread_at_exit(report);
+    at_program_exit(report);
     return true;
 }
 #endif

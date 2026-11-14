@@ -1,66 +1,67 @@
-(set pt.passed 0)
-(set pt.failed 0)
-(define pt.check
-  Name Value -> (if Value (set pt.passed (+ (value pt.passed) 1))
-                    (do (output "FAIL ~A~%" Name) (set pt.failed (+ (value pt.failed) 1)))))
-(define pt.error?
-  Code -> (trap-error (do (thaw Code) false) (/. E true)))
-(define pt.indices
-  At End -> (if (> At End) [] [At | (pt.indices (+ At 1) End)]))
-(define pt.request
-  Op -> (let B (buffer.new 1) _ (buffer.u8! B 0 Op) B))
-(define pt.config
-  -> (let Input (buffer.new 4) _ (shen-jit.u32! (buffer.owner Input) 0 1977)
-       (parallel.config 16777216 67108864 Input)))
-(define pt.scope
-  Count Body -> (parallel.with-workers (value pt.image) (intern "pt.worker") Count (pt.config) Body))
+\\ parallel.map over isolates. Load lib/parallel.shen first. Everything is defined before the first
+\\ map, and each map returns once its isolates have ended.
+(set par.passed 0)
+(set par.failed 0)
 
-\\ The optional checker accepts clients of the small opaque interface.
-(tc +)
-(define pt.typed-read
-  {parallel.shared --> number}
-  Input -> (parallel.shared-u32 Input 0))
-(define pt.typed-copy
-  {parallel.shared --> buffer.view}
-  Input -> (parallel.shared-copy Input 0 4))
-(tc -)
+(define par.check
+  Name Expected F ->
+    (let Got (trap-error (thaw F) (/. E [raised (error-to-string E)]))
+      (if (= Expected Got)
+          (set par.passed (+ 1 (value par.passed)))
+          (do (set par.failed (+ 1 (value par.failed)))
+              (output "FAIL ~A: wanted ~S, got ~S~%" Name Expected Got)))))
 
-(map (/. P
-       (let Results (pt.scope P (/. S
-                       (do (pt.check "scope count" (= (parallel.count S) P))
-                           (set pt.escaped S)
-                           (set pt.borrow (parallel.shared))
-                           (pt.check "typed shared read" (= (pt.typed-read (value pt.borrow)) 1977))
-                           (set pt.copy (pt.typed-copy (value pt.borrow)))
-                           (pt.check "owned copy" (= (shen-jit.u32 (buffer.owner (value pt.copy)) 0) 1977))
-                           (let First (parallel.batch S (map (/. Ignored (pt.request 1)) (pt.indices 1 P)))
-                                _ (parallel.batch S (map (/. Ignored (pt.request 0)) (pt.indices 1 P)))
-                             First))))
-            _ (shen-jit.collect)
-         (do (pt.check "retained parent replies" (= (length Results) P))
-             (map (/. I (let B (buffer.owner (nth I Results))
-                          (pt.check "worker index and shared value"
-                            (and (= (shen-jit.u32 B 0) (- I 1)) (= (shen-jit.u32 B 4) 1977)))))
-                  (pt.indices 1 P))
-             (pt.check "borrow revoked" (= (parallel.shared-length (value pt.borrow)) 0))
-             (pt.check "owned shared copy outlives scope" (= (shen-jit.u32 (buffer.owner (value pt.copy)) 0) 1977))
-             (pt.check "revoked read fails" (pt.error? (freeze (pt.typed-read (value pt.borrow)))))
-             (pt.check "escaped scope fails" (pt.error? (freeze (parallel.batch (value pt.escaped) [])))))))
-     [1 2 3 4 5 8])
-(map (/. Op (pt.check "worker error and forbidden shared writes/replies"
-             (pt.error? (freeze (pt.scope 2 (/. S (parallel.batch S [(pt.request Op) (pt.request 0)]))))))) [2 3 4])
-(pt.check "parent error joins" (pt.error? (freeze (pt.scope 2 (/. S (error "parent failed"))))))
-(pt.check "scope usable after errors" (= (length (pt.scope 1 (/. S (parallel.batch S [(pt.request 0)])))) 1))
-(pt.check "wrong batch length" (pt.error? (freeze (pt.scope 2 (/. S (parallel.batch S [(pt.request 0)]))))))
-(map (/. N (pt.check "invalid worker count rejected"
-             (pt.error? (freeze (pt.scope N (/. S true)))))) [0 -1 65 3.5 true [] "3"])
-(pt.check "maximum worker count reaches image loading"
-  (= (trap-error
-       (parallel.with-workers "build/no-such-worker-image" (intern "pt.worker") 64
-         (pt.config) (/. S (error "invalid image ran the scope body")))
-       (/. E (error-to-string E)))
-     "worker: cannot load image"))
-(pt.check "invalid config" (pt.error? (freeze (parallel.with-workers "" worker 1 [] (/. S true)))))
-(pt.check "invalid scope" (pt.error? (freeze (parallel.batch [] []))))
-(output "~A passed, ~A failed (structured parallel library)~%" (value pt.passed) (value pt.failed))
-(if (= (value pt.failed) 0) true (shen-jit.exit 1))
+(define par.raises?
+  F -> (trap-error (do (thaw F) false) (/. E true)))
+
+(define par.square X -> (* X X))
+(define par.add A X -> (+ A X))
+(define par.three X -> (if (= X 3) (error "three") X))
+(define par.closure X -> (/. Y X))
+(define par.global X -> (trap-error (value *par.global*) (/. E unbound)))
+(define par.first Table X -> (<-address Table X))
+(define par.same Table X -> (shen-jit.same? Table X))
+(define par.range
+  N N -> []
+  I N -> [I | (par.range (+ I 1) N)])
+
+(set *par.global* builder)
+
+(par.check "squares, in order" (map (function par.square) (par.range 0 100))
+  (freeze (parallel.map 7 par.square (par.range 0 100))))
+(par.check "more isolates than elements" [1 4 9] (freeze (parallel.map 16 par.square [1 2 3])))
+(par.check "one isolate" [1 4 9] (freeze (parallel.map 1 par.square [1 2 3])))
+(par.check "nothing to map" [] (freeze (parallel.map 4 par.square [])))
+(par.check "a function with its first arguments" [101 102] (freeze (parallel.map 2 [par.add 100] [1 2])))
+(par.check "an isolate inherits no globals" [unbound unbound] (freeze (parallel.map 2 par.global [a b])))
+(par.check "the first error raises, once every isolate has ended" [raised "parallel.map: three"]
+  (freeze (parallel.map 4 par.three [1 2 3 4 5 3])))
+(par.check "a result that cannot cross raises" true
+  (freeze (par.raises? (freeze (parallel.map 1 par.closure [1])))))
+(par.check "a closure is not a function's name" true
+  (freeze (par.raises? (freeze (parallel.map 1 (/. X X) [1])))))
+(par.check "nor is a function of other arguments" true
+  (freeze (par.raises? (freeze (parallel.map 1 par.add [1])))))
+(par.check "nor a count that is not one" true
+  (freeze (par.raises? (freeze (parallel.map 0 par.square [1])))))
+
+\\ A table shared once crosses to every isolate by pointer.
+(let Table (isolate.share (@v a b c <>))
+  (do (par.check "a shared argument reads in every isolate" [a b c]
+        (freeze (parallel.map 3 [par.first Table] [1 2 3])))
+      (par.check "by pointer" [true true]
+        (freeze (parallel.map 2 [par.same Table] [Table Table])))))
+
+\\ Every isolate has ended, so the program can change again.
+(define par.later X -> X)
+(par.check "defining after a map" ok (freeze (par.later ok)))
+
+\\ A map whose spawn fails closes the channels it made for replies.
+(par.check "a failed launch's replies are closed" "channel closed"
+  (freeze (let R (channel.new 1)
+               _ (parallel.close-replies [R])
+            (trap-error (channel.receive R) (/. E (error-to-string E))))))
+(par.check "a map whose argument cannot cross raises" true
+  (freeze (trap-error (do (parallel.map 2 [par.square (/. X X)] [1 2]) false) (/. E true))))
+
+(output "~A passed, ~A failed (parallel)~%" (value par.passed) (value par.failed))

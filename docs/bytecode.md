@@ -97,7 +97,7 @@ Boolean) as an immediate, and reads any other from its constant cell.
 | `(pop-handler)` | Remove the innermost handler. |
 | `(exception D)` | D := the exception being handled; the first instruction at a handler label. |
 | `(entry N L)` | First, in a `lambda` that returns lambdas: a call with N arguments, more than the arity, continues at L with them in slots 2..N+1. |
-| `(jump-unless-entry S N L)` | Continue at L unless slot S holds a closure whose code has `(entry N _)`. |
+| `(jump-unless-entry S N L)` | Continue at L unless slot S holds a procedure that takes N arguments at once: a closure whose code has `(entry N _)` or takes exactly N, which only a definition's does, or a foreign function of N. Applied one argument at a time, the last two would fail. |
 | `(inline F N)` | The next N instructions are a body of F inlined here: no code, but backtraces name F for errors raised in them. Not in stage 0 code. |
 
 Primitive names are the 39 KLambda primitives, except `eval-kl` (see below),
@@ -140,14 +140,6 @@ plus:
   argument, and if that is false, moves the next offset of the bindings back by one, inline; the port's `shen.gc`
   uses it. `shen-jit.same?` (arity 2) tells whether two values are one and the same. The port's `shen.make-prolog-variable`, `shen.pvar?`,
   `shen.lazyderef`, `shen.deref`, `shen.bindv` and `shen.unwind` use them.
-- `shen-jit.thread`: arity 1, runs a procedure of no arguments in a new thread
-  (`src/runtime/thread.c`). The port defines `thread` with it, after sealing ends, so
-  that programs may define their own.
-- `shen-jit.worker-scope` (arity 5), `shen-jit.worker-batch` (2), and with no arguments
-  `shen-jit.worker-index`, `shen-jit.worker-live`, `shen-jit.worker-cancelled?` and
-  `shen-jit.worker-shared-view`: worker scopes (`src/runtime/worker.c`), which `lib/parallel.shen`
-  wraps. They call C, with no new instruction. A shared view is an object of its own type laid out as a
-  pointer; byte reads take it on the pointer's slow path, after the test for a pointer, and in memory caches.
 - `shen-jit.foreign`: arity 2, `(shen-jit.foreign Name Desc)` makes Name a C function, as `lib/ffi.shen`
   describes it (`src/runtime/ffi.c`, and [ffi.md](ffi.md)), and returns Name. Calls go through a stub shared by all of them, so
   no instruction is new. `shen-jit.pointer?`, `shen-jit.pointer-kind`, `shen-jit.pointer-address`,
@@ -193,6 +185,17 @@ plus:
   The port's file reading uses it.
 - `shen-jit.append`: arity 2, the port's `append` for a non-empty first list.
 - `shen-jit.arity?` and `shen-jit.inlined?`: arity 2, the tests in the rules below.
+- `shen-jit.arity` (arity 1) and `shen-jit.set-arity` (2): a name's arity, or -1, and
+  recording it, which only the builder may do. Arities are kept beside function cells,
+  outside the heap; the port's `arity` reads them.
+- `shen-jit.function` (arity 1): the procedure a name has now, read inline, or an error
+  for a name with none. A primitive's is a definition made from a code object at
+  startup. `fn`'s templates make their last call with it.
+- `shen-jit.apply` (arity 2): calls a name's procedure, or a procedure, with the elements
+  of a list at once, through a nested call: `fn`'s templates past four arguments.
+- `shen-jit.isolate` (arity 3): an operation's number and two operands, for the port's
+  `isolate.spawn`, channels, monitors and `kill` (docs/design.md, "The builder and
+  isolates").
 - `shen-jit.bit-and`, `shen-jit.bit-or`, `shen-jit.bit-xor`, `shen-jit.shift-left`,
   `shen-jit.shift-right`, `shen-jit.rotate32` (2), `shen-jit.bit-not`,
   `shen-jit.bswap32`, `shen-jit.popcount`, `shen-jit.clz` and `shen-jit.ctz` (1): bit
@@ -219,11 +222,22 @@ A pointer with a length is memory outside the heap ([ffi.md](ffi.md)), and all o
 length. `u8`, `u16`, `u32`, `s32`, `f64`, `bytes-length` and the stores `u8!`, `u16!`, `u32!` and `f64!` compile
 inline for both; the others call C for both. `f64` allocates where it reads, and its real holds the word as it
 is in memory, so it takes no floating point. `f64!` takes a real inline, and leaves an integer to C. A read-only
-pointer differs in its header, which a store tests whole, so no other access pays for it.
+pointer differs in its header, which a store tests whole, so no other access pays for it. So does a shared buffer
+or vector (`isolate.share`), by a bit of its header's type field: a store tests the whole byte and sends one to C,
+which refuses it, and a read masks the bit out, as it masks a string's type, with no more instructions. Only
+`absvector?`, which tests one byte it loads, and `=` on two objects, which tests their headers before calling C, take
+one more.
+
+A string is memory too, which they only read: it is laid out as a byte buffer, so a read takes
+either inline, the type tested through a mask with no more instructions, and a store into a
+string raises that it is read only. A string never changes, so a definition holding one as a
+constant, such as a grammar loop's byte table, can go into the program space. `bytes?` stays
+false for a string, and the FFI's `bytes` arguments take byte buffers alone, so C is never given
+a string to write into.
 
 Code that loops, calls nothing and has no handlers, and reads or stores through a parameter it never changes, works out that memory's base and lengths once, on the way in, for any code,
 written by hand or not, however many loops it has, for eight parameters at most where integer registers are many, as on arm64, and four
-where they are few, as on x86-64. They hold until C runs, as only C can collect or kill a pointer, and they are worked out again each time it has. What is not memory gets length 0, so that its first access raises as it would have, and a read-only pointer gets 0 for stores. Memory reached at one width, and only at word indices, keeps limits in place of lengths, the first index without room for that width, so that an access is one comparison, and what is in registers is used where it is.
+where they are few, as on x86-64. They hold until C runs, as only C can collect or kill a pointer, and they are worked out again each time it has. What is not memory gets length 0, so that its first access raises as it would have, and a read-only pointer or a string gets 0 for stores. Memory reached at one width, and only at word indices, keeps limits in place of lengths, the first index without room for that width, so that an access is one comparison, and what is in registers is used where it is.
 
 | Form | Result |
 | --- | --- |
@@ -475,8 +489,10 @@ applies only to files read after it is defined.
 
 An operand follows Shen's conventions: a variable is a slot, a symbol is itself, and
 anything else is a constant, so `[1 2]` is a list. `(const E)` is the value of the
-expression E when the definition is evaluated, which may be any value, or a variable
-of the function around it when `define-native` is used inside one.
+expression E when the definition is evaluated, or a variable of the function around it
+when `define-native` is used inside one. As in any definition, a constant holds only what
+code can: symbols, numbers, strings, booleans and lists of them; a definition with another
+value, such as a vector, is refused when it is installed.
 
 | Form | Meaning |
 | --- | --- |

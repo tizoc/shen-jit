@@ -86,8 +86,8 @@ the call; opening a resource is authoritative.
 
 Errors use `io.error` and retain operation, native domain/code, resource and message. Domains include
 `posix`, `win32`, `crt`, `foreign`, `library`, `limit` and `shen`. Invalid path/limit values and option
-shapes raise before starting native work. The native adapter copies inputs before releasing the VM lock and
-reacquires it before creating managed results. Directory handles close before conversion or callbacks.
+shapes raise before starting native work. The native adapter copies inputs to native storage before the native work, and
+creates managed results after it. Directory handles close before conversion or callbacks.
 
 ## Listings and traversal
 

@@ -120,4 +120,20 @@
       (ts-test.check "closed foreign input rejected"
         (ts-test.raises? (freeze (treesitter.parse (value ts-test.language) View []))))))
 
+\\ A language loaded in the builder parses in an isolate, which makes its own parser.
+(define ts-test.in-isolate
+  [Language Text Out] ->
+    (channel.send Out (let T (ts-test.ok (treesitter.parse Language (buffer.from-string Text) []))
+                         [(treesitter.kind T (treesitter.root T)) (treesitter.node-count T)])))
+
+(let R (channel.new 1)
+     P (isolate.spawn ts-test.in-isolate [(value ts-test.language) "int x; int f(void) { return 1; }"
+                                           (channel.sender R)])
+     M (isolate.monitor P)
+     Got (channel.receive-any [R M])
+     _ (channel.receive M)
+     T (ts-test.parse "int x; int f(void) { return 1; }")
+  (ts-test.check "an isolate parses with a language loaded in the builder"
+    (= Got [R ["translation_unit" (treesitter.node-count T)]])))
+
 (output "~A passed, ~A failed~%" (value ts-test.passed) (value ts-test.failed))

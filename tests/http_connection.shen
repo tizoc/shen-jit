@@ -1,4 +1,5 @@
-\\ Persistent connections retain one reader and dispatch complete requests in wire order.
+\\ Persistent connections retain one reader and dispatch complete requests in wire order. Each case writes
+\\ its requests, which fit the socket's buffers, then serves the connection to its end, then reads.
 (set connection-test.passed 0)
 (set connection-test.failed 0)
 
@@ -22,16 +23,11 @@
          C (io.socket (socket.connect "127.0.0.1" (socket.port L)) "persistent client")
          E (io.socket (socket.accept L) "persistent server")
          _ (socket.close L)
-         Result (io.record [[]])
-         _ (thread (freeze (address-> Result 0 (http.serve-connection E Handler Options))))
          _ (io.socket-deadline C (clock.deadline 3000))
-      [C Result]))
+      [C (freeze (http.serve-connection E Handler Options))]))
 
-(define connection-test.done
-  Result D ->
-    (cond ((not (empty? (<-address Result 0))) (<-address Result 0))
-          ((deadline.expired? D) (error "connection did not finish"))
-          (true (do (http.pause 10) (connection-test.done Result D)))))
+(define connection-test.serve
+  Pair -> (thaw (hd (tl Pair))))
 
 (define connection-test.all
   E ->
@@ -63,8 +59,8 @@
             E (hd Pair)
             _ (io.write-all E (buffer.from-string
                  "POST /a HTTP/1.1c#13;c#10;Host: localc#13;c#10;Transfer-Encoding: chunkedc#13;c#10;c#13;c#10;1c#13;c#10;xc#13;c#10;0c#13;c#10;c#13;c#10;GET /b HTTP/1.1c#13;c#10;Host: localc#13;c#10;Connection: CLOSEc#13;c#10;c#13;c#10;") [])
+            Result (connection-test.serve Pair)
             Wire (connection-test.all E)
-            Result (connection-test.done (hd (tl Pair)) (clock.deadline 3000))
          (do (connection-test.check "pipeline response order and connection fields"
                (cn (connection-test.response "/a" false) (connection-test.response "/b" true)) (freeze Wire))
              (connection-test.check "close token stops dispatch" ["/b" "/a"] (freeze (<-address Calls 0)))
@@ -77,8 +73,8 @@
      E (hd Pair)
      _ (io.write-all E (buffer.from-string
           "GET /a HTTP/1.1c#13;c#10;Host: localc#13;c#10;c#13;c#10;GET /b HTTP/1.1c#13;c#10;Host: localc#13;c#10;c#13;c#10;") [])
+     _ (connection-test.serve Pair)
      Wire (connection-test.all E)
-     _ (connection-test.done (hd (tl Pair)) (clock.deadline 3000))
   (do (connection-test.check "request cap marks final response closing" (connection-test.response "/a" true) (freeze Wire))
       (connection-test.check "request cap never dispatches queued excess" ["/a"] (freeze (<-address Calls 0)))))
 
@@ -87,8 +83,8 @@
             Pair (connection-test.start Options (/. Q (connection-test.handler Calls Q)))
             E (hd Pair)
             _ (io.write-all E (buffer.from-string "GET /a HTTP/1.1c#13;c#10;Host: localc#13;c#10;c#13;c#10;") [])
+            Result (connection-test.serve Pair)
             Wire (connection-test.all E)
-            Result (connection-test.done (hd (tl Pair)) (clock.deadline 3000))
          (do (connection-test.check "unused connection expiry adds no 408" (connection-test.response "/a" false) (freeze Wire))
              (connection-test.check "unused connection expiry succeeds" ok (freeze (hd Result))))))
   [[[idle-timeout 100]] [[connection-timeout 200]]])
@@ -98,8 +94,8 @@
      E (hd Pair)
      _ (io.write-all E (buffer.from-string
           "GET /a HTTP/1.1c#13;c#10;Host: localc#13;c#10;c#13;c#10;POST /b HTTP/1.1c#13;c#10;Host: localc#13;c#10;Transfer-Encoding: chunkedc#13;c#10;c#13;c#10;Qc#13;c#10;GET /c HTTP/1.1c#13;c#10;Host: localc#13;c#10;c#13;c#10;") [])
+     Result (connection-test.serve Pair)
      Wire (connection-test.all E)
-     Result (connection-test.done (hd (tl Pair)) (clock.deadline 3000))
   (do (connection-test.check "malformed second body ends connection" error (freeze (hd Result)))
       (connection-test.check "no pipeline dispatch after framing failure" ["/a"] (freeze (<-address Calls 0)))
       (connection-test.check "successful first response preserved" (connection-test.response "/a" false)
@@ -113,24 +109,28 @@
                       (freeze (do (address-> Closed 0 (+ 1 (<-address Closed 0))) [ok]))))))
      E (hd Pair)
      _ (io.write-all E (buffer.from-string "GET /a HTTP/1.1c#13;c#10;Host: localc#13;c#10;c#13;c#10;") [])
+     Result (connection-test.serve Pair)
      Wire (connection-test.all E)
-     Result (connection-test.done (hd (tl Pair)) (clock.deadline 3000))
   (do (connection-test.check "producer preflight sends 500" "HTTP/1.1 500 "
         (freeze (shen-jit.bytes->string (shen-jit.string->bytes Wire) 0 13)))
       (connection-test.check "producer preflight failure remains local error" error (freeze (hd Result)))
       (connection-test.check "producer preflight closes once" 1 (freeze (<-address Closed 0)))))
 
-(let S (http.listen "127.0.0.1" 0 (/. Q (http.response 200 [] (buffer.new 0)))
-          [[shutdown-grace 1000]])
+(define connection-test.stopper
+  Q -> (do (http.stop (http.current-server)) (http.response 200 [] (buffer.new 0))))
+
+\\ A handler's stop: its response is written, then the persistent connection closes.
+(let S (http.listen "127.0.0.1" 0 connection-test.stopper [[shutdown-grace 1000]])
      C (socket.connect "127.0.0.1" (http.port S))
      _ (socket.send C "GET / HTTP/1.1c#13;c#10;Host: localc#13;c#10;c#13;c#10;")
-     _ (socket.recv C 4096)
-     _ (http.stop S)
-     Result (http.wait S 2000)
+     Result (http.run S)
+     Reply (socket.recv C 4096)
      EOF (socket.recv C 1)
      _ (socket.close C)
-  (do (connection-test.check "shutdown wakes idle persistent worker" [ok] (freeze Result))
-      (connection-test.check "idle shutdown needs no cancellation" [0 1 1 0 0 1] (freeze (http.stats S)))
-      (connection-test.check "idle shutdown closes socket" 0 (freeze (shen-jit.bytes-length EOF)))))
+  (do (connection-test.check "stop from a handler ends the run" [ok] (freeze Result))
+      (connection-test.check "stopped after its connection" [0 1 1 0 0 1] (freeze (http.stats S)))
+      (connection-test.check "the stopping response is written" "HTTP/1.1 200"
+        (freeze (shen-jit.bytes->string Reply 0 12)))
+      (connection-test.check "then the persistent connection closes" 0 (freeze (shen-jit.bytes-length EOF)))))
 
 (output "~A passed, ~A failed~%" (value connection-test.passed) (value connection-test.failed))

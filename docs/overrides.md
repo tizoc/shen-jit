@@ -3,7 +3,7 @@
 Every kernel function that Shen/JIT replaces, in `src/port/shen-jit.kl`, and why. Stage 0 leaves out a kernel `defun` that the port also defines. Nothing
 is overridden just because another port does it: each entry was measured, and [development-log.md](development-log.md) has the numbers. Keep this current with each change.
 
-`make test-overrides` runs each of them beside the kernel's definition, from the KLambda, over generated values, except for `shen.read-evaluate-print`, `shen.toplevel-display-exception` and `shen.x.launcher.main`, which `tests/cli.sh` covers. Where they differ on purpose, `o.known` in `tests/overrides.shen` says how and why.
+`make test-overrides` runs each of them beside the kernel's definition, from the KLambda, over generated values, except for `shen.read-evaluate-print`, `shen.toplevel-display-exception` and `shen.x.launcher.main`, which `tests/cli.sh` covers, and `eval`, `shen.load-help`, `shen.eval-and-print`, `shen.work-through`, `shen.execute-store-arity`, `update-lambda-table` and `shen.update-lambda-table/precompiled`, which change the program, as a check must not. Where they differ on purpose, `o.known` in `tests/overrides.shen` says how and why.
 
 ## Also overridden by Shen/Scheme
 
@@ -42,7 +42,10 @@ The kernel's `shen.prolog-vector` makes an absvector of `(prolog-memory N)` word
 | `get` | Looks the dictionary up once, and builds no message under a handler that ignores it |
 | `tuple?`, `vector?`, `shen.+vector?` | One inline test each, without the kernel's `trap-error`. `shen.+vector?` is split so that it inlines into vector patterns, a value that is not a vector failing without a call |
 | `shen.+string?` | Behind string patterns: tests the type before comparing with `""`, where the kernel's compares first; the same answer for every value |
-| `fn` | One lookup, and it makes lambda forms when first asked for them |
+| `fn` | Makes a name's lambda form the first time it is asked, from the arity, and keeps it: compiled in the builder, and in an isolate, which cannot evaluate, a curried closure from a template whose last call reads the name's function cell (`shen-jit.function`), so a redefinition is seen. A name with no arity and a lambda form keeps that form |
+| `arity`, `shen.initialise-arity-table`, `shen.execute-store-arity` | Arities are kept beside function cells, outside the heap, where an isolate finds them without the builder's property vector |
+| `update-lambda-table`, `shen.update-lambda-table/precompiled` | Record the arity and take any lambda form away, for `fn` to make again; the second still runs its adapter's factory, so its errors are seen |
+| `eval` | Refuses in an isolate, before it would reach the builder's globals; otherwise the kernel's |
 | `read-file` | Skips a `#!` line |
 | `shen.str->bytes` | Copies the string into one byte buffer and reads it backwards to build the list, avoiding repeated copies of the remaining string in `read-from-string` |
 | `shen.make-prolog-variable`, `shen.deref`, `shen.bindv`, `shen.unwind` | A variable is an immediate value holding its binding's offset, so these use `shen-jit.pvar` and `shen-jit.pvar-offset` |
@@ -52,13 +55,14 @@ The kernel's `shen.prolog-vector` makes an absvector of `(prolog-memory N)` word
 | `shen.<-out`, `shen.hds=?` | Small enough to inline into their callers across the kernel, 59 and 35 functions, and into user `defcc` code |
 | `shen.<shortnatters>`, `shen.<whitespaces>`, `shen.<digits>`, `shen.<alphanums>` | Loops over a run of bytes, where the kernel's rules call a rule and build a parse result per byte. Same results, including where a comment ends at a tab |
 | `append` | `shen-jit.append` copies the first list in C, in one pass straight into the free space, and keeps the copy by moving the heap pointer once the list proves proper; the empty list stays inline. Same error for a list that does not end in `[]` |
-| `shen.update-lambdatable` | Reading a definition made its lambda form at once, one compilation per definition. The port stores a placeholder holding the arity, and `fn` makes the form when first asked, so most are never made. `shen.*gensym*` still moves by the arity, so later gensyms are as before. `shen.lambda-entry` still makes them at once; it is rare. Reading the property directly shows the placeholder ([semantics.md](semantics.md), section 11) |
-| `shen-jit.eval-kl` | Returns anything but a list as itself, without lowering it: `load` evaluates what each `define` returns, `(fn F)`'s printer, which compiled a throwaway expression per definition |
+| `shen.update-lambdatable` | Reading a definition made its lambda form at once, one compilation per definition. `fn` makes it when first asked, so most are never made; the port only takes away a form made for an old arity. `shen.*gensym*` still moves by the arity, so later gensyms are as before. `shen.lambda-entry` still makes forms at once; it is rare |
+| `shen-jit.eval-kl` | Returns anything but a list as itself, without lowering it: `load` evaluates what each `define` returns, `(fn F)`'s printer, which compiled a throwaway expression per definition. Refuses in an isolate |
 | `shen.<atom>` | Tries the number rules only when the first byte is a digit, `-`, `+` or `.`, the only bytes any of them can start with |
 | `shen.record-kl` | Puts a name without a `shen.source` property straight on `shen.*userdefs*`, instead of an `adjoin` over every definition |
 | `shen.shendef->kldef-h`, `shen.record-and-evaluate` | Evaluate what `define` produced factorised, keeping `ps` as written: as with `(factorise +)`, a shared guard runs once and a vector's first element may be read early ([semantics.md](semantics.md), section 10) |
 | `shen.compute-integer`, `shen.compute-fraction-h`, `shen.compute-E` | Number reading as Shen/Scheme reads numbers: `8.0` reads as the integer 8, and literals beyond the fixnum range become the nearest real instead of overflowing ([semantics.md](semantics.md), section 3) |
-| `shen.read-evaluate-print`, `shen-jit.repl-read` | Backtraces, and ending the process at end of input |
+| `shen.load-help`, `shen.eval-and-print`, `shen.work-through` | After each form a load evaluates, run what `shen-jit.after-form` registered, and count how deep loads are, for `shen-jit.loading?`: the grammar library compiles a rule's loops once the form defining it has run, as a file's macros cannot wait for the functions its guards call |
+| `shen.read-evaluate-print`, `shen-jit.repl-read` | Backtraces, ending the process at end of input, and each input starting at a load depth of 0, as a load that raised leaves it as it was |
 | `shen.x.launcher.main` | Exit status 1 after an error or an unknown argument |
 
 ## Candidates found by profiling

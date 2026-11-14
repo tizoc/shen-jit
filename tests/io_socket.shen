@@ -13,14 +13,6 @@
 (define io-socket-test.raises
   Name F -> (io-socket-test.check Name true (freeze (trap-error (do (thaw F) false) (/. X true)))))
 
-(define io-socket-test.wait
-  Name -> (if (= (value Name) waiting) (io-socket-test.wait Name) (value Name)))
-
-(define io-socket-test.worker
-  Name F ->
-    (do (set Name waiting)
-        (thread (freeze (set Name (trap-error (thaw F) (/. X [raised (error-to-string X)])))))))
-
 (define io-socket-test.pair
   ->
     (let L (socket.listen "127.0.0.1" 0)
@@ -65,11 +57,20 @@
       (io-socket-test.raises "shutdown after full close" (freeze (io.shutdown-write C)))
       (io.close S)))
 
-\\ Main waits for input while a different task accepts and echoes a series of frames.
-(let L (socket.listen "127.0.0.1" 0)
-     _ (io-socket-test.worker io-socket-test.echo
-         (freeze (frame-echo.serve (io.socket (socket.accept L) "echo peer") 1048576)))
-     C (io.socket (socket.connect "127.0.0.1" (socket.port L)) "echo client")
+\\ An isolate accepts and echoes a series of frames while the main program waits for its replies. A
+\\ socket cannot be sent, so it opens its own listener and sends its port, then what serving gave.
+(define io-socket-test.echo
+  Out -> (channel.send Out
+           (trap-error (let L (socket.listen "127.0.0.1" 0)
+                            _ (channel.send Out (socket.port L))
+                            S (socket.accept L)
+                            _ (socket.close L)
+                         (frame-echo.serve (io.socket S "echo peer") 1048576))
+                       (/. X [raised (error-to-string X)]))))
+
+(let Replies (channel.new 2)
+     _ (isolate.spawn io-socket-test.echo (channel.sender Replies))
+     C (io.socket (socket.connect "127.0.0.1" (channel.receive Replies)) "echo client")
      W (io.writer C [[chunk-size 8192]])
      F (frame.reader (io.reader C [[chunk-size 4096]]) 1048576)
      Payload (buffer.new 1048576)
@@ -88,10 +89,9 @@
         (freeze (io-socket-test.frame-value (frame.next F))))
       (io.shutdown-write C)
       (io-socket-test.check "echo stops after clean stream end" [ok 2]
-        (freeze (io-socket-test.wait io-socket-test.echo)))
+        (freeze (channel.receive Replies)))
       (io-socket-test.check "echo sends EOF" [eof] (freeze (frame.next F)))
-      (io.close C)
-      (socket.close L)))
+      (io.close C)))
 
 (let Pair (io-socket-test.pair)
      C (hd Pair)

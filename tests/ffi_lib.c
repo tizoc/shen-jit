@@ -368,6 +368,12 @@ shen_value copy_string(shen_vm *vm, shen_value *args)
     return shen_make_string(vm, s, n);
 }
 
+/* A store of args[1] at element 0 of args[0], and whether it was made. */
+shen_value vector_set_first(shen_vm *vm, shen_value *args)
+{
+    return shen_make_bool(shen_vector_set(vm, args[0], 0, args[1]));
+}
+
 shen_value vector_set_out_of_range(shen_vm *vm, shen_value *args)
 {
     return shen_make_bool(shen_vector_set(vm, args[0], 99, SHEN_NIL) || shen_vector_set(vm, shen_make_fixnum(1), 0, SHEN_NIL));
@@ -527,7 +533,7 @@ shen_value many_roots(shen_vm *vm, shen_value *args)
     return shen_make_fixnum(0);
 }
 
-/* Giving up the lock around a wait, with a value in a root: another thread's collection moves it. */
+/* shen_release and shen_acquire around a wait, with a value in a root, which they leave as it was. */
 shen_value released_wait(shen_vm *vm, shen_value *args)
 {
     int32_t ms = (int32_t)shen_fixnum(args[1]);
@@ -537,21 +543,7 @@ shen_value released_wait(shen_vm *vm, shen_value *args)
     return args[0];
 }
 
-/* An error raised, then the lock given up until another thread has raised its own: element 0
-   says this one has raised, and element 1 that the other has. */
-shen_value raise_and_wait(shen_vm *vm, shen_value *args)
-{
-    shen_value error = shen_raise(vm, "worker error");
-    shen_vector_set(vm, args[0], 0, SHEN_TRUE);
-    while (shen_vector_ref(vm, args[0], 1) != SHEN_TRUE) {
-        void *token = shen_release(vm);
-        wait_ms(1);
-        shen_acquire(vm, token);
-    }
-    return error;
-}
-
-/* A root deleted with the lock given up, and with no shen_vm: the next one made has its place. */
+/* A root deleted between shen_release and shen_acquire, with no shen_vm: the next one made has its place. */
 shen_value delete_when_released(shen_vm *vm, shen_value *args)
 {
     shen_root_box *r = shen_root_new(vm, args[0]);

@@ -35,7 +35,7 @@ reaches nothing, as the executable is static. A definition's C name and types ar
 | `double` | a real or a fixnum | a new real |
 | `string` | copied to a NUL-terminated buffer for the call; a NUL inside raises | copied into a new string; NULL is `[]` |
 | `pointer` | a pointer of any kind, or `[]` for NULL | a pointer of kind `pointer`; NULL is `[]` |
-| `bytes` | the address of a byte buffer, for the call | not allowed |
+| `bytes` | the address of a byte buffer, for the call; C must not write into a shared one (`isolate.share`) | not allowed |
 | `bool` | `true` or `false`, as 1 or 0 | the **low byte** alone, all a C `bool` defines |
 | `void` | not allowed | `[]` |
 
@@ -44,8 +44,8 @@ type called `int` or `long`, since `long` is 32 bits on Windows and 64 elsewhere
 
 **Flags** follow the result:
 
-- **`blocking`** gives up the lock around the call, so other threads run. A `bytes` argument is then copied to memory of its own and back, since
-  another thread's collection may move the buffer, and one buffer given twice is one copy. With no other thread it is an ordinary call.
+- **`blocking`** marks a call that may wait. It changes nothing now: nothing else uses an isolate's heap while it waits, so its
+  arguments are passed as for any call.
 - **`(varargs N)`** marks a variadic function with N fixed arguments, from 1 to 3, all integers. It is needed: Apple's arm64 passes variable arguments
   differently from fixed ones. `fcntl` is one.
 
@@ -78,9 +78,6 @@ A system function cannot be redefined this way, and a library must be named with
 | `(shen-jit.collect)` | Collects now |
 
 `=` compares kind, address and whether it is read only, and a pointer prints as `#<pointer sqlite3 0x...>`. One saved in an image loads dead.
-
-A worker scope's shared view (`lib/parallel.shen`) is not a pointer: byte reads and copies take it, while stores,
-`pointer-address`, `pointer-sized` and passing it to C refuse it.
 
 **Memory outside the heap** is a pointer with a length. Pointers come from C with none, which refuses any read. `shen-jit.pointer-sized` states one, and then
 what works on a byte buffer works on the pointer, checked against that length: `shen-jit.u8` to `u32`, `s32`, `s64`, `f32`, `f64`, their stores, `bytes-length`,
@@ -115,6 +112,7 @@ collection puts V on the list that `(shen-jit.pointers-dead)` gives, and Shen do
 `lib/handle.shen` does it in Shen alone, as `(handle.wrap M Release)`, `(handle.close H)` and `(handle.sweep)`, and counts what handles hold to bring a collection, since memory outside the heap brings none by itself.
 
 - **V must not refer to the guarded pointer,** or it stays reached. V may refer to another guarded pointer, which then outlives this one, so what uses another is released first.
+- **As an isolate ends,** its guarded pointers die with it: `(shen-jit.at-guards-dead F)` registers `F`, a function of no arguments, which the isolate then calls each time a collection has put values on the list, in rounds, as collections order them. What its globals still hold is not released, as at a program's end. `lib/handle.shen` registers `handle.sweep` so.
 - **It says nothing of when.** It needs a collection to be seen at all, and a frame can hold, in a slot it has not written yet, what an earlier frame left there, so a pointer may outlast its last use.
 - **A call keeps its arguments.** A guarded pointer given to C stays reached until the call returns, even a `blocking` one. C that keeps the address after that must keep the pointer too.
 - **A saved image holds it dead,** with no owner and no guard, and its value is never handed back.
@@ -165,7 +163,7 @@ It links against nothing: `shen_vm` is a pointer to a table of functions, which 
   and C returns it, or reads `shen_exception` and goes on. No `longjmp` crosses C, so a library calling back is safe.
 - **Roots:** `shen_root(vm, &local)` for a call, undone when a procedure returns, however it returns. `shen_root_new` gives a `shen_root_box` that outlives the call, for a callback's
   closure, say. Deleting one needs no `shen_vm` and no lock, so it can be done from anywhere.
-- **The lock:** `shen_release` and `shen_acquire` let other threads run while C waits. Between them, touch no value.
+- **Waiting:** `shen_release` and `shen_acquire` mark where C waits, as `blocking` does for a whole call, and change nothing now. Between them, touch no value.
 - **Threads:** a callback must come on the thread that called the library: a thread the runtime did not start cannot call in.
 - **Memory:** nothing malloc'd by one side is freed by the other, and no `FILE *` crosses.
 
@@ -209,13 +207,12 @@ C for Shen is given the address of `vm->api`, whose first word is the table, and
 `undefined symbol` to a library calling into it, and a stripped macOS executable exports nothing.
 
 `shen_call` wraps `jit_call_nested`, which pushes a handler with no catch address. `h_unwind` pops it and returns NULL, so the adapter returns `V_CLEARED`, and an error never jumps across C frames. The handler is not quiet, so the message is built for C to read.
-Handlers, C roots, the native stack bound and error codes are per thread, swapped with the lock.
 
 A root that outlives a call is four words that never move: its table, its value, a link and the VM that made it. `shen_root_delete` takes no `shen_vm`, so the wrapper finds the table in the root itself. It pushes the root on its VM's lock-free list, which that VM drains at the next
 `shen_root_new`, collection or its end. The link is apart from the value because a collection may be writing the value while another thread deletes it.
 
-A worker's runtime refuses C API procedures and callbacks. It may call plain foreign functions, which must then be
-safe to call from several threads at once. Loading a library takes a lock around the cache of those loaded.
+Isolates call foreign functions from several threads at once, so those must be safe to call so. Loading a library
+takes a lock around the cache of those loaded.
 
 **A later collector.** C reads through calls, allocates through calls, and writes only through `shen_vector_set` and `shen_root_set`, which is where a write barrier would go, and holds nothing across an allocation except in roots. The header names no tag, header bit or layout but
-the fixnum encoding and a few constants. The one assumption left is that the heap does not move while a thread holds the lock and makes no API call, which `shen_bytes_data` and `shen_string_bytes` need and any stop-the-world collector gives.
+the fixnum encoding and a few constants. The one assumption left is that the heap does not move while C makes no API call, which `shen_bytes_data` and `shen_string_bytes` need and any stop-the-world collector gives.

@@ -25,8 +25,8 @@
 \\ A socket is an integer. Errors raise, with the system's message or, on Windows, its number.
 \\
 \\ Sockets never block in C: a call that would have to wait waits in Shen, in poll slices of
-\\ 100 ms with the lock given up. So other threads run meanwhile, and a Ctrl-C at the REPL ends
-\\ the wait. A send to a closed connection raises instead of ending the process.
+\\ 100 ms, between which a kill reaches the isolate and a Ctrl-C at the REPL ends the wait. A send
+\\ to a closed connection raises instead of ending the process.
 \\
 \\ C differs by system in numbers and in a few names, which socket.by-os and the definitions
 \\ below hold, for Linux, macOS and Windows. Functions are found at their first call, so a system
@@ -155,12 +155,13 @@
                                    (again?) false
                                    true (fail "poll"))))
 
-\\ Code runs between the slices, which is where an interrupt is noticed.
+\\ Code runs between the slices, which is where an interrupt is noticed, and a kill raised.
 (define wait
-  S Event -> (if (poll S Event 100) true (wait S Event)))
+  S Event -> (do (isolate.check-kill) (if (poll S Event 100) true (wait S Event))))
 
 (define wait-for
   S Event Left -> (let Slice (min 100 Left)
+                       _ (isolate.check-kill)
                     (cases (poll S Event Slice) true
                            (<= Left Slice) false
                            true (wait-for S Event (- Left Slice)))))
@@ -248,11 +249,15 @@
            (shen-jit.pointer->bytes Address 0 (shen-jit.u32 Info 16))]
           | (read-addresses (shen-jit.bytes->pointer Info 40 addrinfo))]))
 
-\\ The first address on which F works, or the last error.
+\\ The first address on which F works, or the last error; a kill, raised once, is passed on.
 (define first-working
   F [] Last -> (simple-error Last)
   F [Address | Addresses] _
-  -> (trap-error (F Address) (/. E (first-working F Addresses (error-to-string E)))))
+  -> (trap-error (F Address) (/. E (next-working F Addresses (error-to-string E)))))
+
+(define next-working
+  _ _ "killed" -> (simple-error "killed")
+  F Addresses Message -> (first-working F Addresses Message))
 
 (define port
   S -> (let Address (shen-jit.bytes 128)
@@ -279,9 +284,10 @@
                       true (fail "connect")))
 
 \\ The socket's own error each time round, since on old versions of Windows a failure to connect
-\\ never shows in WSAPoll.
+\\ never shows in WSAPoll, and a kill, as for any wait.
 (define finish-connecting
-  S -> (let Ready (poll S (writable-event) 100)
+  S -> (let _ (isolate.check-kill)
+            Ready (poll S (writable-event) 100)
             Error (pending-error S)
          (cases (not (= Error 0)) (raise "connect" Error)
                 Ready S

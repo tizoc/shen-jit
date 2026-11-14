@@ -1,6 +1,7 @@
 \\ Owned duplex endpoints over lib/socket.shen. Load ffi.shen, socket.shen, buffer.shen, io.shen.
 \\ io.socket consumes a connected socket's raw integer. Do not use or wrap that integer again.
-\\ Data calls stay nonblocking; only the existing poll FFI releases the VM lock.
+\\ Data calls stay nonblocking; waits poll in slices of at most 100 ms, after each of which a kill
+\\ (isolate.kill) reaches an isolate that waits.
 
 (shen.x.namespace io
   (use buffer)
@@ -64,6 +65,7 @@
   Token Name Policy Event Op ->
     (let-ok _ (socket-budget Policy Op Name)
       (let Slice (socket-slice Policy)
+           _ (isolate.check-kill)
         (if (= Slice 0)
             [error (native-error Op timeout 0 Name "deadline expired")]
             (let Ready (socket.c-poll (socket.pollfd (socket-id Token) Event) 1 Slice)

@@ -112,8 +112,11 @@ Errors name the value they are about, and show where they happened:
   in test
 ```
 
-- **Ctrl-C** stops a running evaluation, or a program waiting for input, and returns to the prompt. At the prompt
-  it drops what you have typed of an expression.
+- **Ctrl-C** stops a running evaluation, or a program waiting for input or on a channel, and returns to the prompt.
+  At the prompt it drops what you have typed of an expression. It is raised again at every check until the prompt's
+  own handler has it, so a program's handlers cannot clean up; the prompt then kills the isolates the evaluation
+  spawned, which end at their next channel operation or `isolate.check-kill`, and those spawned by earlier inputs
+  go on.
 - **Ctrl-D** ends the REPL. On Windows, use Ctrl-Z then Enter, or `(shen-jit.exit 0)`.
 - **Line editing:** the REPL has none of its own. For history and arrow keys, run it under
   [rlwrap](https://github.com/hanslub42/rlwrap): `rlwrap shen-jit`.
@@ -149,6 +152,12 @@ Options for Shen/JIT itself go before the command:
 
 A script whose first line starts with `#!` can run directly, with Shen/JIT on your `PATH`, and `load` skips that
 line. This does not work on Windows.
+
+A library can act after each form a load evaluates: `(shen-jit.after-form F)` registers `F`, a function of no
+arguments, to run then, and `(shen-jit.loading?)` says whether a load is going on. The kernel expands a whole file
+before it evaluates any of it, so what needs the definitions before it waits for this, as the grammar library
+compiling its loops does. `(shen-jit.at-end F)` registers `F` to run once as the isolate that registers it ends,
+after its function returns or raises.
 
 ```shen
 #!/usr/bin/env -S shen-jit script
@@ -270,39 +279,81 @@ cat build/runtime app.img > app && chmod +x app
 ./app eval -e '(main)'
 ```
 
-### Threads
+### Isolates
 
-`(thread Frozen)` runs a frozen expression in a new thread and returns `true`, as programs written for Shen/Scheme
-expect. Threads are real, and one runs at a time, holding a global lock. So they give concurrency, for work that
-waits or runs beside the main program, and no speed-up from more cores: for that, [structured workers](#structured-workers)
-run a saved image's function on several cores at once.
+`(isolate.spawn F X)` runs `F`, a function of one argument that the program defined, in an isolate of its own on an
+OS thread of its own, with a copy of `X`, and returns the isolate. Isolates share the program's code and nothing
+else: each has its own heap, globals and property list, and they talk through channels. They run on several cores at
+once, within one operating-system process; [subprocesses](https://github.com/tizoc/shen-jit/blob/main/docs/processes.md)
+are other programs.
 
 ```shen
-(set done false)
-(define work 0 -> (set done true) N -> (work (- N 1)))
-(thread (freeze (work 1000000)))
+(define fib 0 -> 0 1 -> 1 N -> (+ (fib (- N 1)) (fib (- N 2))))
+(define fib-of [N Out] -> (channel.send Out [N (fib N)]))
 
-(define wait -> (if (value done) finished (wait)))
-(wait)    \\ finished
+(let Replies (channel.new 4)
+     Out (channel.sender Replies)
+     _ (map (/. N (isolate.spawn fib-of [N Out])) [27 28 29 30])
+  (map (/. I (channel.receive Replies)) [1 2 3 4]))
+\\ [[27 196418] [28 317811] [29 514229] [30 832040]], in the order they finish
 ```
 
-- **Switching:** every 10 ms if another thread is waiting, at a function's entry or a loop's next turn, and whenever
-  a thread waits for input on stdin or a socket. Between those points no other thread runs, though a program should
-  not count on where they fall.
-- **Errors:** one that nothing catches ends its thread and is printed to stderr. The other threads go on.
-- **The end:** the process ends when the main thread does, or when any thread calls `(shen-jit.exit N)`. An image
-  saved with `--save` holds what the main thread reaches, and `shen-jit.save-executable` refuses to run while other
-  threads do.
-- **Ctrl-C** at the REPL stops the main thread's work, and threads beside it go on.
-- **Not provided,** as in Shen/Scheme: join, mutexes and channels. A thread signals another through a global, which
-  the other can spin on, as above.
-- **Waiting elsewhere:** reading a file that blocks, such as a FIFO, holds the lock, and Ctrl-C does not end that
-  wait.
-- **Cost:** nothing until the first thread starts. All code then compiles again on its next call, with a test at
-  each loop's turn. The time is shared with the threads that are running.
-- **A loop running when the first thread starts** keeps the code it had, with no such test, so it never gives way:
-  one that starts the first thread and then spins on it in the same call waits for ever. Start a thread before
-  such a loop, or spin in a function called after, as `wait` above.
+- **Channels:** `(channel.new N)` makes a channel that holds up to `N` messages, from 1 to 2^24, and returns its
+  receive endpoint, which only the isolate that made it reads. `(channel.sender R)` gives a send endpoint, which can go
+  anywhere.
+  `channel.send` waits while the channel is full and `channel.receive` while it is empty;
+  `(channel.receive-any [R1 R2 ...])` gives `[R Message]` from the first that has one, and
+  `(channel.wait-any [R1 R2 ...] Ms)` gives `[ready R]` for the first that has a message or is closed, waiting at
+  most `Ms` milliseconds, a whole number up to a day, or `[timeout]` if none has by then, and receives nothing.
+- **Closing:** a sender's `(channel.close S)` ends the stream: the receiver gets what was queued, and then a receive
+  raises "channel closed". `(channel.next R)` reads a stream instead, giving `[ok Message]` for each message and
+  `[closed]` at its end. The receiver's close drops what is queued. Sending on a closed channel raises "channel
+  closed". A channel is freed when its receiver closes it, reads its end, or ends, and not before.
+- **What crosses:** an argument or a message is copied, with its sharing and cycles. Symbols are the same in every
+  isolate, so a function goes by its name, and the isolate that gets it calls `(fn F)`. Closures made as the program runs, `fn`'s
+  among them, streams and pointers are refused. A receive endpoint moves to a new isolate only in its argument,
+  marked with `(channel.give R)`, and its old holder can no longer read it.
+- **An isolate starts as a program does:** its globals are unbound and its property list is empty, so it takes what
+  it needs from its argument. Only the program's first isolate, the builder, defines: `eval`, `load` and the like
+  raise an error in any other. Its heap starts at 128 KB and grows; `SHEN_JIT_MAX_HEAP` and `SHEN_JIT_GC_STRESS`
+  apply to each isolate's heap, and `SHEN_JIT_SEMISPACE` to the builder's alone.
+- **The end:** an isolate ends when its function returns, or raises an error that nothing catches, which is printed to
+  stderr. `(isolate.monitor I)` returns a receive endpoint that gets `[down I Reason]` when `I` ends, or at once if it
+  has, and is then closed, so that a second receive raises "channel closed", the reason being `normal`, the error's message, `killed`, or `ended` for one that could not start or ended long
+  enough ago that its record was used again. `(isolate.kill I)` raises "killed" at `I`'s next channel operation,
+  waking it if it waits on a channel, so that its handlers can clean up; an isolate busy elsewhere goes on until then,
+  or until it calls `(isolate.check-kill)`, as socket waits, connecting included, and reading standard input do
+  every 100 ms at most. Killing the builder, or an isolate that has ended, does nothing.
+  `(isolate.self)` is the isolate running. The program ends when the builder does, or when any isolate calls
+  `(shen-jit.exit N)`.
+- **The program is fixed while isolates run:** defining raises an error in the builder until every other isolate has
+  ended, as a monitor tells. Define everything first, then spawn.
+- **Isolates for the parts of a call:** `(isolate.spawn-each F Args)` spawns `F` with each of `Args`, each with a
+  monitor, and gives `[[I | Monitor] ...]`; if one cannot start, it stops those it started. `(isolate.stop-each
+  Started)` kills them, waits for each to end and closes the monitors, as a call's cleanup does when its wait
+  raises, so that none is left waiting on one that is gone.
+- **Symbols are shared:** a symbol made in any isolate is the program's, and stays for as long as it runs, so names
+  that come from outside, such as a request's, belong in strings.
+- **A parallel map:** [`lib/parallel.shen`](https://github.com/tizoc/shen-jit/blob/main/docs/parallel.md) gives
+  `(parallel.map N F Xs)`, which maps a function named `F` over `Xs` with at most `N` isolates.
+- **Sharing data:** `(isolate.share X)` copies `X` once, with its sharing and cycles, into storage outside every
+  heap, and gives the copy, which crosses to isolates by pointer rather than being copied again, as a large table
+  many isolates read would. Any isolate can share. Nothing changes a shared value: a store into one of its vectors
+  or byte buffers raises, and a shared dictionary cannot change. It is never freed. What cannot be sent cannot be
+  shared.
+- **Saving:** `shen-jit.save-executable` refuses while other isolates run, and in any isolate but the builder.
+  `--save` writes the builder's image even so, as the program ends then: what isolates hold is not saved, and what
+  they add to the program meanwhile waits until the image is written. An endpoint or isolate saved in an image
+  belongs to the run that saved it: once loaded, a receive on it raises "channel closed".
+- **Types and namespaces:** an isolate has type `isolate`, and endpoints have types `(receiver A)` and `(sender A)`,
+  `A` being what crosses them. A typed function crosses by its name, which typechecks as the function: `(isolate.spawn
+  f X)` with `f : (A --> B)` and `X : A`. A lambda typechecks too, but cannot cross. Results have datatypes:
+  `isolate.down` for a monitor's message, whose reason is an `isolate.reason`, `isolate.started` for what
+  `spawn-each` gives, and `(channel.next A)`, `(channel.got A)` and `(channel.ready A)` for what `channel.next`,
+  `channel.receive-any` and `channel.wait-any` give. `isolate` and `channel` are namespaces: their functions are
+  system functions, which any namespace names as they are, and a client can also write `(use channel => c)` and
+  `(c.send S X)`. In a namespace, keep the types `isolate`, `receiver` and `sender`, and the tags `ok`, `closed`,
+  `ready`, `timeout`, `down`, `normal`, `killed` and `ended`, with `externals`.
 
 ### Cleaning up
 
@@ -402,7 +453,7 @@ such as `[ok Value]`, `io-error` and `chunk-size`. A namespace client must prese
 the libraries use it where a local operation would otherwise resolve to a kernel or stlib function.
 
 Most of them call C through [the FFI](#calling-c), which a static Linux build cannot do. There, buffers and cursors,
-grammars, JSON, I/O over memory, framing and Datalog still work.
+grammars, JSON, I/O over memory, framing, Datalog and the parallel map still work.
 
 Four have a small C adapter of their own as well, which a C compiler builds once: filesystem operations, subprocesses,
 Tree-sitter, which also needs Tree-sitter 0.25 or later and a grammar compiled for it, and curl, which needs libcurl.
@@ -467,18 +518,18 @@ command has exited with 0.
 shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l program.shen
 ```
 
-A server, in a thread, with a client beside it:
+A server and a client, taking turns: on loopback a connection is made before the server accepts it, and a short
+message waits in the socket until it is read.
 
 ```shen
-(set l (socket.listen "127.0.0.1" 0))
-
-(thread (freeze (let S (socket.accept (value l))
-                  (do (socket.send S (socket.recv S 100))
-                      (socket.close S)))))
-
-(let C (socket.connect "127.0.0.1" (socket.port (value l)))
-  (do (socket.send C "hello")
-      (output "~A~%" (socket.recv-string C 100))    \\ hello
+(let L (socket.listen "127.0.0.1" 0)
+     C (socket.connect "127.0.0.1" (socket.port L))
+     _ (socket.send C "hello")
+     S (socket.accept L)
+     _ (socket.send S (socket.recv S 100))
+     _ (socket.close S)
+     _ (socket.close L)
+  (do (output "~A~%" (socket.recv-string C 100))    \\ hello
       (socket.close C)))
 ```
 
@@ -493,26 +544,13 @@ A server, in a thread, with a client beside it:
 | `(socket.readable? S Ms)` | Whether there is something to read, waiting that long at most |
 | `(socket.shutdown S)`, `(socket.no-delay S)`, `(socket.close S)` | Tells the other end nothing more will be sent, sends small writes at once, and closes |
 
-A socket is an integer. Waiting lets other threads run, and Ctrl-C at the REPL ends it. A send to a closed connection
-raises instead of ending the process. The comments at the top of the file list every function. Typed code can call
-those above but `socket.recv` and `socket.recv-into`, whose buffers have no Shen type, and sends strings: bytes go through
-a socket endpoint.
+A socket is an integer. Ctrl-C at the REPL ends a wait on one, and a kill reaches an isolate waiting on one. A send
+to a closed connection raises instead of ending the process. The comments at the top of the file list every function.
+Typed code can call those above but `socket.recv` and `socket.recv-into`, whose buffers have no Shen type, and sends
+strings: bytes go through a socket endpoint.
 
 [Socket I/O endpoints](https://github.com/tizoc/shen-jit/blob/main/docs/io-sockets.md), `lib/io-socket.shen`, put a
 connection behind the I/O library's readers and writers, with deadlines.
-
-### Structured workers
-
-*Experimental:* this API is expected to change in a later release.
-
-For independent jobs over numbers, booleans, symbols, strings and proper lists, start with
-`parallel.with-map` and `parallel.map` from optional `lib/parallel-map.shen`. Results keep input order;
-`tools/parallel-map.shen` is a complete program. Each of 1 to 64 OS threads runs a named function of a saved
-image in its own runtime, and a scope always joins before returning. Load `lib/buffer.shen`, then
-`lib/parallel.shen`, then `lib/parallel-map.shen`. The underlying byte API offers copied messages and one
-immutable buffer shared by the workers. The [reference](https://github.com/tizoc/shen-jit/blob/main/docs/parallel.md)
-covers both APIs, a starting heap configuration, typed read-only access and cooperative cancellation.
-The source-deps example answers batches of queries with it. `thread` is unchanged.
 
 ### HTTP
 
@@ -523,8 +561,10 @@ keeping the bytes of the body that came with it.
 by Content-Length or chunked, within limits, with trailers kept apart, and encodes responses.
 [Streaming HTTP responses](https://github.com/tizoc/shen-jit/blob/main/docs/http-streaming.md) writes a response as it
 is made, with a length or chunked.
-[Bounded HTTP servers](https://github.com/tizoc/shen-jit/blob/main/docs/http-listener.md) accept connections up to a
-limit, keep them for later requests within limits, and shut down when asked. Ambiguous framing is refused.
+[HTTP servers](https://github.com/tizoc/shen-jit/blob/main/docs/http-listener.md) serve the connections a listener
+accepts, each in an isolate of its own, a bounded number at once, keep each for later requests within limits, and
+stop when asked, killing what has not finished within a grace period. Ambiguous
+framing is refused.
 
 [HTTP clients with libcurl](https://github.com/tizoc/shen-jit/blob/main/docs/curl.md): `lib/curl.shen` makes HTTP and
 HTTPS requests through libcurl, with reusable clients, binary bodies, headers and trailers, timeouts, TLS
@@ -536,10 +576,7 @@ downloads to a file with it.
 [Datalog](https://github.com/tizoc/shen-jit/blob/main/docs/datalog.md): `lib/datalog.shen` evaluates relations, facts
 and recursive rules bottom up, to a fixed point, over symbols, strings, integers and records, with each rule compiled
 through the JIT and its join order chosen from the sizes of the relations as it runs, and answers a query by deriving
-only what bears on it. Optional `lib/datalog-parallel.shen`, experimental as the workers it runs on are, adds
-`datalog.parallel.run`: an explicit worker budget, automatic detection of programs that partition safely,
-sequential fallback, and an ordinary database returned after the workers join. Short jobs can still be faster
-sequentially.
+only what bears on it.
 
 #### SQLite
 
@@ -575,8 +612,7 @@ To use a statement many times: `sqlite.prepare`, `sqlite.bind`, `sqlite.step`, w
 
 Values go in and come out as Shen values: a number is an INTEGER or a REAL, a string is TEXT, a byte buffer is a
 BLOB, and `[]` is NULL. `true` and `false` go in as 1 and 0. Errors raise, with SQLite's message. A connection belongs
-to one thread: other threads run while a query does, and some builds of SQLite, Apple's among them, do not allow two
-threads on one.
+to the isolate that opened it.
 
 ### Example applications
 
@@ -670,8 +706,8 @@ Windows reaches nothing, as the executable is static. A static Linux build canno
 A function takes at most 6 arguments that are not doubles and 8 that are, and no structs by value. After the result,
 two flags:
 
-- **`blocking`** gives up the lock during the call, so other threads run. Its byte buffers are copied and back, as
-  another thread's collection may move them.
+- **`blocking`** marks a call that may wait, such as a read from a socket. It changes nothing now: nothing else
+  uses an isolate's heap while it waits.
 - **`(varargs N)`** marks a variadic function with N fixed arguments, from 1 to 3, all integers.
 
 ```shen
@@ -794,8 +830,9 @@ reaches the handle:
 shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l lib/mmap.shen -l lib/handle.shen -l program.shen
 ```
 
-- **It is released some time later:** in the next `handle.wrap` or `(handle.sweep)` after a collection finds it dead, and
-  not at all if the program ends first, which leaves it to the system. Handles count what they hold, so that memory
+- **It is released some time later:** in the next `handle.wrap` or `(handle.sweep)` after a collection finds it dead, or
+  as the isolate that holds it ends, unless one of the isolate's globals holds it then; and not at all if the program
+  ends first, which leaves it to the system. Handles count what they hold, so that memory
   outside the heap brings collections too.
 - **`(handle.close H)` releases it now,** for what should not wait: on Windows, a mapped file cannot be deleted. H then
   raises when used, and closing it again does nothing.
@@ -840,7 +877,7 @@ cc -shared -fPIC -I include -o libmine.so mine.c
   `shen_root_new` for longer. Reads do not allocate, so the loop above needs no root.
 - **Errors** come back by value, as `SHEN_ERROR`. `shen_call` calls Shen, and no `longjmp` crosses C, so a C library
   calling back is safe.
-- **Waiting:** `shen_release` and `shen_acquire` let other threads run while C waits.
+- **Waiting:** `shen_release` and `shen_acquire` mark where C waits, touching no value; they change nothing now.
 - **Limits:** up to 8 arguments, and a thread the runtime did not start cannot call in.
 
 > Test with `SHEN_JIT_GC_STRESS=1`, which collects at every allocation and finds most mistakes with values. `shen.h`
@@ -966,7 +1003,7 @@ flat profile at exit, and `SHEN_JIT_STATS=1` prints the collector's work and the
 | `SHEN_JIT_SEMISPACE=SIZE` | Starts the heap at SIZE bytes (with K, M or G; anything that is not a size is refused) instead of 32 MB, or at what the image needs if that is more: what a collection keeps and the room for new objects add up to this. It still grows with live data, up to 64 GiB, or stays at SIZE if that is more. Less collects more often and uses less memory |
 | `SHEN_JIT_MAX_HEAP=SIZE` | Limits the heap to SIZE bytes (with K, M or G; at least the initial semispace; anything that is not a size is refused). What the heap holds stays below SIZE, and an allocation past that raises `out of memory`. The collector copies, so the process can use two to three times SIZE: vectors and strings of 256 KB or more stay apart, uncopied, and count once |
 | `SHEN_JIT_PROFILE=1` | Samples the program and prints a flat profile to stderr at exit, naming both Shen and C functions. Not on Windows |
-| `SHEN_JIT_STATS=1` | Prints collection statistics, the live heap and its roots, and the native code compiled and freed, at exit |
+| `SHEN_JIT_STATS=1` | Prints collection statistics, the live heap and its roots, and the native code compiled and freed, at exit; the builder's, without its live heap when an isolate ends the program |
 | `SHEN_JIT_PERF_MAP=1` | Writes `/tmp/perf-PID.map`, so external profilers can name compiled code |
 | `SHEN_JIT_GC_STRESS=N` | Collects after every N words allocated and overwrites the old space, for testing |
 | `SHEN_JIT_SLOW_PRIMS=1` | Sends every primitive to C, for testing |
@@ -975,13 +1012,15 @@ flat profile at exit, and `SHEN_JIT_STATS=1` prints the collector's work and the
 
 ### Differences from Shen/Scheme
 
+- **Code holds only what the reader makes.** A definition whose code holds a value with no syntax, such as a vector
+  put into a form given to `eval`, is refused, where Shen/Scheme keeps the value as a constant.
 - **No stlib in the default image.** Only the kernel and its extensions for features, programmable pattern matching, namespaces and the launcher are in use: see
   [The standard library](#the-standard-library).
 - **Fixnums only.** Integers are 62-bit, and a result outside that range raises `integer overflow`.
 - **Sealing.** Internal kernel functions cannot be redefined, where Shen/Scheme accepts such definitions.
 - **Numbers hash by value.** A real and an integer that are `=` have the same `hash`, where Shen/Scheme's tells them apart.
-- **Threads run one at a time,** where Shen/Scheme's run in parallel. [Structured workers](#structured-workers) run in
-  parallel, each in a runtime of its own.
+- **No `thread`.** Shen/Scheme's `(thread Frozen)` is not provided. [Isolates](#isolates) run in parallel, each
+  with a heap of its own.
 - **Definitions are factorised,** as with `(factorise +)`: a guard that consecutive clauses share runs once, so
   guards should have no effects, and a vector pattern may read its first element before a clause that does not
   need it, which raises if that element was never set.
@@ -1045,11 +1084,13 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 
 | Target | What it does |
 | --- | --- |
-| `make test-core` | `test`, `test-jit`, `test-ops`, `test-kl`, `check-lowerer`, `check-generated`, `test-kernel`, `test-stlib`, `test-thorn`, `test-native`, `test-ffi`, `test-overrides` and `test-structs` |
-| `make test-libs` | `test-buffer`, `test-json`, `test-io`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl` and `test-namespaces` |
+| `make test-core` | `test`, `test-jit`, `test-ops`, `test-kl`, `check-lowerer`, `check-generated`, `test-kernel`, `test-stlib`, `test-thorn`, `test-native`, `test-ffi`, `test-overrides`, `test-structs` and `test-isolates` |
+| `make test-libs` | `test-buffer`, `test-json`, `test-io`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl`, `test-namespaces` and `test-parallel` |
 | `make test` | The runtime's unit tests |
 | `make test-jit`, `make test-ops` | The JIT and the instructions, on small programs |
 | `make test-kl` | The `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
+| `make test-isolates` | Isolates: what one starts with, spawning, channels, monitors, kill, sharing, what crosses, types and namespace clients, and the same with a collection at every allocation in `make test-isolates-stress` |
+| `make test-parallel` | `parallel.map` over isolates: order, errors, what crosses and shared arguments |
 | `make test-kernel` | The kernel's test suite, the extension tests, the contract examples and `tests/cli.sh` |
 | `make test-stlib` | The executable with the standard library |
 | `make test-thorn` | THORN, from the kernel, with no time limit: its inference counts and what goes unproved, as on Shen/Scheme |
@@ -1057,14 +1098,13 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-structs` | Managed records, mutation, labelled evaluation order, namespace aliases, declaration validation and saved images in both executables |
 | `make test-namespaces` | Library exports, aliases, imports, types and scoped DSL vocabulary in the base and stlib executables, and in their saved images |
 | `make test-json` | JSON syntax/encoding, Unicode, exact numbers, builders, typing and images/GC |
-| `make test-buffer` | Buffer/cursor bounds, copying, foreign lifetime, typed clients, format examples, grammars, typed grammars and images/GC |
+| `make test-buffer` | Buffer/cursor bounds, copying, foreign lifetime, typed clients, format examples, grammars, typed grammars, grammars in isolates and images/GC |
 | `make test-io` | Bounded chunk I/O, binary files and framing, socket endpoints/echo, native lifetimes, typed results and images/GC |
 | `make test-http` | Request/response framing, streaming, persistent connections, shutdown, SQLite example, typing and images/GC |
-| `make test-datalog` | Datalog answers/errors/generated programs against its plain evaluator; Shen/KL dependency analysis and source-fact matching/reach/impact with independent graph oracles |
-| `make test-parallel` | Worker scopes, typed shared reads, copied replies, lifetimes and cleanup after errors |
+| `make test-datalog` | Datalog answers/errors/generated programs against its plain evaluator, also in isolates, in parts and with joins shared out; Shen/KL dependency analysis and source-fact matching/reach/impact with independent graph oracles |
 | `make test-datalog-swipl` | The same generated programs against SWI-Prolog's tabling, if `swipl` is there |
 | `make test-ffi` | C functions called from Shen and C written for Shen, against `tests/ffi_lib.c`, memory outside the heap, and the SQLite and socket libraries |
-| `make test-curl` | Optional libcurl adapter, independent loopback HTTP/TLS fixtures, downloader, typing, threads and images/GC; needs libcurl development headers, Python 3 and `openssl` |
+| `make test-curl` | Optional libcurl adapter, independent loopback HTTP/TLS fixtures, downloader, typing and images/GC; needs libcurl development headers, Python 3 and `openssl` |
 | `make test-fs` | Filesystem metadata, paths, bounded traversal, replacement, cleanup, typing, images/GC and the copy application; needs a C compiler and Python 3 |
 | `make test-process` | Child lifecycle, argv/environment/cwd, bounded communication, pipelines, inheritance, typing, images/GC and streaming memory; needs a C compiler and Python 3 |
 | `make test-tree-sitter` | Tree/query snapshots, independent C/coordinate oracles, types, images/GC and bounded source facts; needs a C compiler, Python 3 and `make deps-tree-sitter` on shared-capable builds |
@@ -1073,7 +1113,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make check-generated` | Compares the generated files with `generated.sha256`. `make update-generated` rewrites it after a change to the lowerer, the port or the lowered test programs |
 | `make test-kl-stress`, `make test-kernel-stress` | The same with frequent collections |
 | `make test-lib-stress` | The libraries' saved images reloaded with a collection at every allocation, which their own suites leave out |
-| `make test-san` | `test`, `test-jit`, `test-ops`, `test-kl`, FFI, libcurl, filesystem, subprocess and Tree-sitter adapters under AddressSanitizer and UBSan |
+| `make test-san` | `test`, `test-jit`, `test-ops`, `test-kl`, FFI, isolates, libcurl, filesystem, subprocess and Tree-sitter adapters under AddressSanitizer and UBSan |
 | `make test-x86` | The same five, built as x86-64 code (under Rosetta on Apple silicon) |
 | `make test-differential` | Each primitive over generated values, however it is compiled and through C, and properties they must keep. `make differential-scheme` lists what differs from Shen/Scheme, to read and not to pass |
 | `make fuzz-native` | Mutated code objects, run if the checker accepts them |

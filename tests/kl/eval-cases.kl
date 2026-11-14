@@ -143,7 +143,7 @@ exactly, so 8 and 8.0 differ here even though = treats them as equal."
 (value (3 0 98 99 100 -1) (let S (open "kl-tmp.bin" out) (let A (shen-jit.write-bytes (shen-jit.string->bytes "abcd") 1 3 S) (let B (shen-jit.write-bytes (shen-jit.bytes 2) 2 0 S) (let C (close S) (let T (open "kl-tmp.bin" in) (let D (read-byte T) (let E (read-byte T) (let F (read-byte T) (let G (read-byte T) (let H (close T) (cons A (cons B (cons D (cons E (cons F (cons G ())))))))))))))))))
 (error (shen-jit.write-bytes (shen-jit.bytes 2) 1 2 (value *stoutput*)))
 (error (shen-jit.write-bytes (shen-jit.bytes 2) -1 1 (value *stoutput*)))
-(error (shen-jit.write-bytes "ab" 0 1 (value *stoutput*)))
+(value 1 (let S (open "kl-tmp.bin" out) (let A (shen-jit.write-bytes "ab" 1 1 S) (let C (close S) A))))
 (error (let S (open "kl-tmp.bin" in) (let A (shen-jit.write-bytes (shen-jit.bytes 1) 0 1 S) (close S))))
 (error (let S (open "kl-tmp.bin" out) (let A (close S) (shen-jit.write-bytes (shen-jit.bytes 1) 0 1 S))))
 (error (open "kl-nonexistent-xyz" in))
@@ -611,7 +611,7 @@ has them."
 (value false (string? (shen-jit.bytes 3)))
 (value 3 (t.len (shen-jit.bytes 3)))
 (value 0 (t.len (shen-jit.bytes 0)))
-(error "bytes: " (t.len "abc"))
+(value 3 (t.len "abc"))
 (error "bytes: " (t.len 3))
 (error "shen-jit.bytes: " (shen-jit.bytes -1))
 (error "shen-jit.bytes: " (shen-jit.bytes a))
@@ -636,7 +636,9 @@ has them."
 (error "bytes: " (t.u8 (shen-jit.bytes 1) 0.5))
 (error "bytes: " (t.u8 (shen-jit.bytes 1) 2305843009213693951))
 (error "bytes: " (t.u32 (shen-jit.bytes 1) 2305843009213693951))
-(error "bytes: " (t.u8 "abc" 0))
+(value 98 (t.u8 "abc" 1))
+(error "bytes: " (t.u8 "abc" 3))
+(error "bytes: " (shen-jit.u8! "abc" 0 1))
 (error "bytes: " (t.u8 3 0))
 (error "bytes: " (t.u8 (absvector 3) 0))
 "The constants the JIT may use directly."
@@ -672,7 +674,7 @@ has them."
 (value "" (shen-jit.bytes->string (shen-jit.string->bytes "abc") 3 0))
 (error "shen-jit.bytes->string: " (shen-jit.bytes->string (shen-jit.string->bytes "abc") 2 2))
 (error "shen-jit.bytes->string: " (shen-jit.bytes->string (shen-jit.string->bytes "abc") -1 1))
-(error "bytes: " (shen-jit.bytes->string "abc" 0 1))
+(value "b" (shen-jit.bytes->string "abc" 1 1))
 (value true (shen-jit.bytes? (set t.b (shen-jit.string->bytes "abcdef"))))
 (value "ababcd" (shen-jit.bytes->string (shen-jit.copy-bytes (shen-jit.string->bytes "abcdef") 2 (value t.b) 0 4) 0 6))
 (value "abab" (shen-jit.bytes->string (shen-jit.copy-bytes (shen-jit.string->bytes "abcd") 2 (shen-jit.string->bytes "abcd") 0 2) 0 4))
@@ -682,7 +684,7 @@ has them."
 (error "shen-jit.copy-bytes: " (shen-jit.copy-bytes (shen-jit.bytes 2) 0 (shen-jit.bytes 2) 1 2))
 (error "shen-jit.copy-bytes: " (shen-jit.copy-bytes (shen-jit.bytes 2) 0 (shen-jit.bytes 2) 0 -1))
 (error "bytes: " (shen-jit.copy-bytes "ab" 0 (shen-jit.bytes 2) 0 1))
-(error "bytes: " (shen-jit.copy-bytes (shen-jit.bytes 2) 0 "ab" 0 1))
+(value "b" (shen-jit.bytes->string (shen-jit.copy-bytes (shen-jit.bytes 1) 0 "ab" 1 1) 0 1))
 "= compares contents, as for strings, and hash agrees."
 (value true (= (shen-jit.string->bytes "abc") (shen-jit.string->bytes "abc")))
 (value false (= (shen-jit.string->bytes "abc") (shen-jit.string->bytes "abd")))
@@ -891,27 +893,19 @@ that holds itself, whose copy would not end."
 (value t.deref-eq-all (defun t.deref-eq-all () (let B (shen.prolog-vector) (let X (shen.newpv B) (let Y (shen.newpv B) (let Z (shen.newpv B) (let U (shen.newpv B) (let V (shen.newpv B) (let C (shen.newpv B) (do (shen.bindv X (cons Z (cons 1 ())) B) (do (shen.bindv Y (cons 2 (cons 1 ())) B) (do (shen.bindv Z 2 B) (do (shen.bindv C (cons C 1) B) (cons (t.deref-eq X Y B) (cons (t.deref-eq X (cons 3 (cons 1 ())) B) (cons (t.deref-eq X Z B) (cons (t.deref-eq Z 2 B) (cons (t.deref-eq U U B) (cons (t.deref-eq U V B) (cons (t.deref-eq C C B) ()))))))))))))))))))))
 (value (true false false true true false true) (t.deref-eq-all))
 
-"Threads, here also under GC stress and the sanitizers: one that sets a global,
-one whose list collections move while the main thread allocates, and a thread
-that raises and catches."
-(value t.wait (defun t.wait (Name V) (if (= (value Name) V) Name (t.wait Name V))))
-(value 0 (set t.flag 0))
-(value true (shen-jit.thread (freeze (set t.flag 7))))
-(value t.flag (t.wait t.flag 7))
+"Isolates, here also under GC stress and the sanitizers: one that sends back what it was
+given, and two whose lists collections move while the builder allocates its own. Everything is
+defined first, as the program cannot change while another isolate runs, and each case waits for
+its isolates to end, as cases after it define more."
+(value t.reply (defun t.reply (X) (channel.send (hd X) (tl X))))
 (value t.build (defun t.build (N) (if (= N 0) () (cons N (t.build (- N 1))))))
 (value t.sum (defun t.sum (L) (if (cons? L) (+ (hd L) (t.sum (tl L))) 0)))
 (value t.churn (defun t.churn (N A) (if (= N 0) A (t.churn (- N 1) (t.sum (t.build 50))))))
-(value 0 (set t.done 0))
-(value true (shen-jit.thread (freeze (do (set t.a (t.churn 200 0)) (set t.done (+ (value t.done) 1))))))
-(value true (shen-jit.thread (freeze (do (set t.b (t.churn 200 0)) (set t.done (+ (value t.done) 1))))))
-(value 1275 (t.churn 200 0))
-(value t.done (t.wait t.done 2))
-(value 1275 (value t.a))
-(value 1275 (value t.b))
-(value 0 (set t.caught 0))
-(value true (shen-jit.thread (freeze (set t.caught (trap-error (hd 1) (lambda E (error-to-string E)))))))
-(value t.caught (do (t.churn 50 0) (t.wait t.caught "hd: 1 is not a pair")))
-(error "thread: 1 is not a function" (shen-jit.thread 1))
+(value t.churn-reply (defun t.churn-reply (S) (channel.send S (t.churn 200 0))))
+(value t.ended (defun t.ended (P) (channel.receive (isolate.monitor P))))
+(value (7 "seven" seven) (let R (channel.new 1) (let P (isolate.spawn t.reply (cons (channel.sender R) (cons 7 (cons "seven" (cons seven ()))))) (let Got (channel.receive R) (do (t.ended P) Got)))))
+(value (1275 1275 1275) (let R (channel.new 2) (let S (channel.sender R) (let P (isolate.spawn t.churn-reply S) (let Q (isolate.spawn t.churn-reply S) (let M (t.churn 200 0) (let Got (cons M (cons (channel.receive R) (cons (channel.receive R) ()))) (do (t.ended P) (do (t.ended Q) Got)))))))))
+(error "isolate.spawn: 1 is not a function of one argument that the builder defined" (isolate.spawn 1 2))
 
 "Pointers and C functions as far as they go without a library: tests/ffi.shen has the rest. A call
 goes through the stub, and a function that cannot be found raises as anything does."

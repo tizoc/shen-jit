@@ -52,7 +52,7 @@ states which fields hold values:
 | --- | --- |
 | String | Byte length and bytes; immutable. |
 | Byte buffer | Byte length and bytes, which can be stored to, and which the collector does not scan. |
-| Symbol | Name string, name hash, global cell index. |
+| Symbol | Name string, name hash; its cell's index and its global's number, with flags. |
 | Real | IEEE double. |
 | Absvector | Length and that many values. |
 | Closure | Code object and captured values; a `defun` is a closure with no captures. Raw native entry. |
@@ -61,24 +61,34 @@ states which fields hold values:
 | Exception | Message string, and a value that goes before it, or none. An error raised from C keeps the offending value apart; `error-to-string` builds the full message the first time it is asked. |
 | Stream | Kind, direction, open flag; raw OS handle. |
 | Pointer | Kind and what keeps it alive; raw address and length. Its header says whether it is read only. |
-| Shared view | A worker scope's read-only input: raw address and length, cleared when the scope ends and in an image. Equal only to itself; prints as `#<shared-bytes>`. |
+
+An absvector or byte buffer that `isolate.share` made lies outside every heap and is shared by every isolate:
+it reads as any, is equal to an unshared one with the same contents, and raises on a store.
 
 There is no partial-application object: KLambda named calls are saturated (see
 section 9), so only closures and foreign functions are ever applied.
 
-Symbols are ordinary heap objects. The hash is computed from the name bytes when
-the symbol is created, so it never depends on an address. The intern table is a
-heap object that holds symbols weakly: a collection drops a symbol that nothing
-else reaches, that has no value or function, and that no compiled code calls by
-name, and its cell is reused. Interning the name again makes a new symbol, which
-nothing can tell from the old one. `(intern "true")` and `(intern "false")`
+Symbols live in the program space ([design.md](design.md), "Collection"), in
+slots that never move. The hash is computed from the name bytes when the symbol is
+created. A symbol that code installed there refers to is published, and stays.
+The others are held weakly: a collection drops a symbol that nothing else reaches,
+that has no value or function, and that no compiled code calls by name, and its
+slot and cell are reused. Interning the name again makes a new symbol, which
+nothing can tell from the old one. From the first spawn of an isolate, every symbol
+is published as it is made, and none is dropped. `(intern "true")` and `(intern "false")`
 return the Boolean specials.
 
-Global cells (a value word and a function word per symbol) and constant slots
-live in root arrays outside the heap. The arrays grow by adding fixed-size
-chunks, so no cell moves. The heap refers to cells only by index; emitted code
-embeds cell addresses. A code object owns its range of constant slots: the
-collector copies them with it, and reuses them once it is dead (heap.c).
+Function cells, with the function's arity beside each, two entries per symbol,
+and constant slots live in root arrays outside the heap. The arrays grow by adding fixed-size chunks, so no cell moves. The heap
+refers to cells only by index; emitted code embeds cell addresses. A code object
+owns its range of constant slots: the collector copies them with it, and reuses
+them once it is dead (heap.c).
+
+A global's value is in a slot of the VM's own, by a number that a symbol gets
+once code names it as a global or it is `set`: a symbol never set and never named
+so takes none, and reads as unbound. The slots follow the VM in one block of
+address space, committed as numbers grow, so emitted code reads one at a fixed
+offset from the VM's register. A dropped symbol's number is reused.
 
 ## 3. Numbers
 
@@ -139,7 +149,8 @@ bytes; source text and files pass through as UTF-8 bytes without decoding.
   symbol `shen.fail!`, as in Shen/Scheme, so the `vector` override need not
   fill elements again.
 - `(<-address V N)` and `(address-> V N X)`: N must be within 0 to length-1;
-  `address->` returns V. Out-of-range indices and non-vectors raise errors.
+  `address->` returns V. Out-of-range indices and non-vectors raise errors, and so does
+  `address->` on a shared absvector, one that `isolate.share` made, which never changes.
 
 The kernel catches `pos` past the end in `shen.string->byte` and `value` of an
 unbound symbol in `bound?`, and programs catch such errors too, so they must be
@@ -148,7 +159,7 @@ cheap to raise and catch.
 ## 6. Equality and hashing
 
 `(= A B)` is true when A and B are numbers with the same mathematical value,
-strings or byte buffers with the same bytes, pairs whose heads and tails are `=`,
+strings or byte buffers with the same bytes, shared or not, pairs whose heads and tails are `=`,
 absvectors of the same length whose elements are `=`, pointers of the same kind and
 address that are both read only or both not, or the same symbol, special, procedure,
 stream or exception. Closures compare by identity.
@@ -277,10 +288,17 @@ its name; any other form returns its value. Malformed forms raise an error.
 returned without lowering.
 
 A definition's lambda form, which `fn` returns, is made the first time `fn`
-asks for it, not when the definition is read; `shen.*gensym*` still moves as
-if it had been made then. *Deviation:* until then, reading the
-`shen.lambda-form` property directly gives a placeholder, an absvector tagged
-`shen-jit.lazy-form`, where other ports give the closure.
+asks for it, from F's arity, not when the definition is read;
+`shen.*gensym*` still moves as if it had been made then. In an isolate, which
+cannot evaluate, it is a curried closure from a template whose last call reads
+F's function cell, so it sees a redefinition as a compiled form does.
+*Deviation:* arities are kept beside function cells, not in the property
+vector, so `(get F arity)` finds none, and until `fn` asks, reading the
+`shen.lambda-form` property finds none either; use `arity` and `fn`.
+
+Only the builder, the isolate a program starts as, evaluates or defines: in
+another isolate `eval`, `eval-kl` and installing raise an error ([design.md](design.md),
+"The builder and isolates").
 
 ## 12. Streams, files and time
 
@@ -326,7 +344,8 @@ Stage 1 runs, in order: install the stage 0 definitions; set `*os*`,
 `shen.initialise`; call `shen.x.features.initialise` with the feature list
 `[shen/shen-jit]`, then `shen.x.programmable-pattern-matching.initialise` and
 `shen.x.namespaces.initialise`, and `shen-jit.initialise`, which registers the port's
-functions and defines `thread`; write the image, in which file streams are closed.
+functions, and the `isolate` and `channel` namespaces with their types; write the image, in
+which file streams are closed.
 `make stlib` loads the standard library later, into a running image, and calls
 `stlib.initialise` there.
 
@@ -369,19 +388,26 @@ come before those arguments.
 An image is a header followed by sections and a trailer, all little-endian:
 
 - **Header:** magic `SJHI`, format version, the executable's build identifier
-  (an image loads only into the build that wrote it), word size, heap size, the
-  sizes of the root sections, the symbol count, the intern table's relative address,
-  and the primitive table's size and a checksum of its names, so an image cannot
-  load against a different primitive table.
-- **Heap:** the live heap after a final collection, with every pointer stored
-  relative to the heap base and every raw native field stored as 0.
-- **Roots:** the global-cell and constant-slot arrays, with relative pointers.
+  (an image loads only into the build that wrote it), word size, the sizes of the
+  program space's symbol slots and objects, of the heap and of the root sections,
+  the program space's first free symbol slot, and the primitive table's size and a
+  checksum of its names, so an image cannot load against a different primitive table.
+- **Program space:** its symbol slots, then its objects, as they lie there.
+- **Heap:** the live heap after a final collection.
+
+  Every pointer in these is stored relative to the start of the program space's
+  symbol slots, with bit 62 set, of its objects, with bit 61 set, or of the heap,
+  and every raw native field is stored as 0. The objects start where the address
+  space a process reserves puts them, which a limit on it can change.
+- **Roots:** the function cells with their arities, the constant slots and the global slots, with relative
+  pointers.
 - **Trailer:** the image's length in bytes and the magic `SJHI-END`. A loader
   reads it from the end of the file, so an image can be appended to another
   file: the executable carries its image this way.
 
-Loading reads the heap into a region at least five times its size, adds the base
-to every pointer in one linear pass over objects and pairs, does the same for
-the root arrays, and then applies the reconstruction rules in
+Loading reads the program space into a new one and the heap into a region at
+least five times its size, adds the bases to every pointer in one linear pass
+over each, does the same for the root arrays, rebuilds the symbol tables from
+the slots, and then applies the reconstruction rules in
 [design.md](design.md): native entries from each procedure's kind, the standard streams
 rebound in place, and file streams left closed.

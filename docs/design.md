@@ -15,7 +15,7 @@ larger or harder to follow needs clear evidence that it is worth the cost.
 | Boot artifact | A heap image written at build time, holding no native code |
 | Collector | A Cheney copying collector with inline bump allocation into one reused area, and no write barriers |
 | Native emitters | Handwritten C. Only what dominates execution is inline; the rest calls C helpers |
-| Runtime organisation | One contiguous guest stack per thread, and a handler stack |
+| Runtime organisation | One contiguous guest stack per isolate, and a handler stack |
 
 [bytecode.md](bytecode.md) defines the instructions and the lowering rules, and [semantics.md](semantics.md)
 the behaviour the system implements.
@@ -53,13 +53,14 @@ The build appends the image to the runtime to make `build/shen-jit`, a single fi
 stays out: `make stlib` loads the kernel's precompiled `stlib.kl` into a running image and writes a binary with
 `shen-jit.save-executable`.
 
-**Startup** reads the image from the end of the executable's file, relocates its pointers and applies these rules:
+**Startup** reads the image from the end of the executable's file: the program space's symbols and objects, then the heap
+(see "Collection"). It relocates their pointers and applies these rules:
 
 - **Procedures:** a closure's native entry is a cache, set on load to the compile-on-first-call stub. A foreign
   function's is set to its stub, and its address is cleared, so it is found again at its first call.
 - **Code objects** load with no native code: no emitted code is saved.
-- **Root cells** are referred to from the heap by index, so nothing in the heap needs rebinding. Only emitted
-  code holds their addresses.
+- **Root cells and global slots** are referred to from the heap by index or number, so nothing in the heap needs
+  rebinding. Only emitted code holds their addresses or offsets.
 - **Streams:** the standard stream objects are kept and rebound to the process's handles, so every reference stays
   good. File streams load closed.
 - **Pointers from C** load with address 0, which is dead.
@@ -148,7 +149,7 @@ other entry addresses, and call sites need no checks of that kind.
 
 ```text
 call f (arguments already in slots A+2..A+n+1):
-  load P from f's global cell
+  load P from f's function cell
   check that P is a procedure, else jump to the not-a-procedure path
   store P at [FP+A+1] and the return label at [FP+A]
   FP += A; COUNT = n
@@ -238,8 +239,10 @@ Pairs stay at two words, so the collector's linear scan and the image's relocati
 from an object: every other object starts with a header word whose low bits no value has. A word at the start of an object is then
 either a header, which gives its size and which fields hold values, or the head of a pair.
 
-Symbols are ordinary heap objects, so the image is a single heap. Each stores a hash computed from its name, so
-hashing never depends on an address that moves. A symbol refers to its global cell by index. Cells and constant slots
+Symbols live in the program space (see "Collection"), in slots that never move, so a symbol is its address. Each stores
+a hash computed from its name. A symbol refers to its function cell by index, and to its global's slot by a number
+that it gets once code names it as a global or it is set. The slots lie after the VM in its own block of address space,
+so emitted code reads one at a fixed offset from the VM's register ([semantics.md](semantics.md), section 2). Function cells and constant slots
 live outside the heap, in root arrays that grow by adding chunks, so none ever moves, and emitted code embeds their addresses and never a
 heap address. Native code lives in SLJIT's executable memory, and a collection frees that of code objects it did not reach, except under a profiler, and what was compiled before everything compiled again, which frames may still be running.
 
@@ -264,20 +267,34 @@ collection copies at most a word for every four allocated. With its own area the
 - **Lists stay contiguous.** Cheney's breadth-first order scatters a list's pairs among everything else live, so when a pair is
   copied, the pairs of its tail are copied right after it.
 - **Large objects:** vectors, strings and byte buffers of 32K words or more are allocated apart and copied only into an image. Collections mark
-  them, scan them in place and free the dead ones, whose blocks wait one collection for an object of the same size. The intern table is
-  allocated in the semispace at any size: every collection builds the next one in to-space, in the room the old one leaves there.
-- **Weak things:** the intern table holds symbols weakly, and symbols nothing needs are dropped, their global cells reused, and those above the last one kept taken out of the array that collections walk; streams nothing reaches are closed; the
+  them, scan them in place and free the dead ones, whose blocks wait one collection for an object of the same size.
+- **Weak things:** symbols that are not published are held weakly, and those nothing needs are dropped, their slots, cells and
+  global numbers reused, and those above the last one kept taken out of the ranges that collections walk; streams nothing reaches are closed; the
   constant slots of dead code are reused; and a guarded pointer nothing reaches has its value put on a list for Shen. That value is a root until then, so nothing has to come back
   from the dead, and what one value uses outlasts it. The list's pair takes less to-space than the pointer, which is not copied, leaves free.
 - **Repeated pointers** are skipped while scanning, which matters for the Prolog engine's big vectors.
+
+**The program space** is a range of reserved address space, committed as it fills, that collections neither copy nor scan:
+a pointer into it is recognised by one range test and left as it is. Every symbol has a slot at its start. A definition,
+once installed, is copied there with all it reaches: its code objects, bytecode, constants and inline body: pairs,
+strings, reals, symbols, code and the definition's closure, which captures nothing. Code holds only what the reader
+makes, symbols, numbers, strings, booleans and lists of them, so every definition goes there: one whose code holds
+anything else, such as a vector put into a form given to `eval`, is refused when it is installed, and a check before
+copying makes sure it leaves nothing behind. A foreign function goes there too, with its description: a vector, but
+one only the FFI library makes and only the runtime reads. Grammar loops keep their byte tables as strings for the same
+reason. So nothing in the space points into the heap, function cells point only into it, and neither they nor the
+constant slots of its code are scanned or freed. What it holds stays, a redefined function's old version included. A
+symbol that it refers to is published: its name moves there too, and it is never dropped. A collection marks the other
+symbols it reaches, which are the only things in the space it writes to, and frees the slots of those nothing needs,
+until isolates exist (below).
 
 Reals are boxed, each a 16-byte object, and native code does their arithmetic and comparisons on its slow path, after the
 test for fixnums fails, loading each operand into a float register and allocating the result in line. Code written by hand can keep them unboxed
 in real registers, and 64-bit integers in word registers, which the collector never sees ([bytecode.md](bytecode.md), "Real and word registers").
 
-The roots are the scanned extent of each thread's guest stack, the global cells and constants, what C holds, and a few VM
-fields. C holds values in explicitly registered locals, per thread, and in the roots that outlive a call (`shen_root_new`), which a
-thread with no lock may delete, so a collection first drains its VM's list of those deleted.
+The roots are the scanned extent of the guest stack, the global slots, function cells and constants, what C holds, and a few VM
+fields. C holds values in explicitly registered locals, and in the roots that outlive a call (`shen_root_new`), which any OS
+thread may delete, so a collection first drains its VM's list of those deleted.
 
 The stack is scanned linearly, from its base to the published top, which three rules make sound:
 
@@ -290,49 +307,161 @@ The stack is scanned linearly, from its base to the published top, which three r
 Under `SHEN_JIT_GC_STRESS` the collector also overwrites where objects were, and new objects go past those words for as long as they
 fit, so that a stale pointer fails at once. `SHEN_JIT_SLOW_PRIMS` compiles every primitive as a call to C, so that `make test-differential` can compare what the JIT inlines with the C versions.
 
-## Threads
+## The builder and isolates
 
-`thread` makes real threads, of which one runs at a time, holding a global lock. A timer asks for a switch every 10 ms if another
-thread is waiting, by the same mechanism as an interrupt: it clears the limit that frames check, so the next function entry or loop check comes to
-the runtime. Each thread has its own guest stack, handlers, C roots, native stack bound and saved error codes, swapped as the lock changes hands.
-A thread about to wait gives the lock up, and a foreign call can too. Waiters are served in order, each woken by its ticket rather than all at
-once, since threads waiting on sockets take the lock often.
+A program runs as isolates over one program: each runs the program's definitions on an OS thread
+of its own, with its own heap, globals and property list, inherits nothing, and talks to others
+only through channels. Only the builder, the isolate a program starts as, defines: it alone
+installs code and records arities, and in any other VM `eval`, `eval-kl`, installing, foreign
+definitions and recording an arity raise an error. Any isolate may give a global its number, as
+below.
 
-`SIGPIPE` has a handler that does nothing, set at startup, so that a write to a closed pipe fails and raises. Being a handler and not `SIG_IGN`,
-exec resets it, and a child finds the default.
+The runtime is split the same way. What every isolate will share is a `Program`: the program space,
+the published symbols, function cells with arities, constant slots, global numbering, and the JIT
+with its native code. A `VM` is one context, pointing at its program: heap, stack, handlers, global
+slots, its own symbols and C roots. Emitted code reads only the context through the
+VM register, and reaches cells and constants at addresses that never move. The program's roots may
+point into one heap, its owner's, the builder's, whose collections alone scan and sweep them.
 
-The first thread has everything compile again on its next call, since loops must then test for a switch, and code compiled before need not have.
-The same goes for the REPL, when it starts catching Ctrl-C.
+What a running program needs without the builder's state is program, outside the heap: code and
+symbols in the program space, arities beside function cells, and global numbers. `fn` makes a
+name's lambda form when first asked, from the arity, and keeps it in the property vector: the
+builder compiles it, as before, and an isolate, which cannot evaluate, makes it from a template
+whose last call reads the name's function cell inline. A primitive's cell holds a definition
+made from a code object at startup, so a template can call primitives too.
 
-### Worker scopes
+An isolate starts as a program does: its globals are unbound, the program's constants are
+put back, the standard streams made, and the port's `shen-jit.start-isolate` sets the run
+state with the kernel's starting values: a new property vector, Prolog's memory and
+counters, the printer's settings, and `gensym` counting from a base of its own, so that
+names made in two isolates never meet.
 
-`thread` shares one VM under a lock. A worker scope (`src/runtime/worker.c`, wrapped by `lib/parallel.shen`) runs
-1 to 64 VMs at once, one per joinable OS thread, each loaded from the same saved image with a heap, globals
-and JIT of its own. No lock is held while Shen code, a collection or a compilation runs; a mutex and a condition
-variable hand work over. Each batch copies one byte request into each worker, calls a named function there, and
-copies the byte slices it returns into the host's heap. A worker keeps its reply rooted and does not run again until
-the host has copied it. No value, closure or address crosses heaps. The scope destroys every VM and joins every
-thread before it returns or raises, also when the host's body or a worker raised: an error stops further batches,
-and the jobs already running finish first. Cancellation is cooperative, through `shen-jit.worker-cancelled?`.
-At shutdown the scope mutex serializes native-code release, avoiding contention in SLJIT's process-wide
-executable allocator. Heap destruction remains parallel.
+**The interface.** The port defines the `isolate` and `channel` namespaces over one primitive,
+`shen-jit.isolate`, which takes an operation's number. Their functions are system functions, as
+the kernel's are, so a namespace leaves them unqualified, and the namespaces publish their
+exports for clients that use a prefix. Their types, declarations and datatypes are Shen source
+that `shen-jit.initialise` evaluates as the image is built, since the tool that compiles the
+port's Shen source takes definitions only; what the datatypes define is left off
+`shen.*userdefs*`.
 
-A scope can own a read-only copy of one byte buffer, at most 64 MiB. `shen-jit.worker-shared-view` gives an
-object of its own type, `T_SHARED_BYTES`, laid out as a pointer, which byte reads and copies accept and stores,
-resizing and foreign-pointer operations refuse. The collector moves the object and never looks at the memory.
-When the scope ends, after every worker is gone, the host's view is cleared before the memory is freed, so a view
-that escaped has length 0, and an image clears it too.
+**Spawning** (`isolate.c`). `isolate.spawn` takes the name of a function of one argument
+whose procedure is in the program space, and a value, which it copies into a fragment: blocks
+outside every heap. The new thread makes a context (`vm_create_context`), with a heap that
+reserves 8 GiB for each region rather than the builder's 64, as reserving and releasing that
+much took most of a spawn, a small stack that grows, and a slot for each global number. It
+starts as above and copies the fragment into its heap.
 
-A worker refuses what belongs to the process: legacy threads, nested scopes, streams (also those an image kept),
-the REPL's handler, saving an executable, exiting and C API procedures. A host refuses legacy threads and
-process-wide profiling during a scope. Plain foreign functions are trusted to be safe on several threads.
+**Copying.** Arguments and messages go through one copier, breadth first as a collection
+copies, out of the sender's heap into a fragment with a table from old addresses to copies
+instead of forwarding pointers, so the sender's objects are untouched and nothing allocates in
+its heap meanwhile; sharing and cycles are kept. Into the receiver's heap, the fragment, which
+is freed next, is forwarded in as a collection forwards, which took a third of the time the
+table did. What lies in the program space crosses by pointer: symbols, constants and the
+program's functions. The receiver makes room for all of it first, so nothing moves while it is
+copied. A byte buffer or string of 256 KB or more, which a fragment keeps in a block of its own,
+is not copied in: the block becomes one of the receiver's large objects as it is, so a big
+message costs one copy, in the sender, and the receiver's collections never copy it. Closures in a heap, streams, pointers, code and the end of a stream are refused. A receive endpoint moves only in a spawn's argument, marked by
+`channel.give`, which hands its channel to the child.
 
-`lib/parallel-map.shen` maps a named unary function over ordinary values on that boundary. Each batch encodes the
-workers' contiguous shards before any runs, and decodes the results in input order. A versioned, bounded codec
-copies numbers with their representation, booleans, strings, symbols, which the receiver interns again, and proper
-lists, and refuses everything else; sharing within a value is not kept. The source-deps example exports its call
-graph once as forward and reverse integer indexes, the scope's shared buffer, and answers reach and impact
-queries with one BFS, sequentially or split between workers.
+**Channels.** A table outside every heap, under the isolates' lock, holds each channel's
+queue of fragments, copied into the receiver's heap as it receives, its receiver, and the
+senders waiting while it is full. An endpoint is an absvector `[Tag Index Generation]`, whose
+tag is a port function that prints it; freeing a channel raises its slot's generation, so a
+stale endpoint raises "channel closed". Generations start from a seed taken from the clock as
+the first isolate starts, so an endpoint or isolate saved in an image matches nothing in the
+next run. At the end of a stream the primitive gives a marker,
+`shen-jit.end-of-stream`, which nothing can send; the port's `channel.receive` turns it into
+"channel closed" and `channel.next` into `[closed]`, and `channel.wait-any`'s `[]` becomes
+`[timeout]`. Each isolate waits on a condition of its own, with a
+time limit for `channel.wait-any`, which looks at several receive endpoints without receiving,
+so that a supervisor can wake for whichever of its connections ends and still look at a socket
+or a clock now and then. A monitor is a channel of capacity 1 that gets `[down I Reason]` when I
+ends, and is closed then, so that what reads it again does not wait for ever; one made while I is
+ending waits for it to have ended, as the isolate counts as running until then. `kill` marks the isolate, which raises "killed", once, at its next channel operation or
+`isolate.check-kill`, even if the kill came before it started, so that its handlers clean up
+what its argument holds, and wakes it if it waits on a channel: an isolate needs no safe points,
+and code compiled for one is what any program runs. What waits on
+something else, as the I/O library's socket waits do in slices of 100 ms, calls
+`isolate.check-kill` between them; in the builder, or before isolates exist, it does nothing. An isolate that
+cannot start, for want of memory for its context, tells its monitors too, with a message laid out by hand, as it has
+no heap to make one in; so does one whose down message cannot be made, and if even that cannot be, the monitor is
+closed, so that nothing waits on it for ever. An isolate that ends first runs, once, what it
+registered with `shen-jit.at-end`; then what it registered with `shen-jit.at-guards-dead`, as the
+handle library's sweep, in rounds: a collection finds dead the guarded pointers nothing reaches, and
+a release may use another handle, which outlives it until that release has run and so dies in a
+later round. Only what dies is released, so always in that order and with the globals a release may
+read still there; what the argument slots of calls to C and the error last caught hold is dead by then,
+and cleared before each round, and rounds go on while a collection finds a guard dead. A
+collection inside a release may find more dead; they stay queued for the next round. What
+its globals still hold is left to the system, as a program's is when it ends. Then it tells its monitors,
+closes its files
+and the channels it receives on, and frees its context; its record keeps why it ended, as a symbol
+or an error's text, so that a monitor that comes after, as one made just after a spawn can, is
+told at once with the same reason, until the record is used again with a new generation. Then,
+or for one that could not start, the reason is `ended`.
+
+**The program is fixed while isolates run.** Defining, foreign definitions and arities are
+refused while an isolate other than the builder has not ended, so nothing patches the code
+isolates run, and the builder never has to stop them. Once they have all ended, the builder
+defines again. The compile lock guards compiling at a first call, the JIT's tables, which
+backtraces read, and the list of native code, which isolates add to; it is recursive, as the
+builder collects while it holds it.
+
+**Symbols.** At the first spawn, the builder's own symbols are published, and from then on every
+symbol is: an isolate interning a name new to the program makes the symbol in the program space,
+with its name, under a lock, so that a name has one symbol in every isolate and symbols cross
+by pointer. The table of published symbols is read without the lock: a lookup reads the
+capacity before the array, which growing stores in the other order, keeps the arrays it
+replaces, and returns the symbol its probe read, so a miss is found again under the lock. No
+symbol is freed once isolates exist, so names that come from outside belong in strings. Any
+isolate may number a global, under the same lock: every VM's slots are committed before the
+symbol shows its number.
+
+**Grammars** compile their loops once the functions their guards call exist, which is after
+the form defining the rule has run: the kernel expands a whole file before it evaluates any of
+it, so a load runs the functions registered with `shen-jit.after-form` after each form, and the
+grammar library compiles there the loops of rules defined so far, and prepares the streaming
+variants of the rules that reads name. Outside a load, it compiles at once. In an isolate, a
+variant is found by its name, and one never prepared is refused.
+
+A function goes to an isolate by its name, a published symbol, and the isolate gets it with
+`fn`; what `fn` makes is a closure in a heap, which does not cross. A foreign function found at
+its first call in one isolate is found for all: they store the same address.
+
+**The HTTP listener** (`lib/http-listener.shen`) is a supervisor in the program that calls
+`http.run`, and an isolate for each connection, given the accepted descriptor, the handler's name
+and its arguments, the request options, a sender to the supervisor's channel, and the receive
+endpoint of a channel of its own, which the supervisor closes to ask it to stop. While there is
+room it polls the listener in slices of 50 ms; otherwise it waits on its channel and the
+connections' monitors. A connection tells it once that it failed, before it ends, and a handler
+once that it asked to stop. Once the grace has passed it kills the connections left, which a
+kill reaches in their next socket wait.
+
+**Shared storage.** `isolate.share` copies a value into a fragment as a send does, refusing
+what a send refuses, then lays the fragment out in one run of the program space, taken and filled
+under the lock that guards making symbols there, which an image's save and the REPL's walk of the
+space hold too, and marks each vector and byte buffer in it shared,
+by bit 7 of its header. Nothing in it points into a heap, so collections neither scan nor move
+it, any isolate reads it by pointer, and an image saves it with the program. Nothing changes
+it: code that stores into a vector or buffer tests the header's whole low byte, which a shared
+one fails, and C refuses it, `shen_vector_set` too, as it refuses changing a dictionary whose
+buckets or entries are shared, even through an unshared copy of its wrapper, while code that reads
+masks the bit out, so neither pays for it. That replaced testing on every store whether the
+address lies in the program space, which would have added the space's bounds, a subtraction and
+a comparison to every store. It is never freed. C given a shared buffer must not write into it.
+
+**Signals.** A Ctrl-C is the builder's: isolates start with SIGINT blocked. Whether loops test for
+an interrupt is the program's, as its code is shared: only code compiled once the REPL catches
+Ctrl-C does, by any isolate, and everything is compiled again then, under the compile lock and the
+lock under which isolates add to the program space, which the walk reads. The builder waits on a
+channel in slices of 50 ms, as a signal handler cannot wake it, and raises "interrupted" between
+them. Isolates read standard input one at a time, through one buffer: the one whose turn it is waits
+for input in slices of 100 ms, between which a kill reaches it, and one waiting for its turn tries
+every 10 ms, so that a Ctrl-C or a kill reaches it too, which waiting on a mutex would not let it. Each REPL input notes how many isolates had been spawned, the count that numbers their
+gensyms, and a Ctrl-C that stops it kills those numbered after. `SIGPIPE` has a handler that does nothing, set at startup, so that a write to a closed pipe
+fails and raises; being a handler and not `SIG_IGN`, exec resets it, and a child finds the default.
+
+**Not yet.** A channel whose receive endpoint is dropped stays until its receiver ends.
 
 ## Calling C
 
@@ -345,23 +474,6 @@ same bounds check and access. A pointer that is dead or has no length has length
 
 ## Datalog
 
-Optional `lib/datalog-parallel.shen` adds an opt-in entry point. It checks for positive scalar rules
-whose derived inputs preserve the head's first-column key, then gives disjoint keys to private worker
-runtimes. Input-only relations are replicated and seeded derived facts are partitioned. Eligibility
-checking returns explicit refusals; unexpected checker or codec errors propagate. Snapshot decoding
-reads shared bytes directly, while decoded values remain private to each worker. Unsupported
-programs and inputs outside the snapshot transport bounds use the sequential evaluator before any
-worker starts. Each child calls the existing Datalog evaluator with an extra key guard on its rules.
-The parent collects packed tuples, translates intern IDs for noninteger columns, and uses the existing
-full-column index kernel to rebuild ordinary insertion tables. Merge histories retain each worker's
-derivation order, offset beyond the parent's initial facts; subsequent parent merges start after them.
-The returned database therefore needs no live worker for queries, explanations, updates or images.
-`datalog.parallel.with-db` instead keeps a read-only view inside the worker scope. Counts use the
-reported cardinalities; membership and selected queries execute in the workers and return owned
-values. A worker retains its owned keys and skips derived-relation queries bound to another key;
-queries with an unbound key still search every shard. This avoids collecting every tuple and rebuilding parent tables. Explicit materialization
-consumes the view and provides the ordinary database; scope exit invalidates any escaped view.
-
 `lib/datalog.shen` is Shen, loaded on request, and the JIT knows nothing of it. A program is checked into relations and rules, and planned: relations
 by strongly connected components in dependency order, and each rule as an order of joins, the atom with the most columns known going next. In a
 recursive component a rule has one variant for each of its atoms in that component, which reads that relation's new tuples and goes first, as a new
@@ -369,6 +481,27 @@ derivation must use a new tuple somewhere. So that a derivation from several new
 the component's atoms before that one read only the old tuples, from before the round's new ones, and those after it read all: a scan stops where
 the new tuples begin, a walk along an index's chain, which runs from the newest, skips those, and a probe of the table ignores them. Join order is chosen as a run goes, from the sizes of the relations, and again when one has doubled: the next atom is the one expected to give the fewest tuples for what is known, from
 an index's tuples per key if it has one, and otherwise as if the columns were alike and independent. Each order becomes code, described below, kept with the program, as a rule has only so many orders.
+
+An isolate cannot compile, so `datalog.share` prepares a program in the builder: a run on no facts with no sizes to go by
+compiles every rule's and variant's plan in that order, every rule's whole plan in it too, and the closures that facts,
+queries and keyed relations call, each a function installed once and taken with `fn`; the program goes out as a shared
+value with every plan made so far, which `datalog.use` puts in an isolate's property list. There a run takes the plan
+the sizes choose if it was made, then the same plan with no sizes, and otherwise the whole rule's, which reads all
+tuples where a variant reads the new ones: all give the same tuples. Queries on columns with no prepared index scan, and
+a query by demand whose program the builder never made runs the whole program. A run in parts gives the keys of a program
+whose rules keep their first column's key to isolates in turn, each running a copy whose rules hold only for its
+keys, and keeps the databases they send back, with their hash tables, which are bytes, and without their indexes,
+which hold closures and are made again by the first query that wants one.
+
+A recursive program that does not run in parts runs its joins in isolates instead: each holds the whole database and
+runs every component, and in each round of a recursive one takes only the new tuples whose next lookup's key columns
+hash to it, by a test on the outer loop of each variant's plan, which the builder makes again for that (`owned`
+sources). Each then sends every other the tuples it derived, as bytes on a channel for each pair, and adds theirs with a
+native loop, so all start the next round with the same tuples, choose the same plans and stop together; the first
+sends its database back. Interned values agree only if no rule makes a string, so such programs run whole. Every
+isolate adds every new tuple, so `run-parallel` uses as many isolates as the program's last run says pay: none
+unless its recursive rounds derived four times the tuples they kept, and only as many as get 50,000 derivations a
+round.
 
 A negated atom counts as a dependency too, so its relation's component comes first, and the checker refuses a program where a relation depends
 on the negation of one in its own component. A negated atom is then a condition, like a comparison, placed as soon as its variables are bound:

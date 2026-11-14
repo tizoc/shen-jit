@@ -212,7 +212,7 @@ stages are terminated/reaped within the same cleanup policy and returned as part
 ## Inheritance and native boundary
 
 POSIX uses `posix_spawn`, never guest-language work in a post-fork child. It unblocks the child's signal
-mask, including SIGINT when called from a Shen worker, and restores SIGINT/SIGPIPE defaults. Runtime
+mask, including SIGINT when called from an isolate, whose thread blocks it, and restores SIGINT/SIGPIPE defaults. Runtime
 file opens and newly created/accepted Linux sockets use atomic close-on-exec. Our file I/O already
 prevents inheritance. macOS spawn closes everything except explicitly established standard streams.
 
@@ -224,7 +224,7 @@ avoid opening an inheritable descriptor after that snapshot. This is not a sandb
 Windows uses `CreateProcessW` with an explicit inherited-handle list. Grouped children are assigned to
 a job atomically through the startup attribute list, before they execute. File/pipe handles never cross
 CRT descriptor tables: native handles stay in the adapter, while our file endpoints retain their own CRT
-ownership. Inputs are copied before releasing the VM lock, and managed results are rooted across GC.
+ownership. Inputs are copied to native storage before the native work, and managed results are rooted across GC.
 
 ## File-filter application
 

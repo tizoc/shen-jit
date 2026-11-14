@@ -32,6 +32,14 @@
 \\ datalog.plans       (datalog.plans Name), the order of each rule's joins and the indexes they use
 \\ datalog.code        (datalog.code Name), the KL those give
 \\ datalog.stats       (datalog.stats Db), rounds, and per relation tuples and derivations
+\\ datalog.share       (datalog.share Name), the program prepared for isolates, which cannot compile,
+\\                     as a shared value
+\\ datalog.use         (datalog.use Shared) in an isolate, which gives the name to run it by
+\\ datalog.run-parallel (datalog.run-parallel N Name Facts), a run in at most N isolates, each for
+\\                     some of the keys, for a program whose rules keep the key of their first column,
+\\                     or sharing the joins of each round of a recursive program
+\\ datalog.partition   (datalog.partition Name), [parts Type Derived], [joins Reason] or
+\\                     [sequential Reason]
 \\
 \\ A column is a symbol, a string or an integer of 32 bits, signed. A variable in a head, a
 \\ comparison or a negated atom must appear in a positive atom of the body, or be bound by =.
@@ -56,18 +64,22 @@
   (import struct defstruct)
   (externals [!= % a absent again aggregate all any assign b band bit-and bit-or bit-xor block
     bor bshl bshr bxor c cat check choice compare count csv d db defdatalog define-native demand
-    e emit eq equivalence exit f fact filter fold for grow i insert integer j k keyed l lattice
-    lookup max mean min n naive new no none ok old p place plans probe program q r record
-    relation replace restart return-word rounds rule s s32 same scan shift-left shift-right
-    shift-right-signed skip start strlen substr t to-number to-string tsv u32 u32! u64 u64! u<
-    unless unpack v var w while word x])
-  (shadow atom? bound? index log2 nth run some? sort subset?)
+    e emit eq equivalence exit f fact filter fold for grow i insert integer j joins k keyed l
+    lattice lookup max mean min n naive new no none normal ok old owned p parallel parts place
+    plans probe program q r record relation replace restart return-word rounds rule s s32 same scan
+    sequential shift-left shift-right shift-right-signed skip start strlen substr t timeout to-number
+    to-string tsv u32 u32! u64 u64! u< unless unpack v var w while word x])
+  (shadow atom? bound? index log2 nth partition run some? sort subset?)
   (export add ask bytes->facts code datalog.count => count datalog.define => define demand-db
     explain holds? match datalog.plans => plans query read-facts relation->bytes
-    datalog.remove => remove run run-naive solve sorted stats tuples write-facts defdatalog)
+    partition datalog.remove => remove run run-naive run-parallel share solve sorted stats tuples use
+    write-facts defdatalog)
 
 (set *adaptive* true)
 (set *plans* 0)
+(set *joined* false)
+(set *round-derivations* 0)
+(set *round-tuples* 0)
 
 \\ ---------------------------------------------------------------------------
 \\ Checking a program.
@@ -562,7 +574,10 @@
 (define forget-code
   Name -> (do (put Name compiled (shen.dict 8))
               (put Name indexes [])
-              (put Name counter 0)))
+              (put Name counter 0)
+              (put Name parallel [])
+              (put Name joined [])
+              (put Name last-run [])))
 
 (define datalog.program
   Name -> (trap-error (get Name datalog.program)
@@ -1267,13 +1282,40 @@
 (eval-kl [defun dict-find [d k] [shen-jit.dict-find d k]])
 (shen.store-arity dict-find 2)
 
-\\ A generated kernel, once, under its name. Kernels depend only on the shape of a tuple.
+\\ A generated kernel, once, under its name. Kernels depend only on the shape of a tuple. An isolate,
+\\ which cannot install one, finds those the builder made as it prepared the program (datalog.share).
 (define kernel
-  Name Make -> (if (cons? (dict-find (value *kernels*) Name))
-                   Name
-                   (do (shen-jit.install-code [defun Name (thaw Make)])
-                       (shen.dict-> (value *kernels*) Name true)
-                       Name)))
+  Name Make -> (cases (cons? (dict-find (value *kernels*) Name)) Name
+                      (and (not (shen-jit.builder?)) (defined? Name))
+                        (do (shen.dict-> (value *kernels*) Name true) Name)
+                      true (do (builder-only Name)
+                               (shen-jit.install-code [defun Name (thaw Make)])
+                               (shen.dict-> (value *kernels*) Name true)
+                               Name)))
+
+(define defined?
+  F -> (trap-error (do (shen-jit.function F) true) (/. E false)))
+
+(define builder-only
+  Name -> (if (shen-jit.builder?)
+              skip
+              (error "datalog: ~A was not prepared: share the program, after running it as it will be run (datalog.share)" Name)))
+
+\\ A closure of a function of Params made once under Name, with its arity, so that fn makes the
+\\ closure, in an isolate too, which finds it made.
+(define made
+  Name Params Body
+  -> (let Known (dict-find (value *kernels*) Name)
+       (if (cons? Known)
+           (tl Known)
+           (let _ (if (and (not (shen-jit.builder?)) (defined? Name))
+                      skip
+                      (do (builder-only Name)
+                          (eval-kl [defun Name Params (thaw Body)])
+                          (shen.store-arity Name (length Params))))
+                F (fn Name)
+                _ (shen.dict-> (value *kernels*) Name F)
+             F))))
 
 (define kernel-name
   Prefix N Keys -> (intern (name-with Keys (cn Prefix (str N)))))
@@ -1859,10 +1901,11 @@
          (map (/. T (value-form T Constants)) Terms) (keyed-mode Rel))]
   [[scan Rel Source Columns] | Steps] [Relations Constants Indexes] Prefix N
   -> (let Stride (stride (arity-in Rel Relations))
-          Start (if (= Source new) [* [<-address r 5] Stride] 0)
+          Start (if (element? Source [new owned]) [* [<-address r 5] Stride] 0)
           End (if (= Source old) [* [<-address r 5] Stride] [* [<-address r 6] Stride])
+          Owned (if (= Source owned) (owned-columns Columns Steps (arity-in Rel Relations)) none)
        [let r [<-address s (relation-slot Rel Relations)]
-         (gen-scan Start End Stride Columns Steps [Relations Constants Indexes] Prefix N)])
+         (gen-scan Start End Stride Owned Columns Steps [Relations Constants Indexes] Prefix N)])
   [[lookup Rel Source Keys Terms Columns] | Steps] [Relations Constants Indexes] Prefix N
   -> (let Forms (map (/. T (value-form T Constants)) Terms)
           Find (find-kernel (arity-in Rel Relations) Keys)
@@ -1906,18 +1949,68 @@
           _ (set *forms* [Form | (value *forms*)])
        [Name List s | Live]))
 
-\\ A loop over the tuples from byte Start to byte End of the relation in r.
+\\ A loop over the tuples from byte Start to byte End of the relation in r, or those of them this
+\\ isolate owns, if Owned gives the columns that decide.
 (define gen-scan
-  Start End Stride Columns Steps Ctx Prefix N
+  Start End Stride Owned Columns Steps Ctx Prefix N
   -> (let Name (loop-name Prefix N)
           Live (loop-live Columns Steps)
-          Body (gen-columns Columns l (nth 2 Ctx) (gen Steps Ctx Prefix (+ N 1)))
+          Inner (gen-columns Columns l (nth 2 Ctx) (gen Steps Ctx Prefix (+ N 1)))
+          Body (if (= Owned none)
+                   Inner
+                   [if [= (owner-of (kl-ops) (owner-hash-form (kl-ops) (/. I (column-form l I)) Owned 0) [value *parts*])
+                          [value *part*]]
+                       Inner
+                       true])
           Form [defun Name [l e b s | Live]
                  [if [< l e]
                      [do Body [Name [+ l Stride] e b s | Live]]
                      true]]
           _ (set *forms* [Form | (value *forms*)])
        [Name Start End [<-address r 2] s | Live]))
+
+\\ Which of the isolates running a program's joins takes a tuple: a multiplicative hash of some of
+\\ its columns, kept to 32 bits, whose top half picks one, as a form of word operations that KL and
+\\ the assembler both read alike. The columns are the keys of the lookup that follows, so that a key's
+\\ tuples go to one isolate, which then reads only its keys' part of what they join with; or all of
+\\ them.
+(define owned-columns
+  Columns Steps Arity -> (let Keys (next-keys Columns Steps)
+                           (if (empty? Keys) (upto 1 Arity) Keys)))
+
+(define next-keys
+  Columns [[lookup _ _ _ Terms _] | _] -> (key-positions Terms Columns)
+  Columns [[filter | _] | Steps] -> (next-keys Columns Steps)
+  _ _ -> [])
+
+(define key-positions
+  [] _ -> []
+  [[var V] | Terms] Columns -> (let I (bound-at V Columns)
+                                 (if (= I none) (key-positions Terms Columns) (adjoin I (key-positions Terms Columns))))
+  [_ | Terms] Columns -> (key-positions Terms Columns))
+
+(define bound-at
+  _ [] -> none
+  V [[bind V I] | _] -> I
+  V [_ | Cs] -> (bound-at V Cs))
+
+(define owner-of
+  [_ _ Shr] Hash Parts -> [Shr [* [Shr Hash 16] Parts] 16])
+
+(define owner-hash-form
+  _ _ [] H -> H
+  [And Xor Shr] Read [I | Is] H
+  -> (owner-hash-form [And Xor Shr] Read Is
+       [And [* (if (= H 0) (Read I) [Xor H (Read I)]) (owner-factor)] 4294967295]))
+
+(define kl-ops
+  -> [shen-jit.bit-and shen-jit.bit-xor shen-jit.shift-right])
+
+(define native-ops
+  -> [bit-and bit-xor shift-right])
+
+(define owner-factor
+  -> 506832829)
 
 \\ The first of a chain's tuples, given as position plus one, from before position Limit: a chain
 \\ runs from the newest.
@@ -2052,9 +2145,9 @@
           _ (put Name counter (+ N 1))
        (cn "datalog." (cn (str Name) (cn ".p" (str N))))))
 
-\\ Generated functions are called from here as closures, which need no arity or lambda table entry.
+\\ Generated functions are called from here as closures, which fn makes once their arity is known.
 (define callable
-  Name -> (eval-kl [lambda x [Name x]]))
+  Name -> (do (shen.store-arity Name 1) (fn Name)))
 
 \\ A kernel's form shows what it was written as; it is installed already.
 (define install
@@ -2068,7 +2161,8 @@
           Entry (dict-find Cache Steps)
        (if (cons? Entry)
            (tl Entry)
-           (let Ctx [Relations Constants (get Name indexes)]
+           (let _ (builder-only (cn (str Name) " plans"))
+                Ctx [Relations Constants (get Name indexes)]
                 _ (set *constructors* (nth 7 (datalog.program Name)))
                 _ (set *keyed* (nth 9 (datalog.program Name)))
                 _ (set *equivalences* (nth 8 (datalog.program Name)))
@@ -2077,7 +2171,7 @@
                 Fn (gen-either Steps Ctx Prefix)
                 Forms (reverse (value *forms*))
                 _ (install Forms)
-                Code [(callable Fn) | Forms]
+                Code [(callable Fn) Fn | Forms]
                 _ (shen.dict-> Cache Steps Code)
              Code))))
 
@@ -2309,16 +2403,19 @@
           Tuples (tuples-param Slot)
           From (if (and (= Outer none) (= Level 1))
                    (param (intern "Start") start)
-                   (param (word-name "From" Level) (if (= Source new) [<-address (record-form Slot) 5] 0)))
+                   (param (word-name "From" Level) (if (element? Source [new owned]) [<-address (record-form Slot) 5] 0)))
           To (if (= Source old)
                  (old-param Slot)
                  (param (word-name "To" Level) [<-address (record-form Slot) 6]))
           P (word-name "P" Level)
           B (word-name "B" Level)
           Cols (native-columns Columns Tuples B Env Constants [])
+          Checks (if (= Source owned)
+                     [(owner-test Tuples B (owned-columns Columns Steps (arity-in Rel Relations))) | (hd (tl Cols))]
+                     (hd (tl Cols)))
        [[for P From To
           [word B [* P Stride]]
-          | (guarded (hd (tl Cols))
+          | (guarded Checks
               (native-steps Steps Ctx (hd Cols) (+ Level 1) (if (and (= Outer none) (= Level 1)) P (outer Outer))))]])
   [[lookup Rel Source Keys Terms Columns] | Steps] [Relations Constants Indexes N] Env Level Outer
   -> (let Ctx [Relations Constants Indexes N]
@@ -2625,6 +2722,12 @@
                 [do | (guarded (hd (tl Cols)) (native-steps Steps Ctx (hd Cols) (+ Level 1) Outer))]
                 [word P [u32 Next [shift-left [- P 1] 2]]]]]))]))
 
+\\ Whether this isolate owns the tuple at B in Tuples, as gen-scan tests it in KL.
+(define owner-test
+  Tuples B Owned -> [= (owner-of (native-ops) (owner-hash-form (native-ops) (/. I (column-word Tuples B I)) Owned 0)
+                                 (param (intern "Parts") [value *parts*]))
+                       (param (intern "Part") [value *part*])])
+
 \\ Statements that run only when these checks hold.
 (define guarded
   [] Statements -> Statements
@@ -2762,6 +2865,7 @@
   [[scan Rel new _] | _] Relations -> [classes.changed-from [<-address [<-address s (relation-slot Rel Relations)] 8]]
                                        where (equivalence? Rel)
   [[scan Rel new _] | _] Relations -> [<-address [<-address s (relation-slot Rel Relations)] 5]
+  [[scan Rel owned _] | _] Relations -> [<-address [<-address s (relation-slot Rel Relations)] 5]
   [[scan _ _ _] | _] _ -> 0
   [[filter | _] | Steps] Relations -> (first-start Steps Relations)
   [[assign | _] | Steps] Relations -> (first-start Steps Relations)
@@ -2788,7 +2892,7 @@
   [Steps | More] Name Relations Constants
   -> (let _ (put Name indexes (steps-indexes Steps Relations (get Name indexes)))
           Code (compiled Name Steps Relations Constants)
-       (append (tl Code) (code-h More Name Relations Constants))))
+       (append (tl (tl Code)) (code-h More Name Relations Constants))))
 
 \\ ---------------------------------------------------------------------------
 \\ Running.
@@ -2849,7 +2953,7 @@
                                     (index-all Slots Rec From To)))
 
 \\ What was added becomes the new tuples. Gives whether there were any.
-\\ Each merge has a number, larger than any before it in this process, and a relation keeps those
+\\ Each merge has a number, larger than any before it in this isolate, and a relation keeps those
 \\ its tuples came in, as [[Number | First] ...], the newest first: a round derives only from tuples
 \\ merged before it, so these order every derivation, which datalog.explain follows.
 (set *merges* 0)
@@ -3026,7 +3130,7 @@
   -> (let X (classes.layout C)
           From (classes.positions C)
           _ (reset-old X (classes.changed-from C) From false)
-          Changed (filter-parts true (map (/. Ms (parts C Ms)) Classes))
+          Changed (filter-parts true (map (/. Ms (class-parts C Ms)) Classes))
           _ (map (/. Ps (map (/. Part (map (/. V (hole C X V)) (tl Part))) (tl Ps))) Changed)
           End (place-classes X Changed From)
           _ ((index-function 5 [1]) (classes.table C) (classes.chains C) X (classes.mask C) From End)
@@ -3038,7 +3142,7 @@
 \\ twice that.
 (define lay-out-all
   C Live
-  -> (let Parts (fold-classes (/. Cell Acc [(parts C (<-address Cell 2)) | Acc]) C [])
+  -> (let Parts (fold-classes (/. Cell Acc [(class-parts C (<-address Cell 2)) | Acc]) C [])
           Changed (filter-parts true Parts)
           Room (datalog.max 16 (* 2 Live))
           X (shen-jit.bytes (* 20 Room))
@@ -3071,7 +3175,7 @@
 
 \\ A class's parts: [Changed [Old Values] ... [new Values]], Old where the class each was in when
 \\ last laid out starts, before X changes.
-(define parts
+(define class-parts
   C Ms -> (let X (classes.layout C)
                Olds (map (/. V (let P (class-position C V) (if (= P 0) new (shen-jit.u32 X (- (* 20 P) 16))))) Ms)
             (cases (not (all-same? (tl Olds) (hd Olds))) [true | (group-parts Olds Ms (shen.dict 8))]
@@ -3167,7 +3271,7 @@
        (if (cons? Known)
            (tl Known)
            (let Find (find-kernel 5 [1])
-                F (eval-kl [lambda c [lambda v [Find [classes.table c] [classes.layout c] [classes.mask c] v]]])
+                F (made Name [c v] (freeze [Find [classes.table c] [classes.layout c] [classes.mask c] v]))
                 _ (shen.dict-> (value *kernels*) Name F)
              F))))
 
@@ -3289,7 +3393,7 @@
 \\ A closure of an index's kernel, for calling it from here.
 (define index-function
   N Keys -> (let K (index-kernel N Keys)
-              (eval-kl [lambda a [lambda b [lambda c [lambda d [lambda e [lambda f [K a b c d e f]]]]]]])))
+              (made (intern (cn "datalog.indexer." (str K))) [a b c d e f] (freeze [K a b c d e f]))))
 
 (define new-index
   N Keys Count
@@ -3323,13 +3427,42 @@
 
 (define first-functions
   [] _ _ -> []
-  [R | Rs] Est Run -> (let F (steps-function (plan-rule R Est) Run)
-                        [F | (first-functions Rs Est Run)]))
+  [R | Rs] Est Run
+  -> (let F (steps-function (prepared-steps (plan-rule R Est) (freeze (plan-rule R [])) (freeze (plan-rule R [])) Run) Run)
+       [F | (first-functions Rs Est Run)]))
 
 (define variant-functions
   [] _ _ -> []
-  [[R P Old] | Vs] Est Run -> (let F (steps-function (plan-variant R P Old Est) Run)
-                            [F | (variant-functions Vs Est Run)]))
+  [[R P Old] | Vs] Est Run
+  -> (let F (steps-function (prepared-steps (joined-steps (plan-variant R P Old Est))
+                                            (freeze (joined-steps (plan-variant R P Old [])))
+                                            (freeze (plan-rule R [])) Run)
+                            Run)
+       [F | (variant-functions Vs Est Run)]))
+
+\\ A variant as an isolate running joins with others takes it: the new tuples it owns.
+(define joined-steps
+  Steps -> (if (value *joined*) (owned-steps Steps) Steps))
+
+(define owned-steps
+  [] -> []
+  [[scan Rel new Columns] | Steps] -> [[scan Rel owned Columns] | Steps]
+  [Step | Steps] -> [Step | (owned-steps Steps)])
+
+\\ An isolate cannot compile, so it takes the plan the sizes choose if the builder compiled it, then
+\\ the same with no sizes to go by, and otherwise the whole rule's plan with none, over all the
+\\ tuples, which the builder always compiled (datalog.share). Any order of a rule's atoms gives the
+\\ same tuples, and so does the whole rule where a variant would read only the new ones, with more
+\\ derivations.
+(define prepared-steps
+  Steps Fixed Whole [Name | _]
+  -> (cases (shen-jit.builder?) Steps
+            (compiled? Name Steps) Steps
+            (compiled? Name (thaw Fixed)) (thaw Fixed)
+            true (thaw Whole)))
+
+(define compiled?
+  Name Steps -> (cons? (dict-find (get Name compiled) Steps)))
 
 \\ Sizes to within a power of two: a new plan when one has moved that far.
 (define signature
@@ -3342,11 +3475,26 @@
   -> (let Now (signature (hd (tl Run)) Run)
           Replan (and (value *adaptive*) (not (= Now Signature)))
           Fs (if Replan (variant-functions Variants (estimator Run) Run) Functions)
+          Before (map (function derivations) Rels)
+          Sizes (sum-sizes Rels 0)
           _ (call-all Fs (nth 4 Run))
+          _ (if (value *joined*) (exchange Rels Run Before) skip)
+          _ (set *round-derivations* (+ (value *round-derivations*) (derived-since Rels Before 0)))
           Any (merge-all Rels false)
+          _ (set *round-tuples* (+ (value *round-tuples*) (- (sum-sizes Rels 0) Sizes)))
        (if Any
            (fixpoint Variants Rels Run Fs Now (+ Rounds 1))
            (+ Rounds 1))))
+
+\\ What a run's rounds of recursive components derived and kept, which joins in isolates share out
+\\ (joins-count); an isolate counts only what it derived, as tuples others derived are added without.
+(define sum-sizes
+  [] N -> N
+  [Rec | Recs] N -> (sum-sizes Recs (+ N (size-of Rec))))
+
+(define derived-since
+  [] [] N -> N
+  [Rec | Recs] [B | Bs] N -> (derived-since Recs Bs (+ N (- (derivations Rec) B))))
 
 (define run-component
   [C First Variants] Run Rounds
@@ -3408,8 +3556,8 @@
          (if (cons? Known)
              (tl Known)
              (let Find (find-kernel N (upto 1 (- N 1)))
-                  F (eval-kl [lambda r [lambda l
-                               [Find [<-address r 8] [<-address r 2] [shen-jit.u32 [<-address r 4] 8] | (list-forms (- N 1) l)]]])
+                  F (made Name [r l]
+                      (freeze [Find [<-address r 8] [<-address r 2] [shen-jit.u32 [<-address r 4] 8] | (list-forms (- N 1) l)]))
                   _ (shen.dict-> (value *kernels*) Name F)
                F))))
 
@@ -3450,7 +3598,7 @@
                  Known (dict-find (value *kernels*) Name)
               (if (cons? Known)
                   (tl Known)
-                  (let F (eval-kl [lambda r [lambda l (insert-form N (list-forms N l) Mode)]])
+                  (let F (made Name [r l] (freeze (insert-form N (list-forms N l) Mode)))
                        _ (shen.dict-> (value *kernels*) Name F)
                     F))))
 
@@ -3460,8 +3608,8 @@
          (if (cons? Known)
              (tl Known)
              (let Find (find-kernel N (upto 1 N))
-                  F (eval-kl [lambda r [lambda l
-                               [Find [<-address r 3] [<-address r 2] [shen-jit.u32 [<-address r 4] 8] | (list-forms N l)]]])
+                  F (made Name [r l]
+                      (freeze [Find [<-address r 3] [<-address r 2] [shen-jit.u32 [<-address r 4] 8] | (list-forms N l)]))
                   _ (shen.dict-> (value *kernels*) Name F)
                F))))
 
@@ -3555,7 +3703,7 @@
          (if (cons? Known)
              (tl Known)
              (let K (intern-kernel N)
-                  F (eval-kl [lambda r [lambda l [K [<-address r 3] [<-address r 2] [<-address r 4] | (list-forms N l)]]])
+                  F (made Name [r l] (freeze [K [<-address r 3] [<-address r 2] [<-address r 4] | (list-forms N l)]))
                   _ (shen.dict-> (value *kernels*) Name F)
                F))))
 
@@ -3682,8 +3830,18 @@
           _ (merge-state S 1 N)
           Run [Name Relations Constants S]
           _ (set *plans* 0)
+          _ (set *round-derivations* 0)
+          _ (set *round-tuples* 0)
           Rounds (run-components (get Name schedule) Run 0)
+          _ (if (empty? Facts) skip (note-run Name Rounds (value *round-derivations*) (value *round-tuples*)))
        [db Name S Interned Rounds (value *plans*) Facts]))
+
+\\ What a program's last run on facts counted, by which datalog.run-parallel judges whether its joins
+\\ pay: its rounds, and the derivations and new tuples of the rounds of its recursive components,
+\\ which are all that joins share out. A run on none, as preparing one for isolates is, tells
+\\ nothing.
+(define note-run
+  Name Rounds Derived Kept -> (put Name last-run [Rounds Derived Kept]))
 
 \\ ---------------------------------------------------------------------------
 \\ Adding facts to a database. The facts go in, and each relation remembers its size before them,
@@ -3696,6 +3854,7 @@
 \\ nothing that changed stays as it is. The database changes in place.
 
 (define add
+  [parts | _] _ -> (only-parts)
   [demand Name Kept] New -> (do (demand-store.facts-> Kept (append (demand-store.facts Kept) New))
                                 (each-kept Kept (/. Db (add Db New)))
                                 [demand Name Kept])
@@ -3836,6 +3995,7 @@
 \\ order, and the rest stay. A fact the database does not have is no change.
 
 (define datalog.remove
+  [parts | _] _ -> (only-parts)
   [demand Name Kept] Gone -> (do (demand-store.facts-> Kept (hd (split-facts (demand-store.facts Kept) (fact-set Gone (shen.dict 8)) [] [])))
                                  (each-kept Kept (/. Db (datalog.remove Db Gone)))
                                  [demand Name Kept])
@@ -3876,6 +4036,7 @@
 
 (define relation-of
   [demand | _] _ -> (only-asked)
+  [parts | _] _ -> (only-parts)
   [db Name S | _] Rel
   -> (let Relations (nth 3 (datalog.program Name))
        (if (cons? (assoc Rel Relations))
@@ -3903,6 +4064,9 @@
 
 (define tuples
   [demand | _] _ -> (only-asked)
+  [parts _ Parts Derived _] Rel -> (if (element? Rel Derived)
+                                       (mapcan (/. D (tuples D Rel)) Parts)
+                                       (tuples (hd Parts) Rel))
   [naive _ Tables] Rel
   -> (let Table (assoc Rel Tables)
        (if (empty? Table) (error "datalog: no relation ~A" Rel) (tl Table)))
@@ -3917,10 +4081,16 @@
 
 (define datalog.count
   [naive | Rest] Rel -> (length (tuples [naive | Rest] Rel))
+  [parts _ Parts Derived _] Rel -> (if (element? Rel Derived)
+                                       (sum-counts Parts Rel 0)
+                                       (datalog.count (hd Parts) Rel))
   Db Rel -> (size-of (relation-of Db Rel)))
 
 (define holds?
   [demand | _] _ -> (only-asked)
+  [parts _ Parts Derived _] [Rel | Values] -> (if (element? Rel Derived)
+                                                  (some-part? Parts [Rel | Values])
+                                                  (holds? (hd Parts) [Rel | Values]))
   [naive | Rest] [Rel | Values] -> (element? Values (tuples [naive | Rest] Rel))
   [db Name S Interned | Rest] [Rel | Values]
   -> (let Rec (relation-of [db Name S Interned | Rest] Rel)
@@ -3932,6 +4102,9 @@
 
 (define match
   [demand Name Kept] Pattern -> (match-demand Name Kept Pattern)
+  [parts _ Parts Derived _] [Rel | Terms] -> (if (element? Rel Derived)
+                                                 (mapcan (/. D (match D [Rel | Terms])) Parts)
+                                                 (match (hd Parts) [Rel | Terms]))
   [db | Rest] [Rel | Terms] -> (match-tuples (tuples-for [db | Rest] Rel Terms) Terms [])
   Db [Rel | Terms] -> (match-tuples (tuples Db Rel) Terms []))
 
@@ -3942,7 +4115,12 @@
   -> (let Keys (key-columns Terms 1 [])
        (cases (or (empty? Keys) (has-classes? (relation-of Db Rel))) (tuples Db Rel)
               (= (length Keys) (length Terms)) (if (holds? Db [Rel | Terms]) [Terms] [])
+              (not (index-ready? Db Rel Keys)) (tuples Db Rel)
               true (tuples-at Db Rel Keys (map (/. K (nth K Terms)) Keys)))))
+
+\\ In an isolate, an index can be started only on columns the builder made one on.
+(define index-ready?
+  [db Name | _] Rel Keys -> (or (shen-jit.builder?) (defined? (index-finder-name (length (types-of Name Rel)) Keys))))
 
 (define match-tuples
   [] _ Acc -> Acc
@@ -3952,6 +4130,7 @@
 \\ Rounds, plans made, and for each relation its tuples, its derivations and its indexes.
 (define stats
   [demand | _] -> (only-asked)
+  [parts | _] -> (only-parts)
   [db Name S _ Rounds Plans | _]
   -> (let Relations (nth 3 (datalog.program Name))
        [[rounds Rounds] [plans Plans]
@@ -3970,6 +4149,7 @@
 
 (define explain
   [demand | _] _ -> (only-asked)
+  [parts | _] _ -> (only-parts)
   [db Name S Interned Rounds Plans Facts] [Rel | Values]
   -> (let Program (datalog.program Name)
           _ (if (cons? (assoc Rel (nth 3 Program))) skip (error "datalog: no relation ~A" Rel))
@@ -4257,9 +4437,20 @@
 
 (define solve
   Name Facts [Rel | Terms]
-  -> (let Asked (asked Name [Rel | Terms])
-          Db (run (hd Asked) [(hd (tl Asked)) | Facts])
-       (match-tuples (tuples Db (hd (tl (tl Asked)))) Terms [])))
+  -> (if (demand-ready? Name [Rel | Terms])
+         (let Asked (asked Name [Rel | Terms])
+              Db (run (hd Asked) [(hd (tl Asked)) | Facts])
+           (match-tuples (tuples Db (hd (tl (tl Asked)))) Terms []))
+         (match (run Name Facts) [Rel | Terms])))
+
+\\ An isolate cannot make the program a query's demand needs, so it has only those the builder made.
+(define demand-ready?
+  Name [Rel | Terms] -> (or (shen-jit.builder?)
+                            (element? (demand-name Name Rel (map (/. T (if (known? T []) b f)) Terms))
+                                      (get Name demands))))
+
+(define demand-name
+  Name Rel Adorn -> (intern (cn (str Name) (cn "@" (str (adorned-name Rel Adorn))))))
 
 \\ For a query: the program rewritten for its adornment, the fact that asks it, and the relation that
 \\ answers.
@@ -4280,6 +4471,12 @@
                   [demand Name (demand-store.make Facts (shen.dict 8))]))
 
 (define match-demand
+  Name Kept [Rel | Terms]
+  -> (let Entry (dict-find (demand-store.dbs Kept) Name)
+          Db (if (cons? Entry) (tl Entry) (run Name (demand-store.facts Kept)))
+          _ (shen.dict-> (demand-store.dbs Kept) Name Db)
+       (match Db [Rel | Terms]))
+     where (not (demand-ready? Name [Rel | Terms]))
   Name Kept [Rel | Terms]
   -> (let Asked (asked Name [Rel | Terms])
           Seed (hd (tl Asked))
@@ -4313,14 +4510,17 @@
        [(tuple-at (<-address Rec 2) (* (- P 1) (<-address Rec 7)) Types Records) | Acc]))
 
 \\ A closure of the find kernel for an index on Keys, given the index, the tuples and the values.
+(define index-finder-name
+  Arity Keys -> (intern (make-string "datalog.index-finder.~A.~A" Arity Keys)))
+
 (define index-finder
   Arity Keys
-  -> (let Name (intern (make-string "datalog.index-finder.~A.~A" Arity Keys))
+  -> (let Name (index-finder-name Arity Keys)
           Known (dict-find (value *kernels*) Name)
        (if (cons? Known)
            (tl Known)
            (let Find (find-kernel Arity Keys)
-                F (eval-kl [lambda i [lambda t [lambda l [Find [index.table i] t [index.mask i] | (list-forms (length Keys) l)]]]])
+                F (made Name [i t l] (freeze [Find [index.table i] t [index.mask i] | (list-forms (length Keys) l)]))
                 _ (shen.dict-> (value *kernels*) Name F)
              F))))
 
@@ -4330,7 +4530,7 @@
 
 (define datalog.demand
   Name Rel Adorn
-  -> (let D (intern (cn (str Name) (cn "@" (str (adorned-name Rel Adorn)))))
+  -> (let D (demand-name Name Rel Adorn)
           Known (get Name demands)
        (if (element? D Known)
            D
@@ -4557,6 +4757,598 @@
   [cons H T] -> [(unbracket-term H) | (unbracket-term T)]
   [X | Xs] -> (map (function unbracket-term) [X | Xs])
   X -> X)
+
+\\ ---------------------------------------------------------------------------
+\\ Isolates. An isolate cannot compile or install, so the builder prepares a program and shares it:
+\\ (datalog.share Name) gives a value outside every heap, which an isolate takes up with
+\\ (datalog.use Shared), which gives the name, after which the rest works there as in the builder.
+\\ Preparing runs the program on no facts with no sizes to go by, which compiles every rule's plan in
+\\ that order, and makes the closures that facts, queries, records and keyed relations call; plans
+\\ the builder made as it ran before come too. An isolate takes the plan the sizes choose if it was
+\\ made, and that order otherwise (prepared-steps); a query by columns no prepared index has reads
+\\ every tuple; and a query by demand the builder did not ask runs the whole program.
+
+(define share
+  Name -> (let _ (prepare-program Name)
+            (isolate.share [datalog-program Name (value *adaptive*) (value *native*)
+                             (map (function program-snapshot) [Name | (all-demands Name)])])))
+
+(define all-demands
+  Name -> (mapcan (/. D [D | (all-demands D)]) (get Name demands)))
+
+(define prepare-program
+  Name -> (let Adaptive (value *adaptive*)
+               _ (shen-jit.finally (freeze (do (set *adaptive* false) (run Name [])))
+                                   (freeze (set *adaptive* Adaptive)))
+               Program (datalog.program Name)
+               Relations (nth 3 Program)
+               _ (map (/. R (prepare-steps Name (plan-rule R []) Relations (nth 5 Program))) (nth 4 Program))
+               _ (prepare-relations Relations (nth 9 Program) (nth 8 Program))
+               _ (map (/. C (prepare-record (nth 6 C))) (nth 7 Program))
+               _ (map (/. E (map (/. Keys (index-finder (arity-in (hd E) Relations) Keys)) (tl E)))
+                      (get Name indexes))
+               _ (map (function prepare-program) (get Name demands))
+            Name))
+
+\\ A plan, with the kernels and closures of the indexes it looks up.
+(define prepare-steps
+  Name Steps Relations Constants
+  -> (do (put Name indexes (steps-indexes Steps Relations (get Name indexes)))
+         (compiled Name Steps Relations Constants)
+         (map (/. Step (let I (step-index Step Relations)
+                         (if (= I none) skip (index-function (arity-in (hd I) Relations) (hd (tl I))))))
+              Steps)))
+
+(define prepare-relations
+  [] _ _ -> true
+  [[Rel | Types] | Rs] Keyed Equivalences
+  -> (let N (length Types)
+          Mode (assoc Rel Keyed)
+          _ (if (> N 0) (finder N) skip)
+          _ (if (empty? Mode) skip (do (key-finder N) (keyed-closure N (tl Mode))))
+          _ (if (element? Rel Equivalences) (do (key-finder-5) (index-function 5 [1])) skip)
+       (prepare-relations Rs Keyed Equivalences)))
+
+(define keyed-closure
+  N [lattice _] -> (adder-for N replace)
+  N Mode -> (adder-for N Mode))
+
+(define prepare-record
+  Width -> (if (> Width 0) (do (interner Width) (finder Width)) skip))
+
+\\ A program: its name, definition, schedule, demand programs, indexes, and plans as [Steps Function
+\\ | Forms].
+(define program-snapshot
+  Name -> (let Cache (get Name compiled)
+            [Name (datalog.program Name) (get Name schedule) (get Name demands) (get Name indexes)
+             (map (/. Steps [Steps | (tl (tl (dict-find Cache Steps)))]) (shen.dict-keys Cache))]))
+
+(define use
+  [datalog-program Name Adaptive Native Programs]
+  -> (do (if (trap-error (do (value *kernels*) true) (/. E false)) skip (isolate-globals))
+         (set *adaptive* Adaptive)
+         (set *native* Native)
+         (map (function use-program) Programs)
+         Name)
+  X -> (error "datalog: ~S is not a shared program" X))
+
+\\ What the library sets as it loads, which an isolate has not got.
+(define isolate-globals
+  -> (do (set *plans* 0)
+         (set *constructors* [])
+         (set *interned-slot* 0)
+         (set *naive-keyed* [])
+         (set *kernels* (shen.dict 8))
+         (set *equivalences* [])
+         (set *keyed* [])
+         (set *fallbacks* 0)
+         (set *labels* 0)
+         (set *made* [])
+         (set *merges* 0)
+         (set *joined* false)
+         (set *round-derivations* 0)
+         (set *round-tuples* 0)
+         (set *fresh* [])))
+
+(define use-program
+  [Name Program Schedule Demands Indexes Plans]
+  -> (do (put Name datalog.program Program)
+         (put Name schedule Schedule)
+         (put Name demands Demands)
+         (put Name indexes Indexes)
+         (put Name counter 0)
+         (put Name compiled (plan-cache Plans (shen.dict 8)))))
+
+(define plan-cache
+  [] Cache -> Cache
+  [[Steps Fn | Forms] | Plans] Cache -> (do (shen.dict-> Cache Steps [(fn Fn) Fn | Forms])
+                                            (plan-cache Plans Cache)))
+
+\\ ---------------------------------------------------------------------------
+\\ Runs in parts. A program can run in parts with no part needing another's tuples when its derived
+\\ relations all have a first column of one type, its key, and each rule gives a head whose key is a
+\\ constant or a variable a body atom reads, and reads derived relations only at that key, with no
+\\ negation, aggregate, record, equivalence or keyed relation. (datalog.run-parallel N Name Facts)
+\\ runs it so in N isolates at most: each runs, for some of the keys, a copy of the program whose
+\\ rules hold only for its keys, on every input fact and the derived facts of its keys, and sends
+\\ back its database, which is bytes but for the indexes it clears, so that nothing is built again.
+\\ What it gives answers datalog.count, holds?, ask, match, tuples and sorted from all the parts, or
+\\ the first for an input relation, which each has whole. A program that cannot run so runs its joins
+\\ in isolates if it can (below), and otherwise as datalog.run does.
+
+(define partition
+  Name -> (let P (datalog.program Name)
+               Relations (nth 3 P)
+               Rules (nth 4 P)
+               Derived (unique (map (/. R (hd (hd R))) Rules) [])
+               Reason (cases (empty? Derived) "no derived relations"
+                             (not (and (empty? (nth 7 P)) (empty? (nth 8 P)) (empty? (nth 9 P))))
+                               "records, equivalences and relations of one tuple a key are not run in parts"
+                             (cons? (assoc part-key Relations)) "part-key is a name of its own"
+                             (not (scalar-relations? Relations)) "only relations of symbols, strings and integers are run in parts"
+                             true [])
+            (if (string? Reason)
+                (joins-or-whole Name Reason)
+                (let Type (hd (tl (assoc (hd Derived) Relations)))
+                     Why (if (same-key-type? Derived Relations Type)
+                             (rules-in-parts Rules Derived Relations Type)
+                             "the derived relations need one key type")
+                  (if (string? Why) (joins-or-whole Name Why) [parts Type Derived])))))
+
+\\ A program that cannot run in parts may run its joins in isolates, and otherwise runs whole.
+(define joins-or-whole
+  Name Why -> (let Not (joins-reason Name) (if (string? Not) [sequential Not] [joins Why])))
+
+(define scalar-relations?
+  [] -> true
+  [[_ | Types] | Rs] -> (and (cons? Types) (scalar-types? Types) (scalar-relations? Rs)))
+
+(define scalar-types?
+  [] -> true
+  [T | Ts] -> (and (element? T [integer symbol string]) (scalar-types? Ts)))
+
+(define same-key-type?
+  [] _ _ -> true
+  [R | Rs] Relations Type -> (and (= (hd (tl (assoc R Relations))) Type) (same-key-type? Rs Relations Type)))
+
+(define rules-in-parts
+  [] _ _ _ -> []
+  [[[_ Key | _] Body] | Rules] Derived Relations Type
+  -> (let Why (if (or (= (value-type Key) Type) (and (key-variable? Key) (read-by? Key Body Relations)))
+                  (body-in-parts Body Key Derived)
+                  "a head's key must be a constant or a variable a body atom reads")
+       (if (string? Why) Why (rules-in-parts Rules Derived Relations Type))))
+
+(define key-variable?
+  [var _] -> true
+  _ -> false)
+
+(define read-by?
+  _ [] _ -> false
+  Key [[Rel | Terms] | Rest] Relations -> (or (and (cons? (assoc Rel Relations)) (element? Key Terms))
+                                              (read-by? Key Rest Relations)))
+
+(define body-in-parts
+  [] _ _ -> []
+  [[Op | Terms] | Rest] Key Derived
+  -> (cases (element? Op [not aggregate]) "negation and aggregates are not run in parts"
+            (and (element? Op Derived) (not (= (hd Terms) Key))) "a derived atom of a body changes the key"
+            true (body-in-parts Rest Key Derived)))
+
+(define run-parallel
+  N _ _ -> (error "datalog.run-parallel: ~S is not a number of isolates" N) where (not (and (integer? N) (> N 0)))
+  N Name Facts -> (let Plan (partition Name)
+                    (cases (= N 1) (run Name Facts)
+                           (= (hd Plan) parts) (run-parts N Name Facts (hd (tl Plan)) (hd (tl (tl Plan))))
+                           (= (hd Plan) joins) (let K (joins-count N Name)
+                                                 (if (< K 2) (run Name Facts) (run-joined K Name Facts)))
+                           true (run Name Facts))))
+
+(define run-parts
+  N Name Facts Type Derived
+  -> (let P (datalog.program Name)
+          _ (map (/. F (check-fact (nth 3 P) [] F)) Facts)
+          Seen (shen.dict 64)
+          Keys (keys-of Facts Type Seen (values-of-type (rule-keys (nth 4 P) Type []) Type Seen []))
+          K (if (< N (length Keys)) N (length Keys))
+       (if (< K 2)
+           (run Name Facts)
+           (let Shared (parts-shared Name Type)
+                Owners (shen.dict 64)
+                _ (own-keys Keys 0 K Owners)
+                Split (split-parts Facts Derived Owners K (part-facts Keys 0 K (absvector K)))
+             [parts Name (part-databases Shared Split K) Derived Facts]))))
+
+(define rule-keys
+  [] _ Acc -> Acc
+  [[[_ Key | _] _] | Rules] Type Acc -> (rule-keys Rules Type (if (= (value-type Key) Type) (adjoin Key Acc) Acc)))
+
+\\ The constants heads have as keys, and every value of the key's type in the facts, once each.
+(define keys-of
+  [] _ _ Acc -> (reverse Acc)
+  [[_ | Values] | Facts] Type Seen Acc -> (keys-of Facts Type Seen (values-of-type Values Type Seen Acc)))
+
+(define values-of-type
+  [] _ _ Acc -> Acc
+  [V | Vs] Type Seen Acc -> (if (and (= (value-type V) Type) (not (cons? (dict-find Seen V))))
+                                (do (shen.dict-> Seen V true) (values-of-type Vs Type Seen [V | Acc]))
+                                (values-of-type Vs Type Seen Acc)))
+
+\\ Keys go to parts in turn.
+(define own-keys
+  [] _ _ _ -> true
+  [Key | Keys] I K Owners -> (do (shen.dict-> Owners Key I) (own-keys Keys (shen.mod (+ I 1) K) K Owners)))
+
+\\ Each part's facts start with its keys, as part-key facts.
+(define part-facts
+  [] _ K Parts -> (fill-empty Parts 0 K)
+  [Key | Keys] I K Parts -> (do (address-> Parts I [[part-key Key] | (part-list Parts I)])
+                                (part-facts Keys (shen.mod (+ I 1) K) K Parts)))
+
+(define part-list
+  Parts I -> (let X (<-address Parts I) (if (cons? X) X [])))
+
+(define fill-empty
+  Parts K K -> Parts
+  Parts I K -> (do (address-> Parts I (part-list Parts I)) (fill-empty Parts (+ I 1) K)))
+
+\\ A derived fact to the part of its key, and an input fact to every part.
+(define split-parts
+  [] _ _ _ Parts -> Parts
+  [[Rel | Values] | Facts] Derived Owners K Parts
+  -> (do (if (element? Rel Derived)
+             (let I (tl (dict-find Owners (hd Values)))
+               (address-> Parts I [[Rel | Values] | (<-address Parts I)]))
+             (every-part Parts 0 K [Rel | Values]))
+         (split-parts Facts Derived Owners K Parts)))
+
+(define every-part
+  _ K K _ -> true
+  Parts I K Fact -> (do (address-> Parts I [Fact | (<-address Parts I)]) (every-part Parts (+ I 1) K Fact)))
+
+\\ The program in parts, defined and shared once for each program.
+(define parts-shared
+  Name Type -> (let Known (get Name parallel)
+                 (if (not (empty? Known))
+                     Known
+                     (let Parts (intern (cn (str Name) "@parts"))
+                          P (datalog.program Name)
+                          _ (datalog.define Parts (parts-items P Type))
+                          Shared (share Parts)
+                          _ (put Name parallel Shared)
+                       Shared))))
+
+(define parts-items
+  [program _ Relations Rules | _] Type
+  -> (append (map (/. R [relation (hd R) (tl R)]) Relations)
+             [[relation part-key [Type]]
+              | (map (/. R [rule (hd R) [[part-key (hd (tl (hd R)))] | (map (function literal->data) (hd (tl R)))]])
+                     Rules)]))
+
+\\ The parts' databases, from an isolate for each part, with a channel for its database and a
+\\ monitor for its end. What spawn-each gives is stored in Cell at once, a store allocating
+\\ nothing, so that whatever fails after it, even making the list, stops the isolates: each is
+\\ killed and waited for, and the replies' channels are closed, some of which the wait closed
+\\ already. If a spawn fails, spawn-each stops those it started. After a Ctrl-C, the REPL kills
+\\ them instead.
+(define part-databases
+  Shared Split K
+  -> (let Replies (part-replies 0 K)
+          Cell (address-> (absvector 1) 0 [])
+       (shen-jit.on-error
+         (freeze (gather-parts (with-replies Replies (started Cell (isolate.spawn-each run-part
+                                                                      (part-args Shared Split Replies 0))))))
+         (freeze (do (isolate.stop-each (<-address Cell 0)) (close-quietly Replies))))))
+
+(define started
+  Cell Started -> (do (address-> Cell 0 Started) Started))
+
+(define part-replies
+  K K -> []
+  I K -> [(channel.new 1) | (part-replies (+ I 1) K)])
+
+(define part-args
+  _ _ [] _ -> []
+  Shared Split [Reply | Replies] I
+  -> [[Shared (<-address Split I) (channel.sender Reply)] | (part-args Shared Split Replies (+ I 1))])
+
+(define with-replies
+  [] [] -> []
+  [Reply | Replies] [[P | Down] | Started] -> [[Reply Down P] | (with-replies Replies Started)])
+
+(define close-quietly
+  [] -> true
+  [E | Endpoints] -> (do (trap-error (channel.close E) (/. X skip)) (close-quietly Endpoints)))
+
+(define run-part
+  [Shared Facts Out] -> (channel.send Out (cleared (run (use Shared) Facts))))
+
+\\ Indexes hold closures, which do not cross, and are made again when a query wants one.
+(define cleared
+  [db Name S | Rest] -> (do (clear-relations S 1 (length (nth 3 (datalog.program Name)))) [db Name S | Rest]))
+
+(define clear-relations
+  S I N -> (if (> I N)
+               S
+               (let Rec (<-address S I)
+                    _ (address-> Rec 1 [])
+                    _ (clear-slots Rec 10 (<-address Rec 0))
+                 (clear-relations S (+ I 1) N))))
+
+(define clear-slots
+  Rec I Room -> (if (>= I Room) Rec (do (address-> Rec I 0) (clear-slots Rec (+ I 1) Room))))
+
+(define gather-parts
+  [] -> []
+  [[Reply Down _] | Rest]
+  -> (let Got (channel.receive-any [Reply Down])
+          End (if (= (hd Got) Reply) (channel.receive Down) (hd (tl Got)))
+          _ (channel.close Reply)
+          _ (channel.close Down)
+          Others (gather-parts Rest)
+       (if (= (hd Got) Reply)
+           [(hd (tl Got)) | Others]
+           (error "datalog: a part ended without its database: ~A" (nth 3 End)))))
+
+(define sum-counts
+  [] _ N -> N
+  [D | Ds] Rel N -> (sum-counts Ds Rel (+ N (datalog.count D Rel))))
+
+(define some-part?
+  [] _ -> false
+  [D | Ds] Fact -> (or (holds? D Fact) (some-part? Ds Fact)))
+
+(define only-parts
+  -> (error "datalog: a database run in parts answers datalog.count, holds?, ask, match, tuples and sorted; datalog.run makes one for the rest"))
+
+\\ ---------------------------------------------------------------------------
+\\ Joins in isolates. A program that cannot run in parts can still share its joins. Each of N
+\\ isolates holds the whole database and runs every component, and in each round of a recursive one
+\\ takes only the new tuples it owns, by a hash of some of their columns (owned-columns), for the
+\\ atom of each variant that reads them; it then sends the tuples it derived to every other, and adds
+\\ theirs, so that all start the next round with the same tuples, if in another order, choose the
+\\ same plans and stop together. The first sends its database back, its indexes cleared. Values are
+\\ interned alike in every isolate as long as no rule makes a string, and only relations of symbols,
+\\ strings and integers, with no equivalences or relations of one tuple a key, are run so: a record
+\\ a rule makes, which no relation can hold, stays in its isolate.
+
+(define joins-reason
+  Name -> (let P (datalog.program Name)
+            (cases (not (and (empty? (nth 8 P)) (empty? (nth 9 P))))
+                     "equivalences and relations of one tuple a key are not run in isolates"
+                   (not (scalar-relations? (nth 3 P))) "only relations of symbols, strings and integers are run in isolates"
+                   (makes-strings? (nth 4 P)) "a rule that makes a string is not run in isolates"
+                   (not (some? (/. C (cons? (nth 3 C))) (get Name schedule))) "no rule is recursive"
+                   true [])))
+
+(define makes-strings?
+  [X | _] -> true where (element? X [cat substr to-string])
+  [X | Y] -> (or (makes-strings? X) (makes-strings? Y))
+  _ -> false)
+
+(define run-joined
+  N Name Facts
+  -> (let Shared (joins-shared Name)
+          Grid (join-grid 0 N (absvector N))
+          Reply (channel.new N)
+          Cell (address-> (absvector 1) 0 [])
+          Got (shen-jit.on-error
+                (freeze (let Isolates (started Cell (isolate.spawn-each join-isolate
+                                                      (joined-args Shared Facts Grid (channel.sender Reply) 0 N)))
+                          (gather-joined Reply (map (function tl) Isolates) (map (function hd) Isolates) [] [])))
+                (freeze (do (isolate.stop-each (<-address Cell 0))
+                            (close-quietly [Reply | (grid-channels Grid 0 0 N)]))))
+          _ (channel.close Reply)
+       (joined-db Got Facts)))
+
+\\ The first isolate's database, with the facts, every isolate's derivations in rounds, and merges
+\\ numbered past its own.
+(define joined-db
+  Got Facts -> (let First (first-part Got)
+                    Db (nth 5 First)
+                    _ (map (/. G (if (= (hd G) 0) skip (add-derived (nth 3 Db) 1 (nth 2 G)))) Got)
+                    _ (if (> (nth 3 First) (value *merges*)) (set *merges* (nth 3 First)) skip)
+                    _ (if (empty? Facts)
+                          skip
+                          (note-run (nth 2 Db) (nth 5 Db) (sum-rounds Got 0) (tl (nth 4 First))))
+                 (with-facts Db Facts)))
+
+\\ Every isolate's derivations in rounds; the tuples they kept, each isolate has all of.
+(define sum-rounds
+  [] N -> N
+  [G | Got] N -> (sum-rounds Got (+ N (hd (nth 4 G)))))
+
+\\ How many isolates a program's joins keep busy, by its last run: none unless its recursive rounds
+\\ derived four times the tuples they kept, as every isolate adds every new tuple, and only as many
+\\ as take 50,000 derivations a round each, as each round's exchange costs more with each isolate. N
+\\ with no run to go by.
+(define joins-count
+  N Name -> (let Last (trap-error (get Name last-run) (/. E []))
+              (if (empty? Last)
+                  N
+                  (let Rounds (if (> (hd Last) 0) (hd Last) 1)
+                       Derived (hd (tl Last))
+                    (if (< Derived (* 4 (hd (tl (tl Last)))))
+                        1
+                        (busy-count N (* Rounds 50000) Derived))))))
+
+(define busy-count
+  1 _ _ -> 1
+  N Each Derived -> (if (<= (* N Each) Derived) N (busy-count (- N 1) Each Derived)))
+
+(define with-facts
+  [db Name S Interned Rounds Plans _] Facts -> [db Name S Interned Rounds Plans Facts])
+
+(define first-part
+  [[0 | Rest] | _] -> [0 | Rest]
+  [_ | Got] -> (first-part Got))
+
+(define add-derived
+  _ _ [] -> true
+  S I [D | Ds] -> (let Meta (<-address (<-address S I) 4)
+                    (do (shen-jit.s64! Meta 24 (+ D (shen-jit.s64 Meta 24))) (add-derived S (+ I 1) Ds))))
+
+(define derivations
+  Rec -> (shen-jit.s64 (<-address Rec 4) 24))
+
+\\ The program prepared as for any isolate, with each variant's plan made again to read only the new
+\\ tuples an isolate owns, and the closures that add what others derived. Shared again only when there
+\\ are new plans.
+(define joins-shared
+  Name -> (let Known (get Name joined)
+            (if (and (cons? Known) (= (hd Known) (shen.dict-count (get Name compiled))))
+                (tl Known)
+                (let _ (prepare-program Name)
+                     Program (datalog.program Name)
+                     Relations (nth 3 Program)
+                     _ (map (/. Steps (let Owned (owned-steps Steps)
+                                        (if (= Owned Steps) skip (prepare-steps Name Owned Relations (nth 5 Program)))))
+                            (shen.dict-keys (get Name compiled)))
+                     _ (map (/. R (bulker (length (tl R)))) Relations)
+                     Shared (share Name)
+                     _ (put Name joined [(shen.dict-count (get Name compiled)) | Shared])
+                  Shared))))
+
+\\ A channel for each isolate from each other, Grid's row J holding those J reads.
+(define join-grid
+  N N Grid -> Grid
+  J N Grid -> (do (address-> Grid J (join-row 0 J N (absvector N))) (join-grid (+ J 1) N Grid)))
+
+\\ The grid's channels, for a run that fails: those given to isolates it started are theirs, and
+\\ end with them, and closing one raises, which close-quietly drops.
+(define grid-channels
+  _ N _ N -> []
+  Grid J N N -> (grid-channels Grid (+ J 1) 0 N)
+  Grid J I N -> (let C (<-address (<-address Grid J) I)
+                  (if (= C none) (grid-channels Grid J (+ I 1) N) [C | (grid-channels Grid J (+ I 1) N)])))
+
+(define join-row
+  N _ N Row -> Row
+  I J N Row -> (do (address-> Row I (if (= I J) none (channel.new 2))) (join-row (+ I 1) J N Row)))
+
+(define others
+  F N N _ -> []
+  F I N J -> (if (= I J) (others F (+ I 1) N J) [(F I) | (others F (+ I 1) N J)]))
+
+\\ Each isolate's argument: the channels it reads, from each other, and those it sends on.
+(define joined-args
+  _ _ _ _ N N -> []
+  Shared Facts Grid Reply J N
+  -> [[Shared Facts J N (others (/. I (channel.give (<-address (<-address Grid J) I))) 0 N J)
+       (others (/. I (channel.sender (<-address (<-address Grid I) J))) 0 N J) Reply]
+      | (joined-args Shared Facts Grid Reply (+ J 1) N)])
+
+(define join-isolate
+  [Shared Facts J N Ins Outs Reply]
+  -> (let Name (use Shared)
+          _ (set *part* J)
+          _ (set *parts* N)
+          _ (set *peers* [Ins | Outs])
+          Relations (nth 3 (datalog.program Name))
+          _ (set *derived* (vector (length Relations)))
+          _ (map (/. I (vector-> (value *derived*) I 0)) (upto 1 (length Relations)))
+          _ (set *joined* true)
+          Db (run Name Facts)
+       (channel.send Reply [J (map (/. I (<-vector (value *derived*) I)) (upto 1 (length Relations))) (value *merges*)
+                             [(value *round-derivations*) | (value *round-tuples*)]
+                             (if (= J 0) (cleared (with-facts Db [])) [])])))
+
+\\ What each isolate sent, once every one has ended; or the first error one raised, the others
+\\ killed, as they would wait for it. One whose reply came did its part, whatever its monitor says:
+\\ one that ended before its monitor was made, its record then taken by another spawn, is told
+\\ `ended`. Its reply is here by then, as it sent it before ending and the receive takes Reply first.
+(define gather-joined
+  Reply [] _ Got Failure -> (drain-joined Reply Got Failure)
+  Reply Monitors Isolates Got Failure
+  -> (let Next (channel.receive-any [Reply | Monitors])
+          From (hd Next)
+       (if (= From Reply)
+           (gather-joined Reply Monitors Isolates [(hd (tl Next)) | Got] Failure)
+           (let Down (hd (tl Next))
+                Reason (nth 3 Down)
+                _ (channel.close From)
+                Failed (and (empty? Failure) (not (= Reason normal)) (not (replied? (position (nth 2 Down) Isolates 0) Got)))
+                _ (if Failed (map (/. P (trap-error (isolate.kill P) (/. E skip))) Isolates) skip)
+             (gather-joined Reply (remove From Monitors) Isolates Got (if Failed [Reason] Failure))))))
+
+(define replied?
+  J Got -> (some? (/. G (= (hd G) J)) Got))
+
+(define drain-joined
+  Reply Got [] -> (if (= (channel.wait-any [Reply] 0) [timeout]) Got (drain-joined Reply [(channel.receive Reply) | Got] []))
+  _ _ [Reason] -> (if (string? Reason) (simple-error Reason) (error "datalog: an isolate running joins ended: ~S" Reason)))
+
+\\ In an isolate running joins, at the end of a round: the tuples it derived go to every other, and
+\\ theirs come in, each relation's as bytes.
+(define exchange
+  Rels Run Before -> (let Mine (map (function since-merge) Rels)
+                          Peers (value *peers*)
+                          _ (map (/. Out (channel.send Out Mine)) (tl Peers))
+                          _ (count-derived Rels Before Run)
+                          _ (map (/. In (add-tuples Rels (channel.receive In) Run)) (hd Peers))
+                       true))
+
+(define count-derived
+  [] [] _ -> true
+  [Rec | Recs] [B | Bs] [Name Relations Constants S]
+  -> (let I (record-slot Rec S 1)
+          _ (vector-> (value *derived*) I (+ (<-vector (value *derived*) I) (- (derivations Rec) B)))
+       (count-derived Recs Bs [Name Relations Constants S])))
+
+(define since-merge
+  Rec -> (let From (* (<-address Rec 6) (<-address Rec 7))
+              Size (- (* (count-of Rec) (<-address Rec 7)) From)
+           (shen-jit.copy-bytes (shen-jit.bytes Size) 0 (<-address Rec 2) From Size)))
+
+(define add-tuples
+  [] [] _ -> true
+  [Rec | Recs] [Bytes | More] Run
+  -> (do ((bulker (record-arity Rec Run)) Rec Bytes 0 (/ (shen-jit.bytes-length Bytes) (<-address Rec 7)))
+         (add-tuples Recs More Run)))
+
+(define record-arity
+  Rec [_ Relations _ S] -> (length (tl (nth (record-slot Rec S 1) Relations))))
+
+(define record-slot
+  Rec S I -> (if (shen-jit.same? (<-address S I) Rec) I (record-slot Rec S (+ I 1))))
+
+\\ A closure adding the tuples of N columns in bytes b, from position l to e, to the relation in r.
+(define bulker
+  N -> (let Name (intern (cn "datalog.bulk." (str N)))
+         (made Name [r b l e]
+           (freeze [let x [(bulk-kernel N) [<-address r 3] [<-address r 2] [<-address r 4] b l e]
+                     [if [= x 0] true [do [datalog.grow r] [Name r b [- x 1] e]]]]))))
+
+\\ Adds the tuples of N columns at positions From to To of Bytes, as datalog.insert-kernel adds one,
+\\ but for counting no derivation: 0 once all are in, or the position at which there was no room,
+\\ plus one. The columns are read where used, so that its registers do not grow with N.
+(define bulk-kernel
+  N -> (kernel (kernel-name "datalog.k.bulk." N []) (freeze (bulk-code N))))
+
+(define bulk-code
+  N -> (let Cols (map (/. I [u32 (protect Bytes) (offset-form (protect B) (* 4 (- I 1)))]) (upto 1 N))
+         (shen-jit.assemble (kernel-name "datalog.k.bulk." N [])
+           [(protect Table) (protect Tuples) (protect Meta) (protect Bytes) (protect From) (protect To)]
+           (append (hash-setup)
+             [[for (protect Q) (protect From) (protect To)
+                [word (protect B) [* (protect Q) (stride N)]]
+                [word (protect Count) [u64 (protect Meta) 0]]
+                [word (protect Fp) [shift-right (hash-form Cols) 32]]
+                [word (protect I) [bit-and (protect Fp) [u64 (protect Meta) 8]]]
+                [while insert true
+                  [word (protect E) [u64 (protect Table) [shift-left (protect I) 3]]]
+                  [when [= (protect E) 0]
+                    [unless [< (protect Count) [u64 (protect Meta) 16]] [return-word [+ (protect Q) 1]]]
+                    [u64! (protect Table) [shift-left (protect I) 3] [bit-or [shift-left (protect Fp) 32] [+ (protect Count) 1]]]
+                    [word (protect P) [* (protect Count) (stride N)]]
+                    [do | (store-columns Cols 0)]
+                    [u64! (protect Meta) 0 [+ (protect Count) 1]]
+                    [exit insert]]
+                  [when [= [shift-right (protect E) 32] (protect Fp)]
+                    [word (protect P) [* [- [bit-and (protect E) 4294967295] 1] (stride N)]]
+                    [when [and | (same-columns Cols 0)] [exit insert]]]
+                  [word (protect I) [bit-and [+ (protect I) 1] [u64 (protect Meta) 8]]]]]
+              [return-word 0]]))))
 
 \\ A form building the data, with variables as [var "X"] and _ as [any]: left as they are they
 \\ would be read as Shen's own variables.

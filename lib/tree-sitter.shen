@@ -97,7 +97,8 @@
   Op Resource Exception ->
     [error (treesitter.error Op foreign 0 0 Resource (error-to-string Exception))])
 
-\\ A language stores its FFI entry name, not a native address. It reopens correctly in saved images.
+\\ A language stores its FFI entry name, not a native address. It reopens correctly in saved images,
+\\ and crosses to isolates, which call the entry by its name, as they cannot evaluate.
 (defstruct lang
   name
   entry
@@ -114,7 +115,7 @@
          _ (shen-jit.ffi.define Function Function Entry [] pointer false 0)
       (trap-error
         (do (abi)
-            (let Raw (c-language (eval-kl [Function]))
+            (let Raw (c-language (shen-jit.apply Function []))
               (if (number? Raw)
                   [ok (lang.make Name Function Raw)]
                   (native-error load-language Name Raw))))
@@ -196,7 +197,7 @@
                    Op (if (= Query []) parse query)
                 (trap-error
                   (do (abi)
-                      (let Raw (c-parse (eval-kl [(lang.entry Language)])
+                      (let Raw (c-parse (shen-jit.apply (lang.entry Language) [])
                                   (record [(buffer.owner View) (buffer.offset View)
                                                       N Query Config]))
                         (if (number? (<-address Raw 0))

@@ -58,20 +58,24 @@ a constraint or other database failure produces the HTTP driver's empty 500 resp
 The list limit is fixed; this example does not implement pagination.
 
 HTTP/1.1 connections can serve up to 100 sequential requests, with a 5-second idle limit and a
-60-second total lifetime. Each request still opens its own database connection. The NDJSON source owns
+60-second total lifetime. Each connection runs in an isolate of its own, up to the listener's
+`max-connections`. The database belongs to one isolate, which holds it open while the server runs and does each
+request's work in turn: a handler sends it a job and waits for the result, so writers never wait in SQLite's busy
+handler, whose retries sleep a millisecond or more. The database keeps a write-ahead log (`counters.db-wal` and
+`counters.db-shm` beside it), so that an export reads through a connection of its own without holding writes back,
+and the owning isolate keeps the log between requests. The NDJSON source owns
 its prepared SELECT and database until completion/disconnect. It batches rows under both a 16 KiB cap
 and the sender's chunk bound, holding one encoded row and one output batch. It checks the total 5-second
-write budget while assembling batches; even a one-byte chunk bound preserves every row and newline. A slow export can hold a
-SQLite read lock until that budget is observed; this small example does not enable WAL or implement
-pagination. Streaming storage and database lifetimes remain bounded by the row/output/time limits.
+write budget while assembling batches; even a one-byte chunk bound preserves every row and newline. A slow export
+keeps its read snapshot until that budget is observed, without holding writers back, though the log cannot be
+checkpointed past it meanwhile; this small example does not implement pagination. Streaming storage and database lifetimes remain bounded by the row/output/time limits.
 
 ## Shutdown
 
-Use `POST /shutdown` for controlled shutdown of the runnable example. The main task notices the flag
-within its 100 ms wait loop, calls `http.stop`, then waits for all workers to clean up. The listener stops
-admitting connections; active work gets a grace period, after which blocked socket I/O is cancelled.
-SQLite calls already in progress finish under SQLite's configured busy timeout. Ordinary errors during
-the main wait also request shutdown and wait before being raised again.
+Use `POST /shutdown` for controlled shutdown of the runnable example. Its handler calls
+`(http.stop (http.current-server))`, the response is written, and the listener closes. Active work gets the
+listener's grace period, after which the connections left are killed at their next socket wait, and
+`http.run` returns. SQLite calls already in progress finish under SQLite's busy timeout.
 
 Scripts currently receive Ctrl-C as process termination. It does not invoke this application's graceful
 stop path. Catchable interruption at the REPL has different semantics. Signal-driven service shutdown
@@ -81,8 +85,12 @@ would need separate runtime/library support; this example uses an explicit appli
 
 `main.shen` holds the routes, database scopes, startup and shutdown. `run.shen` loads their public
 dependencies and passes the command-line arguments. Applications can instead load `main.shen` and call
-`counter-app.start Path Host Port Options`, which returns an `http.server`; its caller controls shutdown
-with `http.stop` and `http.wait`. The `/shutdown` control route is supplied by `counter-app.run`.
+`(counter-app.start Path Host Port F Options)`, which starts the database's owner and a server whose handler is `F`,
+called with `Db`, what reaches the owning isolate, and the request, such as `counter-app.handle`: a handler runs in an
+isolate of its connection's, which inherits no globals. If it fails, it ends the owning isolate and closes the
+server it made. It gives `[Owner S]`, which the caller serves with
+`(counter-app.await Owner S)` until it is stopped, which then ends the owning isolate. The `/shutdown` control route
+is supplied by `counter-app.run`.
 
 ```sh
 python3 example-apps/sqlite-http/test.py build/shen-jit
@@ -90,10 +98,11 @@ make test-http
 ```
 
 The independent Python test uses temporary files, HTTP clients and SQLite to check routes, HEAD,
-malformed input, parameter handling, JSON PUT bodies, 32 concurrent increments, persistence across restart
-streaming NDJSON and repeated requests on the same socket,
-and shutdown with stalled fixed-body and chunk-extension input. It also launches `run.shen` and exercises its shutdown command. `make test-http`
+malformed input, parameter handling, JSON PUT bodies, 32 concurrent increments, persistence across restart,
+streaming NDJSON, repeated requests on the same socket, and shutdown with stalled fixed-body and
+chunk-extension input. It also launches `run.shen` and exercises its shutdown command with a stalled
+connection open. `make test-http`
 runs the Shen regression tests on supported platforms, including static-build skips for native parts.
 
-The [bounded server reference](../../docs/http-listener.md) documents the reusable API and ownership
+The [HTTP servers reference](../../docs/http-listener.md) documents the reusable API and ownership
 rules. The application has no C code, private runtime calls, external web framework or kernel-stream I/O.

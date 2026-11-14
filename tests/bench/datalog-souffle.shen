@@ -104,7 +104,26 @@
           Best (sf.best Name Facts 3 1000000)
           Db (datalog.run Name Facts)
           _ (sf.results Dir Db Relations)
-       (output "OURS ~A ~A~%" Tag (db.ms Best))))
+          _ (output "OURS ~A ~A~%" Tag (db.ms Best))
+          N (value sf.*parallel*)
+       (if (> N 1)
+           (let _ (datalog.run-parallel N Name Facts)
+                Parallel (sf.best-parallel N Name Facts 3 1000000)
+             (output "PARALLEL ~A ~A ~A~%" Tag (db.ms Parallel)
+                     (if (= (sf.all-sorted (datalog.run-parallel N Name Facts) Relations) (sf.all-sorted Db Relations))
+                         same
+                         differ)))
+           skip)))
+
+(define sf.best-parallel
+  N Name Facts 0 Best -> Best
+  N Name Facts K Best -> (let T (fst (db.seconds (freeze (datalog.run-parallel N Name Facts))))
+                           (sf.best-parallel N Name Facts (- K 1) (if (< T Best) T Best))))
+
+(define sf.all-sorted
+  Db Relations -> (map (/. R (datalog.sorted Db (hd R))) Relations))
+
+(set sf.*parallel* 0)
 
 (define sf.points-to
   Base Tag Items Facts

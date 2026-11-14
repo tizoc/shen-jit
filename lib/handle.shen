@@ -15,9 +15,12 @@
 \\   (handle.sweep)           runs it for each handle that has died, and gives how many.
 \\
 \\ Release runs in the next call to handle.wrap or handle.sweep after a collection that finds the
-\\ handle dead, on whichever thread that is. A program that stops making handles and never calls
-\\ handle.sweep leaves the rest to the system when it ends. An error from Release raises in
-\\ handle.close and is dropped in handle.sweep, which has no caller to tell.
+\\ handle dead, in whichever isolate that is, and as an isolate ends for each of its handles that
+\\ dies then, as a server's connection's do. A program that stops making handles and never calls
+\\ handle.sweep leaves the rest to the system when it ends, as does an isolate for handles its
+\\ globals still hold: close those before it ends.
+\\ An error from Release raises in handle.close and is dropped in handle.sweep, which has no caller
+\\ to tell.
 \\
 \\ A copy from shen-jit.pointer-sized keeps its handle alive, unless the handle is closed: it must
 \\ not be used after that. Release must not refer to the handle, or the handle will never die. It
@@ -36,19 +39,32 @@
 (set *held* 0)
 (set *limit* 67108864)
 
+\\ Each isolate counts its own, from nothing, as an isolate inherits no globals.
+(define held
+  -> (trap-error (value *held*) (/. E 0)))
+
+(define held-limit
+  -> (trap-error (value *limit*) (/. E 67108864)))
+
 (define wrap
   M Release -> (let Record (absvector 2)
                     _ (address-> (address-> Record 0 M) 1 Release)
                     Handle (shen-jit.pointer-guard M Record)
-                 (do (set *held* (+ (value *held*) (shen-jit.bytes-length M)))
+                 (do (set *held* (+ (held) (shen-jit.bytes-length M)))
+                     (sweep-at-end)
                      (make-room)
                      Handle)))
 
+\\ An isolate that has made a handle sweeps as it ends, in rounds as its guards die, so that a release
+\\ that uses another handle runs before that one's.
+(define sweep-at-end
+  -> (if (trap-error (value *at-end*) (/. E false)) true (do (shen-jit.at-guards-dead sweep) (set *at-end* true))))
+
 (define make-room
-  -> (if (> (value *held*) (value *limit*))
+  -> (if (> (held) (held-limit))
          (do (shen-jit.collect)
              (sweep)
-             (set *limit* (larger 67108864 (* 2 (value *held*)))))
+             (set *limit* (larger 67108864 (* 2 (held)))))
          (sweep)))
 
 (define larger
@@ -61,7 +77,7 @@
                   false
                   (let M (<-address Record 0)
                     (do (address-> Record 1 closed)
-                        (set *held* (- (value *held*) (shen-jit.bytes-length M)))
+                        (set *held* (- (held) (shen-jit.bytes-length M)))
                         (Release M)
                         true)))))
 

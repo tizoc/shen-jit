@@ -108,21 +108,31 @@
            (freeze (= Wait [pending])))))
   [1 2 3 4 5 6])
 
-(let Cancel (io.record [false])
-     _ (thread (freeze (do (process.c-pause [] 40) (address-> Cancel 0 true))))
+\\ The thunk turns true only after the child has started, so the wait must keep polling it.
+(let Expiry (clock.deadline 40)
      Result (process-test.run ["hold" "10000"] (buffer.new 0)
-               [[cancel (freeze (<-address Cancel 0))] [terminate-grace 0]])
-  (process-test.check "cooperative cancellation is observed from another task" cancelled
+               [[cancel (freeze (deadline.expired? Expiry))] [terminate-grace 0]])
+  (process-test.check "cooperative cancellation is observed while the child runs" cancelled
     (freeze (io.error-domain (process-test.error Result)))))
 
+\\ An isolate's thread blocks SIGINT, which a child it spawns must not inherit.
+(define process-stream.signals
+  [Helper Out] ->
+    (channel.send Out
+      (trap-error
+        (let Bytes (process.output-bytes
+                     (process-test.ok (process.run Helper ["signals"] (buffer.new 0) [])))
+          [(process-test.u32 Bytes 0) (process-test.u32 Bytes 4)])
+        (/. E [raised (error-to-string E)]))))
+
 (if (io.file-windows?) skip
-    (let Done (io.record [[]])
-         _ (thread (freeze (address-> Done 0 (process-test.run ["signals"] (buffer.new 0) []))))
-         _ (process-test.join Done 200)
-         Report (process-test.ok (<-address Done 0))
-      (do (process-test.check "worker-spawned child does not inherit blocked SIGINT" 0
-            (freeze (process-test.u32 (process.output-bytes Report) 0)))
+    (let Replies (channel.new 1)
+         _ (isolate.spawn process-stream.signals
+             [(value process-test.helper) (channel.sender Replies)])
+         Report (channel.receive Replies)
+      (do (process-test.check "isolate-spawned child does not inherit blocked SIGINT" 0
+            (freeze (hd Report)))
           (process-test.check "child receives default SIGPIPE" 1
-            (freeze (process-test.u32 (process.output-bytes Report) 4))))))
+            (freeze (hd (tl Report)))))))
 
 (output "~A passed, ~A failed~%" (value process-test.passed) (value process-test.failed))

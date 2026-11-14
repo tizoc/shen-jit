@@ -14,7 +14,7 @@ local PAGES = {
   io = 'Chunk I/O',
   fs = 'Filesystem operations',
   processes = 'Subprocesses and pipelines',
-  parallel = 'Structured workers',
+  parallel = 'Parallel map',
   ['tree-sitter'] = 'Tree-sitter bindings',
   framing = 'Binary framing',
   ['io-sockets'] = 'Socket I/O endpoints',
@@ -22,16 +22,16 @@ local PAGES = {
   ['http-head'] = 'HTTP head framing',
   http = 'HTTP requests and responses',
   ['http-streaming'] = 'Streaming HTTP responses',
-  ['http-listener'] = 'Bounded HTTP servers',
+  ['http-listener'] = 'HTTP servers',
   json = 'JSON',
   datalog = 'Datalog',
   curl = 'HTTP clients with libcurl',
 }
 local REPOSITORY = 'https://github.com/tizoc/shen-jit/blob/main/'
 
--- A link to a document with a page goes there, and any other into the repository goes to GitHub, as
--- the page is not next to it. A document's own links are relative to docs/, and the guide's are
--- to GitHub, so that each also works where it is read in the repository.
+-- A link to a document with a page goes there, the guide's being index.html, and any other into the
+-- repository goes to GitHub, as the page is not next to it. A document's own links are relative to
+-- docs/, and the guide's are to GitHub, so that each also works where it is read in the repository.
 function Link(link)
   local path, fragment = link.target:match('^([^#]*)(#?.*)$')
   if path == '' then return nil end
@@ -45,7 +45,9 @@ function Link(link)
     path = 'docs/' .. path
   end
   local page = path:match('^docs/([%w-]+)%.md$')
-  if page and PAGES[page] then
+  if page == 'guide' then
+    link.target = 'index.html' .. fragment
+  elseif page and PAGES[page] then
     link.target = page .. '.html' .. fragment
     local text = pandoc.utils.stringify(link.content)
     if text == page .. '.md' or text == path then

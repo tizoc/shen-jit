@@ -12,9 +12,6 @@
 (define listener-test.raises?
   F -> (trap-error (do (thaw F) false) (/. X true)))
 
-(define listener-test.handler
-  Q -> (http.response 200 [] (buffer.from-string "ok")))
-
 (define listener-test.available
   -> (trap-error (do (clock.monotonic) true)
        (/. X (if (= (error-to-string X) "foreign: this static build cannot load libraries")
@@ -24,54 +21,81 @@
     (do (output "0 passed, 0 failed (static build: native listener unavailable)~%") (shen-jit.exit 0)))
 
 (define listener-test.listen
-  Options -> (http.listen "127.0.0.1" 0 (function listener-test.handler) Options))
+  Options -> (http.listen "127.0.0.1" 0 listener-test.handler Options))
 
 (define listener-test.client
   S -> (socket.connect "127.0.0.1" (http.port S)))
 
-(define listener-test.wait-active
-  S N D ->
-    (cond ((= (hd (http.stats S)) N) true)
-          ((deadline.expired? D) (error "listener did not reach expected active count"))
-          (true (do (http.pause 10) (listener-test.wait-active S N D)))))
+(define listener-test.two
+  X Q -> Q)
 
-(define listener-test.wait-cell
-  Cell D ->
-    (cond ((<-address Cell 0) true)
-          ((deadline.expired? D) (error "worker did not start"))
-          (true (do (http.pause 10) (listener-test.wait-cell Cell D)))))
+\\ Handlers run in the connections' isolates. /stop stops the server, /fail fails, and /tag, /port
+\\ and /stats give the handler's argument, its server's port and what its server's stats raise.
+(define listener-test.handler
+  Q -> (listener-test.tagged "ok" Q))
 
-(define listener-test.reply
-  S Target ->
-    (let C (listener-test.client S)
-         _ (socket.closing-on-error C
-             (freeze (socket.send C (make-string "GET ~A HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Connection: closec#13;c#10;c#13;c#10;" Target))))
-         E (io.socket C "listener test client")
-         Result (io.with-endpoint E (/. Peer (io.read-all (io.reader Peer []) 4096)))
-      (listener-test.body Result)))
+(define listener-test.tagged
+  Tag Q -> (let Target (http.target Q)
+             (cases (= Target "/stop") (do (http.stop (http.current-server)) (listener-test.text "ok"))
+                    (= Target "/fail") (error "handler failed")
+                    (= Target "/tag") (listener-test.text Tag)
+                    (= Target "/port") (listener-test.text (str (http.port (http.current-server))))
+                    (= Target "/stats") (listener-test.text (trap-error (str (http.stats (http.current-server)))
+                                                              (/. X (error-to-string X))))
+                    true (listener-test.text "ok"))))
 
-(define listener-test.body
-  [ok V] ->
-    (let B (buffer.owner V)
-         N (buffer.length V)
-      (shen-jit.bytes->string B (- N 2) 2))
+(define listener-test.text
+  Text -> (http.response 200 [] (buffer.from-string Text)))
+
+\\ A client, in an isolate of its own while the caller of http.run serves: each step is a connection,
+\\ taken in turn, and it sends back what each gave. [get Target] gives [Status Body]; [stall Target]
+\\ opens a connection that sends half a head and waits, takes [get Target], then reads what the
+\\ first connection gets until it ends.
+(define listener-test.client-isolate
+  [Port Steps Out] -> (channel.send Out (map (/. Step (trap-error (listener-test.step Port Step)
+                                                         (/. X [raised (error-to-string X)])))
+                                              Steps)))
+
+(define listener-test.step
+  Port [get Target] -> (listener-test.get Port Target)
+  Port [stall Target] -> (let A (socket.connect "127.0.0.1" Port)
+                              _ (socket.send A "GET / HTTP/1.1c#13;c#10;")
+                              Reply (listener-test.get Port Target)
+                           [Reply (listener-test.read A)]))
+
+(define listener-test.get
+  Port Target ->
+    (let C (socket.connect "127.0.0.1" Port)
+         _ (socket.send C (make-string "GET ~A HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Connection: closec#13;c#10;c#13;c#10;" Target))
+      (listener-test.read C)))
+
+\\ Everything until the end: [Status Body], or [] if there was nothing.
+(define listener-test.read
+  C -> (listener-test.parse (io.with-endpoint (io.socket C "listener test client")
+                              (/. Peer (io.read-all (io.reader Peer []) 4096)))))
+
+(define listener-test.parse
+  [ok V] -> (let B (shen-jit.string->bytes (buffer.string V))
+                 N (shen-jit.bytes-length B)
+              (if (= N 0) [] (listener-test.split B N 0)))
   [error Error] -> (error "client read: ~A" (io.error-message Error)))
 
-(define listener-test.progress
-  [error Error N] -> [(io.error-domain Error) N (io.error-progress Error)])
+(define listener-test.split
+  B N At -> (cond ((> (+ At 4) N) [(shen-jit.bytes->string B 9 3) ""])
+                  ((and (= (shen-jit.u8 B At) 13) (= (shen-jit.u8 B (+ At 1)) 10)
+                        (= (shen-jit.u8 B (+ At 2)) 13) (= (shen-jit.u8 B (+ At 3)) 10))
+                    [(shen-jit.bytes->string B 9 3) (shen-jit.bytes->string B (+ At 4) (- N (+ At 4)))])
+                  (true (listener-test.split B N (+ At 1)))))
 
-(define listener-test.wait-prefix
-  V Result D ->
-    (cond ((= (buffer.string (buffer.slice V 0 3)) "abc") true)
-          ((or (not (empty? (<-address Result 0))) (deadline.expired? D))
-            (error "partial read did not arrive"))
-          (true (do (http.pause 10) (listener-test.wait-prefix V Result D)))))
-
-(define listener-test.wait-result
-  Result D ->
-    (cond ((not (empty? (<-address Result 0))) (<-address Result 0))
-          ((deadline.expired? D) (error "socket read did not finish"))
-          (true (do (http.pause 10) (listener-test.wait-result Result D)))))
+\\ Runs S while a client takes Steps, and gives [Result Stats Replies] once the client has ended.
+(define listener-test.serve
+  S Steps -> (let R (channel.new 1)
+                  P (isolate.spawn listener-test.client-isolate [(http.port S) Steps (channel.sender R)])
+                  M (isolate.monitor P)
+                  Result (http.run S)
+                  Got (channel.receive-any [R M])
+                  _ (if (= (hd Got) R) (channel.receive M) true)
+               [Result (http.stats S) (if (= (hd Got) R) (hd (tl Got)) [client (hd (tl Got))])]))
 
 (map (/. Options
        (listener-test.check "invalid options rejected" true
@@ -82,100 +106,71 @@
    [[read-buffer-size 0]] [[read-buffer-size 65537]] [[read-buffer-size -1]]
    [[read-buffer-size 1] [read-buffer-size 2]]])
 
+(map (/. Handler
+       (listener-test.check "invalid handlers rejected" true
+         (freeze (listener-test.raises? (freeze (http.listen "127.0.0.1" 0 Handler []))))))
+  [(/. Q Q) (function listener-test.handler) [] [1 2] "f" listener-test.two [listener-test.handler 1]])
+
 (let S (listener-test.listen [[shutdown-grace 0]])
+     Before (http.wait S 0)
      _ (http.stop S)
      _ (http.stop S)
-     Result (http.wait S 2000)
-  (do (listener-test.check "empty listener stops" [ok] (freeze Result))
+     Result (http.run S)
+  (do (listener-test.check "nothing runs before http.run" [pending] (freeze Before))
+      (listener-test.check "empty listener stops" [ok] (freeze Result))
+      (listener-test.check "without making its events channel" [] (freeze (http.server.events S)))
       (listener-test.check "stopped state" stopped (freeze (http.state S)))
       (listener-test.check "empty statistics" [0 0 0 0 0 0] (freeze (http.stats S)))
-      (listener-test.check "wait caches final result" [ok] (freeze (http.wait S 0)))
+      (listener-test.check "wait gives the final result" [ok] (freeze (http.wait S 0)))
+      (listener-test.check "run again gives it too" [ok] (freeze (http.run S)))
       (listener-test.check "listener port is closed" true
         (freeze (listener-test.raises? (freeze (listener-test.client S)))))))
 
-(let S (listener-test.listen [[max-connections 2] [shutdown-grace 0]])
-     A (listener-test.client S)
-     B (listener-test.client S)
-     _ (socket.send A "GET /")
-     _ (socket.send B "GET /")
-     _ (listener-test.wait-active S 2 (clock.deadline 2000))
-     C (listener-test.client S)
-     _ (socket.send C "GET / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;")
-     _ (http.pause 100)
-     _ (shen-jit.collect)
-     _ (listener-test.check "capacity applies backpressure" false (freeze (socket.readable? C 0)))
-     _ (socket.close A)
-     _ (listener-test.check "queued connection admitted after completion" true
-         (freeze (socket.readable? C 2000)))
-     _ (socket.close C)
-     _ (http.stop S)
-     Result (http.wait S 2000)
-     _ (socket.close B)
-  (do (listener-test.check "cancelled listener joins workers" [ok] (freeze Result))
-      (listener-test.check "connection cap never exceeded" 2 (freeze (hd (reverse (http.stats S)))))
-      (listener-test.check "no active workers remain" 0 (freeze (hd (http.stats S))))
-      (listener-test.check "three connections accepted" 3 (freeze (hd (tl (http.stats S)))))
-      (listener-test.check "cancelled peer closes without a fabricated HTTP response" true
-        (freeze (not (= (http.state S) listening))))))
+\\ A connection waiting for its head does not hold the next one back, and is killed once the grace
+\\ has passed: counted as failed and as cancelled.
+(let Run (listener-test.serve (listener-test.listen [[shutdown-grace 0]]) [[stall "/stop"]])
+  (do (listener-test.check "a stalled connection stops nothing" [ok] (freeze (hd Run)))
+      (listener-test.check "the next is served meanwhile" [[["200" "ok"] []]] (freeze (nth 3 Run)))
+      (listener-test.check "the stalled one is killed" [0 2 2 1 1 2] (freeze (nth 2 Run)))))
 
-(let Started (io.record [false])
-     Handler (/. Q (do (address-> Started 0 true) (http.pause 150) (listener-test.handler Q)))
-     S (http.listen "127.0.0.1" 0 Handler [[shutdown-grace 1000]])
-     C (listener-test.client S)
-     _ (socket.send C "GET / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;")
-     _ (listener-test.wait-cell Started (clock.deadline 2000))
-     _ (http.stop S)
-     Result (http.wait S 2000)
-     E (io.socket C "graceful client")
-     Reply (io.with-endpoint E (/. Peer (io.read-all (io.reader Peer []) 4096)))
-  (do (listener-test.check "in-flight handler finishes within grace" [ok] (freeze Result))
-      (listener-test.check "graceful result has no cancellations" [0 1 1 0 0 1] (freeze (http.stats S)))
-      (listener-test.check "graceful response remains complete" "ok"
-        (freeze (listener-test.body Reply)))))
+\\ At most max-connections at once: the next waits until the stalled one times out, with a 408.
+(let Run (listener-test.serve (listener-test.listen [[max-connections 1] [head-timeout 300]])
+           [[stall "/stop"]])
+  (do (listener-test.check "a full listener waits" [[["200" "ok"] ["408" ""]]] (freeze (nth 3 Run)))
+      (listener-test.check "one connection at a time" [0 2 2 1 0 1] (freeze (nth 2 Run)))))
 
-(let S (listener-test.listen [[shutdown-grace 0]])
-     C (listener-test.client S)
-     _ (socket.send C "POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Content-Length: 4c#13;c#10;c#13;c#10;a")
-     _ (listener-test.wait-active S 1 (clock.deadline 2000))
-     _ (http.pause 100)
-     _ (http.stop S)
-     _ (listener-test.check "bounded wait can report pending" [pending] (freeze (http.wait S 0)))
-     Result (http.wait S 2000)
-     Reply (socket.recv C 4096)
-     _ (socket.close C)
-  (do (listener-test.check "blocked body cancelled" [ok] (freeze Result))
-      (listener-test.check "cancellation is counted" [0 1 1 1 1 1] (freeze (http.stats S)))
-      (listener-test.check "cancelled body gets EOF, not an error response" 0
-        (freeze (shen-jit.bytes-length Reply)))))
+(let Run (listener-test.serve (listener-test.listen []) [[get "/fail"] [get "/ok"] [get "/stop"]])
+  (do (listener-test.check "handler failure does not stop admission" [["500" ""] ["200" "ok"] ["200" "ok"]]
+        (freeze (nth 3 Run)))
+      (listener-test.check "server survives a failed connection" [ok] (freeze (hd Run)))
+      (listener-test.check "request failure is counted separately" [0 3 3 1 0]
+        (freeze (reverse (tl (reverse (nth 2 Run))))))))
 
-(let S (http.listen "127.0.0.1" 0
-          (/. Q (if (= (http.target Q) "/fail") (error "worker failed") (listener-test.handler Q)))
-          [[max-connections 1]])
-     _ (listener-test.reply S "/fail")
-     Good (listener-test.reply S "/ok")
-     _ (http.stop S)
-     Result (http.wait S 2000)
-  (do (listener-test.check "handler failure does not stop admission" "ok" (freeze Good))
-      (listener-test.check "server survives a failed worker" [ok] (freeze Result))
-      (listener-test.check "request failure is counted separately" [0 2 2 1 0 1] (freeze (http.stats S)))))
+(let S (http.listen "127.0.0.1" 0 [listener-test.tagged "tagged"] [])
+     Run (listener-test.serve S [[get "/tag"] [get "/port"] [get "/stats"] [get "/stop"]])
+  (listener-test.check "a handler's arguments and its server"
+    [["200" "tagged"] ["200" (str (http.port S))]
+     ["200" "http: a handler's server gives only its port, and stops"] ["200" "ok"]]
+    (freeze (nth 3 Run))))
+
+(listener-test.check "no handler runs in the caller" [raised "http: no handler runs here"]
+  (freeze (http.current-server)))
+
+(define listener-test.progress
+  [error Error N] -> [(io.error-domain Error) N (io.error-progress Error)])
 
 (let L (socket.listen "127.0.0.1" 0)
      C (io.socket (socket.connect "127.0.0.1" (socket.port L)) "cancel client")
      E (io.socket (socket.accept L) "cancel server")
      _ (socket.close L)
-     V (buffer.new 4)
-     Result (io.record [[]])
-     _ (thread (freeze (address-> Result 0 (io.read-exact C V []))))
      _ (io.write-all E (buffer.from-string "abc") [])
-     _ (listener-test.wait-prefix V Result (clock.deadline 2000))
      _ (io.socket-cancel C)
-     Read (listener-test.wait-result Result (clock.deadline 2000))
+     V (buffer.new 4)
+     Read (io.read-exact C V [])
      _ (io.socket-unlimited C)
      _ (io.socket-deadline C (clock.deadline 1000))
-  (do (listener-test.check "cancellation retains partial read progress" [cancelled 3 3]
+  (do (listener-test.check "a cancelled socket reads nothing" [cancelled 0 0]
         (freeze (listener-test.progress Read)))
-      (listener-test.check "cancellation does not discard acknowledged bytes" "abc"
-        (freeze (buffer.string (buffer.slice V 0 3))))
       (listener-test.check "new deadline does not undo cancellation" [cancelled 0 0]
         (freeze (listener-test.progress (io.write-all C (buffer.from-string "x") []))))
       (io.close C)
@@ -183,41 +178,21 @@
         (freeze (io.socket-cancel C)))
       (io.close E)))
 
-(let Started (io.record [false])
-     Handler (/. Q (do (address-> Started 0 true) (http.pause 250) (listener-test.handler Q)))
-     S (http.listen "127.0.0.1" 0 Handler [[shutdown-grace 0]])
-     C (listener-test.client S)
-     _ (socket.send C "GET / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;")
-     _ (listener-test.wait-cell Started (clock.deadline 2000))
-     _ (http.stop S)
-     Early (http.wait S 80)
-     Later (http.wait S 2000)
-     _ (socket.close C)
-  (do (listener-test.check "application work is not killed after grace" [pending] (freeze Early))
-      (listener-test.check "worker cleanup is observed when application work returns" [ok] (freeze Later))
-      (listener-test.check "cancelled response does not write after handler returns" [0 1 1 1 1 1]
-        (freeze (http.stats S)))))
-
-\\ Force a supervisor failure with one worker blocked, without closing a foreign descriptor.
+\\ A listener failure ends the run with its error, and closes the listener.
 (set listener-test.poll-failure false)
 (define socket.readable?
   S N -> (if (value listener-test.poll-failure)
              (error "forced listener poll failure")
              (socket.wait-for S (socket.readable-event) N)))
 
-(let S (listener-test.listen [[shutdown-grace 1000]])
-     C (listener-test.client S)
-     _ (socket.send C "GET /")
-     _ (listener-test.wait-active S 1 (clock.deadline 2000))
+(let S (listener-test.listen [])
      _ (set listener-test.poll-failure true)
-     Result (http.wait S 2000)
+     Result (http.run S)
      _ (set listener-test.poll-failure false)
-     _ (socket.close C)
-  (do (listener-test.check "supervisor error is retained" serve
+  (do (listener-test.check "listener error is retained" serve
         (freeze (io.error-operation (hd (tl Result)))))
-      (listener-test.check "supervisor error cancels and collects workers" [0 1 1 1 1 1]
-        (freeze (http.stats S)))
-      (listener-test.check "supervisor error closes listener" true
+      (listener-test.check "listener error stops it" stopped (freeze (http.state S)))
+      (listener-test.check "listener error closes listener" true
         (freeze (listener-test.raises? (freeze (listener-test.client S)))))))
 
 (output "~A passed, ~A failed~%" (value listener-test.passed) (value listener-test.failed))

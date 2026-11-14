@@ -15,18 +15,3 @@
          _ (fs-gc.check [ok 2] (fs.write-replace (fs.join Root "gc-output")
                                 (buffer.from-string "gc")))
       true))
-
-(define fs-gc.worker
-  Done 0 -> (address-> Done 0 [ok])
-  Done N ->
-    (do (shen-jit.collect)
-        (curl-test.pause)
-        (fs-gc.worker Done (- N 1))))
-
-(define fs-gc.threaded
-  Root ->
-    (let Done (io.record [[]])
-         _ (thread (freeze (fs-gc.worker Done 10)))
-         _ (fs-gc.run Root)
-         _ (curl-test.join Done 1000)
-      true))

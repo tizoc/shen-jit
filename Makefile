@@ -51,9 +51,9 @@ VERSION := $(shell cat VERSION)
 
 RUNTIME_SRC := src/runtime/heap.c src/runtime/objects.c src/runtime/image.c src/runtime/prims.c \
                src/runtime/reader.c src/runtime/loader.c src/runtime/jit.c src/runtime/dict.c \
-               src/runtime/profile.c src/runtime/thread.c src/runtime/ffi.c src/runtime/win32.c \
-               src/runtime/worker.c
-RUNTIME_HDR := src/runtime/value.h src/runtime/vm.h src/runtime/ops.h src/runtime/reader.h src/runtime/jit.h src/runtime/win32.h src/runtime/file.h src/runtime/worker.h include/shen.h
+               src/runtime/profile.c src/runtime/ffi.c src/runtime/win32.c \
+               src/runtime/program.c src/runtime/isolate.c
+RUNTIME_HDR := src/runtime/value.h src/runtime/vm.h src/runtime/ops.h src/runtime/reader.h src/runtime/jit.h src/runtime/win32.h src/runtime/file.h include/shen.h
 SLJIT_OBJ := $(BUILD)/sljitLir.o
 RUNTIME_OBJ := $(patsubst src/runtime/%.c,$(BUILD)/%.o,$(RUNTIME_SRC))
 
@@ -297,7 +297,7 @@ check-lowerer: $(BUILD)/stage0/.done $(BUILD)/tools/native.shen $(BUILD)/tools/n
 $(BUILD)/test_kl: tests/test_kl.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(RUNTIME_HDR)
 	$(CC) $(CFLAGS) $(SLJIT_FLAGS) -o $@ tests/test_kl.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(LDLIBS)
 
-test-kl: $(BUILD)/test_kl $(BUILD)/stage0/.done
+test-kl: $(BUILD)/test_kl $(BUILD)/stage0/.done $(BUILD)/shen-jit.img
 	cd $(BUILD) && ./test_kl stage0 ../tests/kl/eval-cases.kl
 
 # The eval-kl cases with a collection before every allocation (slow).
@@ -325,7 +325,7 @@ test-kernel: all $(FFI_TEST_LIB)
 	SHEN_JIT_GC_STRESS=$(GC_STRESS) sh tests/cli.sh $(SHEN_JIT)
 
 # The same with a collection after every 1000 words allocated (about 2 minutes).
-test-kernel-stress:
+test-kernel-stress: test-isolates-stress
 	$(MAKE) test-kernel GC_STRESS=1000
 	$(MAKE) test-stlib GC_STRESS=1000
 	$(MAKE) test-native GC_STRESS=1000
@@ -334,61 +334,26 @@ test-kernel-stress:
 
 # What a change to the runtime, the JIT, the lowerer or the port must pass (about 20 s).
 test-core: test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn \
-  test-native test-ffi test-overrides test-structs test-workers
+  test-native test-ffi test-overrides test-structs test-isolates
+
+# Isolates (src/runtime/isolate.c), and the same with a collection at every allocation.
+test-isolates: $(BUILD)/shen-jit
+	$(BUILD)/shen-jit eval -l tests/isolates.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l tests/isolate-start.shen -e '(start-test.run)' | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l tests/isolates_typed.shen | $(FFI_RESULT)
+
+test-isolates-stress: $(BUILD)/shen-jit
+	SHEN_JIT_GC_STRESS=1 $(BUILD)/shen-jit eval -l tests/isolates.shen | $(FFI_RESULT)
 
 # Every library's suite, without the collections test-lib-stress adds (about 30 s).
-test-libs: test-buffer test-json test-io test-fs test-process test-parallel test-tree-sitter test-http test-datalog test-curl test-namespaces
+test-libs: test-buffer test-json test-io test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces \
+  test-parallel
 
-# Worker scopes: the runtime (test-workers) and lib/parallel.shen (test-parallel).
-.PHONY: test-workers test-workers-stress test-workers-san test-parallel test-parallel-stress
+.PHONY: test-isolates test-isolates-stress test-parallel
+
+# lib/parallel.shen: a map over isolates.
 test-parallel: $(BUILD)/shen-jit
-	sh tests/parallel.sh $(SHEN_JIT)
-test-parallel-stress: $(BUILD)/shen-jit
-	SHEN_JIT_GC_STRESS=100 sh tests/parallel.sh $(SHEN_JIT)
-$(BUILD)/test_worker_roots: tests/test_worker_roots.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(RUNTIME_HDR)
-	$(CC) $(CFLAGS) $(SLJIT_FLAGS) -o $@ tests/test_worker_roots.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(LDLIBS)
-
-test-workers: $(BUILD)/shen-jit $(BUILD)/test_worker_roots
-	$(BUILD)/test_worker_roots
-	$(BUILD)/shen-jit eval -q -l tests/worker-api.shen -l tests/worker-fixture.shen \
-	  -e '(shen-jit.save-executable "$(BUILD)/worker-fixture" [])'
-	$(BUILD)/shen-jit eval -q -l tests/worker-api.shen -s worker-test.image '"$(BUILD)/worker-fixture"' \
-	  -s worker-test.closed-image '"$(BUILD)/closed-worker-view$(EXE)"' \
-	  -e '(set *hush* false)' -l tests/workers.shen > $(BUILD)/workers-test.log
-	grep -a '^[0-9][0-9]* worker checks passed$$' $(BUILD)/workers-test.log | \
-	  awk '{ print } END { exit !/worker checks passed$$/ }'
-	SHEN_JIT_STATS=1 $(BUILD)/closed-worker-view$(EXE) eval -q -e '(set *hush* false)' \
-	  -l tests/worker-view-image.shen 2> $(BUILD)/closed-worker-view-stats.log | \
-	  grep -a '^closed worker view image passed$$'
-	grep -q 'shared views ' $(BUILD)/closed-worker-view-stats.log
-
-test-workers-stress: test-workers
-	SHEN_JIT_GC_STRESS=100 $(BUILD)/shen-jit eval -q -l tests/worker-api.shen \
-	  -s worker-test.image '"$(BUILD)/worker-fixture"' \
-	  -s worker-test.closed-image '"$(BUILD)/closed-worker-view$(EXE)"' \
-	  -e '(set *hush* false)' -l tests/workers.shen > $(BUILD)/workers-stress.log
-	grep -a '^[0-9][0-9]* worker checks passed$$' $(BUILD)/workers-stress.log | \
-	  awk '{ print } END { exit !/worker checks passed$$/ }'
-
-# C memory access, independent JITs and the owning-VM root deletion queue.
-test-workers-san: $(BUILD)/stage0/.done
-	$(CC) $(SAN_FLAGS) $(SLJIT_SRC_FLAGS) -DSJ_BUILD_ID='"$(BUILD_ID)"' -o $(BUILD)/test_worker_roots-san \
-	  tests/test_worker_roots.c $(RUNTIME_SRC) vendor/sljit/sljit_src/sljitLir.c $(LDLIBS)
-	$(BUILD)/test_worker_roots-san
-	$(CC) $(SAN_FLAGS) $(SLJIT_SRC_FLAGS) -DSJ_BUILD_ID='"$(BUILD_ID)"' -DSJ_VERSION='"$(VERSION)"' \
-	  -o $(BUILD)/workers-san src/runtime/main.c $(RUNTIME_SRC) vendor/sljit/sljit_src/sljitLir.c $(LDLIBS)
-	$(BUILD)/workers-san --stage1 $(BUILD)/stage0 $(BUILD)/workers-san.img
-	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=$(abspath $(BUILD)/workers-san.img) \
-	  $(BUILD)/workers-san eval -q -l tests/worker-api.shen -l tests/worker-fixture.shen \
-	  -e '(shen-jit.save-executable "$(BUILD)/worker-fixture-san" [])'
-	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=$(abspath $(BUILD)/workers-san.img) \
-	  $(BUILD)/workers-san eval -q -l tests/worker-api.shen -s worker-test.image '"$(BUILD)/worker-fixture-san"' \
-	  -s worker-test.closed-image '"$(BUILD)/closed-worker-view-san$(EXE)"' \
-	  -e '(set *hush* false)' -l tests/workers.shen > $(BUILD)/workers-san.log
-	grep -a '^[0-9][0-9]* worker checks passed$$' $(BUILD)/workers-san.log | \
-	  awk '{ print } END { exit !/worker checks passed$$/ }'
-	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 $(BUILD)/closed-worker-view-san$(EXE) \
-	  eval -q -e '(set *hush* false)' -l tests/worker-view-image.shen | grep -a '^closed worker view image passed$$'
+	$(BUILD)/shen-jit eval -l lib/parallel.shen -l tests/parallel.shen | $(FFI_RESULT)
 
 .PHONY: test-namespaces
 test-namespaces: $(BUILD)/shen-jit-stlib
@@ -402,7 +367,7 @@ test-structs: $(BUILD)/shen-jit-stlib
 # leave out for speed.
 LIB_IMAGE_TESTS = buffer_image json_image io_image frame_image io_socket_image http_image \
   http_request_image http_stream_image http_listener
-test-lib-stress: $(BUILD)/shen-jit test-parallel-stress
+test-lib-stress: $(BUILD)/shen-jit
 	for t in $(LIB_IMAGE_TESTS); do TEST_GC_STRESS=1 sh tests/$$t.sh $(SHEN_JIT) || exit 1; done
 	TEST_GC_STRESS=1 CC="$(CC)" sh tests/curl.sh $(SHEN_JIT)
 	TEST_GC_STRESS=1 CC="$(CC)" sh example-apps/source-deps/test.sh $(SHEN_JIT)
@@ -435,6 +400,7 @@ test-buffer: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen -l tests/buffer.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/grammar.shen -l tests/grammar.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -l tests/grammar_stream.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -l tests/grammar_isolates.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -e '(tc +)' -l tests/grammar_typed.shen | $(FFI_RESULT)
 	sh tests/grammar_typed.sh $(SHEN_JIT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen \
@@ -530,7 +496,10 @@ test-overrides: $(BUILD)/shen-jit
 test-datalog: $(BUILD)/shen-jit
 	SHEN_JIT_GC_STRESS=$(GC_STRESS) $(BUILD)/shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/datalog-generate.shen -l tests/datalog.shen < /dev/null | \
 	  grep -a 'FAIL\|uncaught\| checks, ' | awk '{ print } END { exit !/ 0 failed$$/ }'
-	sh tests/datalog-parallel.sh $(SHEN_JIT)
+	$(BUILD)/shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/datalog-generate.shen \
+	  -l tests/datalog_isolates.shen < /dev/null | grep -a 'FAIL\|uncaught\| checks, ' | awk '{ print } END { exit !/ 0 failed$$/ }'
+	$(BUILD)/shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/datalog-generate.shen -l tests/datalog_parallel.shen < /dev/null | \
+	  grep -a 'FAIL\|uncaught\| checks, ' | awk '{ print } END { exit !/ 0 failed$$/ }'
 	sh example-apps/depends/test.sh $(BUILD)/shen-jit $(KERNEL_DIR)/klambda
 	CC="$(CC)" sh example-apps/source-deps/test.sh $(SHEN_JIT)
 
@@ -652,6 +621,8 @@ test-san: $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stage0/.done 
 	$(CC) $(SAN_FLAGS) $(SLJIT_SRC_FLAGS) -DSJ_BUILD_ID='"$(BUILD_ID)"' -DSJ_VERSION='"$(VERSION)"' -o $(BUILD)/shen-jit-san src/runtime/main.c $(RUNTIME_SRC) vendor/sljit/sljit_src/sljitLir.c $(LDLIBS)
 	cd $(BUILD) && ./shen-jit-san --stage1 stage0 shen-jit-san.img && \
 	  $(call FFI_SUITES,ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=shen-jit-san.img ./shen-jit-san)
+	cd $(BUILD) && ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=shen-jit-san.img \
+	  ./shen-jit-san eval -l ../tests/isolates.shen | $(FFI_RESULT)
 	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=$(abspath $(BUILD)/shen-jit-san.img) \
 	  CC="$(CC)" CFLAGS="$(SAN_FLAGS)" sh tests/curl.sh $(BUILD)/shen-jit-san$(EXE)
 	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=$(abspath $(BUILD)/shen-jit-san.img) \

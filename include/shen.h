@@ -41,7 +41,7 @@
    6. Returning from a procedure unroots what it rooted, however it returns. A callback a C library
       makes, not being a procedure, unroots its own. A callback must come on the thread that called
       the library: a thread the runtime did not start cannot call in.
-   7. shen_vm is this thread's and this call's: never keep one past the call that gave it.
+   7. shen_vm is this isolate's and this call's: never keep one past the call that gave it.
 
    A read of the wrong type gives SHEN_NONE, or NULL, or as it says below, and never raises. Passing
    SHEN_NONE or SHEN_ERROR on, or returning SHEN_NONE, ends the process with a message naming the
@@ -200,8 +200,8 @@ static inline shen_value shen_make_pointer(shen_vm *vm, void *address, const cha
     return (*vm)->make_pointer(vm, address, kind);
 }
 
-/* Writing, the only way to store a value in an object. Gives 0 if it is not a vector or the index
-   is out of range. Does not allocate. */
+/* Writing, the only way to store a value in an object. Gives 0 if it is not a vector, the index is
+   out of range, or the vector is shared (isolate.share), as nothing changes one. Does not allocate. */
 static inline int shen_vector_set(shen_vm *vm, shen_value v, int64_t i, shen_value x) { return (*vm)->vector_set(vm, v, i, x); }
 
 /* Roots for a call: the local must hold a value already, and stays up to date while rooted. */
@@ -233,7 +233,7 @@ static inline shen_value shen_exception(shen_vm *vm) { return (*vm)->exception(v
 /* Its message, as a Shen string. May collect. */
 static inline shen_value shen_exception_message(shen_vm *vm) { return (*vm)->exception_message(vm); }
 
-/* The lock, around a call that waits: other threads run meanwhile, and may collect. */
+/* Around C that waits. They change nothing now, as nothing else uses an isolate's heap meanwhile. */
 static inline void *shen_release(shen_vm *vm) { return (*vm)->release(vm); }
 static inline void shen_acquire(shen_vm *vm, void *token) { (*vm)->acquire(vm, token); }
 

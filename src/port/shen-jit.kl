@@ -9,11 +9,30 @@ definition."
 
 (defun shen-jit.eval-kl (X)
   (if (cons? X)
-      (let Lowered (shen-jit.lower.toplevel X ())
-        (if (= (hd Lowered) defun)
-            (shen-jit.install Lowered)
-            (let Result ((shen-jit.install Lowered)) Result)))
+      (if (shen-jit.builder?)
+          (let Lowered (shen-jit.lower.toplevel X ())
+            (if (= (hd Lowered) defun)
+                (shen-jit.install Lowered)
+                (let Result ((shen-jit.install Lowered)) Result)))
+          (shen-jit.not-builder eval-kl))
       X))
+
+"Only the builder evaluates and defines (docs/design.md, The builder and isolates). An isolate
+sets shen-jit.*isolate* as it starts (shen-jit.start-isolate), so eval and
+eval-kl refuse there at once, before they would reach the builder's globals,
+which it has not got; the runtime refuses to install anything there too."
+
+(defun shen-jit.builder? () (trap-error (not (value shen-jit.*isolate*)) (lambda E true)))
+
+(defun shen-jit.not-builder (F)
+  (simple-error (cn (str F) ": only the builder can evaluate or define code")))
+
+"The kernel's eval, refusing in an isolate."
+
+(defun eval (X)
+  (if (shen-jit.builder?)
+      (eval-kl (shen.shen->kl (shen.process-applications (macroexpand X) (shen.find-types X))))
+      (shen-jit.not-builder eval)))
 
 "The kernel calls input+ but leaves its definition to the port (41.3)."
 
@@ -29,12 +48,18 @@ in user code still raises the error."
 
 (defun shen.read-evaluate-print ()
   (do (shen-jit.mark-toplevel)
+  (do (set shen-jit.*load-depth* 0)
+  (do (set shen-jit.*input-mark* (shen-jit.isolate 14 () ()))
   (let Package (value shen.*package*)
     (let Lineread (shen.package-user-input Package (shen-jit.repl-read (stinput)))
       (let History (shen.update-history)
-        (shen.evaluate-lineread Lineread History (value shen.*tc*)))))))
+        (shen.evaluate-lineread Lineread History (value shen.*tc*)))))))))
 
-"Backtraces. The REPL's read-evaluate-print runs
+"Each input marks how many isolates had been spawned before it, and a Ctrl-C
+that stops it kills those it spawned (docs/guide.md, Isolates), so that none
+is left waiting on a REPL that has gone on.
+
+Backtraces. The REPL's read-evaluate-print runs
 inside the kernel's top-level trap-error, so it marks that handler: an error
 raised while it is the innermost handler, or while none is, records the
 frames on the stack, and the display prints them after the message. Errors
@@ -42,8 +67,9 @@ that the program catches record nothing."
 
 (defun shen.toplevel-display-exception (E)
   (let Message (error-to-string E)
+    (do (if (= Message "interrupted") (shen-jit.isolate 14 (value shen-jit.*input-mark*) ()) skip)
     (do (pr Message (stoutput))
-        (pr (shen-jit.trace-text Message) (stoutput)))))
+        (pr (shen-jit.trace-text Message) (stoutput))))))
 
 (defun shen-jit.repl-read (Stream)
   (let Byte (shen.my-read-byte Stream)
@@ -61,40 +87,98 @@ argument, as Shen/Scheme does; the kernel's main only reports it."
           (shen-jit.exit 1)
           Shown))))
 
-"fn reads F's property list once, where the kernel's looks F up twice,
-through arity and get; the results and errors are the same."
+"Arities are program, so they are kept beside function cells, outside the
+heap and the property vector, which an isolate starts without
+(docs/design.md, The builder and isolates). These are the kernel's, with that table for the
+property."
+
+(defun arity (F) (shen-jit.arity F))
+
+(defun shen.initialise-arity-table (L)
+  (cond ((= () L) ())
+        ((and (cons? L) (cons? (tl L)))
+         (do (shen-jit.set-arity (hd L) (hd (tl L))) (shen.initialise-arity-table (tl (tl L)))))
+        (true (simple-error "implementation error in shen.initialise-arity-table"))))
+
+(defun shen.execute-store-arity (F N)
+  (if (= 0 N)
+      (shen-jit.set-arity F 0)
+      (do (shen-jit.set-arity F N) (shen.update-lambdatable F N))))
+
+"A lambda form left from before would be stale: fn makes its closure from the
+arity, so the form goes, as the kernel's takes it away for a name of arity 0
+or none."
+
+(defun update-lambda-table (F N)
+  (do (shen-jit.set-arity F N) (do (unput F shen.lambda-form (value *property-vector*)) F)))
+
+(defun shen.update-lambda-table/precompiled (F N Lambda Precompiled)
+  (if Precompiled
+      (do (shen-jit.set-arity F N) (do (thaw Lambda) (update-lambda-table F N)))
+      (update-lambda-table F N)))
+
+"fn makes its curried closure the first time it is asked for a name, and keeps
+it as the name's lambda form. The builder compiles one that calls the name, as
+the kernel's fn does when a definition is read; an isolate, which cannot
+evaluate, makes one from a template (shen-jit.template), which needs only the
+arity. A name with no arity but a lambda form keeps that form."
 
 (defun fn (F)
-  (let Plist (trap-error (shen.<-dict (value *property-vector*) F) (lambda E ()))
-    (let Arity (trap-error (assoc arity Plist) (lambda E ()))
-      (if (and (cons? Arity) (= (tl Arity) 0))
-          (F)
-          (let Form (trap-error (assoc shen.lambda-form Plist) (lambda E ()))
-            (if (cons? Form)
-                (shen-jit.lambda-form F (tl Form))
-                (simple-error (cn "fn: " (shen.app F " is undefined
-" shen.a)))))))))
+  (let Arity (shen-jit.arity F)
+    (if (= Arity 0)
+        (F)
+        (let Form (trap-error (get F shen.lambda-form (value *property-vector*)) (lambda E ()))
+          (if (= Form ())
+              (if (> Arity 0)
+                  (shen-jit.make-form F Arity)
+                  (simple-error (cn "fn: " (shen.app F " is undefined
+" shen.a))))
+              Form)))))
 
-"Lambda forms are made when fn first asks for them. Reading a definition
-stores F's arity and its lambda form, which the kernel makes by evaluating
-a curried lambda: one compilation per definition, about a fifth of loading
-a file of definitions, for a closure that fn rarely needs. The port stores
-[shen-jit.lazy-form N] instead, and fn replaces it with the real form the
-first time. The kernel's shen.lambda-function calls gensym once per
-argument, so the counter still moves by N, and later gensyms are the same;
-the lambda made later names its parameters without gensym, after F, as F/1
-and so on: a fixed name would be captured by a function of that name."
+(defun shen-jit.make-form (F N)
+  (let Form (if (shen-jit.builder?) (eval-kl (shen-jit.curried (cons F ()) N)) (shen-jit.template F N))
+    (do (put F shen.lambda-form Form (value *property-vector*)) Form)))
+
+"A template's last call goes through the name's function cell, which
+shen-jit.function reads inline, so a redefinition is seen, as with a lambda
+form's named call. Up to four arguments the call is direct; past that the
+arguments are listed and shen-jit.apply makes it. The templates of two to four
+are defined as the image is built (shen-jit.initialise), lowered then, so that
+they take all their arguments at once too, which stage 0 code cannot."
+
+(defun shen-jit.template (F N)
+  (cond ((= N 1) (lambda A ((shen-jit.function F) A)))
+        ((= N 2) (shen-jit.template-2 F))
+        ((= N 3) (shen-jit.template-3 F))
+        ((= N 4) (shen-jit.template-4 F))
+        (true (shen-jit.template-list F N ()))))
+
+(defun shen-jit.template-defun (Name Vars)
+  (cons defun (cons Name (cons (cons f ()) (cons (shen-jit.template-body Vars Vars) ())))))
+
+(defun shen-jit.template-body (All Rest)
+  (if (= Rest ())
+      (cons (cons shen-jit.function (cons f ())) All)
+      (cons lambda (cons (hd Rest) (cons (shen-jit.template-body All (tl Rest)) ())))))
+
+(defun shen-jit.template-list (F N Args)
+  (lambda X
+    (if (= N 1)
+        (shen-jit.apply F (reverse (cons X Args)))
+        (shen-jit.template-list F (- N 1) (cons X Args)))))
+
+"Reading a definition stores F's arity and its lambda form, which the kernel
+makes by evaluating a curried lambda: one compilation per definition, about a
+fifth of loading a file of definitions. fn makes the form the first time it is
+asked, so a definition only takes away any form made for its old arity. The
+kernel's shen.lambda-function calls gensym once per argument, so the counter
+still moves by N, and later gensyms are the same. A form made later names its
+parameters after F, as F/1 and so on: a fixed name would be captured by a
+function of that name."
 
 (defun shen.update-lambdatable (F N)
   (do (set shen.*gensym* (+ (value shen.*gensym*) N))
-      (do (shen.set-lambda-form-entry (cons F (shen-jit.absvector3 shen-jit.lazy-form N 0)))
-          N)))
-
-(defun shen-jit.lambda-form (F Form)
-  (if (shen-jit.tagged? Form shen-jit.lazy-form)
-      (let Lambda (eval-kl (shen-jit.curried (cons F ()) (<-address Form 1)))
-        (do (shen.set-lambda-form-entry (cons F Lambda)) Lambda))
-      Form))
+      (do (unput F shen.lambda-form (value *property-vector*)) N)))
 
 (defun shen-jit.curried (Call N)
   (if (= N 0)
@@ -189,9 +273,6 @@ binding, so what an earlier query left above that offset is never read."
 (defun shen-jit.new-prolog-vector ()
   (let Vector (absvector (value shen.*prolog-memory*))
     (do (address-> Vector 0 shen.print-prolog-vector) (address-> Vector 1 2))))
-
-"No call between reading the free list and setting it, so another thread cannot
-take the same vector: threads switch at function entries and loop checks."
 
 (defun shen-jit.prolog-done (Vector Result)
   (do (set shen-jit.*free-prolog-vectors*
@@ -382,9 +463,342 @@ below)."
 "Byte buffers and bit operations are primitives that Shen code calls by name and
 may use as values, as (fn shen-jit.u8)."
 
-(defun shen-jit.primitive (F N)
-  (do (shen.initialise-arity-table (cons F (cons N ())))
-      (shen.set-lambda-form-entry (cons F (shen-jit.absvector3 shen-jit.lazy-form N 0)))))
+(defun shen-jit.primitive (F N) (shen-jit.set-arity F N))
+
+"A primitive has no definition of its own, as compiled code calls it in line,
+so fn's templates could not call it by name. Each gets one, made from a code
+object whose body is the primitive. The special forms and eval-kl are not
+primitives, and stay as they are."
+
+(defun shen-jit.primitive-procedures ()
+  (shen.for-each (lambda Group (if (number? (hd Group))
+                                   (shen.for-each (lambda F (shen-jit.primitive-procedure F (hd Group)))
+                                                  (hd (tl Group)))
+                                   shen.skip))
+                 (shen-jit.lower.fixed-names)))
+
+(defun shen-jit.primitive-procedure (F N)
+  (if (shen-jit.arity? F N)
+      shen.skip
+      (trap-error
+        (shen-jit.install
+          (cons defun (cons F (cons (cons code (cons F (cons N (cons (+ N 3) (cons ()
+            (cons (cons (cons prim (cons (+ N 2) (cons F (shen-jit.slots 2 N))))
+                        (cons (cons return (cons (+ N 2) ())) ()))
+              (cons () ())))))))
+                                  ()))))
+        (lambda E shen.skip))))
+
+(defun shen-jit.slots (From N)
+  (if (= N 0) () (cons From (shen-jit.slots (+ From 1) (- N 1)))))
+
+"An isolate starts as a program does (docs/design.md, The builder and isolates): the runtime
+puts back the program's constants and makes the standard streams, then this
+sets what running code reads, with the kernel's starting values: nothing of
+the builder's or of the isolate that started it, whose globals are unbound
+here. Its gensyms count from Base, so that names made in two isolates never
+meet. The builder's own globals, macros, datatypes, the typechecker's, stay
+unbound: only the builder defines."
+
+(defun shen-jit.start-isolate (Base)
+  (do (set shen-jit.*isolate* true)
+  (do (set *property-vector* (shen.dict 64))
+  (do (set shen.*gensym* Base)
+  (do (set *hush* false)
+  (do (set *maximum-print-sequence-size* 20)
+  (do (set *absolute* ())
+  (do (set shen.*call* 0)
+  (do (set shen.*infs* 0)
+  (do (set shen.*step* false)
+  (do (set shen.*spy* false)
+  (do (set shen.*tracking* ())
+  (do (set shen.*profiled* ())
+  (do (set shen.*it* "")
+  (do (set shen.*residue* ())
+  (do (set shen.*occurs* true)
+  (do (set shen.*maxinferences* 1000000)
+  (do (set shen.*names* ())
+  (do (set shen.*empty-absvector* (absvector 0))
+  (do (set shen.*tc* false)
+  (do (set shen-jit.*free-prolog-vectors* ())
+      (prolog-memory 10000))))))))))))))))))))))
+
+"Isolates (docs/design.md, The builder and isolates): each runs a function of
+one argument that the builder defined, on an OS thread of its own, and they talk
+through channels. The isolate and channel namespaces are the interface; these
+pass an operation's number to the primitive behind them, shen-jit.isolate
+(isolate.c). A channel's receive endpoint stays with its receiver, unless
+channel.give marks it to move to an isolate being spawned; send endpoints and
+isolates copy freely."
+
+(defun isolate.spawn (F X) (shen-jit.isolate 0 F X))
+
+(defun isolate.monitor (Isolate) (shen-jit.isolate 8 Isolate ()))
+
+(defun isolate.kill (Isolate) (shen-jit.isolate 9 Isolate ()))
+
+(defun isolate.self () (shen-jit.isolate 10 () ()))
+
+"What waits on something other than a channel, such as a socket, calls this now
+and then, so that a kill reaches it: it raises killed if one is pending."
+
+(defun isolate.check-kill () (shen-jit.isolate 12 () ()))
+
+"(isolate.share V) copies V into storage outside every heap, where any isolate
+reads it by pointer rather than as a copy, and nothing changes it: a store into
+one of its vectors or byte buffers raises. It is never freed."
+
+(defun isolate.share (V) (shen-jit.isolate 13 V ()))
+
+(defun channel.new (Capacity) (shen-jit.isolate 1 Capacity ()))
+
+(defun channel.sender (Receiver) (shen-jit.isolate 2 Receiver ()))
+
+(defun channel.send (Sender X) (shen-jit.isolate 3 Sender X))
+
+(defun channel.close (Endpoint) (shen-jit.isolate 6 Endpoint ()))
+
+(defun channel.give (Receiver) (shen-jit.isolate 7 Receiver ()))
+
+"A receive gives messages only: once a sender has closed the channel and its
+queue is empty, it raises channel closed, as it does after that, the channel
+being freed. The primitive gives shen-jit.end-of-stream for that end, which no
+message can be. channel.next gives [ok Message] or [closed] instead, for a
+stream; channel.wait-any gives [ready R] or [timeout], R having a message or
+being closed."
+
+(defun channel.receive (Receiver) (shen-jit.message (shen-jit.isolate 4 Receiver ())))
+
+(defun channel.receive-any (Receivers)
+  (let Got (shen-jit.isolate 5 Receivers ())
+    (do (shen-jit.message (hd (tl Got))) Got)))
+
+(defun shen-jit.message (X)
+  (if (= X shen-jit.end-of-stream) (simple-error "channel closed") X))
+
+(defun channel.next (Receiver)
+  (let X (shen-jit.isolate 4 Receiver ())
+    (if (= X shen-jit.end-of-stream) (cons closed ()) (cons ok (cons X ())))))
+
+(defun channel.wait-any (Receivers Milliseconds)
+  (let R (shen-jit.isolate 11 Receivers Milliseconds)
+    (if (= R ()) (cons timeout ()) (cons ready (cons R ())))))
+
+"A call that starts isolates for its parts and waits for them stops them if it
+raises, so that none is left waiting on one that is gone, or keeping the program
+from changing. (isolate.spawn-each F Args) spawns F with each of Args, each
+with a monitor, and gives [[I | Monitor] ...]; if one cannot start, it stops
+those it started, and raises. (isolate.stop-each Started) kills them all, as
+a call's cleanup does, waits for each to end, and closes the monitors. A kill
+of an isolate that has ended does nothing, and a monitor already read or closed
+is passed over; a Ctrl-C ends the wait, as it ends any. What spawn-each started
+is in a vector made first, [Started I Monitor], by stores, which do not
+allocate, so that a failure to allocate anywhere after a spawn stops it too."
+
+(defun isolate.spawn-each (F Args)
+  (let Cell (address-> (address-> (address-> (absvector 3) 0 ()) 1 ()) 2 ())
+    (shen-jit.on-error (freeze (shen-jit.spawn-each-h F Args Cell)) (freeze (shen-jit.stop-cell Cell)))))
+
+(defun shen-jit.spawn-each-h (F Args Cell)
+  (if (= () Args)
+      (reverse (<-address Cell 0))
+      (do (address-> Cell 1 (isolate.spawn F (hd Args)))
+          (do (address-> Cell 2 (isolate.monitor (<-address Cell 1)))
+              (do (address-> Cell 0 (cons (cons (<-address Cell 1) (<-address Cell 2)) (<-address Cell 0)))
+                  (do (address-> (address-> Cell 1 ()) 2 ())
+                      (shen-jit.spawn-each-h F (tl Args) Cell)))))))
+
+(defun shen-jit.stop-cell (Cell)
+  (do (if (= () (<-address Cell 1)) true (isolate.kill (<-address Cell 1)))
+      (do (isolate.stop-each (<-address Cell 0))
+          (if (= () (<-address Cell 2)) true (shen-jit.await (<-address Cell 2))))))
+
+(defun isolate.stop-each (Started)
+  (do (shen-jit.kill-each Started) (shen-jit.await-each Started)))
+
+(defun shen-jit.kill-each (Started)
+  (if (= () Started)
+      true
+      (do (isolate.kill (hd (hd Started))) (shen-jit.kill-each (tl Started)))))
+
+(defun shen-jit.await-each (Started)
+  (if (= () Started)
+      true
+      (do (shen-jit.await (tl (hd Started))) (shen-jit.await-each (tl Started)))))
+
+(defun shen-jit.await (Monitor)
+  (trap-error (do (channel.receive Monitor) (channel.close Monitor)) (lambda E skip)))
+
+"Types for typed programs, and the two namespaces' exports, so that a client
+can write (use channel => c). An isolate is of type isolate, and endpoints of
+types (receiver A) and (sender A), A being what crosses them; the shapes of
+results have datatypes. The functions and the dotted types are system
+functions, as the kernel's are, so that a namespace leaves them as they are
+without a use. The image is built with them, from this source, which the tool
+that compiles the port's Shen source could not take, as it takes definitions
+only; what the datatypes define is not the program's, for shen.*userdefs*."
+
+(defun shen-jit.isolate-interface ()
+  (let Userdefs (value shen.*userdefs*)
+    (do (map (lambda Form (eval Form)) (read-from-string "
+(datatype isolate.types
+  if (element? R [normal killed ended])
+  _____________________________________
+  R : isolate.reason;
+
+  R : string;
+  ___________
+  R : isolate.reason;
+
+  I : isolate; R : isolate.reason;
+  ================================
+  [down I R] : isolate.down;
+
+  I : isolate; M : (receiver isolate.down);
+  =========================================
+  [I | M] : isolate.started;)
+
+(datatype channel.types
+  R : (receiver A);
+  _________________
+  R : (channel.endpoint A);
+
+  S : (sender A);
+  _______________
+  S : (channel.endpoint A);
+
+  X : A;
+  ==========================
+  [ok X] : (channel.next A);
+
+  ____________________________
+  [closed] : (channel.next A);
+
+  R : (receiver A); X : A;
+  ========================
+  [R X] : (channel.got A);
+
+  R : (receiver A);
+  ==============================
+  [ready R] : (channel.ready A);
+
+  ______________________________
+  [timeout] : (channel.ready A);)
+
+(declare isolate.spawn [[A --> B] --> [A --> isolate]])
+(declare isolate.self [--> isolate])
+(declare isolate.kill [isolate --> isolate])
+(declare isolate.monitor [isolate --> [receiver isolate.down]])
+(declare isolate.check-kill [--> boolean])
+(declare isolate.share [A --> A])
+(declare isolate.spawn-each [[A --> B] --> [[list A] --> [list isolate.started]]])
+(declare isolate.stop-each [[list isolate.started] --> boolean])
+(declare channel.new [number --> [receiver A]])
+(declare channel.sender [[receiver A] --> [sender A]])
+(declare channel.give [[receiver A] --> [receiver A]])
+(declare channel.send [[sender A] --> [A --> A]])
+(declare channel.receive [[receiver A] --> A])
+(declare channel.next [[receiver A] --> [channel.next A]])
+(declare channel.receive-any [[list [receiver A]] --> [channel.got A]])
+(declare channel.wait-any [[list [receiver A]] --> [number --> [channel.ready A]]])
+(declare channel.close [[channel.endpoint A] --> [channel.endpoint A]])
+
+(shen.x.namespaces.publish isolate
+  [[spawn | isolate.spawn] [self | isolate.self] [kill | isolate.kill] [monitor | isolate.monitor]
+   [check-kill | isolate.check-kill] [share | isolate.share] [spawn-each | isolate.spawn-each]
+   [stop-each | isolate.stop-each] [down | isolate.down] [started | isolate.started]
+   [reason | isolate.reason]])
+(shen.x.namespaces.publish channel
+  [[new | channel.new] [sender | channel.sender] [give | channel.give] [send | channel.send]
+   [receive | channel.receive] [next | channel.next] [receive-any | channel.receive-any]
+   [wait-any | channel.wait-any] [close | channel.close] [endpoint | channel.endpoint]
+   [got | channel.got] [ready | channel.ready]])
+(map (/. F (systemf F))
+  [isolate.spawn isolate.self isolate.kill isolate.monitor isolate.check-kill isolate.share
+   isolate.spawn-each isolate.stop-each isolate.down isolate.started isolate.reason
+   channel.new channel.sender channel.give channel.send channel.receive channel.next
+   channel.receive-any channel.wait-any channel.close channel.endpoint channel.got channel.ready])"))
+        (set shen.*userdefs* Userdefs))))
+
+"After each form a load evaluates. A library can do then what needs the forms
+before it run, such as the grammar library compiling its loops once the
+functions their guards call exist, which a file's macros cannot wait for, as
+the kernel expands a whole file before it evaluates any of it.
+(shen-jit.after-form F) registers F, a function of no arguments, and
+(shen-jit.loading?) says whether a load is going on. These are the kernel's,
+with that added. A handler around the load would keep an error in it from
+recording its backtrace, so a load that raises leaves the count as it is,
+and the REPL starts each input at 0."
+
+(defun shen.load-help (Tc Forms)
+  (let Depth (shen-jit.load-depth)
+    (do (set shen-jit.*load-depth* (+ Depth 1))
+        (let Result (if (= false Tc) (shen.eval-and-print Forms) (shen.check-eval-and-print Forms))
+          (do (set shen-jit.*load-depth* Depth) Result)))))
+
+(defun shen.eval-and-print (Forms)
+  (shen.for-each (lambda Form (do (pr (shen.app (eval-kl (shen.shen->kl Form)) "
+" shen.s) (stoutput)) (shen-jit.form-ended))) Forms))
+
+(defun shen.work-through (Forms)
+  (cond ((= () Forms) ())
+        ((and (cons? Forms) (and (cons? (tl Forms)) (and (cons? (tl (tl Forms))) (= (hd (tl Forms)) (intern ":")))))
+         (let Type (shen.typecheck (hd Forms) (hd (tl (tl Forms))))
+           (if (= Type false)
+               (shen.type-error)
+               (let Value (eval-kl (shen.shen->kl (hd Forms)))
+                 (do (pr (shen.app Value (cn " : " (shen.app (shen.pretty-type Type) "
+" shen.r)) shen.s) (stoutput))
+                     (do (shen-jit.form-ended) (shen.work-through (tl (tl (tl Forms))))))))))
+        ((cons? Forms) (shen.work-through (cons (hd Forms) (cons (intern ":") (cons A (tl Forms))))))
+        (true (simple-error "implementation error in shen.work-through"))))
+
+(defun shen-jit.load-depth () (trap-error (value shen-jit.*load-depth*) (lambda E 0)))
+
+(defun shen-jit.loading? () (> (shen-jit.load-depth) 0))
+
+(defun shen-jit.after-forms () (trap-error (value shen-jit.*after-forms*) (lambda E ())))
+
+(defun shen-jit.after-form (F) (set shen-jit.*after-forms* (adjoin F (shen-jit.after-forms))))
+
+(defun shen-jit.form-ended () (shen-jit.run-after (reverse (shen-jit.after-forms))))
+
+(defun shen-jit.run-after (Fs)
+  (if (= Fs ()) shen.skip (do (shen-jit.apply (hd Fs) ()) (shen-jit.run-after (tl Fs)))))
+
+"As an isolate ends, after its function returns or raises, it runs once each
+function of no arguments it registered with (shen-jit.at-end F), the last first.
+Then, in rounds, as collections find its guards' pointers dead, it runs each it
+registered with (shen-jit.at-guards-dead F), which takes their values off the
+list, as the handle library's sweep releases what its handles hold: what dies
+then, while its globals still hold the rest (isolate.c).
+An error from one is dropped. The builder's run only as an isolate's would:
+never, as the program ends with it."
+
+(defun shen-jit.at-end-list () (trap-error (value shen-jit.*at-end*) (lambda E ())))
+
+(defun shen-jit.at-end (F) (set shen-jit.*at-end* (adjoin F (shen-jit.at-end-list))))
+
+(defun shen-jit.at-guards-dead (F)
+  (set shen-jit.*guards-dead* (adjoin F (trap-error (value shen-jit.*guards-dead*) (lambda E ())))))
+
+(defun shen-jit.isolate-ending () (shen-jit.run-at-end (shen-jit.at-end-list)))
+
+(defun shen-jit.run-at-end (Fs)
+  (if (= Fs ())
+      true
+      (do (trap-error (shen-jit.apply (hd Fs) ()) (lambda E shen.skip)) (shen-jit.run-at-end (tl Fs)))))
+
+"An isolate or an endpoint is an absvector whose first element is one of these,
+which the printer calls."
+
+(defun shen-jit.print-isolate (V) (cn "<isolate " (cn (str (<-address V 1)) ">")))
+
+(defun shen-jit.print-receiver (V) (cn "<receive endpoint " (cn (str (<-address V 1)) ">")))
+
+(defun shen-jit.print-sender (V) (cn "<send endpoint " (cn (str (<-address V 1)) ">")))
+
+(defun shen-jit.print-given (V) (cn "<given endpoint " (cn (str (<-address V 1)) ">")))
 
 (defun shen-jit.register-primitives ()
   (do (shen-jit.primitive shen-jit.fixnum? 1)
@@ -419,7 +833,6 @@ may use as values, as (fn shen-jit.u8)."
     (do (shen-jit.primitive shen-jit.same? 2)
     (do (shen-jit.primitive shen-jit.newpv 2)
     (do (shen-jit.primitive shen-jit.gc 2)
-    (do (shen-jit.primitive shen-jit.thread 1)
     (do (shen-jit.primitive shen-jit.foreign 2)
     (do (shen-jit.primitive shen-jit.pointer? 1)
     (do (shen-jit.primitive shen-jit.pointer-kind 1)
@@ -446,12 +859,8 @@ may use as values, as (fn shen-jit.u8)."
     (do (shen-jit.primitive shen-jit.pointer-read-only 1)
     (do (shen-jit.primitive shen-jit.collect 0)
     (do (shen-jit.primitive shen-jit.write-bytes 4)
-    (do (shen-jit.primitive shen-jit.worker-scope 5)
-    (do (shen-jit.primitive shen-jit.worker-batch 2)
-    (do (shen-jit.primitive shen-jit.worker-index 0)
-    (do (shen-jit.primitive shen-jit.worker-live 0)
-    (do (shen-jit.primitive shen-jit.worker-cancelled? 0)
-    (do (shen-jit.primitive shen-jit.worker-shared-view 0) shen.skip))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+    (do (shen-jit.primitive shen-jit.arity 1) (do (shen-jit.primitive shen-jit.function 1)
+    (do (shen-jit.primitive shen-jit.set-arity 2) (do (shen-jit.primitive shen-jit.apply 2) (do (shen-jit.primitive shen-jit.isolate 3) shen.skip))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
 
 "Cleanup, as a library that holds something outside the heap needs it.
 (shen-jit.finally Body Cleanup) thaws Body, then Cleanup however Body ended,
@@ -478,18 +887,33 @@ the process with status N; it is not named exit, since port definitions are
 sealed and programs may define their own exit. (shen-jit.save-executable Path
 Entry) writes a binary and ends the process. shen-jit.finally and
 shen-jit.on-error are typed, and can be given one argument. The others are for native.shen,
-which would otherwise compile its calls to them as look-ups with fn.
-
-(thread Frozen) runs Frozen in a new thread, as Shen/Scheme's does, with one
-thread at a time holding a lock (thread.c). It is defined here, once sealing has
-ended, since programs may define their own thread."
+which would otherwise compile its calls to them as look-ups with fn. The kernel's printers
+shen.tuple, shen.pvar and shen.dictionary get arities here too: the kernel keeps only their
+lambda forms, in the property vector, which an isolate starts without, so that fn makes theirs
+from a template, which needs the arity."
 
 (defun shen-jit.initialise ()
-  (do (shen-jit.struct.initialise)
-  (do (shen-jit.register-primitives)
-  (do (eval-kl (cons defun (cons thread (cons (cons x ()) (cons (cons shen-jit.thread (cons x ())) ())))))
   (do (shen.initialise-arity-table
-        (cons thread (cons 1 (cons shen-jit.seal (cons 1 (cons shen-jit.backtrace (cons 0
+        (cons isolate.spawn (cons 2 (cons channel.new (cons 1 (cons channel.sender (cons 1
+          (cons channel.send (cons 2 (cons channel.receive (cons 1 (cons channel.receive-any (cons 1
+            (cons channel.close (cons 1 (cons channel.give (cons 1 (cons isolate.monitor (cons 1
+              (cons isolate.kill (cons 1 (cons isolate.self (cons 0 (cons channel.next (cons 1
+              (cons channel.wait-any (cons 2 (cons isolate.check-kill (cons 0 (cons isolate.share (cons 1
+                (cons isolate.spawn-each (cons 2 (cons isolate.stop-each (cons 1
+                (cons shen-jit.after-form (cons 1 (cons shen-jit.loading? (cons 0 (cons shen-jit.at-end (cons 1 (cons shen-jit.at-guards-dead (cons 1
+                (cons shen.tuple (cons 1 (cons shen.pvar (cons 1 (cons shen.dictionary (cons 1
+                (cons shen-jit.print-isolate (cons 1 (cons shen-jit.print-receiver (cons 1
+                  (cons shen-jit.print-sender (cons 1 (cons shen-jit.print-given (cons 1
+                    ())))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+  (do (eval-kl (shen-jit.template-defun shen-jit.template-2 (cons a (cons b ()))))
+  (do (eval-kl (shen-jit.template-defun shen-jit.template-3 (cons a (cons b (cons c ())))))
+  (do (eval-kl (shen-jit.template-defun shen-jit.template-4 (cons a (cons b (cons c (cons d ()))))))
+  (do (shen-jit.struct.initialise)
+  (do (shen-jit.isolate-interface)
+  (do (shen-jit.register-primitives)
+  (do (shen-jit.primitive-procedures)
+  (do (shen.initialise-arity-table
+        (cons shen-jit.seal (cons 1 (cons shen-jit.backtrace (cons 0
           (cons shen-jit.exit (cons 1 (cons shen-jit.code (cons 1
             (cons shen-jit.save-executable (cons 2
               (cons shen-jit.install (cons 1 (cons shen-jit.symbol? (cons 1
@@ -499,7 +923,7 @@ ended, since programs may define their own thread."
                       (cons shen-jit.lower.constant (cons 2 (cons shen-jit.lower.add-code (cons 2
                         (cons shen-jit.lower.code-form (cons 1 (cons shen-jit.lower.prim-arity (cons 1
                           (cons shen-jit.lower.fixed? (cons 1
-                            (cons shen-jit.finally (cons 2 (cons shen-jit.on-error (cons 2 ())))))))))))))))))))))))))))))))))))))))))
+                            (cons shen-jit.finally (cons 2 (cons shen-jit.on-error (cons 2 ())))))))))))))))))))))))))))))))))))))))
       (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.finally))
       (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.on-error))
       (do (declare shen-jit.fixnum? (cons A (cons --> (cons boolean ()))))
@@ -507,12 +931,11 @@ ended, since programs may define their own thread."
                                       (cons --> (cons (cons (cons lazy (cons B ())) (cons --> (cons A ()))) ()))))
       (do (declare shen-jit.on-error (cons (cons lazy (cons A ()))
                                        (cons --> (cons (cons (cons lazy (cons B ())) (cons --> (cons A ()))) ()))))
-      (do (shen.set-lambda-form-entry (shen.lambda-entry thread))
       (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.seal))
           (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.exit))
               (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.code))
                   (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.save-executable))
-                      (set shen-jit.defined ()))))))))))))))))
+                      (set shen-jit.defined ()))))))))))))))))))))
 
 "Definitions are factorised as they are evaluated, as Shen/Scheme's compiler
 does: the kernel's shen.factor binds each selector once and shares the tests

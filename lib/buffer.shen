@@ -23,11 +23,12 @@
           I
           (error "buffer: range ~A + ~A exceeds ~A bytes" I N Length))))
 
+\\ The byte primitives read strings too, but a buffer's storage is bytes it may write, or a pointer.
 (define storage-length
-  Storage -> (if (and (shen-jit.pointer? Storage)
-                     (= (shen-jit.pointer-address Storage) 0))
-                 (error "buffer: storage is closed")
-                 (shen-jit.bytes-length Storage)))
+  Storage -> (cond ((string? Storage) (error "bytes: ~S is not a byte buffer" Storage))
+                   ((and (shen-jit.pointer? Storage) (= (shen-jit.pointer-address Storage) 0))
+                    (error "buffer: storage is closed"))
+                   (true (shen-jit.bytes-length Storage))))
 
 \\ A view: the original owner, start and exclusive end. Metadata is not mutated.
 (define show-view

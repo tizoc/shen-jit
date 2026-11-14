@@ -45,18 +45,17 @@ def server(executable, database):
         reservation.bind(("127.0.0.1", 0))
         port = reservation.getsockname()[1]
     # Test-only routes let this harness observe listener statistics.
-    program = f'''(counter-app.initialize {shen_string(database.as_posix())})
-      (define counter-test.handle
-        Q -> (cases (= (http.target Q) "/__test_stop")
-                     (do (http.stop (value counter-test.server)) (counter-app.json 202 [object]))
-                    (= (http.target Q) "/__test_fail") (error "test application failure")
-                    true (counter-app.handle {shen_string(database.as_posix())} Q)))
-      (set counter-test.server
-        (http.listen "127.0.0.1" {port} (function counter-test.handle)
+    program = f'''(define counter-test.handle
+        Db Q -> (cases (= (http.target Q) "/__test_stop")
+                        (do (http.stop (http.current-server)) (counter-app.json 202 [object]))
+                       (= (http.target Q) "/__test_fail") (error "test application failure")
+                       true (counter-app.handle Db Q)))
+      (set counter-test.started
+        (counter-app.start {shen_string(database.as_posix())} "127.0.0.1" {port} counter-test.handle
           [[max-connections 4] [shutdown-grace 100] [head-timeout 1000]
            [body-timeout 1000] [body-limit 4096] [response-body-limit 65536]]))
-      (counter-app.await (value counter-test.server))
-      (output "APP-STATS ~A~%" (http.stats (value counter-test.server)))'''
+      (counter-app.await (hd (value counter-test.started)) (hd (tl (value counter-test.started))))
+      (output "APP-STATS ~A~%" (http.stats (hd (tl (value counter-test.started)))))'''
     driver = database.parent / "test-driver.shen"
     driver.write_text(program)
     command = [str(executable), "eval"]
@@ -165,12 +164,11 @@ def main():
             finally:
                 connection.close()
 
-            # Native socket waits must not keep shutdown waiting for their full body timeout.
+            # A connection waiting on its socket is killed once the grace has passed.
             with socket.create_connection(("127.0.0.1", port), timeout=5) as stalled:
                 stalled.sendall(b"POST /counters/x HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4\r\n\r\na")
                 time.sleep(0.1)
                 # Context exit requests shutdown while this connection remains open below.
-                # Its owner closes it after the 100 ms grace period.
                 held = stalled.dup()
             with socket.create_connection(("127.0.0.1", port), timeout=5) as stalled_chunk:
                 stalled_chunk.sendall(b"PUT /counters/x HTTP/1.1\r\nHost: localhost\r\n"

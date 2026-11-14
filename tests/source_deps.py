@@ -357,8 +357,6 @@ def main():
     image(executable, base, directory)
     import source_deps_batch
     source_deps_batch.check(program, source, output, directory)
-    import source_deps_values
-    source_deps_values.check(executable, adapter, directory, program)
 
 
 if __name__ == '__main__':

@@ -15,7 +15,8 @@
 \\   (return Acc))
 \\
 \\ Names follow Shen: a variable is a slot, a symbol is itself, and anything else
-\\ is a constant, so [1 2] is a list. (const E) is the value of E, at definition.
+\\ is a constant, so [1 2] is a list. (const E) is the value of E, at definition, which
+\\ code can hold only if it is a symbol, number, string, boolean or list of them.
 \\ See docs/bytecode.md, "Native code written by hand".
 \\
 \\ Real registers hold doubles, unboxed, and word registers 64-bit integers that wrap, in code

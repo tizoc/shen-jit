@@ -49,11 +49,11 @@ or closing it from another task while an operation is active is unsupported.
 
 Use `io.read-some`, `io.write-some`, `io.read-exact`, `io.write-all`, `io.reader` and `io.writer` with their
 usual contracts. The adapter uses nonblocking native `recv` and `send` directly on bounded managed chunks.
-They hold the VM lock, so those buffers cannot move during the call. A positive result is acknowledged
+An isolate's heap does not move during the call, so neither do those buffers. A positive result is acknowledged
 immediately; a short send is reported to the I/O core, whose writer retains the unsent suffix.
 
-Readiness shortage and EINTR wait/retry in Shen. Polling waits use 100 ms slices and release the VM lock,
-allowing other threads and the runtime's interruption checks to run.
+Readiness shortage and EINTR wait/retry in Shen. Polling waits use 100 ms slices, between which the
+runtime's interruption checks run and a kill of the waiting isolate is raised.
 [Absolute deadlines](deadlines.md) can bound a complete operation across retries and partial progress.
 Install one with `io.socket-deadline E D`, or remove it with `io.socket-unlimited E`. Transfer options
 remain `[]`; cancellation is not implemented. Slices alone are not operation timeouts. Unexpected
@@ -79,9 +79,8 @@ endpoint or its old writer raise, including empty writes. Full `io.close` remain
 remembered result. Close after successful shutdown does not flush the detached, already drained writer.
 This supports request EOF followed by a server response without prematurely closing the whole connection.
 
-`io.socket-cancel Endpoint` can be called from another task to permanently cancel nonempty backend I/O,
-including while its task waits. It preserves acknowledged progress and leaves close to that task.
-See [server cancellation](http-listener.md#cancellation-and-ownership) for the cooperative wait/ownership rules.
+`io.socket-cancel Endpoint` permanently cancels nonempty backend I/O on an endpoint. It preserves
+acknowledged progress and leaves close to the endpoint's owner. See [cancellation](http-listener.md#cancellation-and-kills).
 
 ## A bounded session handler
 

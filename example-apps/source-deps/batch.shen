@@ -1,4 +1,5 @@
-\\ Host-only export, selector validation and ordered result assembly.
+\\ Batch queries: the matched call graph as integer adjacency, selectors checked against it, and
+\\ each query's BFS, in turn or in isolates that read the graph shared (lib/parallel.shen).
 (define source-deps.ids
   [] _ _ _ -> true
   [[Fn] | Rest] At Names Ids ->
@@ -62,17 +63,6 @@
         [ok [[(if (= (hd Selected) reach) 0 1)
               (shen.<-dict (<-address Export 3) (hd (tl Selected)))] | More]])))
 
-(define source-deps.drop
-  0 Rest -> Rest
-  N [_ | Rest] -> (source-deps.drop (- N 1) Rest))
-
-(define source-deps.requests
-  _ Count Count _ _ -> []
-  Queries Worker Count Start Budget ->
-    (let Left (- Count Worker) N (sdg.floor (+ (length Queries) (- Left 1)) Left)
-         Packet (sdg.request Queries Start N Budget)
-      [Packet | (source-deps.requests (source-deps.drop N Queries) (+ Worker 1) Count (+ Start N) Budget)]))
-
 (define source-deps.answer-ids
   _ _ End End _ Reversed -> (reverse Reversed)
   Bytes Names At End Previous Reversed ->
@@ -80,52 +70,26 @@
          _ (if (and (> ID Previous) (< ID (limit Names))) true (error "batch: invalid answer ID"))
       (source-deps.answer-ids Bytes Names (+ At 4) End ID [(<-address Names (+ ID 1)) | Reversed])))
 
-(define source-deps.decode-more
-  Bytes End 0 Ordinal _ Queries Reversed ->
-    (if (= End (shen-jit.bytes-length Bytes)) [Ordinal Queries Reversed]
-        (error "batch: trailing reply data"))
-  Bytes At Left Ordinal Names [[Mode Root] | Queries] Reversed ->
-    (let _ (if (<= (+ At 16) (shen-jit.bytes-length Bytes)) true (error "batch: short reply"))
-         Count (shen-jit.u32 Bytes (+ At 12)) End (+ At 16 (* Count 4))
-         _ (if (and (= (shen-jit.u32 Bytes At) Ordinal) (= (shen-jit.u32 Bytes (+ At 4)) Mode)
-                    (= (shen-jit.u32 Bytes (+ At 8)) Root) (<= End (shen-jit.bytes-length Bytes)))
-               true (error "batch: invalid reply"))
-         Answer (source-deps.answer-ids Bytes Names (+ At 16) End -1 [])
-      (source-deps.decode-more Bytes End (- Left 1) (+ Ordinal 1) Names Queries
-        [[(if (= Mode 0) reach impact) (<-address Names (+ Root 1)) Answer] | Reversed]))
-  _ _ _ _ _ _ _ -> (error "batch: unexpected reply"))
+\\ A query's answer, the sorted IDs it reaches, as functions. An isolate reads the graph shared,
+\\ by pointer.
+(define source-deps.batch-job
+  Graph [Mode Root] -> (sdg.query Graph Mode Root))
 
-(define source-deps.decode
-  [] _ [] _ Reversed -> (reverse Reversed)
-  [View | Rest] Names Queries Ordinal Reversed ->
-    (let Bytes (parallel.bytes View)
-         _ (if (>= (shen-jit.bytes-length Bytes) 4) true (error "batch: short reply"))
-         State (source-deps.decode-more Bytes 4 (shen-jit.u32 Bytes 0) Ordinal Names Queries Reversed)
-      (source-deps.decode Rest Names (hd (tl State)) (hd State) (hd (tl (tl State)))))
-  _ _ _ _ _ -> (error "batch: missing reply"))
+(define source-deps.named
+  [] [] _ -> []
+  [[Mode Root] | Queries] [Answer | Answers] Names
+  -> [[(if (= Mode 0) reach impact) (<-address Names (+ Root 1))
+       (source-deps.answer-ids Answer Names 0 (shen-jit.bytes-length Answer) -1 [])]
+      | (source-deps.named Queries Answers Names)])
 
 (define source-deps.batch-execute
-  Export Queries 0 _ ->
-    (source-deps.decode [(sdg.execute (<-address Export 1)
-                          (buffer.owner (sdg.request Queries 0 (length Queries) 67108864)) false)]
-                        (<-address Export 2) Queries 0 [])
-  Export Queries Workers Image ->
-    (parallel.with-workers Image (intern "source-deps.batch-worker") Workers
-      (source-deps.batch-config Export Workers)
-      (/. Scope (source-deps.decode
-                  (parallel.batch Scope (source-deps.requests Queries 0 Workers 0
-                                          (sdg.floor 67108864 Workers)))
-                  (<-address Export 2) Queries 0 []))))
-
-\\ Divide the initial space and heap budget, but keep at least 64 MiB of
-\\ heap capacity per child for the application image and private query state.
-(define source-deps.batch-config
-  Export Workers ->
-    (let _ (parallel.check-count Workers)
-         Graph (<-address Export 1)
-         Budget (sdg.floor (- 402653184 (shen-jit.bytes-length Graph)) Workers)
-      (parallel.config (sdg.floor 16777216 Workers)
-        (if (< Budget 67108864) 67108864 Budget) (buffer.wrap Graph))))
+  Export Queries 0 ->
+    (source-deps.named Queries (map (/. Q (source-deps.batch-job (<-address Export 1) Q)) Queries)
+                       (<-address Export 2))
+  Export Queries Workers ->
+    (source-deps.named Queries
+                       (parallel.map Workers [source-deps.batch-job (isolate.share (<-address Export 1))] Queries)
+                       (<-address Export 2)))
 
 (define source-deps.batch-answer-report
   _ _ _ _ _ [] -> [ok done]
@@ -155,21 +119,22 @@
             [ok (<-address State 1)])))))
 
 (define source-deps.batch-options
-  [] -> [0 ""]
-  ["--workers" "0"] -> [0 ""]
-  ["--workers" N "--worker-image" Image] ->
-    [(parallel.check-count (source-deps.uint (json.parse N []))) Image]
-  _ -> (error "expected --workers 0, or --workers COUNT (1..64) --worker-image IMAGE"))
+  [] -> 0
+  ["--workers" N] -> (let Count (trap-error (source-deps.uint (json.parse N [])) (/. E -1))
+                       (if (and (integer? Count) (>= Count 0) (<= Count 64))
+                           Count
+                           (error "expected --workers COUNT, from 0 to 64")))
+  _ -> (error "expected --workers COUNT, from 0 to 64"))
 
 (define source-deps.batch-run
   Input Output QueryFile Options Limits ->
-    (let Config (source-deps.batch-options Options)
+    (let Workers (source-deps.batch-options Options)
       (io.let-ok Queries (source-deps.read-queries QueryFile)
         (io.let-ok Data (io.with-input-file Input
                          (/. In (source-deps.read (io.reader In [[chunk-size 16384]]) Input Limits)))
           (io.let-ok Analysis (source-deps.analyze Data [])
             (let Db (<-address Analysis 2) Export (source-deps.export Db)
               (io.let-ok Selected (source-deps.resolve-queries Db Export Queries)
-                (let Answers (source-deps.batch-execute Export Selected (hd Config) (hd (tl Config)))
+                (let Answers (source-deps.batch-execute Export Selected Workers)
                   (fs.with-replacement Output
                     (/. Out (source-deps.batch-report Analysis Answers Out Limits)))))))))))

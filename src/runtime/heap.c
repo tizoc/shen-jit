@@ -44,12 +44,15 @@ static void fill_cleared(V *from, V *to)
    much. The area lies between the spaces, so that one range holds what a
    collection may move, and not where it copies to: the collector need not know. */
 #define RESERVED_WORDS ((size_t)1 << 33) /* 64 GiB for each region */
+/* An isolate's (isolate.c): reserving and releasing the builder's took about 200 us of each
+   spawn, and this about 30 (measured on macOS, 2026-11-12). */
+#define ISOLATE_RESERVED_WORDS ((size_t)1 << 30) /* 8 GiB */
 #define STAGGER_WORDS (((size_t)33 << 17) + (1 << 13)) /* 33 MiB and 64 KiB, so whole pages */
 #define HEAP_BYTES(words) ((3 * (words) + 2 * STAGGER_WORDS) * sizeof(uint64_t))
 
-static uint64_t *reserve_heap(size_t min_words, size_t *words)
+static uint64_t *reserve_heap(size_t min_words, size_t most_words, size_t *words)
 {
-    for (*words = min_words > RESERVED_WORDS ? min_words : RESERVED_WORDS; *words >= min_words; *words /= 2) {
+    for (*words = min_words > most_words ? min_words : most_words; *words >= min_words; *words /= 2) {
 #ifdef _WIN32
         void *p = win_reserve(HEAP_BYTES(*words));
         if (p)
@@ -97,16 +100,67 @@ V *vm_cleared_stack(size_t words)
     return stack;
 }
 
-VM *vm_create(size_t semispace_words, size_t stack_words)
+/* A VM lies at the start of a block of address space that also holds its global slots
+   (vm.h), committed as numbers grow. */
+#define MAX_GLOBALS ((size_t)1 << 24)
+#define GLOBALS_STEP ((size_t)1 << 13) /* slots committed at a time: 64 KB */
+
+static size_t page_round(size_t bytes) { return (bytes + 65535) & ~(size_t)65535; }
+
+bool vm_globals_commit(VM *vm, size_t n)
 {
-    VM *vm = calloc(1, sizeof *vm);
+    if (n <= vm->globals_committed)
+        return true;
+    if (n > MAX_GLOBALS)
+        return false;
+    size_t want = (n + GLOBALS_STEP - 1) / GLOBALS_STEP * GLOBALS_STEP;
+    if (want > MAX_GLOBALS)
+        want = MAX_GLOBALS;
+    size_t from = page_round(offsetof(VM, globals) + vm->globals_committed * sizeof(V));
+    size_t to = page_round(offsetof(VM, globals) + want * sizeof(V));
+    if (to > from && !commit_space((uint64_t *)((char *)vm + from), (to - from) / sizeof(uint64_t)))
+        return false;
+    fill_cleared(vm->globals + vm->globals_committed, vm->globals + want);
+    vm->globals_committed = want;
+    return true;
+}
+
+static VM *vm_block(void)
+{
+    size_t bytes = page_round(offsetof(VM, globals) + MAX_GLOBALS * sizeof(V));
+#ifdef _WIN32
+    VM *vm = win_reserve(bytes);
+#else
+    VM *vm = mmap(NULL, bytes, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+    if (vm == MAP_FAILED)
+        vm = NULL;
+#endif
     if (!vm)
         return NULL;
-    vm->space = reserve_heap(semispace_words, &vm->reserved_words);
+    if (!commit_space((uint64_t *)vm, page_round(offsetof(VM, globals)) / sizeof(uint64_t))) {
+#ifdef _WIN32
+        win_release(vm);
+#else
+        munmap(vm, bytes);
+#endif
+        return NULL;
+    }
+    memset(vm, 0, offsetof(VM, globals)); /* fresh pages are zero; this says so */
+    vm->block_bytes = bytes;
+    return vm;
+}
+
+/* The heap and stack of a new VM, whose program is set. */
+static VM *vm_heap(VM *vm, size_t semispace_words, size_t stack_words, size_t reserved_words)
+{
+    vm->space = reserve_heap(semispace_words, reserved_words, &vm->reserved_words);
     vm->area = vm->space ? vm->space + vm->reserved_words + STAGGER_WORDS : NULL;
     vm->other = vm->space ? vm->area + vm->reserved_words + STAGGER_WORDS : NULL;
     vm->stack = vm_cleared_stack(stack_words);
-    if (!vm->space || !vm->stack || !commit_space(vm->space, semispace_words) ||
+    /* An isolate numbering a global meanwhile commits this one's slot too, under the isolates' lock
+       (isolates_commit_globals), once this context is listed. */
+    if (!vm->space || !vm->stack || !vm_globals_commit(vm, __atomic_load_n(&vm->program->nglobals, __ATOMIC_ACQUIRE)) ||
+        !commit_space(vm->space, semispace_words) ||
         !commit_space(vm->area, semispace_words) || !commit_space(vm->other, semispace_words)) {
         vm_destroy(vm);
         return NULL;
@@ -120,7 +174,6 @@ VM *vm_create(size_t semispace_words, size_t stack_words)
     vm_set_limit(vm, vm->stack);
     vm->exception = V_NIL;
     vm->api = ffi_api();
-    vm->intern = V_NIL;
     vm->fail = V_NIL;
     vm->chars = V_NIL;
     vm->messages = V_NIL;
@@ -130,11 +183,39 @@ VM *vm_create(size_t semispace_words, size_t stack_words)
     return vm;
 }
 
+VM *vm_create(size_t semispace_words, size_t stack_words)
+{
+    VM *vm = vm_block();
+    if (!vm)
+        return NULL;
+    /* A VM made here owns a program of its own, as the builder does. */
+    if (!(vm->program = calloc(1, sizeof *vm->program)) || !program_init(&vm->program->space)) {
+        vm_destroy(vm);
+        return NULL;
+    }
+    vm->program->owner = vm;
+    vm->program->nglobals = 1;
+    return vm_heap(vm, semispace_words, stack_words, RESERVED_WORDS);
+}
+
+/* A context of a program another VM owns: an isolate's (isolate.c). It may not define. */
+VM *vm_create_context(Program *program, size_t semispace_words, size_t stack_words)
+{
+    VM *vm = vm_block();
+    if (!vm)
+        return NULL;
+    vm->program = program;
+    return vm_heap(vm, semispace_words, stack_words, ISOLATE_RESERVED_WORDS);
+}
+
 static void ra_free(RootArray *ra)
 {
     for (size_t i = 0; i < ra->nchunks; i++)
         free(ra->chunks[i]);
     free(ra->chunks);
+    for (size_t i = 0; i < ra->nretired; i++)
+        free(ra->retired[i]);
+    free(ra->retired);
 }
 
 void vm_destroy(VM *vm)
@@ -142,7 +223,6 @@ void vm_destroy(VM *vm)
     if (!vm)
         return;
     ffi_drain_roots(vm);
-    thread_free_all(vm);
     if (vm->space) {
 #ifdef _WIN32
         win_release(vm->space < vm->other ? vm->space : vm->other);
@@ -151,23 +231,38 @@ void vm_destroy(VM *vm)
 #endif
     }
     free(vm->stack);
+    free(vm->own.slots);
     for (size_t i = 0; i < vm->nlarge; i++)
         free(vm->large[i].object);
     free(vm->large);
     free(vm->handlers);
-    ra_free(&vm->cells);
-    ra_free(&vm->consts);
     free(vm->croots);
     for (size_t i = 0; i * FOREIGN_ROOT_CHUNK < vm->nforeign_roots; i++)
         free(vm->foreign_roots[i]);
     free(vm->foreign_roots);
     free(vm->files);
-    free(vm->natives);
     free(vm->guards);
-    free(vm->free_cells);
-    free(vm->owned);
-    free(vm->free_consts);
-    free(vm);
+    Program *p = vm->program;
+    if (p && p->owner == vm && isolates_free(p)) { /* or isolates still run it, an embedder's mistake */
+        program_release(&p->space);
+        free(p->published.slots);
+        for (size_t i = 0; i < p->published.nretired; i++)
+            free(p->published.retired[i]);
+        free(p->published.retired);
+        ra_free(&p->cells);
+        ra_free(&p->consts);
+        free(p->natives);
+        free(p->free_cells);
+        free(p->free_globals);
+        free(p->owned);
+        free(p->free_consts);
+        free(p);
+    }
+#ifdef _WIN32
+    win_release(vm);
+#else
+    munmap(vm, vm->block_bytes);
+#endif
 }
 
 V *ra_at(RootArray *ra, size_t i)
@@ -175,14 +270,30 @@ V *ra_at(RootArray *ra, size_t i)
     return &ra->chunks[i >> RA_CHUNK_BITS][i & (RA_CHUNK - 1)];
 }
 
+/* A full directory is replaced by one twice its size and kept: an isolate may be reading it
+   (cell_function, or emitted code through the program), and it holds the same chunks. */
 bool ra_push(RootArray *ra, V v, size_t *index)
 {
     if (ra->count == ra->nchunks * RA_CHUNK) {
-        V **chunks = realloc(ra->chunks, (ra->nchunks + 1) * sizeof *chunks);
-        if (!chunks)
-            return false;
-        ra->chunks = chunks;
-        if (!(chunks[ra->nchunks] = malloc(RA_CHUNK * sizeof(V))))
+        if (ra->nchunks == ra->chunks_cap) {
+            size_t cap = ra->chunks_cap ? 2 * ra->chunks_cap : 8;
+            if (ra->chunks) { /* kept as soon as it moves, whatever fails next */
+                V ***retired = realloc(ra->retired, (ra->nretired + 1) * sizeof *retired);
+                if (!retired)
+                    return false;
+                ra->retired = retired;
+            }
+            V **chunks = malloc(cap * sizeof *chunks);
+            if (!chunks)
+                return false;
+            if (ra->nchunks)
+                memcpy(chunks, ra->chunks, ra->nchunks * sizeof *chunks);
+            if (ra->chunks)
+                ra->retired[ra->nretired++] = ra->chunks;
+            __atomic_store_n(&ra->chunks, chunks, __ATOMIC_RELEASE);
+            ra->chunks_cap = cap;
+        }
+        if (!(ra->chunks[ra->nchunks] = malloc(RA_CHUNK * sizeof(V))))
             return false;
         ra->nchunks++;
     }
@@ -209,7 +320,7 @@ static bool weak_push(V **list, size_t *n, size_t *cap, V v)
 
 bool vm_track_file(VM *vm, V stream) { return weak_push(&vm->files, &vm->nfiles, &vm->files_cap, stream); }
 
-bool vm_track_native(VM *vm, V code) { return weak_push(&vm->natives, &vm->nnatives, &vm->natives_cap, code); }
+bool vm_track_native(VM *vm, V code) { return weak_push(&vm->program->natives, &vm->program->nnatives, &vm->program->natives_cap, code); }
 
 bool vm_guard(VM *vm, V pointer, V value)
 {
@@ -226,7 +337,7 @@ bool vm_guard(VM *vm, V pointer, V value)
 }
 
 /* Constant slots. A code object owns the range [cbase, cbase + nconst +
-   ncode) of vm->consts: the collector copies those slots when it scans the
+   ncode) of vm->program->consts: the collector copies those slots when it scans the
    code object, and once the code object is dead, clears them and reuses
    them. Its native code still holds their addresses, but cannot run again: a
    running function keeps its closure in its frame. Other slots are roots:
@@ -234,16 +345,16 @@ bool vm_guard(VM *vm, V pointer, V value)
    loaded. */
 static bool add_free_consts(VM *vm, size_t start, size_t len)
 {
-    if (vm->nfree_consts == vm->free_consts_cap) {
-        size_t cap = vm->free_consts_cap ? 2 * vm->free_consts_cap : 256;
-        void *ranges = realloc(vm->free_consts, cap * sizeof *vm->free_consts);
+    if (vm->program->nfree_consts == vm->program->free_consts_cap) {
+        size_t cap = vm->program->free_consts_cap ? 2 * vm->program->free_consts_cap : 256;
+        void *ranges = realloc(vm->program->free_consts, cap * sizeof *vm->program->free_consts);
         if (!ranges)
             return false; /* the slots are lost, nothing else */
-        vm->free_consts = ranges;
-        vm->free_consts_cap = cap;
+        vm->program->free_consts = ranges;
+        vm->program->free_consts_cap = cap;
     }
-    vm->free_consts[vm->nfree_consts].start = start;
-    vm->free_consts[vm->nfree_consts++].len = len;
+    vm->program->free_consts[vm->program->nfree_consts].start = start;
+    vm->program->free_consts[vm->program->nfree_consts++].len = len;
     return true;
 }
 
@@ -252,31 +363,27 @@ static bool add_free_consts(VM *vm, size_t start, size_t len)
 size_t vm_consts_alloc(VM *vm, size_t n, bool *ok)
 {
     *ok = true;
-    for (size_t i = 0; n && i < vm->nfree_consts; i++) {
-        if (vm->free_consts[i].len < n)
+    for (size_t i = 0; n && i < vm->program->nfree_consts; i++) {
+        if (vm->program->free_consts[i].len < n)
             continue;
-        size_t start = vm->free_consts[i].start;
-        vm->free_consts[i].start += n;
-        vm->free_consts[i].len -= n;
-        if (!vm->free_consts[i].len)
-            vm->free_consts[i] = vm->free_consts[--vm->nfree_consts];
+        size_t start = vm->program->free_consts[i].start;
+        vm->program->free_consts[i].start += n;
+        vm->program->free_consts[i].len -= n;
+        if (!vm->program->free_consts[i].len)
+            vm->program->free_consts[i] = vm->program->free_consts[--vm->program->nfree_consts];
         return start;
     }
-    size_t start = vm->consts.count, slot;
+    size_t start = vm->program->consts.count, slot;
     for (size_t i = 0; i < n && *ok; i++)
-        *ok = ra_push(&vm->consts, V_CLEARED, &slot);
+        *ok = ra_push(&vm->program->consts, V_CLEARED, &slot);
     return start;
 }
-
-/* owned[i]: 0 for a root or free slot, OWNED for one in a code object's
-   range, and REACHED while a collection has copied that code object. */
-enum { OWNED = 1, REACHED = 2 };
 
 /* Slots that code which could not be built took: cleared, so that what they held can go, and free. */
 void vm_consts_release(VM *vm, size_t start, size_t n)
 {
     for (size_t i = 0; i < n; i++)
-        *ra_at(&vm->consts, start + i) = V_CLEARED;
+        *ra_at(&vm->program->consts, start + i) = V_CLEARED;
     if (n)
         add_free_consts(vm, start, n);
 }
@@ -287,33 +394,36 @@ bool vm_track_code(VM *vm, V code)
 {
     uint64_t *o = ptr(code);
     size_t base = o[CODE_CBASE], n = o[CODE_NCONST] + o[CODE_NCODE];
-    if (!n || base + n > vm->consts.count)
+    if (!n || base + n > vm->program->consts.count)
         return n == 0;
-    if (base + n > vm->owned_cap) {
-        size_t cap = vm->owned_cap ? vm->owned_cap : 4096;
+    if (base + n > vm->program->owned_cap) {
+        size_t cap = vm->program->owned_cap ? vm->program->owned_cap : 4096;
         while (cap < base + n)
             cap *= 2;
-        unsigned char *owned = realloc(vm->owned, cap);
+        unsigned char *owned = realloc(vm->program->owned, cap);
         if (!owned)
             return false;
-        memset(owned + vm->owned_cap, 0, cap - vm->owned_cap);
-        vm->owned = owned;
-        vm->owned_cap = cap;
+        memset(owned + vm->program->owned_cap, 0, cap - vm->program->owned_cap);
+        vm->program->owned = owned;
+        vm->program->owned_cap = cap;
     }
-    memset(vm->owned + base, OWNED, n);
+    memset(vm->program->owned + base, OWNED, n);
     return true;
 }
 
-static bool owned_slot(VM *vm, size_t i) { return i < vm->owned_cap && vm->owned[i]; }
+static bool owned_slot(VM *vm, size_t i) { return i < vm->program->owned_cap && vm->program->owned[i]; }
+
+/* Owned by code in the heap, whose collection copies them. */
+static bool heap_slot(VM *vm, size_t i) { return owned_slot(vm, i) && vm->program->owned[i] != PROGRAM; }
 
 /* After an image loads, whose code objects vm_track_code has taken: the
    runs of cleared slots that no code owns are the ranges freed before it was
    written. Sealed-call slots always hold a symbol or a procedure. */
 void vm_find_free_consts(VM *vm)
 {
-    for (size_t i = 0; i < vm->consts.count;) {
+    for (size_t i = 0; i < vm->program->consts.count;) {
         size_t j = i;
-        while (j < vm->consts.count && !owned_slot(vm, j) && *ra_at(&vm->consts, j) == V_CLEARED)
+        while (j < vm->program->consts.count && !owned_slot(vm, j) && *ra_at(&vm->program->consts, j) == V_CLEARED)
             j++;
         if (j > i && !add_free_consts(vm, i, j - i))
             return;
@@ -332,32 +442,33 @@ static int by_start(const void *a, const void *b)
    code object's range is just owned slots left unreached. */
 static void sweep_code(VM *vm)
 {
-    size_t freed = 0, n = vm->owned_cap < vm->consts.count ? vm->owned_cap : vm->consts.count;
+    size_t freed = 0, n = vm->program->owned_cap < vm->program->consts.count ? vm->program->owned_cap : vm->program->consts.count;
     for (size_t i = 0; i < n;) {
-        if (vm->owned[i] != OWNED) {
-            vm->owned[i] = vm->owned[i] == REACHED ? OWNED : 0;
+        if (vm->program->owned[i] != OWNED) {
+            if (vm->program->owned[i] == REACHED)
+                vm->program->owned[i] = OWNED;
             i++;
             continue;
         }
         size_t j = i;
-        for (; j < n && vm->owned[j] == OWNED; j++) {
-            vm->owned[j] = 0;
-            *ra_at(&vm->consts, j) = V_CLEARED;
+        for (; j < n && vm->program->owned[j] == OWNED; j++) {
+            vm->program->owned[j] = 0;
+            *ra_at(&vm->program->consts, j) = V_CLEARED;
         }
         freed += add_free_consts(vm, i, j - i);
         i = j;
     }
     if (!freed)
         return;
-    qsort(vm->free_consts, vm->nfree_consts, sizeof *vm->free_consts, by_start);
+    qsort(vm->program->free_consts, vm->program->nfree_consts, sizeof *vm->program->free_consts, by_start);
     size_t m = 0;
-    for (size_t i = 0; i < vm->nfree_consts; i++) {
-        if (m && vm->free_consts[m - 1].start + vm->free_consts[m - 1].len == vm->free_consts[i].start)
-            vm->free_consts[m - 1].len += vm->free_consts[i].len;
+    for (size_t i = 0; i < vm->program->nfree_consts; i++) {
+        if (m && vm->program->free_consts[m - 1].start + vm->program->free_consts[m - 1].len == vm->program->free_consts[i].start)
+            vm->program->free_consts[m - 1].len += vm->program->free_consts[i].len;
         else
-            vm->free_consts[m++] = vm->free_consts[i];
+            vm->program->free_consts[m++] = vm->program->free_consts[i];
     }
-    vm->nfree_consts = m;
+    vm->program->nfree_consts = m;
 }
 
 /* Whether an address is in the heap's used part or in a live large object. */
@@ -432,13 +543,27 @@ static V reach_large(Copy *c, V v)
     return v;
 }
 
+/* What is in the program space stays where it is, and is not scanned: nothing there points
+   into the heap. A symbol that is not published is marked, so that the sweep keeps it. */
+static V reach_program(VM *vm, V v)
+{
+    uint64_t *p = ptr(v);
+    if (in_symbols(vm, p) && !((p[SYM_CELL] >> PUBLISHED_BIT) & 1) && vm->program->owner == vm)
+        p[SYM_CELL] |= UINT64_C(1) << MARK_BIT;
+    return v;
+}
+
 static V copy_value(Copy *c, V v)
 {
     if (!is_ptr(v))
         return v;
     uint64_t *p = ptr(v);
-    if ((p < c->from || p >= c->from + c->from_words) && !c->vm->copy_large)
-        return reach_large(c, v);
+    if (p < c->from || p >= c->from + c->from_words) {
+        if (in_program(c->vm, p))
+            return reach_program(c->vm, v);
+        if (!c->vm->copy_large)
+            return reach_large(c, v);
+    }
     if (p[0] == V_FORWARD)
         return p[1];
     /* Every object has at least two words, and most are pairs: copy those
@@ -475,12 +600,6 @@ static V copy_value(Copy *c, V v)
 
 static void copy_slot(Copy *c, V *slot) { *slot = copy_value(c, *slot); }
 
-static void copy_root_array(Copy *c, RootArray *ra)
-{
-    for (size_t i = 0; i < ra->count; i++)
-        copy_slot(c, ra_at(ra, i));
-}
-
 /* Scan to-space linearly. A word at an object boundary is either a header or
    the head of a pair (docs/semantics.md, section 2). Many slots hold no pointer
    (fixnums, booleans, []), so they are tested before the call. A slot that
@@ -508,10 +627,10 @@ static void scan(Copy *c, uint64_t *s)
         if (is_header(w)) {
             scan_values(c, s, w);
             /* A code object's constant slots go with it, when it owns them. */
-            if (hdr_type(w) == T_CODE && owned_slot(c->vm, s[CODE_CBASE]))
+            if (hdr_type(w) == T_CODE && heap_slot(c->vm, s[CODE_CBASE]))
                 for (size_t i = 0; i < s[CODE_NCONST] + s[CODE_NCODE]; i++) {
-                    V *slot = ra_at(&c->vm->consts, s[CODE_CBASE] + i);
-                    c->vm->owned[s[CODE_CBASE] + i] = REACHED;
+                    V *slot = ra_at(&c->vm->program->consts, s[CODE_CBASE] + i);
+                    c->vm->program->owned[s[CODE_CBASE] + i] = REACHED;
                     if (is_ptr(*slot))
                         copy_slot(c, slot);
                 }
@@ -574,79 +693,92 @@ static void free_spares(VM *vm)
     vm->nlarge = kept;
 }
 
-static bool in_from(const Copy *c, V v)
+static bool push_free(size_t **list, size_t *n, size_t *cap, size_t value)
 {
-    return is_ptr(v) && ptr(v) >= c->from && ptr(v) < c->from + c->from_words;
+    if (*n == *cap) {
+        size_t c = *cap ? 2 * *cap : 1024;
+        size_t *l = realloc(*list, c * sizeof *l);
+        if (!l)
+            return false;
+        *list = l;
+        *cap = c;
+    }
+    (*list)[(*n)++] = value;
+    return true;
 }
 
-/* The intern table is weak (objects.c): after everything else is copied, a
-   new table gets the symbols that were reached or that symbol_needed keeps,
-   and the others give their cells back. The new table is built the same way
-   from any layout of the same symbols, and the symbols it alone keeps are
-   copied in its order, so that collecting a heap twice lays it out the same
-   way: an image written from a loaded image is identical to it, unless what
-   was written held objects that only guards, pointers' owners or roots held
-   by C reached (image.c). */
+/* Free numbers at or above top leave the list. */
+static void trim_free(size_t *list, size_t *n, size_t top)
+{
+    size_t kept = 0;
+    for (size_t i = 0; i < *n; i++)
+        if (list[i] < top)
+            list[kept++] = list[i];
+    *n = kept;
+}
+
+/* The table of symbols that are not published is weak (objects.c): after everything else is
+   copied, a new table gets the symbols that were reached, as marked, or that symbol_needed
+   keeps, with their names; the others give back their cells, global numbers and slots.
+   Symbols published since the last collection leave the table. */
 static void sweep_symbols(VM *vm, Copy *c)
 {
-    uint64_t *old = ptr(vm->intern);
-    size_t n = (size_t)hdr_size(old[0]), live = 0, start = 0;
-    for (size_t i = 0; i < n; i++) {
-        V s = old[1 + i];
-        if (s == V_NIL)
-            start = i + 1; /* no cluster runs past an empty slot */
-        else if (ptr(s)[0] == V_FORWARD || symbol_needed(vm, s))
+    SymbolTable *old = &vm->own;
+    size_t live = 0;
+    for (size_t i = 0; i < old->cap; i++) {
+        V s = old->slots[i];
+        if (s && !symbol_published(s) && ((ptr(s)[SYM_CELL] >> MARK_BIT) & 1 || symbol_needed(vm, s)))
             live++;
     }
-    size_t m = n;
+    size_t m = old->cap;
     while (m > 1024 && 4 * live < m)
         m /= 2;
-    uint64_t *t = c->next;
-    c->next += 1 + m;
-    t[0] = HEADER(T_VECTOR, m);
-    for (size_t i = 0; i < m; i++)
-        t[1 + i] = V_NIL;
-    size_t top = 0; /* one past the highest cell kept */
-    for (size_t k = 0; k < n; k++) {
-        V s = old[1 + (start + k) % n];
-        if (s == V_NIL)
+    V *slots = calloc(m ? m : 1, sizeof *slots);
+    if (!slots)
+        return; /* everything stays until a collection has room */
+    SymbolTable t = {slots, m, 0, false, NULL, 0};
+    /* Cell 0 is none's, kept once it is made. */
+    size_t top = vm->program->published_top > 1 ? vm->program->published_top : vm->program->cells.count ? 1 : 0;
+    size_t global_top = vm->program->published_global_top > 1 ? vm->program->published_global_top : 1;
+    uint64_t *mark = c->next;
+    for (size_t i = 0; i < old->cap; i++) {
+        V s = old->slots[i];
+        if (!s || symbol_published(s))
             continue;
-        if (ptr(s)[0] != V_FORWARD && !symbol_needed(vm, s)) {
-            if (vm->nfree_cells == vm->free_cells_cap) {
-                size_t cap = vm->free_cells_cap ? 2 * vm->free_cells_cap : 1024;
-                size_t *cells = realloc(vm->free_cells, cap * sizeof *cells);
-                if (!cells)
-                    continue; /* the cell is lost, nothing else */
-                vm->free_cells = cells;
-                vm->free_cells_cap = cap;
+        uint64_t *p = ptr(s);
+        if (!((p[SYM_CELL] >> MARK_BIT) & 1) && !symbol_needed(vm, s)) {
+            size_t n = symbol_global(s);
+            /* Kept, rather than lose its cell or number, if a list cannot grow. */
+            if ((!n || push_free(&vm->program->free_globals, &vm->program->nfree_globals, &vm->program->free_globals_cap, n)) &&
+                push_free(&vm->program->free_cells, &vm->program->nfree_cells, &vm->program->free_cells_cap, symbol_cell(s))) {
+                if (n)
+                    vm->globals[n] = V_CLEARED;
+                program_free_symbol(vm, p);
+                continue;
             }
-            vm->free_cells[vm->nfree_cells++] = symbol_cell(s);
-            continue;
+            if (n)
+                vm->program->nfree_globals--;
         }
+        p[SYM_CELL] &= ~(UINT64_C(1) << MARK_BIT);
         if (symbol_cell(s) >= top)
             top = symbol_cell(s) + 1;
-        size_t j = ptr(s)[SYM_HASH] & (m - 1);
-        while (t[1 + j] != V_NIL)
-            j = (j + 1) & (m - 1);
-        t[1 + j] = s;
+        if (symbol_global(s) >= global_top)
+            global_top = symbol_global(s) + 1;
+        copy_slot(c, &p[SYM_NAME]);
+        symbol_table_put(&t, s);
     }
-    /* Every cell in use has a symbol in the table, so those above the last one kept are free, and
+    /* Every cell in use has a symbol in a table, so those above the last one kept are free, and
        they leave the array: every collection walks it, and a burst of new symbols would
        otherwise slow them all for good. */
-    size_t free_kept = 0;
-    for (size_t i = 0; i < vm->nfree_cells; i++)
-        if (vm->free_cells[i] < top)
-            vm->free_cells[free_kept++] = vm->free_cells[i];
-    vm->nfree_cells = free_kept;
-    vm->cells.count = 2 * top;
-    uint64_t *mark = c->next;
-    for (size_t i = 0; i < m; i++)
-        if (in_from(c, t[1 + i]))
-            copy_slot(c, &t[1 + i]);
+    trim_free(vm->program->free_cells, &vm->program->nfree_cells, top);
+    vm->program->cells.count = 2 * top;
+    trim_free(vm->program->free_globals, &vm->program->nfree_globals, global_top);
+    vm->program->nglobals = global_top;
     drain(c, mark);
-    vm->intern = tagged(t, TAG_OBJECT);
-    vm->nsymbols = live;
+    free(old->slots);
+    *old = t;
 }
+
 
 /* Slots above the published top are dead by the call-window invariants.
    Slots at or above the dirty mark are already clear, so clearing up to the
@@ -657,7 +789,7 @@ static V *clear_above_top(const VM *vm, V *stack, size_t words, V *fp, V *top, V
 {
     if (limit > top)
         fill_cleared(top, limit);
-    V *mark = fp + vm->max_frame;
+    V *mark = fp + vm->program->max_frame;
     if (mark > stack + words)
         mark = stack + words;
     return mark > top ? mark : top;
@@ -670,24 +802,24 @@ static void collect_into(VM *vm, uint64_t *to)
     Copy c = {from, (size_t)(from_end - from), to, vm, NULL, 0, 0};
     for (V *p = vm->stack; p < vm->top; p++)
         copy_slot(&c, p);
-    for (Thread *t = vm->threads; t; t = t->next) {
-        copy_slot(&c, &t->thunk);
-        if (t != vm->thread) {
-            copy_slot(&c, &t->exception);
-            copy_slot(&c, &t->trace);
-            for (V *p = t->stack; p < t->top; p++)
-                copy_slot(&c, p);
-            for (size_t i = 0; i < t->ncroots; i++)
-                copy_slot(&c, t->croots[i]);
-        }
-    }
-    copy_root_array(&c, &vm->cells);
+    /* Function cells hold only what is in the program space (program_promote), and the constant
+       slots of top-level code may point into its owner's heap alone, so only its collections
+       scan them; another context's heap holds no code (Program). */
+    bool owner = vm->program->owner == vm;
+    for (size_t n = 1, top = __atomic_load_n(&vm->program->nglobals, __ATOMIC_ACQUIRE); n < top; n++)
+        copy_slot(&c, &vm->globals[n]);
     ffi_drain_roots(vm);
     for (size_t i = 0; i < vm->nforeign_roots; i++)
         copy_slot(&c, &vm->foreign_roots[i / FOREIGN_ROOT_CHUNK][i % FOREIGN_ROOT_CHUNK].value);
-    for (size_t i = 0; i < vm->consts.count; i++)
-        if (!owned_slot(vm, i))
-            copy_slot(&c, ra_at(&vm->consts, i));
+    /* A slot of shared code may be bound by an isolate meanwhile (jit.c, resolving a call), so it is
+       written only if what it holds moved, which a value of the program space never does. */
+    for (size_t i = 0; owner && i < vm->program->consts.count; i++)
+        if (!owned_slot(vm, i)) {
+            V *slot = ra_at(&vm->program->consts, i);
+            V v = __atomic_load_n(slot, __ATOMIC_RELAXED), moved_to = copy_value(&c, v);
+            if (moved_to != v)
+                *slot = moved_to;
+        }
     for (size_t i = 0; i < vm->ncroots; i++)
         copy_slot(&c, vm->croots[i]);
     for (size_t i = 0; i < sizeof vm->args / sizeof vm->args[0]; i++)
@@ -720,11 +852,12 @@ static void collect_into(VM *vm, uint64_t *to)
         }
     }
     vm->nguards = guarded;
-    if (vm->intern != V_NIL)
+    if (owner && !vm->program->isolates) /* once isolates exist, every symbol stays (objects.c) */
         sweep_symbols(vm, &c);
     free(c.pending);
     sweep_large(vm);
-    sweep_code(vm);
+    if (owner)
+        sweep_code(vm);
 
     /* Sweep the file streams: keep those that were copied and are still
        open, and close those that nothing reached. */
@@ -742,23 +875,27 @@ static void collect_into(VM *vm, uint64_t *to)
     /* The native code of code objects that nothing reached goes back to the
        JIT. */
     kept = 0;
-    for (size_t i = 0; i < vm->nnatives; i++) {
-        uint64_t *o = ptr(vm->natives[i]);
+    if (owner)
+        program_compile_lock(vm); /* an isolate may be compiling, and adding to the list */
+    for (size_t i = 0; owner && i < vm->program->nnatives; i++) {
+        uint64_t *o = ptr(vm->program->natives[i]);
         if (o[0] == V_FORWARD)
-            vm->natives[kept++] = o[1];
-        else if (vm->free_native)
-            vm->free_native(vm, o);
+            vm->program->natives[kept++] = o[1];
+        else if (in_program(vm, o))
+            vm->program->natives[kept++] = vm->program->natives[i];
+        else if (vm->program->free_native)
+            vm->program->free_native(vm, o);
     }
-    vm->nnatives = kept;
+    if (owner) {
+        vm->program->nnatives = kept;
+        program_compile_unlock(vm);
+    }
 
     vm->space = to;
     vm->live_end = c.next;
     vm_fresh_area(vm);
     vm->collections++;
     vm_set_limit(vm, clear_above_top(vm, vm->stack, vm->stack_words, vm->fp, vm->top, vm->stack_limit));
-    for (Thread *t = vm->threads; t; t = t->next)
-        if (t != vm->thread)
-            t->stack_limit = clear_above_top(vm, t->stack, t->stack_words, t->fp, t->top, t->stack_limit);
 }
 
 static double seconds(void)
@@ -856,10 +993,39 @@ static bool past_limit(VM *vm, size_t words)
     return held + words > vm->max_words / 10 * 9;
 }
 
+/* With room in the list, kept in address order. */
+static void large_insert(VM *vm, uint64_t *p, size_t words)
+{
+    size_t i = vm->nlarge++;
+    for (; i > 0 && vm->large[i - 1].object > p; i--)
+        vm->large[i] = vm->large[i - 1];
+    vm->large[i] = (Large){p, words, false, false};
+    vm->large_words += words;
+}
+
 /* A large object: a spare block of the same size if there is one, or a new
    one. Large allocations count toward the next collection, which frees the
    dead ones, and toward SHEN_JIT_MAX_HEAP. */
 static uint64_t *alloc_large(VM *vm, size_t words)
+{
+    if (!vm_large_room(vm, words, 1))
+        return NULL;
+    vm->large_since += words;
+    for (size_t i = 0; i < vm->nlarge; i++)
+        if (vm->large[i].spare && vm->large[i].words == words) {
+            vm->large[i].spare = false;
+            return vm->large[i].object;
+        }
+    uint64_t *p = malloc(words * sizeof(uint64_t));
+    if (!p)
+        return NULL;
+    large_insert(vm, p, words);
+    return p;
+}
+
+/* Room for large objects of `words` in all and `n` more blocks, which may collect; false if the
+   limit leaves none. Then alloc_large makes one, or vm_adopt_large takes blocks, collecting nothing. */
+bool vm_large_room(VM *vm, size_t words, size_t n)
 {
     if (vm->large_since + words > vm->space_words || vm->stress)
         vm_collect(vm, 0);
@@ -869,32 +1035,32 @@ static uint64_t *alloc_large(VM *vm, size_t words)
             vm_collect(vm, 0);
             free_spares(vm);
             if (past_limit(vm, words))
-                return NULL;
+                return false;
         }
     }
-    vm->large_since += words;
-    for (size_t i = 0; i < vm->nlarge; i++)
-        if (vm->large[i].spare && vm->large[i].words == words) {
-            vm->large[i].spare = false;
-            return vm->large[i].object;
-        }
-    if (vm->nlarge == vm->large_cap) {
-        size_t cap = vm->large_cap ? 2 * vm->large_cap : 16;
+    if (vm->nlarge + n > vm->large_cap) {
+        size_t cap = vm->large_cap ? vm->large_cap : 16;
+        while (cap < vm->nlarge + n)
+            cap *= 2;
         Large *more = realloc(vm->large, cap * sizeof *more);
         if (!more)
-            return NULL;
+            return false;
         vm->large = more;
         vm->large_cap = cap;
     }
-    uint64_t *p = malloc(words * sizeof(uint64_t));
-    if (!p)
-        return NULL;
-    size_t i = vm->nlarge++;
-    for (; i > 0 && vm->large[i - 1].object > p; i--)
-        vm->large[i] = vm->large[i - 1];
-    vm->large[i] = (Large){p, words, false, false};
-    vm->large_words += words;
-    return p;
+    return true;
+}
+
+/* A block malloc'd elsewhere, holding one object, becomes a large object of this heap: a message's,
+   which its fragment kept alone (isolate.c), taken rather than copied. */
+void vm_adopt_large(VM *vm, uint64_t *p, size_t words)
+{
+    vm->large_since += words;
+    large_insert(vm, p, words);
+    if (vm->max_words) {
+        size_t room = (size_t)(vm->hlimit - vm->hp);
+        vm->hlimit -= words < room ? words : room;
+    }
 }
 
 uint64_t *vm_alloc_object(VM *vm, size_t words)

@@ -10,8 +10,7 @@ def check_high_workers(program, source, output, directory):
     ref.run([program, source, output, '--batch', queries])
     expected = output.read_bytes()
     for workers in [32, 64]:
-        ref.run([program, source, output, '--batch', queries, '--workers', workers,
-                 '--worker-image', program])
+        ref.run([program, source, output, '--batch', queries, '--workers', workers])
         assert output.read_bytes() == expected, workers
     return 2
 
@@ -40,10 +39,7 @@ def check(program, source, output, directory):
             ref.write(query_file, subset)
             original = None
             for workers in [0, 1, 2, 3, 4, 5]:
-                args = [program, source, output, '--batch', query_file, '--workers', workers]
-                if workers:
-                    args += ['--worker-image', program]
-                ref.run(args)
+                ref.run([program, source, output, '--batch', query_file, '--workers', workers])
                 rows = ref.read(output)
                 ref.check_report(rows, records)
                 assert [r['query_index'] for r in rows if r['kind'] == 'query'] == list(range(len(subset)))
@@ -76,17 +72,14 @@ def check(program, source, output, directory):
                  '{"mode":"reach","file":"a.c","name":"main","extra":1}\n',
                  ' ' * 1048577]:
         query_file.write_text(text)
-        ref.run([program, source, output, '--batch', query_file, '--workers', 4,
-                 '--worker-image', program], success=False)
+        ref.run([program, source, output, '--batch', query_file, '--workers', 4], success=False)
         assert output.read_bytes() == original
         assert not any(p.name.startswith('.shen-') for p in directory.iterdir())
         checks += 1
     ref.write(query_file, [])
-    for options in [['--workers', '65', '--worker-image', program],
-                    ['--workers', '-1', '--worker-image', program],
-                    ['--workers', '3.5', '--worker-image', program], ['--workers', '2'],
-                    ['--workers', '2', '--worker-image', directory / 'missing-image']]:
+    for options in [['--workers', '65'], ['--workers', '-1'], ['--workers', '3.5'],
+                    ['--workers', '2', '--worker-image', program]]:
         ref.run([program, source, output, '--batch', query_file, *options], success=False)
         assert output.read_bytes() == original
         checks += 1
-    print(f'{checks} passed, 0 failed (batch graph, ordered 0..5/32/64 workers, BFS/Datalog controls)', flush=True)
+    print(f'{checks} passed, 0 failed (batch graph, ordered 0..5/32/64 isolates, BFS/Datalog controls)', flush=True)

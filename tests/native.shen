@@ -76,8 +76,8 @@
 (native-test.check "more arguments than parameters" [2 1 | 2] (freeze (native-test.widen 1)))
 
 \\ Constants: a string, a real, a Boolean, a symbol, a list, and with const the
-\\ value of an expression, here one that is no literal.
-(set native-test.*vector* (vector 2))
+\\ value of an expression. Code holds only what the reader makes, so a vector is refused.
+(set native-test.*list* [x y])
 (define-native native-test.constants ()
   (prim A cons "s" [])
   (prim A cons 1.5 A)
@@ -85,11 +85,19 @@
   (prim B cons foo A)
   (move C [1 2])
   (prim D cons C B)
-  (prim E cons (const (value native-test.*vector*)) D)
+  (prim E cons (const (value native-test.*list*)) D)
   (return E))
 (native-test.check "constants" [[1 2] foo true 1.5 "s"] (freeze (tl (native-test.constants))))
-(native-test.check "a heap value as a constant" true
-  (freeze (= (hd (native-test.constants)) (value native-test.*vector*))))
+(native-test.check "an expression's value as a constant" [x y] (freeze (hd (native-test.constants))))
+(set native-test.*vector* (vector 2))
+(define native-test.first-line
+  "" -> ""
+  (@s "c#10;" _) -> ""
+  (@s C S) -> (@s C (native-test.first-line S)))
+(native-test.check "a vector as a constant is refused"
+  "native-test.vector-constant: code may hold only symbols, numbers, strings, booleans and lists of them"
+  (freeze (trap-error (eval [define-native native-test.vector-constant [] [return [const [value native-test.*vector*]]]])
+                      (/. E (native-test.first-line (error-to-string E))))))
 
 \\ Calls: an open one, a sealed one and one of a variable.
 (define native-test.double X -> (* 2 X))
@@ -1047,7 +1055,7 @@
   M I N Acc -> (native-test.maybe-read M (+ I 1) N (+ Acc (shen-jit.u8 M I))))
 (native-test.check "not memory, and not read" 0 (freeze (native-test.maybe-read a 0 0 0)))
 (native-test.check "not memory, and read" error (freeze (hd (native-test.result (freeze (native-test.maybe-read a 0 1 0))))))
-(native-test.check "a string, and read" error (freeze (hd (native-test.result (freeze (native-test.maybe-read "abc" 0 1 0))))))
+(native-test.check "a string, which is read only memory, and read" 97 (freeze (native-test.maybe-read "abc" 0 1 0)))
 (native-test.check "past the end, in a loop" [error "bytes: 2 is not a valid index"]
   (freeze (native-test.result (freeze (native-test.maybe-read (shen-jit.bytes 2) 0 3 0)))))
 
