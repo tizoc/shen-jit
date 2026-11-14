@@ -5026,22 +5026,16 @@
                      Rules)]))
 
 \\ The parts' databases, from an isolate for each part, with a channel for its database and a
-\\ monitor for its end. What spawn-each gives is stored in Cell at once, a store allocating
-\\ nothing, so that whatever fails after it, even making the list, stops the isolates: each is
-\\ killed and waited for, and the replies' channels are closed, some of which the wait closed
-\\ already. If a spawn fails, spawn-each stops those it started. After a Ctrl-C, the REPL kills
-\\ them instead.
+\\ monitor for its end. If anything raises, spawn-each stops the isolates, each killed and waited
+\\ for, and the replies' channels are closed here, some of which the wait closed already. After a
+\\ Ctrl-C, the REPL kills them instead.
 (define part-databases
   Shared Split K
   -> (let Replies (part-replies 0 K)
-          Cell (address-> (absvector 1) 0 [])
        (shen-jit.on-error
-         (freeze (gather-parts (with-replies Replies (started Cell (isolate.spawn-each run-part
-                                                                      (part-args Shared Split Replies 0))))))
-         (freeze (do (isolate.stop-each (<-address Cell 0)) (close-quietly Replies))))))
-
-(define started
-  Cell Started -> (do (address-> Cell 0 Started) Started))
+         (freeze (isolate.spawn-each run-part (part-args Shared Split Replies 0)
+                   (/. Started (gather-parts (with-replies Replies Started)))))
+         (freeze (close-quietly Replies)))))
 
 (define part-replies
   K K -> []
@@ -5131,13 +5125,11 @@
   -> (let Shared (joins-shared Name)
           Grid (join-grid 0 N (absvector N))
           Reply (channel.new N)
-          Cell (address-> (absvector 1) 0 [])
           Got (shen-jit.on-error
-                (freeze (let Isolates (started Cell (isolate.spawn-each join-isolate
-                                                      (joined-args Shared Facts Grid (channel.sender Reply) 0 N)))
-                          (gather-joined Reply (map (function tl) Isolates) (map (function hd) Isolates) [] [])))
-                (freeze (do (isolate.stop-each (<-address Cell 0))
-                            (close-quietly [Reply | (grid-channels Grid 0 0 N)]))))
+                (freeze (isolate.spawn-each join-isolate (joined-args Shared Facts Grid (channel.sender Reply) 0 N)
+                          (/. Isolates (gather-joined Reply (map (function tl) Isolates) (map (function hd) Isolates)
+                                                      [] []))))
+                (freeze (close-quietly [Reply | (grid-channels Grid 0 0 N)])))
           _ (channel.close Reply)
        (joined-db Got Facts)))
 

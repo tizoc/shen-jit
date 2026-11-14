@@ -1,7 +1,6 @@
 (define listener-typed.finished?
   {http.wait-result --> boolean}
   [ok] -> true
-  [pending] -> false
   [error _] -> false)
 
 (define listener-typed.handler
@@ -18,8 +17,7 @@
 (define listener-typed.message
   {http.wait-result --> string}
   [error E] -> (io.error-message E)
-  [ok] -> "stopped"
-  [pending] -> "pending")
+  [ok] -> "stopped")
 
 (output "~A~%"
   (if (= (listener-typed.message [error (io.error listen "test" "failed")]) "failed")

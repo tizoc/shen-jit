@@ -77,8 +77,7 @@
 
 (define it.each
   {(list number) --> number}
-  Xs -> (let Started (isolate.spawn-each it.double Xs)
-          (if (isolate.stop-each Started) (length Started) 0)))
+  Xs -> (isolate.spawn-each it.double Xs (/. Started (if (isolate.stop-each Started) (length Started) 0))))
 
 (define it.shared
   {(list number) --> (list number)}

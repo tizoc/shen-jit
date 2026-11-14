@@ -14,7 +14,7 @@
     listening max-connections ok pending serve shutdown-grace stopped timeout])
   (shadow port run)
   (export current-server handler listen listener-option option port request response run server
-    state stats stop wait wait-result)
+    state stats stop wait-result)
 
 (define listener-options
   Options -> (listener-config Options 16 1000 [] []))
@@ -86,40 +86,26 @@
     (let Config (listener-options Options)
          _ (handler-check Handler)
          _ (clock.monotonic)
-         _ (grammar.prepare <head>)
+         _ (grammar.finish)
          L (socket.listen Host Port)
       (socket.closing-on-error L (freeze (listener-start L Handler Config)))))
 
 (define listener-start
-  L Handler Config ->
-    (:server
-      guard <- (shen-jit.bytes->pointer (shen-jit.u32! (shen-jit.bytes 8) 0 1) 0 server)
-      port <- (socket.port L)
-      token <- (io.socket-token L)
-      handler <- Handler
-      options <- Config
-      events <- []
-      control <- []
-      stopping <- false
-      phase <- listening
-      connections <- []
-      accepted <- 0
-      completed <- 0
-      failed <- 0
-      cancelled <- 0
-      peak <- 0
-      error <- []
-      grace <- []
-      result <- []))
+  L Handler Config -> (new-server (shen-jit.bytes->pointer (shen-jit.u32! (shen-jit.bytes 8) 0 1) 0 server)
+                                  (socket.port L) (io.socket-token L) Handler Config []))
 
+\\ What a handler gets as its server, in its connection's isolate: its port, and a way to stop it.
 (define handler-copy
-  Port Control ->
+  Port Control -> (new-server [] Port [] [] [] Control))
+
+(define new-server
+  Guard Port Token Handler Options Control ->
     (:server
-      guard <- []
+      guard <- Guard
       port <- Port
-      token <- []
-      handler <- []
-      options <- []
+      token <- Token
+      handler <- Handler
+      options <- Options
       events <- []
       control <- Control
       stopping <- false
@@ -185,16 +171,6 @@
     (let _ (owner-check S)
       [(length (server.connections S)) (server.accepted S) (server.completed S) (server.failed S)
        (server.cancelled S) (server.peak S)]))
-
-\\ The supervisor runs in the caller of http.run, so wait gives the result once run has returned,
-\\ and [pending] before, at once; the budget, checked, stays for the code written for it.
-(define wait
-  S Milliseconds ->
-    (let _ (owner-check S)
-         _ (if (and (number? Milliseconds) (>= Milliseconds 0)) true
-               (error "http: a wait budget is a nonnegative number of milliseconds"))
-         Result (server.result S)
-      (if (empty? Result) [pending] Result)))
 
 \\ Serves until stopped, by http.stop before it or from a handler, or until the listener fails,
 \\ then closes the listener, waits for the connections, at most shutdown-grace, kills those left
@@ -357,9 +333,6 @@
   ___________________________
   [ok] : wait-result;
 
-  ___________________________
-  [pending] : wait-result;
-
   Error : io.error;
   ===========================
   [error Error] : wait-result;)
@@ -393,7 +366,6 @@
 (declare current-server [--> server])
 (declare state [server --> symbol])
 (declare stats [server --> [list number]])
-(declare wait [server --> [number --> wait-result]])
 (declare run [server --> wait-result])
 
 )

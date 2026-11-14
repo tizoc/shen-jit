@@ -153,10 +153,7 @@ Options for Shen/JIT itself go before the command:
 A script whose first line starts with `#!` can run directly, with Shen/JIT on your `PATH`, and `load` skips that
 line. This does not work on Windows.
 
-A library can act after each form a load evaluates: `(shen-jit.after-form F)` registers `F`, a function of no
-arguments, to run then, and `(shen-jit.loading?)` says whether a load is going on. The kernel expands a whole file
-before it evaluates any of it, so what needs the definitions before it waits for this, as the grammar library
-compiling its loops does. `(shen-jit.at-end F)` registers `F` to run once as the isolate that registers it ends,
+`(shen-jit.at-end F)` registers `F`, a function of no arguments, to run once as the isolate that registers it ends,
 after its function returns or raises.
 
 ```shen
@@ -329,10 +326,10 @@ are other programs.
   `(shen-jit.exit N)`; if several end it at once, the first does, and its status is the program's.
 - **The program is fixed while isolates run:** defining raises an error in the builder until every other isolate has
   ended, as a monitor tells. Define everything first, then spawn.
-- **Isolates for the parts of a call:** `(isolate.spawn-each F Args)` spawns `F` with each of `Args`, each with a
-  monitor, and gives `[[I | Monitor] ...]`; if one cannot start, it stops those it started. `(isolate.stop-each
-  Started)` kills them, waits for each to end and closes the monitors, as a call's cleanup does when its wait
-  raises, so that none is left waiting on one that is gone.
+- **Isolates for the parts of a call:** `(isolate.spawn-each F Args G)` spawns `F` with each of `Args`, each with
+  a monitor, and gives `(G Started)`, `Started` being `[[I | Monitor] ...]`. If a spawn fails, or anything after it
+  raises, `G` included, it stops those it started, as `(isolate.stop-each Started)` does: kills them, waits for each
+  to end and closes the monitors, so that none is left waiting on one that is gone.
 - **Symbols are shared:** a symbol made in any isolate is the program's, and stays for as long as it runs, so names
   that come from outside, such as a request's, belong in strings.
 - **A parallel map:** [`lib/parallel.shen`](https://github.com/tizoc/shen-jit/blob/main/docs/parallel.md) gives
@@ -471,7 +468,9 @@ and `lib/cursor.shen` positions in them that move as they read. The libraries be
 
 [Grammars over bytes](https://github.com/tizoc/shen-jit/blob/main/docs/grammar.md): `lib/grammar.shen` adds
 `defgrammar`, Shen-YACC's notation for parsers over views, compiled to the loops a scanner written by hand would use.
-A grammar can have types, as `defcc` does, and `grammar.read` parses from an I/O reader as the bytes arrive.
+A grammar can have types, as `defcc` does, and `grammar.read` parses from an I/O reader as the bytes arrive. Its
+loops compile at their first use; `(grammar.finish)` compiles them all ahead, in the builder, before spawning isolates
+that parse, which cannot compile, or saving the program, as `http.listen` does.
 
 [JSON](https://github.com/tizoc/shen-jit/blob/main/docs/json.md): `lib/json.shen` decodes JSON from views and encodes
 it into them, with strict UTF-8, numbers kept as written until converted exactly, and limits on what it reads and

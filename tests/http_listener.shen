@@ -112,16 +112,13 @@
   [(/. Q Q) (function listener-test.handler) [] [1 2] "f" listener-test.two [listener-test.handler 1]])
 
 (let S (listener-test.listen [[shutdown-grace 0]])
-     Before (http.wait S 0)
      _ (http.stop S)
      _ (http.stop S)
      Result (http.run S)
-  (do (listener-test.check "nothing runs before http.run" [pending] (freeze Before))
-      (listener-test.check "empty listener stops" [ok] (freeze Result))
+  (do (listener-test.check "empty listener stops" [ok] (freeze Result))
       (listener-test.check "without making its events channel" [] (freeze (http.server.events S)))
       (listener-test.check "stopped state" stopped (freeze (http.state S)))
       (listener-test.check "empty statistics" [0 0 0 0 0 0] (freeze (http.stats S)))
-      (listener-test.check "wait gives the final result" [ok] (freeze (http.wait S 0)))
       (listener-test.check "run again gives it too" [ok] (freeze (http.run S)))
       (listener-test.check "listener port is closed" true
         (freeze (listener-test.raises? (freeze (listener-test.client S)))))))

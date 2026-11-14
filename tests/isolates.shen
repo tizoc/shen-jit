@@ -398,9 +398,15 @@
 (pt.check "kill wakes an isolate in wait-any" killed (pt.kill-when-ready pt.wait-long))
 
 (pt.check "stop-each kills what spawn-each started and waits for each to end" [killed killed killed]
-  (let Started (isolate.spawn-each pt.block [1 2 3])
-       _ (isolate.stop-each Started)
-    (map (/. S (pt.third (channel.receive (isolate.monitor (hd S))))) Started)))
+  (isolate.spawn-each pt.block [1 2 3]
+    (/. Started (do (isolate.stop-each Started)
+                    (map (/. S (pt.third (channel.receive (isolate.monitor (hd S))))) Started)))))
+
+(set pt.started [])
+(pt.check "and stops them if what it calls with them raises" ["gave up" [killed killed]]
+  (let Why (pt.message (freeze (isolate.spawn-each pt.block [1 2]
+                                 (/. Started (do (set pt.started Started) (simple-error "gave up"))))))
+    [Why (map (/. S (pt.third (channel.receive (isolate.monitor (hd S))))) (value pt.started))]))
 
 (pt.check "check-kill lets kill reach an isolate busy elsewhere" killed (pt.kill-when-ready pt.spin))
 
@@ -519,13 +525,12 @@
     (pt.message (freeze (channel.receive M)))))
 
 (pt.check "stop-each passes over a monitor already read" true
-  (let Started (isolate.spawn-each pt.id [1 2 3])
-       _ (channel.receive (tl (hd Started)))
-    (isolate.stop-each Started)))
+  (isolate.spawn-each pt.id [1 2 3]
+    (/. Started (do (channel.receive (tl (hd Started))) (isolate.stop-each Started)))))
 
 \\ The two that started wait for ever, so the program could not change unless they were stopped.
 (pt.check "spawn-each stops those it started when one cannot start" [refused done]
-  (let Why (pt.message (freeze (isolate.spawn-each pt.block [1 2 (/. X X)])))
+  (let Why (pt.message (freeze (isolate.spawn-each pt.block [1 2 (/. X X)] (/. Started Started))))
        _ (eval [define pt.after-each -> done])
     [(if (string? Why) refused Why) (pt.after-each)]))
 

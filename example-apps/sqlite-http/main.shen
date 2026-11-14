@@ -107,37 +107,25 @@
   X -> (if (= (error-to-string X) "channel closed") skip (simple-error (error-to-string X))))
 
 \\ Starts the owning isolate: [Db Monitor], Db for the handlers and Monitor for the owning isolate's end.
-\\ What it makes is kept in Cell, [Requests Owner Monitor], by stores, which do not allocate, under one
-\\ cleanup made first, so that a failure anywhere, even making the result, undoes it: before the owning
-\\ isolate starts, by closing its channel; after, by closing the send endpoint, which ends it, and once it is
-\\ monitored, by waiting for its end.
+\\ If making the result fails, spawn-each kills it, which closes the database, and waits for its end;
+\\ its channel is closed, which does nothing once it has gone with the isolate.
 (define counter-app.open
-  Path -> (let Cell (address-> (address-> (address-> (absvector 3) 0 []) 1 []) 2 [])
-               R (channel.new 64)
+  Path -> (let R (channel.new 64)
             (shen-jit.on-error
-              (freeze (let Requests (counter-app.kept Cell 0 (channel.sender R))
-                           I (counter-app.kept Cell 1 (isolate.spawn counter-app.owner [Path (channel.give R)]))
-                           Monitor (counter-app.kept Cell 2 (isolate.monitor I))
-                        [[Path Requests I] Monitor]))
-              (freeze (counter-app.undo-open R Cell)))))
+              (freeze (let Requests (channel.sender R)
+                        (isolate.spawn-each counter-app.owner [[Path (channel.give R)]]
+                          (/. Started [[Path Requests (hd (hd Started))] (tl (hd Started))]))))
+              (freeze (channel.close R)))))
 
 (define counter-app.kept
   Cell I X -> (do (address-> Cell I X) X))
-
-(define counter-app.undo-open
-  R Cell -> (cases (empty? (<-address Cell 1)) (channel.close R)
-                   (empty? (<-address Cell 2)) (channel.close (<-address Cell 0))
-                   true (counter-app.end-owner (<-address Cell 0) (<-address Cell 2))))
 
 (define counter-app.db
   [Db _] -> Db)
 
 \\ Ends the owning isolate's stream, which it reads to its end, and waits for it to close the database.
 (define counter-app.close
-  [[_ Requests _] Monitor] -> (counter-app.end-owner Requests Monitor))
-
-(define counter-app.end-owner
-  Requests Monitor -> (do (channel.close Requests) (channel.receive Monitor) (channel.close Monitor) true))
+  [[_ Requests _] Monitor] -> (do (channel.close Requests) (channel.receive Monitor) (channel.close Monitor) true))
 
 (define counter-app.list
   Db -> (counter-app.json 200 (map (function counter-app.row-json) (counter-app.do Db [list]))))

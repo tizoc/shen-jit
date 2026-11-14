@@ -17,11 +17,10 @@
                   []
                   (let Runs (split Xs (sizes (length Xs) (smaller N (length Xs))))
                        Replies (replies Runs)
-                       Cell (address-> (absvector 1) 0 [])
                     (shen-jit.on-error
-                      (freeze (gather (launched Replies (started Cell (isolate.spawn-each map-run (run-args F Runs Replies))))
-                                      [] []))
-                      (freeze (stop Cell Replies)))))))
+                      (freeze (isolate.spawn-each map-run (run-args F Runs Replies)
+                                (/. Started (gather (launched Replies Started) [] []))))
+                      (freeze (close-replies Replies)))))))
 
 (define check
   N F Xs ->
@@ -65,12 +64,8 @@
   [X | Xs] N Run Ns -> (split-run Xs (- N 1) [X | Run] Ns))
 
 \\ An isolate for each run, with a channel for its reply and a monitor for its end: [Reply Down P].
-\\ What spawn-each gives is stored in Cell at once, a store allocating nothing, so that whatever
-\\ fails after it, even making the list, stops the isolates. If a spawn fails, spawn-each stops
-\\ those it started.
-(define started
-  Cell Started -> (do (address-> Cell 0 Started) Started))
-
+\\ If anything raises, spawn-each stops the isolates, each killed and waited for, and the replies'
+\\ channels are closed here, some of which the wait closed already.
 (define close-replies
   [] -> true
   [R | Replies] -> (do (trap-error (channel.close R) (/. E skip)) (close-replies Replies)))
@@ -86,11 +81,6 @@
 (define launched
   [] [] -> []
   [Reply | Replies] [[P | Down] | Started] -> [[Reply Down P] | (launched Replies Started)])
-
-\\ Kills each isolate, waits for it to end, which closes its monitor, and closes the replies'
-\\ channels, some of which a wait may have closed already.
-(define stop
-  Cell Replies -> (do (isolate.stop-each (<-address Cell 0)) (close-replies Replies)))
 
 (define map-run
   [F Run Out] ->
