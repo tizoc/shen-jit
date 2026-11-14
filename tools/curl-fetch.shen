@@ -5,7 +5,7 @@
   (use curl)
   (use io)
   (shadow open)
-  (externals [*argv* body-limit chunk-size download http ok timeout write])
+  (externals [*argv* body-limit chunk-size download http io.open-file ok timeout write])
 
 (let Quiet (hush?)
      _ (hush +)

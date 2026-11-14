@@ -6,7 +6,8 @@
   (use io)
   (use process)
   (use process-filter)
-  (externals [*argv* child ok stderr-limit stdout-limit timeout])
+  (externals [*argv* child io.with-input-file ok process.output-count process.run-to process.success? stderr-limit
+    stdout-limit timeout])
 
 (let Quiet (hush?)
      _ (hush +)
