@@ -1,4 +1,13 @@
 \\ Stream a binary file through an external program, publishing output only after exit status 0.
+
+(shen.x.namespace process-filter
+  (use buffer)
+  (use fs)
+  (use io)
+  (use process)
+  (use process-filter)
+  (externals [*argv* child ok stderr-limit stdout-limit timeout])
+
 (let Quiet (hush?)
      _ (hush +)
      _ (map (function load)
@@ -7,7 +16,7 @@
           "lib/process.shen" "lib/process-io.shen"])
   (set *hush* Quiet))
 
-(define process-filter.accept
+(define accept
   _ [ok Report] -> [ok (process.output-count Report)] where (process.success? Report)
   Program [ok Report] ->
     [error (io.native-error run child (hd (tl (process.status Report))) Program
@@ -23,18 +32,20 @@
           (/. Input
             (io.with-endpoint (io.output-buffer (buffer.new 65536))
               (/. Errors
-                (process-filter.accept Program
+                (accept Program
                   (process.run-to Program Args Input Output Errors
                     [[stdout-limit 1073741824] [stderr-limit 65536] [timeout 60000]])))))))))
 
-(define process-filter.finished
+(define finished
   [ok N] -> (output "Filtered ~A bytes~%" N)
   [error Error] ->
     (error "filter: ~A (~A; ~A bytes acknowledged)"
       (io.error-message Error) (io.error-code Error) (io.error-progress Error)))
 
-(define process-filter.main
-  [_ From To Program | Args] -> (process-filter.finished (process-filter.run From To Program Args))
+(define main
+  [_ From To Program | Args] -> (finished (process-filter.run From To Program Args))
   _ -> (error "usage: shen-jit script tools/process-filter.shen INPUT OUTPUT PROGRAM [ARG ...]"))
 
-(process-filter.main (value *argv*))
+(main (value *argv*))
+
+)

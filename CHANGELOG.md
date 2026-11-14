@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- The example applications and the examples in `tools/` use namespaces, as the libraries do; their names are
+  unchanged.
+
 ## [0.8] - 2026-11-14
 
 ### Added

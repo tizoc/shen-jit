@@ -1,9 +1,18 @@
+(shen.x.namespace depends
+  (use buffer)
+  (use datalog)
+  (use io)
+  (use shen-jit)
+  (externals [!= *argv* at calls count cycle cyclic dead defdatalog defined defines depth equivalence external-call
+    fact fan-in file-depends file-uses in-file integer live min ok place reaches recursive relation root rule
+    some-root some? tsv var])
+
 \* depends: what calls what among Shen and KL source files, worked out by lib/datalog.shen.
 
    Build the executable from the repository root:
      build/shen-jit eval -q -l lib/native.shen -l lib/datalog.shen -l lib/ffi.shen -l lib/buffer.shen \
        -l lib/io.shen -l lib/io-file.shen -l example-apps/depends/main.shen \
-       -e '(shen-jit.save-executable "depends" depends.main)'
+       -e '(shen-jit.save-executable "depends" main)'
    Run it:
      ./depends [--root F]... [--why F G] [--reach F] [--out DIR] FILE...
 
@@ -11,7 +20,7 @@
    head of a form in its body is a call. Forms the language gives meaning to, such as let and if,
    are not calls, and a function no file defines is external. *\
 
-(defdatalog depends.program
+(defdatalog program
   (type place [at string integer])
   (relation defines [symbol place])
   (relation calls [symbol symbol])
@@ -53,166 +62,168 @@
 
 \* ---- Facts from source. *\
 
-(define depends.special?
+(define special?
   S -> (element? S [define defun let lambda /. if cases cond do freeze trap-error and or where -> <-
                     package defmacro datatype type function fn]))
 
-(define depends.file-facts
-  File -> (depends.forms-facts File (read-file File) 0 []))
+(define file-facts
+  File -> (forms-facts File (read-file File) 0 []))
 
-(define depends.forms-facts
+(define forms-facts
   _ [] _ Acc -> Acc
-  File [Form | Forms] I Acc -> (depends.forms-facts File Forms (+ I 1) (depends.form-facts File Form I Acc)))
+  File [Form | Forms] I Acc -> (forms-facts File Forms (+ I 1) (form-facts File Form I Acc)))
 
-(define depends.form-facts
-  File [define F | Body] I Acc -> (depends.calls-of F Body [[defines F [at File I]] | Acc]) where (symbol? F)
-  File [defun F _ Body] I Acc -> (depends.calls-of F Body [[defines F [at File I]] | Acc]) where (symbol? F)
-  File [package _ _ | Forms] I Acc -> (depends.forms-facts File Forms I Acc)
+(define form-facts
+  File [define F | Body] I Acc -> (calls-of F Body [[defines F [at File I]] | Acc]) where (symbol? F)
+  File [defun F _ Body] I Acc -> (calls-of F Body [[defines F [at File I]] | Acc]) where (symbol? F)
+  File [package _ _ | Forms] I Acc -> (forms-facts File Forms I Acc)
   _ _ _ Acc -> Acc)
 
 \* The calls in a body: each symbol heading a form, and what (function F) or (fn F) names. *\
-(define depends.calls-of
-  F Body Acc -> (depends.heads F Body Acc))
+(define calls-of
+  F Body Acc -> (heads F Body Acc))
 
-(define depends.heads
+(define heads
   F [Op G] Acc -> [[calls F G] | Acc] where (and (element? Op [function fn]) (symbol? G))
-  F [Op | Args] Acc -> (depends.heads-of F Args (if (or (not (symbol? Op)) (variable? Op) (depends.special? Op))
+  F [Op | Args] Acc -> (heads-of F Args (if (or (not (symbol? Op)) (variable? Op) (special? Op))
                                                   Acc
                                                   [[calls F Op] | Acc]))
                        where (symbol? Op)
-  F [X | Xs] Acc -> (depends.heads-of F [X | Xs] Acc)
+  F [X | Xs] Acc -> (heads-of F [X | Xs] Acc)
   _ _ Acc -> Acc)
 
-(define depends.heads-of
+(define heads-of
   _ [] Acc -> Acc
-  F [X | Xs] Acc -> (depends.heads-of F Xs (depends.heads F X Acc))
+  F [X | Xs] Acc -> (heads-of F Xs (heads F X Acc))
   _ _ Acc -> Acc)
 
-(define depends.facts
-  Files Roots -> (append (map (/. R [root R]) Roots) (mapcan (function depends.file-facts) Files)))
+(define facts
+  Files Roots -> (append (map (/. R [root R]) Roots) (mapcan (function file-facts) Files)))
 
 \* ---- The command line. *\
 
-(define depends.main
-  -> (trap-error (depends.command (tl (value *argv*)) [] [] [] [] [])
+(define main
+  -> (trap-error (command (tl (value *argv*)) [] [] [] [] [])
                  (/. E (do (output "depends: ~A~%" (error-to-string E)) (shen-jit.exit 2)))))
 
-(define depends.command
-  ["--root" F | Args] Roots Why Reach Out Files -> (depends.command Args [(intern F) | Roots] Why Reach Out Files)
-  ["--why" F G | Args] Roots _ Reach Out Files -> (depends.command Args Roots [(intern F) (intern G)] Reach Out Files)
-  ["--reach" F | Args] Roots Why _ Out Files -> (depends.command Args Roots Why [(intern F)] Out Files)
-  ["--out" Dir | Args] Roots Why Reach _ Files -> (depends.command Args Roots Why Reach [Dir] Files)
-  [File | Args] Roots Why Reach Out Files -> (depends.command Args Roots Why Reach Out [File | Files])
+(define command
+  ["--root" F | Args] Roots Why Reach Out Files -> (command Args [(intern F) | Roots] Why Reach Out Files)
+  ["--why" F G | Args] Roots _ Reach Out Files -> (command Args Roots [(intern F) (intern G)] Reach Out Files)
+  ["--reach" F | Args] Roots Why _ Out Files -> (command Args Roots Why [(intern F)] Out Files)
+  ["--out" Dir | Args] Roots Why Reach _ Files -> (command Args Roots Why Reach [Dir] Files)
+  [File | Args] Roots Why Reach Out Files -> (command Args Roots Why Reach Out [File | Files])
       where (not (= (pos File 0) "-"))
   [Arg | _] _ _ _ _ _ -> (error "unknown option ~A; usage: depends [--root F]... [--why F G] [--reach F] [--out DIR] FILE..." Arg)
   [] _ _ _ _ [] -> (error "no files; usage: depends [--root F]... [--why F G] [--reach F] [--out DIR] FILE...")
-  [] Roots Why Reach Out Files -> (depends.act (reverse Roots) Why Reach Out (reverse Files)))
+  [] Roots Why Reach Out Files -> (act (reverse Roots) Why Reach Out (reverse Files)))
 
 \* A question about one function asks by demand, and computes only what bears on it. The pattern is
    data, as F is a value here: datalog.query would read it as a Datalog variable. *\
-(define depends.act
-  Roots [] [F] _ Files -> (depends.print-reach F (datalog.solve depends.program (depends.facts Files Roots) [reaches F [var "X"]]))
+(define act
+  Roots [] [F] _ Files -> (print-reach F (datalog.solve program (facts Files Roots) [reaches F [var "X"]]))
   Roots Why _ Out Files
-  -> (let Db (datalog.run depends.program (depends.facts Files Roots))
-       (cases (cons? Why) (depends.print-why (datalog.explain Db [reaches | Why]) Why)
-              (cons? Out) (depends.write-all Db (hd Out))
-              true (depends.report Db Roots))))
+  -> (let Db (datalog.run program (facts Files Roots))
+       (cases (cons? Why) (print-why (datalog.explain Db [reaches | Why]) Why)
+              (cons? Out) (write-all Db (hd Out))
+              true (report Db Roots))))
 
-(define depends.print-reach
+(define print-reach
   F Tuples -> (do (output "~A reaches ~A functions~%" F (length Tuples))
                   (map (/. T (output "  ~A~%" (hd (tl T)))) (datalog.sort Tuples))
                   ok))
 
-(define depends.print-why
+(define print-why
   [] [F G] -> (output "~A does not reach ~A~%" F G)
-  Proof _ -> (depends.print-proof Proof ""))
+  Proof _ -> (print-proof Proof ""))
 
-(define depends.print-proof
-  [[Rel | Values] fact] Indent -> (output "~A~A~%" Indent (depends.tuple [Rel | Values]))
+(define print-proof
+  [[Rel | Values] fact] Indent -> (output "~A~A~%" Indent (tuple [Rel | Values]))
   [[Rel | Values] _ | Proofs] Indent
-  -> (do (output "~A~A, as~%" Indent (depends.tuple [Rel | Values]))
-         (map (/. P (depends.print-proof P (cn Indent "  "))) Proofs)
+  -> (do (output "~A~A, as~%" Indent (tuple [Rel | Values]))
+         (map (/. P (print-proof P (cn Indent "  "))) Proofs)
          ok))
 
-(define depends.tuple
+(define tuple
   [calls F G] -> (make-string "~A calls ~A" F G)
   [reaches F G] -> (make-string "~A reaches ~A" F G)
   Tuple -> (make-string "~S" Tuple))
 
 \* Each relation's tab-separated bytes, written by the I/O library, which says what failed. *\
-(define depends.write-all
-  Db Dir -> (map (/. R (depends.write Db R (cn Dir (cn "/" (cn (str R) ".tsv")))))
+(define write-all
+  Db Dir -> (map (/. R (write Db R (cn Dir (cn "/" (cn (str R) ".tsv")))))
                  [defines calls in-file file-uses file-depends cyclic reaches recursive live dead external fan-in depth]))
 
-(define depends.write
+(define write
   Db R Path -> (let Result (io.write-file Path (buffer.wrap (datalog.relation->bytes Db R tsv)))
                  (if (= (hd Result) ok)
                      (output "~A: ~A~%" R (datalog.count Db R))
                      (error "cannot write ~A: ~A" Path (io.error-message (hd (tl Result)))))))
 
-(define depends.report
+(define report
   Db Roots
   -> (let Files (datalog.unique (map (/. T (hd (tl T))) (datalog.tuples Db in-file)) [])
        (do (output "~A files, ~A functions, ~A calls, ~A to ~A external functions~%"
                    (length Files) (datalog.count Db defined) (datalog.count Db calls)
                    (datalog.count Db external-call) (datalog.count Db external))
            (output "~A file dependencies, ~A files in cycles~%" (datalog.count Db file-uses) (datalog.count Db cyclic))
-           (map (/. Group (output "  cycle: ~A~%" (depends.words Group))) (depends.cycles Db))
+           (map (/. Group (output "  cycle: ~A~%" (words Group))) (cycles Db))
            (output "~A recursive functions~%" (datalog.count Db recursive))
-           (output "most called: ~A~%" (depends.words (map (/. T (make-string "~A (~A)" (hd T) (hd (tl T))))
-                                                          (depends.take 5 (depends.by-count (datalog.tuples Db fan-in))))))
+           (output "most called: ~A~%" (words (map (/. T (make-string "~A (~A)" (hd T) (hd (tl T))))
+                                                          (take 5 (by-count (datalog.tuples Db fan-in))))))
            (if (empty? Roots)
                ok
                (do (output "from ~A: ~A live, ~A dead, ~A deepest at ~A calls~%"
-                           (depends.words Roots) (datalog.count Db live) (datalog.count Db dead)
-                           (length (depends.deepest (datalog.tuples Db depth))) (depends.max-depth (datalog.tuples Db depth) 0))
+                           (words Roots) (datalog.count Db live) (datalog.count Db dead)
+                           (length (deepest (datalog.tuples Db depth))) (max-depth (datalog.tuples Db depth) 0))
                    (map (/. T (output "  dead: ~A~%" (hd T))) (datalog.sorted Db dead))
                    ok)))))
 
 \* Files in a cycle, each group once, from the equivalence. *\
-(define depends.cycles
-  Db -> (depends.groups (datalog.sorted Db cyclic) Db []))
+(define cycles
+  Db -> (groups (datalog.sorted Db cyclic) Db []))
 
-(define depends.groups
+(define groups
   [] _ Acc -> (reverse Acc)
   [[File] | Files] Db Acc
   -> (if (some? (/. G (element? File G)) Acc)
-         (depends.groups Files Db Acc)
-         (depends.groups Files Db [(map (/. T (hd (tl T))) (datalog.sort (datalog.match Db [cycle File [var "B"]]))) | Acc])))
+         (groups Files Db Acc)
+         (groups Files Db [(map (/. T (hd (tl T))) (datalog.sort (datalog.match Db [cycle File [var "B"]]))) | Acc])))
 
 (define some?
   _ [] -> false
   F [X | Xs] -> (or (F X) (some? F Xs)))
 
-(define depends.words
+(define words
   [] -> ""
   [X] -> (make-string "~A" X)
-  [X | Xs] -> (make-string "~A, ~A" X (depends.words Xs)))
+  [X | Xs] -> (make-string "~A, ~A" X (words Xs)))
 
-(define depends.by-count
-  Tuples -> (reverse (depends.sort-by-count Tuples)))
+(define by-count
+  Tuples -> (reverse (sort-by-count Tuples)))
 
-(define depends.sort-by-count
+(define sort-by-count
   [] -> []
-  [X | Xs] -> (let Smaller (depends.filter (/. Y (depends.before? Y X)) Xs)
-                   Larger (depends.filter (/. Y (not (depends.before? Y X))) Xs)
-                (append (depends.sort-by-count Smaller) [X | (depends.sort-by-count Larger)])))
+  [X | Xs] -> (let Smaller (filter (/. Y (before? Y X)) Xs)
+                   Larger (filter (/. Y (not (before? Y X))) Xs)
+                (append (sort-by-count Smaller) [X | (sort-by-count Larger)])))
 
-(define depends.before?
+(define before?
   [F N] [G M] -> (or (< N M) (and (= N M) (datalog.value< G F))))
 
-(define depends.filter
+(define filter
   _ [] -> []
-  F [X | Xs] -> (if (F X) [X | (depends.filter F Xs)] (depends.filter F Xs)))
+  F [X | Xs] -> (if (F X) [X | (filter F Xs)] (filter F Xs)))
 
-(define depends.take
+(define take
   0 _ -> []
   _ [] -> []
-  N [X | Xs] -> [X | (depends.take (- N 1) Xs)])
+  N [X | Xs] -> [X | (take (- N 1) Xs)])
 
-(define depends.max-depth
+(define max-depth
   [] M -> M
-  [[_ D] | Ds] M -> (depends.max-depth Ds (if (> D M) D M)))
+  [[_ D] | Ds] M -> (max-depth Ds (if (> D M) D M)))
 
-(define depends.deepest
-  Depths -> (let M (depends.max-depth Depths 0) (depends.filter (/. T (= (hd (tl T)) M)) Depths)))
+(define deepest
+  Depths -> (let M (max-depth Depths 0) (filter (/. T (= (hd (tl T)) M)) Depths)))
+
+)

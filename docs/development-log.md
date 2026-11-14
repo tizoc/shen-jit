@@ -1313,6 +1313,18 @@ that. Its readings decided nothing below.
   forms in both executables, then again after saving and reloading each image: 14 checks in each of the four modes.
   `make test-core test-libs` passes. Both stage 0 hosts pass the checker and the same manifest; the source tarball
   builds and passes its namespace clients with `BOOTSTRAP=false`. The guide examples run. No runtime or JIT changes.
+- **Namespaces for the examples** (2026-11-14, Apple M3 Max, against main after release 0.8). The four example
+  applications and the seven examples in `tools/`, 19 files, which wrote their prefixes by hand, now use namespace
+  blocks as the libraries do: one per file, `source-deps` over five files and `source-facts` over two. Each file reads
+  as the same forms as before, allowing for the variables the reader names afresh, so nothing a program sees changes.
+  A script made each conversion, and the comparison gave what each header needs: the other prefixes it uses, and the
+  bare symbols it shares with libraries and tests, such as options, result tags, Datalog relations and `*argv*`, as
+  externals. An own name whose bare spelling the file also uses, as a system function or as a tag, stays qualified
+  through a `use` of its own namespace, as `counter-app.do` beside the kernel's `do`, or `counter-app.delete` beside
+  the `delete` tag; the others that are system names are shadowed, as `open` and `run` are. 711 hand-written prefixes
+  go. The gain is uneven: `read.shen` loses 139 and the SQLite example 109, while `model.shen`, whose Datalog program
+  names 57 relations and tags, loses 10 for a ten-line header, and each tool 3 to 10 for three to seven lines; they
+  were converted for consistency.
 
 - **Self-hosting check** (2026-11-01, Apple M3 Max). The lowerer inside Shen/JIT must give stage 0's output exactly:
   1,162 defuns in 0.29 s, against 0.36 s under Shen/Scheme. It found: `read-file` macroexpands, so stage 0 reads

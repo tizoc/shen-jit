@@ -1,5 +1,17 @@
 \\ Syntactic C call matching. Function identity includes file, name and definition byte.
-(defdatalog source-deps.program
+
+(shen.x.namespace source-deps
+  (use datalog)
+  (use io)
+  (use source-deps)
+  (externals [!= ambiguous analyze at backward call-file count defdatalog defined definition-linkage edge
+    excluded-file file-edge format forward global global-allowed global-count integer invalid-owner legacy legacy-file
+    local local-count missing-external-declaration missing-target ok owned raw-definition reach reached relation
+    resolved root rule select shen site source-call source-context source-declaration source-definition
+    source-diagnostic source-file source-format source-parse unique-global unique-local unique-owner unknown
+    unknown-scope unowned unresolved unresolved-reason usable-file var visible])
+
+(defdatalog program
   (type function [fn string string integer])
   (type site [at string integer integer integer integer])
   (relation source-file [string integer integer])
@@ -97,7 +109,7 @@
   (rule (file-edge From To) <-- (edge [fn From _ _] [fn To _ _]) (!= From To)))
 
 \\ One root and one direction: no all-pairs transitive closure in a default report.
-(defdatalog source-deps.walk
+(defdatalog walk
   (type function [fn string string integer])
   (relation edge [function function])
   (relation root [function])
@@ -112,29 +124,31 @@
 (define source-deps.select
   _ [] -> [ok []]
   Db [Mode File Name] ->
-    (source-deps.selected Mode File Name (datalog.match Db [defined File Name [var "Byte"]]))
+    (selected Mode File Name (datalog.match Db [defined File Name [var "Byte"]]))
   Db [Mode File Name Byte] ->
-    (source-deps.selected Mode File Name (datalog.match Db [defined File Name Byte])))
+    (selected Mode File Name (datalog.match Db [defined File Name Byte])))
 
-(define source-deps.selected
+(define selected
   Mode File Name [[File Name Byte]] -> [ok [Mode [fn File Name Byte]]]
   _ File Name [] -> [error (io.error select File (make-string "no usable definition of ~A" Name))]
   _ File Name _ ->
     [error (io.error select File (make-string "multiple definitions of ~A; query is ambiguous" Name))])
 
-(define source-deps.walk-db
+(define walk-db
   _ [] -> []
   Db [Mode Root] ->
-    (datalog.run source-deps.walk
+    (datalog.run walk
       [[root Root] [(if (= Mode reach) forward backward)] |
        (map (/. Edge [edge | Edge]) (datalog.tuples Db edge))]))
 
 (define source-deps.analyze
   Data Query ->
     (trap-error
-      (let Db (datalog.run source-deps.program (<-address Data 1))
+      (let Db (datalog.run program (<-address Data 1))
         (if (> (datalog.count Db invalid-owner) 0)
             [error (io.native-error analyze format 0 "source facts" "caller identity has no matching definition")]
             (io.let-ok Selected (source-deps.select Db Query)
-              [ok (io.record [source-deps.analysis Data Db Selected (source-deps.walk-db Db Selected)])])))
+              [ok (io.record [analysis Data Db Selected (walk-db Db Selected)])])))
       (/. E [error (io.native-error analyze shen 0 "source facts" (error-to-string E))])))
+
+)

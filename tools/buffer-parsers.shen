@@ -1,18 +1,27 @@
 \\ Complete-buffer examples over buffer/cursor and the public JSON library.
 \\ Load buffer.shen, cursor.shen, grammar.shen and json.shen first.
 
-(define buffer-example.json
+(shen.x.namespace buffer-example
+  (use buffer)
+  (use buffer-example)
+  (use cursor)
+  (use json)
+  (externals [byte-limit packet])
+
+(define json
   View -> (json.decode View [[byte-limit (buffer.length View)]]))
 
-(define buffer-example.uint
+(define uint
   _ 0 Acc -> Acc
-  C N Acc -> (buffer-example.uint C (- N 1) (+ (* Acc 256) (cursor.read C))))
+  C N Acc -> (uint C (- N 1) (+ (* Acc 256) (cursor.read C))))
 
 (define buffer-example.packet
   View Limit ->
     (let C (cursor.new View) _ (buffer.index Limit)
          _ (if (< (cursor.remaining C) 6) (error "packet: incomplete header") true)
-         Tag (buffer-example.uint C 2 0) N (buffer-example.uint C 4 0)
+         Tag (uint C 2 0) N (uint C 4 0)
          _ (if (> N Limit) (error "packet: payload exceeds limit") true)
          _ (if (= N (cursor.remaining C)) true (error "packet: payload length mismatch"))
       [packet Tag (cursor.bytes C N)]))
+
+)
