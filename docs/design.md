@@ -420,10 +420,11 @@ symbol shows its number.
 
 **Grammars** compile their loops once the functions their guards call exist, which is after
 the form defining the rule has run: the kernel expands a whole file before it evaluates any of
-it, so a load runs the functions registered with `shen-jit.after-form` after each form, and the
-grammar library compiles there the loops of rules defined so far, and prepares the streaming
-variants of the rules that reads name. Outside a load, it compiles at once. In an isolate, a
-variant is found by its name, and one never prepared is refused.
+it, so a loop compiles at its first call. An isolate cannot compile, so a program that parses
+in isolates calls `grammar.finish` in the builder before it spawns them, as `http.listen` does,
+which compiles the loops still pending and prepares the streaming variants of the rules that
+reads name; an image saved after it carries them made. In an isolate, a loop or variant never
+made is refused, saying to call it.
 
 A function goes to an isolate by its name, a published symbol, and the isolate gets it with
 `fn`; what `fn` makes is a closure in a heap, which does not cross. A foreign function found at

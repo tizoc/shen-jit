@@ -2096,6 +2096,23 @@ isolates, with about 250 lines to spare; what went is below, and the suites pass
   path the undo it lacked; loading an image no longer rebuilds the list of free global numbers, which cells never had
   either, at the cost of numbers dead at the save staying unused. With the down messages, the runtime is 154 lines
   shorter, `isolate.c` 1,614 lines to 1,494.
+- **`isolate.spawn-each` takes the function to run over what it started**, inside its own cleanup, so that the vector
+  `parallel.map`, Datalog's parts and joins and the SQLite example kept for their cleanups goes, and no caller has a
+  gap between the spawns and its cleanup. `http.wait`, which since `http.run` supervises only gave `[pending]` before
+  it or the result it returned, is removed, and the listener's two 19-field server constructors became one.
+- **Grammar loops compile at their first call, or when `grammar.finish` is called.** A load ran hooks after each form,
+  through overrides of `shen.load-help`, `shen.eval-and-print` and `shen.work-through`, so that loops compiled as soon
+  as their guards' functions existed, for isolates, which cannot compile. They compile at their first call in the
+  builder now, and `(grammar.finish)` compiles what is still pending and prepares the reads that code names: a program
+  that parses in isolates calls it before it spawns them, and `http.listen` does. The three overrides,
+  `shen-jit.after-form` and `shen-jit.loading?` go. Loading the HTTP stack with JSON and grammars took 124 to 135 ms,
+  against 138 to 147 for the build of the sixth review's commit, alternating, six runs each. Tried first: a hook the
+  builder ran before each spawn, `shen-jit.before-spawn`. A saved image then carried its loops uncompiled, to compile
+  at each start, and the listener's image test, which loads one under GC stress, compiled them with a collection at
+  every allocation, taking 22 minutes instead of 50 seconds. Running the hook before a save as well would have needed
+  calls in `--save` and in `shen-jit.save-executable`, the first primitive to call Shen code; the explicit call needs
+  neither, and leaves it to the program. With `spawn-each` and `http.wait`, the port, the libraries and the example
+  are 102 lines shorter.
 - **Rejected:** always waking a channel's receiver, dropping `receiver_waiting` (15 lines, but an isolate blocked in a
   send would wake for every message to any of its channels); receive-any in the port over wait-any and receive (one
   more lock round trip a message); running Datalog's parts through `parallel.map` (a library dependency); dropping

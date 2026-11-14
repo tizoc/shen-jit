@@ -132,8 +132,11 @@ A definition becomes `(define <rule> Buffer At End State -> ...)`, which returns
 match, or -1 when it does not match, and -2 when a require failed. A repetition becomes a function of
 its own, `<rule>/1` and so on, which loops by calling itself. A file is read whole before any of it runs,
 so `defgrammar` records each rule's arity as it is read, so that rules can call each other in any order,
-and a load compiles a rule's loops once the form defining the rule has run, when the functions defined
-before it exist; outside a load, they compile at once. Isolates, which cannot compile, find them compiled.
+and a rule's loops compile at their first call, when the functions defined before it exist. Isolates
+cannot compile: `(grammar.finish)`, in the builder, compiles the loops of every rule defined so far and
+prepares the read variants of the rules that `grammar.read` names, so call it before spawning isolates that
+parse, as `http.listen` does, and before saving a program, whose image then carries them. Calling it again
+covers what was defined since. In an isolate, a loop or variant never made is refused, saying to call it.
 A byte class, a rule that is only `B where Guard`, is not called by the rules read after it: they test the
 byte in place, so that `(+ <tchar>)` is one loop with no call per byte, and a loop over a class is called only
 if its first byte matches. When a loop compiles, it evaluates each class's guard for all 256 bytes and tests a

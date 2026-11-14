@@ -19,7 +19,7 @@
   (externals [? at defgrammar eof grammar-read-results none ok plain require skip span text u16-be
     u32-be unknown])
   (shadow bind call compile every? inline list pos read run stream subst type value)
-  (export match? parse parse-range prepare read read-result read-within defgrammar)
+  (export finish match? parse parse-range prepare read read-result read-within defgrammar)
 
 (define grammar.error
   S At Message -> (do (address-> S 1 At) (address-> S 2 Message) -2))
@@ -287,18 +287,17 @@
 \\ A function of a rule, Owner, compiled once the functions its guards call exist: Def, saved, and
 \\ a stub that compiles it. Its variables are checked now, as a definition's are, by compiling it to
 \\ KL without running it. The macro runs as its file is read, before any of the file's forms
-\\ have, so in a load the stub waits until the form that defines Owner has run (shen-jit.after-form),
-\\ and the forms before it; outside a load it compiles at once. An isolate cannot compile, so what
-\\ it runs is compiled before it starts.
+\\ have, so the stub compiles the loop at its first call, by when they have run. An isolate cannot
+\\ compile, so the builder compiles what is still pending with grammar.finish before it spawns.
 (define stub
   H Owner Def -> (let Params (parameters Def)
                       _ (shen.shendef->kldef H (tl (tl Def)))
                       _ (put H loop Def)
-                      Stub (eval (append [define H | Params] [-> [compile H (list Params)]]))
-                   (if (shen-jit.loading?) (do (add-pending loops [H Owner]) Stub) (do (compile-loop H) Stub))))
+                      _ (add-pending loops [H Owner])
+                   (eval (append [define H | Params] [-> [compile H (list Params)]]))))
 
-\\ What waits for a later form, on the builder's property list: stubs with their rules, and the
-\\ rules that reads name, whose streaming variants are prepared once they can be.
+\\ What is not yet made, on the builder's property list: stubs with their rules, and the rules that
+\\ reads name, whose streaming variants an isolate needs prepared.
 (define pending
   Key -> (trap-error (get pending Key) (/. E [])))
 
@@ -308,19 +307,24 @@
 (define defined?
   F -> (trap-error (do (shen-jit.function F) true) (/. E false)))
 
-(define compile-pending
+\\ (grammar.finish) compiles the loops of every rule defined so far, and prepares the streaming
+\\ variants of the rules that reads name. In the builder they otherwise compile at their first use;
+\\ an isolate, which cannot compile, needs them made, and an image saved after this carries them
+\\ made. It is called in the builder once the grammars are loaded, before spawning isolates that
+\\ parse or saving the program, as http.listen does.
+(define finish
   -> (let Loops (pending loops)
           Ready (keep-if (/. E (defined? (hd (tl E)))) Loops)
           _ (put pending loops (difference Loops Ready))
           _ (map (/. E (compile-loop (hd E))) Ready)
           Reads (pending reads)
-       (put pending reads (keep-if (/. R (not (trap-error (do (prepare R) true) (/. E false)))) Reads))))
+          _ (put pending reads (keep-if (/. R (not (trap-error (do (prepare R) true) (/. E false)))) Reads))
+       true))
 
 (define keep-if
   _ [] -> []
   F [X | Xs] -> (if (F X) [X | (keep-if F Xs)] (keep-if F Xs)))
 
-(shen-jit.after-form compile-pending)
 
 \\ A byte class, B where Guard and nothing else, is tested in place by the rules read after it.
 (define class
@@ -719,7 +723,7 @@
 (define compile
   H Args -> (if (shen-jit.builder?)
                 (do (compile-loop H) (put pending loops (unpend H (pending loops))) (apply (fn H) Args))
-                (error "grammar: ~A was not compiled before isolates started" H)))
+                (error "grammar: ~A was not compiled before isolates started: call (grammar.finish) in the builder first" H)))
 
 (define compile-loop
   H -> (eval (tables (get H loop))))
@@ -771,9 +775,7 @@
 
 (define read-form
   Rule Reader Limit Fail ->
-    (do (if (shen-jit.loading?)
-            (add-pending reads (rule-name Rule))
-            (trap-error (prepare (rule-name Rule)) (/. E skip)))
+    (do (add-pending reads (rule-name Rule))
         [read-from (rule-name Rule) (list (rule-args Rule)) Reader Limit Fail]))
 
 \\ Typed code calls a typed rule's own functions, which have types.
@@ -792,9 +794,9 @@
   Rule View Fail ->
     (let V (gensym (protect V)) S (gensym (protect S)) At (gensym (protect At)) End (gensym (protect End))
       [let V [buffer.check View] S [state] At [buffer.view.start V] End [buffer.view.end V]
-        (finish (call-rule Rule [buffer.view.owner V] At End S) S At End Fail)]))
+        (parsed-whole (call-rule Rule [buffer.view.owner V] At End S) S At End Fail)]))
 
-(define finish
+(define parsed-whole
   Call S At End Fail ->
     (let P (gensym (protect P))
       [let P Call [if [= P End] [<-address S 0] [failed P S At Fail]]]))
@@ -809,7 +811,7 @@
   Rule Buffer At End Fail ->
     (let B (gensym (protect B)) A (gensym (protect A)) E (gensym (protect E)) S (gensym (protect S))
       [let B Buffer A At E End S [state]
-        (finish (call-rule Rule B A E S) S A E Fail)]))
+        (parsed-whole (call-rule Rule B A E S) S A E Fail)]))
 
 \\ Reading from an I/O reader as input arrives. A rule's streaming variant, <rule>/stream, is its
 \\ code rewritten at the first streaming call: each bounds check compares with the end of what has
@@ -912,7 +914,7 @@
   F G -> (if (= (shen-jit.arity G) -1) (unprepared F) G))
 
 (define unprepared
-  F -> (error "grammar: ~A was not prepared before isolates started: read it in a read form, or call (grammar.prepare ~A), in the builder" F F))
+  F -> (error "grammar: ~A was not prepared before isolates started: call (grammar.finish), or (grammar.prepare ~A), in the builder first" F F))
 
 \\ In an isolate, a variant is the one the builder prepared, found by name: its property list is
 \\ not the builder's.

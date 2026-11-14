@@ -15,8 +15,9 @@ All notable changes to this project are documented in this file. The format is b
   once, in the sender; `isolate.self` is the one running, `isolate.monitor` watches them,
   and `isolate.kill` stops one at its next channel operation or `isolate.check-kill`, which socket waits call.
   Only the first isolate, the builder, defines, and the program is fixed while other isolates run:
-  defining raises until they have ended. Symbols are the same in every isolate. `isolate.spawn-each` and
-  `isolate.stop-each` start an isolate for each part of a call and stop them if its wait raises. Ctrl-C at the REPL
+  defining raises until they have ended. Symbols are the same in every isolate. `(isolate.spawn-each F Args G)`
+  starts an isolate for each part of a call and gives `G`'s value over them, stopping them, as `isolate.stop-each`
+  does, if anything raises. Ctrl-C at the REPL
   ends a wait on a channel, and kills the isolates the interrupted input spawned. `isolate` and `channel` are
   namespaces of the image, with types for typed programs: `isolate`, `(receiver A)` and `(sender A)`, and datatypes
   for results.
@@ -36,18 +37,18 @@ All notable changes to this project are documented in this file. The format is b
   the program's last run says pay, or runs it whole. Others run as `datalog.run` does.
 - The `source-deps` example's batch queries, with `--workers N`, run in isolates over the graph shared once; no
   worker image is needed.
-- Grammars work in isolates: a load compiles a rule's loops after the form defining it, and prepares the streaming
-  reads that code names. `shen-jit.after-form` registers a function to run after each form of a load, and
-  `shen-jit.at-end` one to run once as the registering isolate ends, and `shen-jit.at-guards-dead` one to run then
-  as its guarded pointers die, in rounds.
+- Grammars work in isolates: `(grammar.finish)`, in the builder, compiles the loops of the rules defined so far and
+  prepares the streaming reads that code names, which `http.listen` calls; otherwise loops compile at their first
+  use. `shen-jit.at-end` registers a function to run once as the registering isolate ends, and
+  `shen-jit.at-guards-dead` one to run then as its guarded pointers die, in rounds.
 - The handle library releases what an isolate's handles hold as the isolate ends, but for handles its globals still
   hold, which are left to the system, as a program's are when it ends.
 
 ### Changed
 
 - The HTTP listener serves each connection in an isolate of its own, in parallel, supervised by the program that calls
-  the new `http.run` until the server is stopped; `http.listen` binds and returns the server without serving, and
-  `http.wait` gives the result once `http.run` has returned. A handler goes by name, as `f` or `[f Arg ...]`, which
+  the new `http.run` until the server is stopped, and gives its result; `http.listen` binds and returns the server
+  without serving, and `http.wait`, with nothing left to wait for, is removed. A handler goes by name, as `f` or `[f Arg ...]`, which
   is called with the arguments and then the request, rather than as a closure, and stops its server with
   `(http.stop (http.current-server))`. Connections left once `shutdown-grace` has passed are killed. The
   `sqlite-http` example keeps a write-ahead log, and its database belongs to one isolate, which holds it open while

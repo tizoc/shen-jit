@@ -1,6 +1,6 @@
-\\ Grammars in isolates, which cannot compile: a rule's loops compile once the form defining it
-\\ has run, and the streaming variants of the rules that reads name are prepared then too. Load
-\\ buffer.shen, io.shen and grammar.shen first.
+\\ Grammars in isolates, which cannot compile: (grammar.finish), in the builder, compiles the loops
+\\ of the rules defined so far and prepares the streaming variants of the rules that reads name.
+\\ Load buffer.shen, io.shen and grammar.shen first.
 (set gp.passed 0)
 (set gp.failed 0)
 
@@ -36,6 +36,8 @@
                                     (grammar.read <gp.word> (gp.reader "abc;rest") (function gp.fail))
                                     (grammar.read <gp.word> (gp.reader "ab1;") (function gp.fail))]))
 
+(grammar.finish)
+
 (gp.check "loops and a streaming read in an isolate" [true false [ok skip] [failed 0 "no match"]]
   (gp.ask gp.work "2026"))
 
@@ -45,7 +47,9 @@
 (define gp.late
   [Text Out] -> (channel.send Out (grammar.match? <gp.late> (buffer.from-string Text))))
 
-(gp.check "a rule defined after a spawn" true (gp.ask gp.late "12!"))
+(grammar.finish)
+
+(gp.check "a rule defined after a spawn, and finished" true (gp.ask gp.late "12!"))
 
 \\ A rule no read names is not prepared: an isolate says so.
 (defgrammar <gp.unread> (+ <gp.letter>);)
@@ -55,7 +59,7 @@
                                                (/. E (error-to-string E)))))
 
 (gp.check "an unprepared variant is refused"
-  "grammar: <gp.unread> was not prepared before isolates started: read it in a read form, or call (grammar.prepare <gp.unread>), in the builder"
+  "grammar: <gp.unread> was not prepared before isolates started: call (grammar.finish), or (grammar.prepare <gp.unread>), in the builder first"
   (gp.ask gp.unread "abc"))
 
 (output "~A passed, ~A failed (grammars in isolates)~%" (value gp.passed) (value gp.failed))

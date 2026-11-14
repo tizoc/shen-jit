@@ -25,7 +25,9 @@ client that runs while the server does belongs in an isolate of its own.
 
 `http.listen Host Port Handler Options` binds and returns an opaque `http.server`, serving nothing yet. Port
 zero selects a free port; `http.port S` returns the actual port. Invalid options and handlers raise before
-opening the listener. A bind failure raises and closes any acquired socket.
+opening the listener. A bind failure raises and closes any acquired socket. It calls `(grammar.finish)` first,
+so that connections, which cannot compile, find every grammar loaded so far compiled, JSON's included: load
+what handlers parse with before it.
 
 A handler runs in its connection's isolate, which inherits nothing from the program that defined it, so it
 goes by name: `F`, a function of the request, or `[F | Args]`, called with `Args` and then the request,
@@ -54,9 +56,7 @@ connections left, and waits for them to end.
 | `[ok]` | The server was stopped, the listener is closed and every connection has ended |
 | `[error Error]` | The listener failed; it is closed, the connections were given the shutdown grace and then killed, and Error retains cleanup failures |
 
-Running a server that has finished gives its result again. `http.wait S Milliseconds` gives that result
-once `http.run` has returned, and `[pending]` before, at once: as `http.run` returns only when the server has
-ended, there is nothing to wait for, and Milliseconds stays for the code written for it. Ordinary malformed requests, handler exceptions and peer
+Running a server that has finished gives its result again. Ordinary malformed requests, handler exceptions and peer
 failures count as failed connections; they do not stop the server or make its result an error.
 
 Ctrl-C in a REPL that runs a server returns to the prompt, as a program's handlers cannot hold it back. The
@@ -92,8 +92,8 @@ while they end) or `stopped`. `http.stats S` returns, in this order:
 Completed includes failures, and Cancelled counts the connections killed when the grace had passed, which
 are counted as failed too. Active can include a connection that has ended until the supervisor next looks,
 within 50 ms. Statistics retain counters, not a history of requests or exception messages. Use application
-logging when the details of individual failures are needed. In a handler, `http.state`, `http.stats`,
-`http.wait` and `http.run` raise: the copy knows only its port.
+logging when the details of individual failures are needed. In a handler, `http.state`, `http.stats`
+and `http.run` raise: the copy knows only its port.
 
 ## Cancellation and kills
 
