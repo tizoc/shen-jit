@@ -295,9 +295,12 @@
                   [Owner S]))
         (freeze (counter-app.undo-start Cell)))))
 
+\\ The server, never run, closes its listener before allocating anything; the owning isolate ends
+\\ even if that raises.
 (define counter-app.undo-start
-  Cell -> (do (if (empty? (<-address Cell 1)) true (do (http.stop (<-address Cell 1)) (http.run (<-address Cell 1))))
-              (if (empty? (<-address Cell 0)) true (counter-app.close (<-address Cell 0)))))
+  Cell -> (shen-jit.finally
+            (freeze (if (empty? (<-address Cell 1)) true (do (http.stop (<-address Cell 1)) (http.run (<-address Cell 1)))))
+            (freeze (if (empty? (<-address Cell 0)) true (counter-app.close (<-address Cell 0))))))
 
 \\ Serves until a handler stops the server, each connection in an isolate of its own, then ends the
 \\ owner. The owner holds the database open meanwhile, so the log stays between requests: the last

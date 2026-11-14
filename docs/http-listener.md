@@ -41,7 +41,8 @@ which owns the socket from then on: requests are handled in order under the requ
 total-connection bounds. Request deadlines start on admission.
 
 `http.stop S` requests shutdown and returns true, and is idempotent. Called before `http.run`, it makes the
-run stop at once. A handler stops the server it serves with `(http.stop (http.current-server))`:
+run stop at once, closing the listener before it allocates anything, so that cleanup after a failure can
+close a server it made this way even when memory is short. A handler stops the server it serves with `(http.stop (http.current-server))`:
 `http.current-server` gives, in a handler, a copy of the server that gives its port and stops it, and
 raises elsewhere. Then the supervisor closes the listener and gives the open connections `shutdown-grace`
 to finish: a connection closes after its active response is written, without dispatching requests queued

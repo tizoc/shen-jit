@@ -204,10 +204,10 @@
 (define run
   S -> (let _ (owner-check S)
             Result (server.result S)
-         (if (empty? Result)
-             (do (if (empty? (server.events S)) (open-events S) true)
-                 (supervisor S))
-             Result)))
+         (cases (not (empty? Result)) Result
+                (and (server.stopping S) (empty? (server.events S))) (finish S)
+                true (do (if (empty? (server.events S)) (open-events S) true)
+                         (supervisor S)))))
 
 \\ Each connection tells at most once that it failed and once that a handler stopped the server,
 \\ and the supervisor takes all that is waiting at every turn.
@@ -341,11 +341,12 @@
   _ [ok] -> true
   S [error Error] -> (do (note-error S Error) true))
 
+\\ A server stopped before it ever ran has no connections or events, and closes its listener before
+\\ allocating anything, so that a rollback that runs it under memory pressure still closes it.
 (define finish
   S ->
     (let _ (close-listener S)
-         _ (take-events S)
-         _ (channel.close (server.events S))
+         _ (if (empty? (server.events S)) true (do (take-events S) (channel.close (server.events S))))
          _ (server.phase-> S stopped)
          Error (server.error S)
          Result (if (empty? Error) [ok] [error Error])

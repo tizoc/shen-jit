@@ -5254,7 +5254,9 @@
                              (if (= J 0) (cleared (with-facts Db [])) [])])))
 
 \\ What each isolate sent, once every one has ended; or the first error one raised, the others
-\\ killed, as they would wait for it.
+\\ killed, as they would wait for it. One whose reply came did its part, whatever its monitor says:
+\\ one that ended before its monitor was made, its record then taken by another spawn, is told
+\\ `ended`. Its reply is here by then, as it sent it before ending and the receive takes Reply first.
 (define gather-joined
   Reply [] _ Got Failure -> (drain-joined Reply Got Failure)
   Reply Monitors Isolates Got Failure
@@ -5262,11 +5264,15 @@
           From (hd Next)
        (if (= From Reply)
            (gather-joined Reply Monitors Isolates [(hd (tl Next)) | Got] Failure)
-           (let Reason (nth 3 (hd (tl Next)))
+           (let Down (hd (tl Next))
+                Reason (nth 3 Down)
                 _ (channel.close From)
-                Failed (and (empty? Failure) (not (= Reason normal)))
+                Failed (and (empty? Failure) (not (= Reason normal)) (not (replied? (position (nth 2 Down) Isolates 0) Got)))
                 _ (if Failed (map (/. P (trap-error (isolate.kill P) (/. E skip))) Isolates) skip)
              (gather-joined Reply (remove From Monitors) Isolates Got (if Failed [Reason] Failure))))))
+
+(define replied?
+  J Got -> (some? (/. G (= (hd G) J)) Got))
 
 (define drain-joined
   Reply Got [] -> (if (= (channel.wait-any [Reply] 0) [timeout]) Got (drain-joined Reply [(channel.receive Reply) | Got] []))

@@ -2105,6 +2105,22 @@ connection starts, which no test makes.
   twice when making the endpoint fails, as `io.socket` closes it then, and the number could by then be another
   isolate's.
 
+### What a ninth review found (2026-11-13, Apple M3 Max, against the commit before)
+
+Two, both fixed, each with a case that fails on the commit before.
+
+- **Closing a server that never ran.** `http.run` of a server stopped before it ran made its events channel and its
+  sender before closing the listener, so the `sqlite-http` example's cleanup, which stops and runs the server it made,
+  could fail there under memory pressure, leaving the socket open, and skip ending the owning isolate after it. Such a
+  run now closes the listener and finishes before it allocates anything, which a case checks by the events channel it
+  no longer makes, and the example ends the owning isolate however closing the server ends.
+- **A join isolate told `ended` after it did its part.** One that sent its reply and ended between its spawn and its
+  monitor, its record then taken by another isolate's spawn, is told `ended`, as documented, and the joins took any
+  reason but `normal` for a failure, killing the others and raising though every reply was in. The reply comes before
+  the end, and the receive takes the reply channel first, so the monitor's isolate is matched with the replies, by its
+  index, and one that replied did its part. The case gives the gatherer a stand-in monitor that says `ended`: with the
+  reply it gives the database's part, and without one it raises, as before.
+
 ### What an eighth review found (2026-11-13, Apple M3 Max, against the commit before)
 
 One, fixed. The reviewer found the seventh's fixes sound, and nothing more worth its code.

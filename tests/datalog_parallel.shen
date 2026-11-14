@@ -279,4 +279,27 @@
   (rule (b X) <-- (a X)))
 (dpp.check "defining after a run in parts" [[1]] (datalog.sorted (datalog.run-parallel 2 dpp.later [[a 1]]) b))
 
+\\ An isolate running joins that ended before its monitor was made, its record then taken by another
+\\ spawn, is told ended, though it did its part: its reply, here before its end, counts. Without the
+\\ reply, ended is a failure. The monitor is stood in for by a channel.
+(define dpp.isolate-gone
+  -> (let I (isolate.spawn dpp.nothing 0)
+          M (isolate.monitor I)
+          _ (channel.receive M)
+       I))
+
+(define dpp.nothing
+  _ -> done)
+
+(define dpp.gather-told-ended
+  Replied -> (let I (dpp.isolate-gone)
+                  Reply (channel.new 1)
+                  _ (if Replied (channel.send (channel.sender Reply) [0 part]) skip)
+                  Down (channel.new 1)
+                  _ (channel.send (channel.sender Down) [down I ended])
+               (trap-error (datalog.gather-joined Reply [Down] [I] [] []) (/. E (error-to-string E)))))
+
+(dpp.check "a join isolate told ended after its reply did its part" (dpp.gather-told-ended true) [[0 part]])
+(dpp.check "and without one failed" (dpp.gather-told-ended false) "datalog: an isolate running joins ended: ended")
+
 (output "~A checks, ~A failed~%" (value dpp.*checks*) (value dpp.*failures*))
