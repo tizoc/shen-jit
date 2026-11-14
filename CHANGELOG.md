@@ -14,6 +14,8 @@ All notable changes to this project are documented in this file. The format is b
   failed.
 - A small predicate the program defines, a struct's among them, tested by `if` or `cond` branches on its own tests
   rather than making a Boolean to test again: one of two tests, in a loop, takes 20-30% less time.
+- Reading or writing a struct's field, or a vector's element at a constant index, tests that it is a vector and long
+  enough at once: reading a struct's fields in a loop takes about 9% less time, and `buffer.u8` about 3.5%.
 
 ## [0.8] - 2026-11-14
 

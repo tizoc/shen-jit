@@ -316,6 +316,17 @@ Lowering rules, the collector and the kernel port have their own sections.
   `SHEN_JIT_MAX_HEAP`, in the reserve a caught "out of memory" opens, it could take what C refuses. One comparison.
   The test of it in `tests/cli.sh` failed only about one run in 15 before, as whether the reserve is open when `tlstr`
   runs varied from run to run.
+- **One test for a vector and its length** (2026-11-14, Apple M3 Max, against the build before, three alternating
+  rounds, best of 5). At a constant index i, `<-address` and `address->` tested the header's type and then its length.
+  The header less that of a vector of length i + 1 has its low bits clear only for a vector and its top bit clear only
+  for a length above i, as lengths are below 2^56, so `sub`, `tst` and one branch replace `and`, `cmp`, `lsr`, `cmp` and
+  two branches: a struct's reader is 9 instructions on arm64, not 12, and every check stays. `shen-jit.tagged?`,
+  `shen-jit.vector?` and Prolog's `gc` test a length of at least 1 or 2 the same way. 10,000 passes over 1,000 structs:
+  reading two fields 19.6 → 17.8 ms, reading one and writing it 16.7 → 15.0, a struct predicate as a test 24.2 → 23.7
+  (24.1 → 19.9 with the code shifted by four unrelated definitions); `buffer.u8` over 64 KB 100 times, 96.1 → 92.6.
+  The independent workloads were 0.98 to 1.00, and the benchmark suite, four rounds alternating which ran first,
+  0.98: vector, absvector and tuple reads and writes 0.84 to 0.89, tuple patterns 0.75 to 0.79; the rows at 1.03 to
+  1.04 include `symbol?`, `variable?` and `shen.sysfunc?`, which move with placement.
 
 ### Errors and handlers
 

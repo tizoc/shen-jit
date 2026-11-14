@@ -126,6 +126,19 @@ static struct sljit_jump *tag_cmp(struct sljit_compiler *c, sljit_s32 type, slji
     return sljit_emit_jump(c, type == SLJIT_EQUAL ? SLJIT_ZERO : SLJIT_NOT_ZERO);
 }
 
+/* A jump taken unless the header in register h, which this overwrites, is that of a
+   vector longer than i, shared or not if shared is true, else not shared. The header
+   less that of a vector of length i + 1 has its low bits clear only for a vector, and
+   its top bit clear only for a length above i, as lengths are below 2^56: one test for
+   both. A length of 2^55 or more, which no heap holds, would only take the jump. */
+static struct sljit_jump *unless_longer_vector(struct sljit_compiler *c, sljit_s32 h, sljit_sw i, bool shared)
+{
+    sljit_emit_op2(c, SLJIT_SUB, h, 0, h, 0, SLJIT_IMM, (sljit_sw)HEADER(T_VECTOR, i + 1));
+    uint64_t low = shared ? 0xFF & ~SHARED_BIT : 0xFF;
+    sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, h, 0, SLJIT_IMM, (sljit_sw)(UINT64_C(1) << 63 | low));
+    return sljit_emit_jump(c, SLJIT_NOT_ZERO);
+}
+
 static size_t site_index(uintptr_t addr, size_t cap) { return (size_t)((addr >> 2) * 0x9E3779B97F4A7C15u) & (cap - 1); }
 
 static void site_put(Jit *jit, uintptr_t addr, uint32_t window, uint32_t chain)
@@ -1884,11 +1897,9 @@ static Test emit_type_test(Emit *e, uint32_t prim, const uint32_t *arg)
     if (prim == P_TAGGEDP) {
         t.no[0] = tag_cmp(c, SLJIT_NOT_EQUAL, R1, r, 0, TAG_OBJECT);
         sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(r), -TAG_OBJECT);
-        sljit_emit_op2(c, SLJIT_AND, R1, R2, IMM(0xFF & ~SHARED_BIT));
-        t.no[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(T_VECTOR << 3 | TAG_HEADER));
-        t.no[2] = sljit_emit_cmp(c, SLJIT_LESS, R2, IMM(1 << 8)); /* length 0 */
+        t.no[1] = unless_longer_vector(c, SLJIT_R2, 0, true);
         sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, arg[1]));
-        t.no[3] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, SLJIT_MEM1(r), sizeof(V) - TAG_OBJECT);
+        t.no[2] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, SLJIT_MEM1(r), sizeof(V) - TAG_OBJECT);
         return t;
     }
     if (prim == P_NUMBERP) {
@@ -1919,13 +1930,11 @@ static struct sljit_jump *emit_vector_test(Emit *e, const uint32_t *arg, struct 
     sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, arg[0]));
     no[0] = tag_cmp(c, SLJIT_NOT_EQUAL, R1, R0, TAG_OBJECT);
     sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), -TAG_OBJECT);
-    sljit_emit_op2(c, SLJIT_AND, R1, R2, IMM(0xFF & ~SHARED_BIT));
-    no[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(T_VECTOR << 3 | TAG_HEADER));
-    no[2] = sljit_emit_cmp(c, SLJIT_LESS, R2, IMM(1 << 8)); /* length 0 */
+    no[1] = unless_longer_vector(c, SLJIT_R2, 0, true);
     sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM1(SLJIT_R0), sizeof(V) - TAG_OBJECT);
     sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R1, IMM(3));
     struct sljit_jump *other = sljit_emit_jump(c, SLJIT_NOT_ZERO);
-    no[3] = sljit_emit_cmp(c, SLJIT_SIG_LESS, R1, IMM(0));
+    no[2] = sljit_emit_cmp(c, SLJIT_SIG_LESS, R1, IMM(0));
     return other;
 }
 
@@ -2629,14 +2638,11 @@ static void emit_prim(Emit *e, const uint32_t *p)
         slow->catch_label = quiet_catch(e); /* C raises wherever these checks fail */
         sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), -TAG_OBJECT);
         /* A read takes a shared vector too; a store sends one to C, which refuses it. */
-        sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(prim == P_GET_ADDRESS ? 0xFF & ~SHARED_BIT : 0xFF));
-        slow->from[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM(T_VECTOR << 3 | TAG_HEADER));
-        sljit_emit_op2(c, SLJIT_LSHR, R2, R2, IMM(8));
         if (fixnum_operand(e, arg[1]) && (uint64_t)*operand_cell(e, arg[1]) < fix(4096)) {
-            /* A small constant index i: the length must exceed it, and the
-               element is at a constant offset. */
+            /* A small constant index i: the length must exceed it, which the
+               type test checks too, and the element is at a constant offset. */
             sljit_sw i = fixval(*operand_cell(e, arg[1]));
-            slow->from[2] = sljit_emit_cmp(c, SLJIT_LESS_EQUAL, R2, IMM(i));
+            slow->from[1] = unless_longer_vector(c, SLJIT_R2, i, prim == P_GET_ADDRESS);
             sljit_sw at = (1 + i) * (sljit_sw)sizeof(V) - TAG_OBJECT;
             if (prim == P_GET_ADDRESS) {
                 put_result(e, dst, SLJIT_MEM1(SLJIT_R0), at);
@@ -2647,6 +2653,9 @@ static void emit_prim(Emit *e, const uint32_t *p)
             }
             break;
         }
+        sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(prim == P_GET_ADDRESS ? 0xFF & ~SHARED_BIT : 0xFF));
+        slow->from[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM(T_VECTOR << 3 | TAG_HEADER));
+        sljit_emit_op2(c, SLJIT_LSHR, R2, R2, IMM(8));
         sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, arg[1]));
         sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R1, IMM(3));
         slow->from[2] = sljit_emit_jump(c, SLJIT_NOT_ZERO);
@@ -2794,10 +2803,7 @@ static void emit_prim(Emit *e, const uint32_t *p)
         slow = slow_path(e, SLOW_PRIM, tag_cmp(c, SLJIT_NOT_EQUAL, R2, R1, TAG_OBJECT));
         slow->catch_label = quiet_catch(e); /* C raises wherever this fails */
         sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R1), -TAG_OBJECT);
-        sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));
-        slow->from[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM(T_VECTOR << 3 | TAG_HEADER));
-        sljit_emit_op2(c, SLJIT_LSHR, R2, R2, IMM(8));
-        slow->from[2] = sljit_emit_cmp(c, SLJIT_LESS, R2, IMM(2));
+        slow->from[1] = unless_longer_vector(c, SLJIT_R2, 1, false);
         sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R1), 2 * WORD - TAG_OBJECT);
         sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R2, IMM(3));
         slow->from[3] = sljit_emit_jump(c, SLJIT_NOT_ZERO);
@@ -2887,12 +2893,12 @@ static void emit_prim(Emit *e, const uint32_t *p)
         break;
     }
     case P_VECTORP: {
-        struct sljit_jump *no[4];
+        struct sljit_jump *no[3];
         slow = slow_path(e, SLOW_PRIM, emit_vector_test(e, arg, no));
         sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), IMM(V_TRUE));
         struct sljit_jump *done = sljit_emit_jump(c, SLJIT_JUMP);
         struct sljit_label *false_ = sljit_emit_label(c);
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < 3; i++)
             sljit_set_label(no[i], false_);
         sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), IMM(V_FALSE));
         sljit_set_label(done, sljit_emit_label(c));
@@ -3074,9 +3080,9 @@ static void emit_fused(Emit *e, const uint32_t *p, uint32_t label)
     if (prim == P_ARITYP || prim == P_INLINEDP) {
         slow = slow_path(e, SLOW_PRIM, sljit_emit_jump(c, SLJIT_JUMP));
     } else if (prim == P_VECTORP) {
-        struct sljit_jump *no[4];
+        struct sljit_jump *no[3];
         slow = slow_path(e, SLOW_PRIM, emit_vector_test(e, arg, no));
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < 3; i++)
             to_label(e, no[i], label);
     } else if (prim == P_EQ) {
         struct sljit_jump *plain;
