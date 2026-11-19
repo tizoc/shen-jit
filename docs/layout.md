@@ -31,7 +31,8 @@ This gives `[42 42 6]`. The [frame](framing.md) library declares its header so.
 Fields are big-endian. A field of whole bytes is one read of 8, 16 or 32 bits, or a few for 24, 40, 48 or
 56. A field that is not whole bytes must lie within one byte, 16-bit or 32-bit word at its own alignment, and
 is shifted and masked out of it. A field of 64 bits or more, such as an IPv6 address, has only its offset.
-`_` names padding, which defines nothing. Write a header one 32-bit row to a line, as an RFC draws it:
+`_` names padding, which defines nothing. No two fields share a name, and none is named `size`, which is the
+layout's length. Write a header one 32-bit row to a line, as an RFC draws it:
 
 ```shen
 (deflayout ipv4

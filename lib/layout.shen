@@ -24,6 +24,7 @@
 (defmacro layout.macro
   [deflayout Name | Fields] -> (let Layout (layout.literal Name)
                                     Checked (map (fn layout.check-field) (map (fn layout.literal) Fields))
+                                    _ (layout.check-names Layout Checked)
                                     _ (put Layout layout.fields Checked)
                                  [package null [] | (layout.fields Layout Checked 0)]))
 
@@ -34,6 +35,15 @@
 (define layout.check-field
   [Field Bits] -> [Field Bits] where (and (symbol? Field) (integer? Bits) (> Bits 0))
   Field -> (error "deflayout: ~S is not (Name Bits)" Field))
+
+\\ A field's definitions must not replace another field's, nor the layout's size.
+(define layout.check-names
+  _ [] -> true
+  Name [[Field _] | _] -> (error "deflayout: ~A.size is the layout's length, and cannot name a field" Name)
+    where (= Field size)
+  Name [[Field _] | Fields] -> (error "deflayout: ~A has two fields named ~A" Name Field)
+    where (and (not (layout.padding? Field)) (element? Field (map (fn head) Fields)))
+  Name [_ | Fields] -> (layout.check-names Name Fields))
 
 (define layout.fields
   Name [] Bit -> [(layout.size Name Bit)]

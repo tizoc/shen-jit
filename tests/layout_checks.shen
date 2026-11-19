@@ -121,6 +121,11 @@
       (layout-check "write-layout leaves addresses alone" [170 170 170 170]
                     [(buffer.u8 B 8) (buffer.u8 B 23) (buffer.u8 B 24) (buffer.u8 B 39)])))
 
+(layout-check "deflayout refuses a field named size, and a name used twice" [true true false]
+              [(layout-raises? (freeze (macroexpand [deflayout layout-test.sized [kind 8] [size 8]])))
+               (layout-raises? (freeze (macroexpand [deflayout layout-test.twice [kind 8] [kind 8]])))
+               (layout-raises? (freeze (macroexpand [deflayout layout-test.padded [_ 8] [kind 8] [_ 16]])))])
+
 (if (= (value *layout-failed*) 0)
     (output "~A passed, 0 failed~%" (value *layout-passed*))
     (error "~A layout checks failed" (value *layout-failed*)))
