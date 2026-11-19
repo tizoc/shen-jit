@@ -3,6 +3,7 @@
   (use buffer)
   (use net-ipv4)
   (use shen-jit)
+  (use net-wire => wire)
   (import struct defstruct)
   (export table make receive packet)
   (shadow receive)
@@ -32,7 +33,7 @@
   V I Limit ->
     (let A (:assembly
               bytes <- (buffer.new Limit)
-              present <- (buffer.new (fxquotient (fx+ (fx- Limit 20) 7) 8))
+              present <- (buffer.new (fxquotient (fx+ (fx- Limit (wire.ipv4.size)) 7) 8))
               src <- 0
               dst <- 0
               id <- 0
@@ -70,10 +71,10 @@
   {assembly --> buffer.view --> fixnum --> fixnum --> assembly}
   A B I Now ->
     (do (clear (assembly.present A) (fxquotient (fx+ (assembly.highest A) 7) 8))
-        (assembly.src-> A (buffer.u32-be B (fx+ I 12)))
-        (assembly.dst-> A (buffer.u32-be B (fx+ I 16)))
-        (assembly.id-> A (buffer.u16-be B (fx+ I 4)))
-        (assembly.proto-> A (buffer.u8 B (fx+ I 9)))
+        (assembly.src-> A (wire.ipv4.source B I))
+        (assembly.dst-> A (wire.ipv4.destination B I))
+        (assembly.id-> A (wire.ipv4.identification B I))
+        (assembly.proto-> A (wire.ipv4.protocol B I))
         (assembly.expires-> A (fx+ Now 30000))
         (assembly.received-> A 0)
         (assembly.highest-> A 0)
@@ -87,10 +88,10 @@
         (let A (entry T Index)
           (cases (fx<= (assembly.expires A) Now)
                    (find T B I Now (fx+ Index 1) Index)
-                 (and (= (assembly.id A) (buffer.u16-be B (fx+ I 4)))
-                      (= (assembly.proto A) (buffer.u8 B (fx+ I 9)))
-                      (= (assembly.src A) (buffer.u32-be B (fx+ I 12)))
-                      (= (assembly.dst A) (buffer.u32-be B (fx+ I 16))))
+                 (and (= (assembly.id A) (wire.ipv4.identification B I))
+                      (= (assembly.proto A) (wire.ipv4.protocol B I))
+                      (= (assembly.src A) (wire.ipv4.source B I))
+                      (= (assembly.dst A) (wire.ipv4.destination B I)))
                    Index
                  true (find T B I Now (fx+ Index 1) Available)))))
 
@@ -107,12 +108,13 @@
 (define complete
   {table --> fixnum --> assembly --> fixnum}
   T Index A ->
-    (let N (fx+ (assembly.end A) 20)
+    (let N (fx+ (assembly.end A) (wire.ipv4.size))
          B (assembly.bytes A)
-      (do (buffer.u16-be-> B 2 N)
-          (buffer.u16-be-> B 6 0)
-          (buffer.u16-be-> B 10 0)
-          (buffer.u16-be-> B 10 (net-ipv4.packet-checksum B 0 20))
+      (do (wire.ipv4.total-length-> B 0 N)
+          (wire.ipv4.more-fragments-> B 0 0)                \\ Whole now: the last fragment, at offset 0.
+          (wire.ipv4.fragment-offset-> B 0 0)
+          (wire.ipv4.checksum-> B 0 0)
+          (wire.ipv4.checksum-> B 0 (net-ipv4.packet-checksum B 0 (wire.ipv4.size)))
           (table.ready-index-> T Index)
           (assembly.expires-> A 0)
           N)))
@@ -135,8 +137,8 @@
              true
                (let Out (assembly.bytes A)
                     Total (fx+ (assembly.received A) N)
-                 (do (if (= Offset 0) (buffer.copy-into! Out 0 B I 20) Out)
-                     (buffer.copy-into! Out (fx+ 20 Offset) B (fx+ I 20) N)
+                 (do (if (= Offset 0) (buffer.copy-into! Out 0 B I (wire.ipv4.size)) Out)  \\ The first's header.
+                     (buffer.copy-into! Out (fx+ (wire.ipv4.size) Offset) B (fx+ I (wire.ipv4.size)) N)
                      (mark Map FirstBlock EndBlock)
                      (if (fx> End (assembly.highest A)) (assembly.highest-> A End) A)
                      (assembly.received-> A Total)
@@ -146,12 +148,11 @@
 (define receive
   {table --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
   T B I N Now ->
-    (let Flags (buffer.u16-be B (fx+ I 6))
-         Offset (fx* 8 (shen-jit.bit-and Flags 8191))
-         More (not (= (shen-jit.bit-and Flags 8192) 0))
-         Payload (fx- N 20)
+    (let Offset (fx* 8 (wire.ipv4.fragment-offset B I))         \\ Counted in 8-byte blocks.
+         More (= (wire.ipv4.more-fragments B I) 1)
+         Payload (fx- N (wire.ipv4.size))
       (if (and (fx> Payload 0) (fx<= (fx+ Offset N) (table.limit T))
-               (= (shen-jit.bit-and Flags 49152) 0)
+               (= (wire.ipv4.reserved B I) 0) (= (wire.ipv4.dont-fragment B I) 0)
                (or (not More) (= (fxremainder Payload 8) 0)))
           (let Index (find T B I Now 1 0)
             (if (= Index 0) 0 (store T Index B I Payload Offset More Now)))
