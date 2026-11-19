@@ -5,7 +5,9 @@
   (use net-link)
   (use net-ipv4)
   (use net-ipv6)
+  (use net-wire => wire)
   (import struct defstruct)
+  (import layout write-layout)
   (shadow bind)
   (export link device peer peer.port recv-info recv-info.source recv-info.family recv-info.source6 recv-info.destination6 recv-info.port recv-info.length
           make-link left right ipv4 bind make-recv-info packet-send packet-recv-into
@@ -34,10 +36,33 @@
   (mutable dropped : fixnum))
 
 \\ These names remain the UDP facade over the shared link.
+\\ Where the datagram starts behind each IP header, and both headers' bytes.
+(define datagram4
+  {fixnum --> fixnum}
+  I -> (fx+ I (wire.ipv4.size)))
+
+(define datagram6
+  {fixnum --> fixnum}
+  I -> (fx+ I (wire.ipv6.size)))
+
+(define headers4
+  {--> fixnum}
+  -> (fx+ (wire.ipv4.size) (wire.udp.size)))
+
+(define headers6
+  {--> fixnum}
+  -> (fx+ (wire.ipv6.size) (wire.udp.size)))
+
+\\ A computed checksum of 0 is sent as all ones, as 0 means none (RFC 768).
+(define as-sent
+  {fixnum --> fixnum}
+  0 -> 65535
+  Sum -> Sum)
+
 (define make-link
   {fixnum --> fixnum --> fixnum --> (lazy fixnum) --> link}
   Slots Mtu Delay Clock ->
-    (if (fx>= Mtu 28) (net-link.make Slots Mtu Delay Clock)
+    (if (fx>= Mtu (headers4)) (net-link.make Slots Mtu Delay Clock)
         (error "udp: need an MTU of at least 28")))
 
 (define left
@@ -96,15 +121,12 @@
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum -->
    buffer.view --> fixnum --> fixnum --> buffer.view}
   B I Src SrcPort Dst DstPort Payload Start N ->
-    (let UdpLength (fx+ N 8)
-      (do (net-ipv4.write-header B I (fx+ N 28) 17 Src Dst)
-          (buffer.u16-be-> B (fx+ I 20) SrcPort)
-          (buffer.u16-be-> B (fx+ I 22) DstPort)
-          (buffer.u16-be-> B (fx+ I 24) UdpLength)
-          (buffer.u16-be-> B (fx+ I 26) 0)
-          (buffer.copy-into! B (fx+ I 28) Payload Start N)
-          (let Sum (udp-checksum B I UdpLength)
-            (buffer.u16-be-> B (fx+ I 26) (if (= Sum 0) 65535 Sum))))))
+    (let Length (fx+ N (wire.udp.size))
+         T (datagram4 I)
+      (do (net-ipv4.write-header B I (fx+ N (headers4)) 17 Src Dst)
+          (write-layout wire.udp B T (source-port SrcPort) (destination-port DstPort) (length Length))
+          (buffer.copy-into! B (fx+ T (wire.udp.size)) Payload Start N)
+          (wire.udp.checksum-> B T (as-sent (udp-checksum B I Length))))))
 
 (define queue-datagram
   {peer --> fixnum --> fixnum --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
@@ -113,7 +135,7 @@
          B (net-link.ring.data Tx)
          I (net-link.tail-offset Tx)
       (do (write-packet B I (peer.ip P) (peer.port P) Dst Port Payload Start N)
-          (net-link.publish Tx (fx+ N 28) Delivery))))
+          (net-link.publish Tx (fx+ N (headers4)) Delivery))))
 
 (define send
   {peer --> fixnum --> fixnum --> buffer.view --> fixnum --> symbol}
@@ -123,7 +145,7 @@
          D (peer.device P)
          Tx (net-link.device.tx D)
       (cases (not (and (net-ipv4.unicast? IP) (port? Port))) (error "udp: invalid destination")
-             (fx> N (fx- (net-link.mtu D) 28)) too-large
+             (fx> N (fx- (net-link.mtu D) (headers4))) too-large
              (net-link.full? Tx) would-block
              true (let Delivery (net-link.delivery D (net-link.now D))
                     (do (queue-datagram P IP Port Payload 0 N Delivery) sent)))))
@@ -135,8 +157,8 @@
          _ (buffer.range (buffer.length Payload) 0 N)
          D (peer.device P)
          Tx (net-link.device.tx D)
-         UdpBytes (fx+ N 8)
-         Size (fx+ N 48)
+         Length (fx+ N (wire.udp.size))
+         Size (fx+ N (headers6))
       (cases (not (and (net-ipv6.unicast? Source) (net-ipv6.unicast? Destination) (port? Port)
                        (fx>= (net-link.mtu D) 1280))) (error "udp: invalid IPv6 endpoints or MTU")
              (fx> Size (net-link.mtu D)) too-large
@@ -144,64 +166,62 @@
              true (let Delivery (net-link.delivery D (net-link.now D))
                        B (net-link.ring.data Tx)
                        I (net-link.tail-offset Tx)
-                       T (fx+ I 40)
+                       T (datagram6 I)
                     (do (net-ipv6.write-header B I Size 17 64 Source Destination)
-                        (buffer.u16-be-> B T (peer.port P))
-                        (buffer.u16-be-> B (fx+ T 2) Port)
-                        (buffer.u16-be-> B (fx+ T 4) UdpBytes)
-                        (buffer.u16-be-> B (fx+ T 6) 0)
-                        (buffer.copy-into! B (fx+ T 8) Payload 0 N)
-                        (let Sum (net-ipv6.transport-checksum B I 17 UdpBytes)
-                          (buffer.u16-be-> B (fx+ T 6) (if (= Sum 0) 65535 Sum)))
+                        (write-layout wire.udp B T (source-port (peer.port P)) (destination-port Port) (length Length))
+                        (buffer.copy-into! B (fx+ T (wire.udp.size)) Payload 0 N)
+                        (wire.udp.checksum-> B T (as-sent (net-ipv6.transport-checksum B I 17 Length)))
                         (net-link.publish Tx Size Delivery)
                         sent)))))
 
 (define valid-datagram6?
   {buffer.view --> fixnum --> fixnum --> boolean}
   B I N ->
-    (and (fx>= N 48)
-         (net-ipv6.valid-header? B I N)
-         (= (buffer.u8 B (fx+ I 6)) 17)
-         (port? (buffer.u16-be B (fx+ I 40)))
-         (port? (buffer.u16-be B (fx+ I 42)))
-         (= (buffer.u16-be B (fx+ I 44)) (fx- N 40))
-         (not (= (buffer.u16-be B (fx+ I 46)) 0))
-         (= (net-ipv6.transport-checksum B I 17 (fx- N 40)) 0)))
+    (let T (datagram6 I)
+      (and (fx>= N (headers6))
+           (net-ipv6.valid-header? B I N)
+           (= (wire.ipv6.next-header B I) 17)
+           (port? (wire.udp.source-port B T))
+           (port? (wire.udp.destination-port B T))
+           (= (wire.udp.length B T) (fx- N (wire.ipv6.size)))
+           (not (= (wire.udp.checksum B T) 0))
+           (= (net-ipv6.transport-checksum B I 17 (fx- N (wire.ipv6.size))) 0))))
 
 \\ Length checks precede reading the transport header.
 (define valid-datagram?
   {buffer.view --> fixnum --> fixnum --> boolean}
   B I N ->
-    (and (fx>= N 28)
-         (net-ipv4.valid? B I N 17)
-         (net-ipv4.unicast? (buffer.u32-be B (fx+ I 12)))
-         (port? (buffer.u16-be B (fx+ I 20)))
-         (port? (buffer.u16-be B (fx+ I 22)))
-         (= (buffer.u16-be B (fx+ I 24)) (fx- N 20))
-         (or (= (buffer.u16-be B (fx+ I 26)) 0) (= (udp-checksum B I (fx- N 20)) 0))))
+    (let T (datagram4 I)
+      (and (fx>= N (headers4))
+           (net-ipv4.valid? B I N 17)
+           (net-ipv4.unicast? (wire.ipv4.source B I))
+           (port? (wire.udp.source-port B T))
+           (port? (wire.udp.destination-port B T))
+           (= (wire.udp.length B T) (fx- N (wire.ipv4.size)))
+           (or (= (wire.udp.checksum B T) 0) (= (udp-checksum B I (fx- N (wire.ipv4.size))) 0)))))
 
 (define accept?
   {peer --> buffer.view --> fixnum --> fixnum --> boolean}
   P B I N ->
-    (and (fx>= N 28)
-         (= (buffer.u32-be B (fx+ I 16)) (peer.ip P))
-         (= (buffer.u16-be B (fx+ I 22)) (peer.port P))
+    (and (fx>= N (headers4))
+         (= (wire.ipv4.destination B I) (peer.ip P))
+         (= (wire.udp.destination-port B (datagram4 I)) (peer.port P))
          (valid-datagram? B I N)))
 
 (define receive-datagram
   {net-link.ring --> buffer.view --> fixnum --> fixnum --> buffer.view --> recv-info --> symbol}
   R B I N Out Info ->
-    (let V4 (= (shen-jit.shift-right (buffer.u8 B I) 4) 4)
-         T (fx+ I (if V4 20 40))
-         Count (fx- N (if V4 28 48))
+    (let V4 (= (wire.ipv4.version B I) 4)
+         T (if V4 (datagram4 I) (datagram6 I))
+         Count (fx- N (if V4 (headers4) (headers6)))
       (if (fx> Count (buffer.length Out)) too-small
-          (do (buffer.copy-into! Out 0 B (fx+ T 8) Count)
+          (do (buffer.copy-into! Out 0 B (fx+ T (wire.udp.size)) Count)
               (recv-info.family-> Info (if V4 4 6))
-              (if V4 (recv-info.source-> Info (buffer.u32-be B (fx+ I 12)))
-                  (do (net-ipv6.read-address (recv-info.source6 Info) B (fx+ I 8))
-                      (net-ipv6.read-address (recv-info.destination6 Info) B (fx+ I 24))
+              (if V4 (recv-info.source-> Info (wire.ipv4.source B I))
+                  (do (net-ipv6.read-address (recv-info.source6 Info) B (wire.ipv6.source-at I))
+                      (net-ipv6.read-address (recv-info.destination6 Info) B (wire.ipv6.destination-at I))
                       (recv-info.source-> Info 0)))
-              (recv-info.port-> Info (buffer.u16-be B T))
+              (recv-info.port-> Info (wire.udp.source-port B T))
               (recv-info.length-> Info Count)
               (net-link.consume R)
               received))))
@@ -235,8 +255,8 @@
                    (do (net-link.consume Rx) (echo-ready P Rx Tx Now (fx- Budget 1) (fx+ Done 1)))
                  (net-link.full? Tx) Done
                  true (let Delivery (net-link.delivery (peer.device P) Now)
-                        (do (queue-datagram P (buffer.u32-be B (fx+ I 12)) (buffer.u16-be B (fx+ I 20))
-                                            B (fx+ I 28) (fx- N 28) Delivery)
+                        (do (queue-datagram P (wire.ipv4.source B I) (wire.udp.source-port B (datagram4 I))
+                                            B (fx+ I (headers4)) (fx- N (headers4)) Delivery)
                             (net-link.consume Rx)
                             (echo-ready P Rx Tx Now (fx- Budget 1) (fx+ Done 1))))))
         Done))
@@ -254,7 +274,7 @@
   D IP Port Slots ->
     (let N (buffer.index Slots)
          Mtu (net-link.mtu D)
-         _ (if (and (fx> N 0) (fx>= Mtu 28)) true
+         _ (if (and (fx> N 0) (fx>= Mtu (headers4))) true
                (error "udp: inbox needs positive slots and an MTU of at least 28"))
       (:inbox
         peer <- (bind D IP Port)
@@ -278,15 +298,15 @@
 (define inbox-ingress6
   {inbox --> buffer.view --> fixnum --> fixnum --> boolean}
   Q B I N ->
-    (and (valid-datagram6? B I N) (= (buffer.u16-be B (fx+ I 42)) (peer.port (inbox.peer Q)))
+    (and (valid-datagram6? B I N) (= (wire.udp.destination-port B (datagram6 I)) (peer.port (inbox.peer Q)))
          (store-inbox Q B I N)))
 
 (define inbox-ingress-broadcast
   {inbox --> buffer.view --> fixnum --> fixnum --> boolean}
   Q B I N ->
     (and (valid-datagram? B I N)
-         (= (buffer.u32-be B (fx+ I 16)) 4294967295)
-         (= (buffer.u16-be B (fx+ I 22)) (peer.port (inbox.peer Q)))
+         (= (wire.ipv4.destination B I) 4294967295)               \\ The limited broadcast address.
+         (= (wire.udp.destination-port B (datagram4 I)) (peer.port (inbox.peer Q)))
          (store-inbox Q B I N)))
 
 (define inbox-recv-into
