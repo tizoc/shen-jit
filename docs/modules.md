@@ -302,7 +302,11 @@ the structs it returns later are read as they are. A module that untyped code us
 definitions for typed clients and the wrappers for the rest:
 
 ```shen
-(shen.module (version 1) (name shapes) (requires numbers) (typed)
+(shen.module
+  (version 1)
+  (name shapes)
+  (requires numbers)
+  (typed)
   (sources tc+ "typed.shen" tc- "checked.shen"))
 ```
 

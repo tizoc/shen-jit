@@ -179,7 +179,11 @@ machine registers: the module [`numbers`](numbers.md) gives the types `fixnum` a
 and a descriptor's `(typed)` compiles the module with them ([Typed programs](modules.md#typed-programs)):
 
 ```shen
-(shen.module (version 1) (name orbit) (requires numbers) (typed)
+(shen.module
+  (version 1)
+  (name orbit)
+  (requires numbers)
+  (typed)
   (sources tc+ "orbit.shen"))
 ```
 
