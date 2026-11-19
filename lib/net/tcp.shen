@@ -63,12 +63,10 @@
 
 (defstruct peer
   (device : net-link.device)
-  (local-ip : fixnum)
-  (local-ip6 : net-ipv6.address)
-  (remote-ip6 : net-ipv6.address)
+  (local-address : net-ipv6.address)                     \\ Both families', IPv4's mapped.
+  (remote-address : net-ipv6.address)
   (mutable ip-header : fixnum)
   (mutable local-port : fixnum)
-  (mutable remote-ip : fixnum)
   (mutable remote-port : fixnum)
   (tx : buffer.view)
   (rx : buffer.view)
@@ -146,6 +144,19 @@
   {--> fixnum}
   -> (fx+ (wire.ipv6.size) (wire.tcp.size)))
 
+\\ The IP header of a segment between two addresses, with IpBytes of it.
+(define write-ip-header
+  {buffer.view --> fixnum --> fixnum --> fixnum --> net-ipv6.address --> net-ipv6.address --> buffer.view}
+  B I Size IpBytes Local Remote ->
+    (if (= IpBytes (wire.ipv4.size))
+        (net-ipv4.write-header B I Size (wire.tcp-protocol) (net-ipv6.address.d Local) (net-ipv6.address.d Remote))
+        (net-ipv6.write-header B I Size (wire.tcp-protocol) 64 Local Remote)))
+
+\\ How many bytes of IP header go to an address.
+(define ip-bytes
+  {net-ipv6.address --> fixnum}
+  A -> (if (net-ipv6.mapped? A) (wire.ipv4.size) (wire.ipv6.size)))
+
 (define transport-checksum
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
   B I IpBytes N ->
@@ -177,12 +188,10 @@
     (let MapBytes (fxquotient (fx+ Capacity 7) 8)
       (:peer
         device <- D
-        local-ip <- LocalIP
-        local-ip6 <- (net-ipv6.make-address 0 0 0 0)
-        remote-ip6 <- (net-ipv6.make-address 0 0 0 0)
+        local-address <- (net-ipv6.map-ipv4 (net-ipv6.make-address 0 0 0 0) LocalIP)
+        remote-address <- (net-ipv6.map-ipv4 (net-ipv6.make-address 0 0 0 0) RemoteIP)
         ip-header <- 20
         local-port <- LocalPort
-        remote-ip <- RemoteIP
         remote-port <- RemotePort
         tx <- (buffer.new Capacity)
         rx <- (buffer.new Capacity)
@@ -582,9 +591,7 @@
          Options (write-options P B T Flags)
          TcpBytes (fx+ (fx+ Count (wire.tcp.size)) Options)
          Size (fx+ TcpBytes IpBytes)
-      (do (if (= IpBytes (wire.ipv4.size))
-                (net-ipv4.write-header B I Size (wire.tcp-protocol) (peer.local-ip P) (peer.remote-ip P))
-                (net-ipv6.write-header B I Size (wire.tcp-protocol) 64 (peer.local-ip6 P) (peer.remote-ip6 P)))
+      (do (write-ip-header B I Size IpBytes (peer.local-address P) (peer.remote-address P))
           (write-segment P B T Flags Seq At Count Options)
           (wire.tcp.checksum-> B T (transport-checksum B I IpBytes TcpBytes))
           (net-link.publish R Size Delivery)
@@ -1414,8 +1421,8 @@
   P B I N Now ->
     (and (not (terminal? P))
          (fx>= N (headers4))
-         (addressed-to? B I (peer.local-ip P) (peer.local-port P))
-         (= (wire.ipv4.source B I) (peer.remote-ip P))
+         (addressed-to? B I (net-ipv6.address.d (peer.local-address P)) (peer.local-port P))
+         (= (wire.ipv4.source B I) (net-ipv6.address.d (peer.remote-address P)))
          (= (wire.tcp.source-port B (fx+ I (wire.ipv4.size))) (peer.remote-port P))
          (valid-segment? B I N)
          (receive-valid P B (fx+ I (wire.ipv4.size)) (fx- N (wire.ipv4.size)) Now)))
@@ -1461,10 +1468,9 @@
 \\ sequences stood, the window it advertised, when the wait ends, and whether a segment awaits an
 \\ acknowledgement. It holds no buffers.
 (defstruct wait-entry
-  (local6 : net-ipv6.address)
-  (remote6 : net-ipv6.address)
+  (local : net-ipv6.address)
+  (remote : net-ipv6.address)
   (mutable ip-header : fixnum)
-  (mutable remote4 : fixnum)
   (mutable local-port : fixnum)
   (mutable remote-port : fixnum)
   (mutable send-next : seq)
@@ -1491,7 +1497,8 @@
   (key0 : fixnum)
   (key1 : fixnum)
   (hash : buffer.view)
-  (input-ip6 : net-ipv6.address)
+  (local4 : net-ipv6.address)                           \\ Its IPv4 address, mapped.
+  (input-remote : net-ipv6.address)
   (mutable next-output : fixnum)
   (mutable next-accept : fixnum))
 
@@ -1517,10 +1524,9 @@
   V 0 -> V
   V I ->
     (let W (:wait-entry
-             local6 <- (net-ipv6.make-address 0 0 0 0)
-             remote6 <- (net-ipv6.make-address 0 0 0 0)
+             local <- (net-ipv6.make-address 0 0 0 0)
+             remote <- (net-ipv6.make-address 0 0 0 0)
              ip-header <- (wire.ipv4.size)
-             remote4 <- 0
              local-port <- 0
              remote-port <- 0
              send-next <- (seq-of 0)
@@ -1560,7 +1566,8 @@
         key0 <- Key0
         key1 <- Key1
         hash <- (buffer.new 16)
-        input-ip6 <- (net-ipv6.make-address 0 0 0 0)
+        local4 <- (net-ipv6.map-ipv4 (net-ipv6.make-address 0 0 0 0) IP)
+        input-remote <- (net-ipv6.make-address 0 0 0 0)
         next-output <- 1
         next-accept <- 1)))
 
@@ -1607,12 +1614,9 @@
       (and (fx> I 0)
            (let W (wait-at L I)
                 H (peer.ip-header P)
-             (do (if (= H (wire.ipv6.size))
-                     (do (net-ipv6.copy-address (wait-entry.local6 W) (peer.local-ip6 P))
-                         (net-ipv6.copy-address (wait-entry.remote6 W) (peer.remote-ip6 P)))
-                     (wait-entry.remote6 W))
+             (do (net-ipv6.copy-address (wait-entry.local W) (peer.local-address P))
+                 (net-ipv6.copy-address (wait-entry.remote W) (peer.remote-address P))
                  (wait-entry.ip-header-> W H)
-                 (wait-entry.remote4-> W (peer.remote-ip P))
                  (wait-entry.local-port-> W (peer.local-port P))
                  (wait-entry.remote-port-> W (peer.remote-port P))
                  (wait-entry.send-next-> W (peer.send-next P))
@@ -1631,19 +1635,16 @@
         (listener.wait-used-> L (fx- (listener.wait-used L) 1))
         true))
 
-\\ The record of the tuple a packet at I belongs to, with IpBytes of IP header, or 0.
+\\ The record of a tuple, by its addresses and ports, or 0.
 (define find-wait
-  {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
-  _ _ _ _ _ _ 0 -> 0
-  L B I IpBytes Local Remote J ->
+  {listener --> net-ipv6.address --> net-ipv6.address --> fixnum --> fixnum --> fixnum --> fixnum}
+  _ _ _ _ _ 0 -> 0
+  L Local Remote LocalPort Port J ->
     (let W (wait-at L J)
-      (if (and (occupied-wait? W) (= Local (wait-entry.local-port W))
-               (= Remote (wait-entry.remote-port W)) (= IpBytes (wait-entry.ip-header W))
-               (if (= IpBytes (wire.ipv4.size)) (= (wait-entry.remote4 W) (wire.ipv4.source B I))
-                   (and (net-ipv6.address-at? (wait-entry.local6 W) B (wire.ipv6.destination-at I))
-                        (net-ipv6.address-at? (wait-entry.remote6 W) B (wire.ipv6.source-at I)))))
+      (if (and (occupied-wait? W) (= LocalPort (wait-entry.local-port W)) (= Port (wait-entry.remote-port W))
+               (net-ipv6.same? Remote (wait-entry.remote W)) (net-ipv6.same? Local (wait-entry.local W)))
           J
-          (find-wait L B I IpBytes Local Remote (fx- J 1)))))
+          (find-wait L Local Remote LocalPort Port (fx- J 1)))))
 
 \\ A segment for a record, read as a peer's are, with the listener's segment and options state.
 (define receive-wait
@@ -1674,9 +1675,7 @@
          B (net-link.ring.data Tx)
          I (net-link.tail-offset Tx)
          T (fx+ I H)
-      (do (if (= H (wire.ipv4.size))
-              (net-ipv4.write-header B I Size (wire.tcp-protocol) (listener.ip L) (wait-entry.remote4 W))
-              (net-ipv6.write-header B I Size (wire.tcp-protocol) 64 (wait-entry.local6 W) (wait-entry.remote6 W)))
+      (do (write-ip-header B I Size H (wait-entry.local W) (wait-entry.remote W))
           (write-layout wire.tcp B T
             (source-port (wait-entry.local-port W)) (destination-port (wait-entry.remote-port W))
             (sequence (seq-number (wait-entry.send-next W)))
@@ -1687,30 +1686,18 @@
           (wait-entry.ack-needed-> W false)
           true)))
 
+\\ The slot of a connection by its tuple, or 0.
 (define find-peer
-  {listener --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
-  L LocalPort IP Port I ->
-    (if (fx> I (listener.capacity L)) 0
-        (let S (slot-at L I) P (listener-slot.peer S)
-          (if (and (not (= (listener-slot.lease S) vacant))
-                   (= LocalPort (peer.local-port P))
-                   (= (peer.ip-header P) 20)
-                   (= IP (peer.remote-ip P)) (= Port (peer.remote-port P)))
-              I
-              (find-peer L LocalPort IP Port (fx+ I 1))))))
-
-(define find-peer6
   {listener --> fixnum --> net-ipv6.address --> net-ipv6.address --> fixnum --> fixnum --> fixnum}
-  L LocalPort LocalIP RemoteIP Port I ->
+  L LocalPort Local Remote Port I ->
     (if (fx> I (listener.capacity L)) 0
         (let S (slot-at L I) P (listener-slot.peer S)
           (if (and (not (= (listener-slot.lease S) vacant))
                    (= LocalPort (peer.local-port P)) (= Port (peer.remote-port P))
-                   (= (peer.ip-header P) 40)
-                   (net-ipv6.same? LocalIP (peer.local-ip6 P))
-                   (net-ipv6.same? RemoteIP (peer.remote-ip6 P)))
+                   (net-ipv6.same? Remote (peer.remote-address P))
+                   (net-ipv6.same? Local (peer.local-address P)))
               I
-              (find-peer6 L LocalPort LocalIP RemoteIP Port (fx+ I 1))))))
+              (find-peer L LocalPort Local Remote Port (fx+ I 1))))))
 
 (define find-vacant
   {listener --> fixnum --> fixnum}
@@ -1767,16 +1754,17 @@
         (hash-round (hash-round (hash-round (hash-round H))))
         (shen-jit.bit-xor (buffer.u32-be H 4) (buffer.u32-be H 12))))
 
+\\ RFC 6528: a connection's initial sequence number hashes its tuple with the listener's keys.
 (define tuple-hash
-  {listener --> fixnum --> fixnum --> fixnum --> fixnum}
-  L Local IP Port ->
+  {listener --> peer --> fixnum}
+  L P ->
     (let H (hash-start L)
-      (do (hash-word H (listener.ip L))
-          (hash-word H IP)
-          (hash-word H (fx+ (shen-jit.shift-left Local 16) Port))
-          (hash-end H 12))))
+      (do (hash-address H (peer.local-address P))
+          (hash-address H (peer.remote-address P))
+          (hash-word H (fx+ (shen-jit.shift-left (peer.local-port P) 16) (peer.remote-port P)))
+          (hash-end H 36))))
 
-(define hash-address6
+(define hash-address
   {buffer.view --> net-ipv6.address --> buffer.view}
   H A ->
     (do (hash-word H (net-ipv6.address.a A))
@@ -1784,20 +1772,14 @@
         (hash-word H (net-ipv6.address.c A))
         (hash-word H (net-ipv6.address.d A))))
 
-(define next-sequence6
-  {listener --> peer --> fixnum --> fixnum}
-  L P Now ->
-    (let H (hash-start L)
-         Seq (listener.next-sequence L)
-      (do (hash-address6 H (peer.local-ip6 P))
-          (hash-address6 H (peer.remote-ip6 P))
-          (hash-word H (fx+ (shen-jit.shift-left (peer.local-port P) 16) (peer.remote-port P)))
-          (listener.next-sequence-> L (add32 Seq 65537))
-          (add32 (hash-end H 36) (add32 Seq (fx* Now 250))))))
-
+\\ A table's first ephemeral port comes from its keys and its address.
 (define seed-port
   {listener --> listener}
-  L -> (listener.next-port-> L (fx+ 49152 (shen-jit.bit-and (tuple-hash L 0 0 0) 16383))))
+  L -> (let H (hash-start L)
+         (do (hash-word H (listener.ip L))
+             (hash-word H 0)
+             (hash-word H 0)
+             (listener.next-port-> L (fx+ 49152 (shen-jit.bit-and (hash-end H 12) 16383))))))
 
 (define make-table
   {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
@@ -1815,29 +1797,22 @@
         (error "tcp: need a 1..1048576-byte window and 0..1024 TIME-WAIT slots")))
 
 (define next-sequence
-  {listener --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
-  L Local IP Port Now ->
+  {listener --> peer --> fixnum --> fixnum}
+  L P Now ->
     (let Seq (listener.next-sequence L)
       (do (listener.next-sequence-> L (add32 Seq 65537))
           (if (= (listener.port L) 0)
-              (add32 (tuple-hash L Local IP Port) (add32 Seq (fx* Now 250)))
+              (add32 (tuple-hash L P) (add32 Seq (fx* Now 250)))
               Seq))))
 
 (define configure-peer
-  {peer --> fixnum --> fixnum --> fixnum --> peer}
-  P Local IP Port -> (do (peer.ip-header-> P 20)
-                         (peer.remote-ip-> P IP)
-                         (peer.remote-port-> P Port)
-                         (peer.local-port-> P Local)))
-
-(define configure-peer6
   {peer --> fixnum --> net-ipv6.address --> net-ipv6.address --> fixnum --> peer}
-  P Local LocalIP RemoteIP Port ->
-    (do (peer.ip-header-> P 40)
-        (net-ipv6.copy-address (peer.local-ip6 P) LocalIP)
-        (net-ipv6.copy-address (peer.remote-ip6 P) RemoteIP)
+  P LocalPort Local Remote Port ->
+    (do (peer.ip-header-> P (ip-bytes Remote))
+        (net-ipv6.copy-address (peer.local-address P) Local)
+        (net-ipv6.copy-address (peer.remote-address P) Remote)
         (peer.remote-port-> P Port)
-        (peer.local-port-> P Local)))
+        (peer.local-port-> P LocalPort)))
 
 (define lease
   {listener --> listener-slot --> lease --> fixnum}
@@ -1881,47 +1856,45 @@
   Tx B T -> (and (not (flag? (segment-flags B T) (flag-bits control rst))) (not (net-link.full? Tx))))
 
 (define reject-segment
-  {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
-  L B T Count IP Now ->
-    (let D (listener.device L)
-         Tx (net-link.device.tx D)
-      (if (reset-allowed? Tx B T)
-          (let Out (net-link.ring.data Tx)
-               At (net-link.tail-offset Tx)
-            (do (net-ipv4.write-header Out At (headers4) (wire.tcp-protocol) (listener.ip L) IP)
-                (write-reset Out (fx+ At (wire.ipv4.size)) B T Count)
-                (wire.tcp.checksum-> Out (fx+ At (wire.ipv4.size))
-                                     (net-ipv4.transport-checksum Out At (wire.tcp-protocol) (wire.tcp.size)))
-                (net-link.publish Tx (headers4) (net-link.delivery D Now))))
-          false)))
-
-(define reject-segment6
   {listener --> buffer.view --> fixnum --> fixnum --> net-ipv6.address --> net-ipv6.address -->
    fixnum --> boolean}
-  L B T Count LocalIP RemoteIP Now ->
+  L B T Count Local Remote Now ->
     (let D (listener.device L)
          Tx (net-link.device.tx D)
+         IpBytes (ip-bytes Remote)
+         Size (fx+ IpBytes (wire.tcp.size))
       (if (reset-allowed? Tx B T)
           (let Out (net-link.ring.data Tx)
                At (net-link.tail-offset Tx)
-            (do (net-ipv6.write-header Out At (headers6) (wire.tcp-protocol) 64 LocalIP RemoteIP)
-                (write-reset Out (fx+ At (wire.ipv6.size)) B T Count)
-                (wire.tcp.checksum-> Out (fx+ At (wire.ipv6.size))
-                                     (net-ipv6.transport-checksum Out At (wire.tcp-protocol) (wire.tcp.size)))
-                (net-link.publish Tx (headers6) (net-link.delivery D Now))))
+            (do (write-ip-header Out At Size IpBytes Local Remote)
+                (write-reset Out (fx+ At IpBytes) B T Count)
+                (wire.tcp.checksum-> Out (fx+ At IpBytes) (transport-checksum Out At IpBytes (wire.tcp.size)))
+                (net-link.publish Tx Size (net-link.delivery D Now))))
           false)))
 
 (define new-segment
-  {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum -->
-   fixnum --> boolean --> boolean}
-  L B T Count Local IP Port Now Listening ->
+  {listener --> buffer.view --> fixnum --> fixnum --> net-ipv6.address --> net-ipv6.address -->
+   fixnum --> fixnum --> fixnum --> boolean --> boolean}
+  L B T Count Local Remote LocalPort Port Now Listening ->
     (if (and Listening (not (flag? (segment-flags B T) (flag-bits control ack))))
         (let Index (opening-index L B T Count)
           (and (fx> Index 0)
                (let S (slot-at L Index)
-                 (do (configure-peer (listener-slot.peer S) Local IP Port)
-                     (admit-segment L S B T Count Now (next-sequence L Local IP Port Now))))))
-        (reject-segment L B T Count IP Now)))
+                    P (configure-peer (listener-slot.peer S) LocalPort Local Remote Port)
+                 (admit-segment L S B T Count Now (next-sequence L P Now)))))
+        (reject-segment L B T Count Local Remote Now)))
+
+\\ A segment for a tuple: to its connection, to its TIME-WAIT record, or as a new one.
+(define segment-for
+  {listener --> buffer.view --> fixnum --> fixnum --> net-ipv6.address --> net-ipv6.address -->
+   fixnum --> fixnum --> fixnum --> boolean --> boolean}
+  L B T Bytes Local Remote LocalPort Port Now Listening ->
+    (let Index (find-peer L LocalPort Local Remote Port 1)
+      (if (fx> Index 0)
+          (receive-valid (listener-slot.peer (slot-at L Index)) B T Bytes Now)
+          (let Wait (find-wait L Local Remote LocalPort Port (wait-scan-limit L))
+            (if (fx> Wait 0) (receive-wait L (wait-at L Wait) B T Bytes Now)
+                (new-segment L B T Bytes Local Remote LocalPort Port Now Listening))))))
 
 (define table-ingress
   {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
@@ -1930,27 +1903,10 @@
          (let T (fx+ I (wire.ipv4.size))
               IP (wire.ipv4.source B I)
               Port (wire.tcp.source-port B T)
-              Local (wire.tcp.destination-port B T)
-              Bytes (fx- Count (wire.ipv4.size))
-           (and (endpoint? IP Port) (fx> Local 0)
-                (let Index (find-peer L Local IP Port 1)
-                  (if (fx> Index 0)
-                      (receive-valid (listener-slot.peer (slot-at L Index)) B T Bytes Now)
-                      (let Wait (find-wait L B I (wire.ipv4.size) Local Port (wait-scan-limit L))
-                        (if (fx> Wait 0) (receive-wait L (wait-at L Wait) B T Bytes Now)
-                            (new-segment L B T Bytes Local IP Port Now Listening)))))))))
-
-(define new-segment6
-  {listener --> buffer.view --> fixnum --> fixnum --> net-ipv6.address --> net-ipv6.address -->
-   fixnum --> fixnum --> fixnum --> boolean --> boolean}
-  L B T Count LocalIP RemoteIP Local Port Now Listening ->
-    (if (and Listening (not (flag? (segment-flags B T) (flag-bits control ack))))
-        (let Index (opening-index L B T Count)
-          (and (fx> Index 0)
-               (let S (slot-at L Index)
-                    P (configure-peer6 (listener-slot.peer S) Local LocalIP RemoteIP Port)
-                 (admit-segment L S B T Count Now (next-sequence6 L P Now)))))
-        (reject-segment6 L B T Count LocalIP RemoteIP Now)))
+              LocalPort (wire.tcp.destination-port B T)
+           (and (endpoint? IP Port) (fx> LocalPort 0)
+                (segment-for L B T (fx- Count (wire.ipv4.size)) (listener.local4 L)
+                             (net-ipv6.map-ipv4 (listener.input-remote L) IP) LocalPort Port Now Listening)))))
 
 (define table-ingress6
   {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> net-ipv6.address --> boolean}
@@ -1967,16 +1923,11 @@
       (and (fx>= T (fx+ I (wire.ipv6.size))) (net-ipv6.valid-header? B I Count) (valid-tcp? B T Bytes)
            (= (net-ipv6.transport-checksum-at B I T (wire.tcp-protocol) Bytes) 0)
            (net-ipv6.address-at? LocalIP B (wire.ipv6.destination-at I))
-           (let Remote (net-ipv6.read-address (listener.input-ip6 L) B (wire.ipv6.source-at I))
+           (let Remote (net-ipv6.read-address (listener.input-remote L) B (wire.ipv6.source-at I))
                 Port (wire.tcp.source-port B T)
-                Local (wire.tcp.destination-port B T)
-             (and (net-ipv6.unicast? Remote) (fx> Port 0) (fx> Local 0)
-                  (let Index (find-peer6 L Local LocalIP Remote Port 1)
-                    (if (fx> Index 0)
-                        (receive-valid (listener-slot.peer (slot-at L Index)) B T Bytes Now)
-                        (let Wait (find-wait L B I (wire.ipv6.size) Local Port (wait-scan-limit L))
-                          (if (fx> Wait 0) (receive-wait L (wait-at L Wait) B T Bytes Now)
-                              (new-segment6 L B T Bytes LocalIP Remote Local Port Now Listening))))))))))
+                LocalPort (wire.tcp.destination-port B T)
+             (and (net-ipv6.unicast? Remote) (fx> Port 0) (fx> LocalPort 0)
+                  (segment-for L B T Bytes LocalIP Remote LocalPort Port Now Listening))))))
 
 (define listener-ingress
   {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
@@ -2017,18 +1968,23 @@
               (claim-port L Reserved (fx- Left 1))
               Port))))
 
+\\ An active open from Local to Port of Remote.
+(define open-connection
+  {listener --> (list fixnum) --> net-ipv6.address --> net-ipv6.address --> fixnum --> fixnum}
+  L Reserved Local Remote Port ->
+    (let I (find-vacant L 1)
+         LocalPort (if (= I 0) (type 0 fixnum) (claim-port L Reserved 16384))
+      (if (= LocalPort 0) 0
+          (let S (slot-at L I)
+               P (configure-peer (listener-slot.peer S) LocalPort Local Remote Port)
+            (do (connect P (next-sequence L P (net-link.now (listener.device L))))
+                (lease L S leased))))))
+
 (define table-connect
   {listener --> (list fixnum) --> fixnum --> fixnum --> fixnum}
   L Reserved IP Port ->
     (if (endpoint? IP Port)
-        (let I (find-vacant L 1)
-             Local (if (= I 0) (type 0 fixnum) (claim-port L Reserved 16384))
-          (if (= Local 0) 0
-              (let S (slot-at L I)
-                   P (configure-peer (listener-slot.peer S) Local IP Port)
-                   Now (net-link.now (listener.device L))
-                (do (connect P (next-sequence L Local IP Port Now))
-                    (lease L S leased)))))
+        (open-connection L Reserved (listener.local4 L) (net-ipv6.map-ipv4 (listener.input-remote L) IP) Port)
         (error "tcp: invalid remote endpoint")))
 
 (define table-connect6
@@ -2036,14 +1992,7 @@
   L Reserved LocalIP RemoteIP Port ->
     (if (and (net-ipv6.unicast? LocalIP) (net-ipv6.unicast? RemoteIP)
              (fx>= Port 1) (fx<= Port 65535) (fx>= (net-link.mtu (listener.device L)) (net-ipv6.minimum-mtu)))
-        (let I (find-vacant L 1)
-             Local (if (= I 0) (type 0 fixnum) (claim-port L Reserved 16384))
-          (if (= Local 0) 0
-              (let S (slot-at L I)
-                   P (configure-peer6 (listener-slot.peer S) Local LocalIP RemoteIP Port)
-                   Now (net-link.now (listener.device L))
-                (do (connect P (next-sequence6 L P Now))
-                    (lease L S leased)))))
+        (open-connection L Reserved LocalIP RemoteIP Port)
         (error "tcp: invalid IPv6 endpoints or link MTU below 1280")))
 
 (define expire-addresses6
@@ -2064,8 +2013,8 @@
   L Local LocalReady Global GlobalReady I ->
     (let S (slot-at L I)
          P (listener-slot.peer S)
-         Source (peer.local-ip6 P)
-      (do (if (and (= (peer.ip-header P) 40) (not (= (listener-slot.lease S) vacant)) (not (terminal? P))
+         Source (peer.local-address P)
+      (do (if (and (= (peer.ip-header P) (wire.ipv6.size)) (not (= (listener-slot.lease S) vacant)) (not (terminal? P))
                    (not (usable-address6? Source Local LocalReady Global GlobalReady)))
               (stop-peer P reset)
               false)
@@ -2077,7 +2026,7 @@
   L Local LocalReady Global GlobalReady I ->
     (let W (wait-at L I)
       (do (if (and (occupied-wait? W) (= (wait-entry.ip-header W) (wire.ipv6.size))
-                   (not (usable-address6? (wait-entry.local6 W) Local LocalReady Global GlobalReady)))
+                   (not (usable-address6? (wait-entry.local W) Local LocalReady Global GlobalReady)))
               (clear-wait L W)
               false)
           (expire-waits6 L Local LocalReady Global GlobalReady (fx- I 1)))))
@@ -2311,7 +2260,8 @@
            (= (wire.ipv4.source B I) (listener.ip L))
            (= (net-ipv4.packet-checksum B I (wire.ipv4.size)) 0)
            (fx>= Mtu 68) (fx< Mtu (wire.ipv4.total-length B I))
-           (reduce-mtu L (find-peer L (wire.tcp.source-port B T) (wire.ipv4.destination B I)
+           (reduce-mtu L (find-peer L (wire.tcp.source-port B T) (listener.local4 L)
+                                    (net-ipv6.map-ipv4 (listener.input-remote L) (wire.ipv4.destination B I))
                                     (wire.tcp.destination-port B T) 1)
                        (wire.tcp.sequence B T) Mtu Now))))
 
@@ -2324,8 +2274,8 @@
            (= (wire.ipv6.next-header B I) (wire.tcp-protocol))
            (net-ipv6.address-at? LocalIP B (wire.ipv6.source-at I))
            (fx>= Mtu 1280) (fx< Mtu (fx+ (wire.ipv6.size) (wire.ipv6.payload-length B I)))
-           (let Remote (net-ipv6.read-address (listener.input-ip6 L) B (wire.ipv6.destination-at I))
-             (reduce-mtu L (find-peer6 L (wire.tcp.source-port B T) LocalIP Remote
+           (let Remote (net-ipv6.read-address (listener.input-remote L) B (wire.ipv6.destination-at I))
+             (reduce-mtu L (find-peer L (wire.tcp.source-port B T) LocalIP Remote
                                        (wire.tcp.destination-port B T) 1)
                          (wire.tcp.sequence B T) Mtu Now)))))
 

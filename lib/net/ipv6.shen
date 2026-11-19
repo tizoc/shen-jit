@@ -8,7 +8,7 @@
   (import layout write-layout)
   (export address make-address address.a address.b address.c address.d copy-address read-address
           write-address compose-prefix same? address-at? unspecified? multicast? multicast-at? scope unicast? link-local?
-          solicited-node solicited-node? multicast-mac-at link-group minimum-mtu error-quote
+          solicited-node solicited-node? multicast-mac-at link-group minimum-mtu error-quote map-ipv4 mapped?
           valid-header? write-header transport-checksum transport-checksum-at)
 
 (defstruct address
@@ -99,6 +99,15 @@
   A -> (and (not (unspecified? A)) (not (multicast? A))))
 
 \\ RFC 4291 2.7: ff02::, the first word of a group of link scope, and the group ff02::Id.
+\\ RFC 4291 2.5.5.2: an IPv4 address as an IPv6 one, ::ffff:a.b.c.d, as tables keep both kinds.
+(define map-ipv4
+  {address --> fixnum --> address}
+  Out IP -> (do (address.a-> Out 0) (address.b-> Out 0) (address.c-> Out 65535) (address.d-> Out IP)))
+
+(define mapped?
+  {address --> boolean}
+  A -> (and (= (address.c A) 65535) (= (address.b A) 0) (= (address.a A) 0)))
+
 (define link-scope
   {--> fixnum}
   -> 4278321152)
