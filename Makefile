@@ -495,7 +495,7 @@ test-net-tcp: $(BUILD)/shen-jit
 # Shared ingress, UDP overflow and ICMP wire checks.
 .PHONY: test-net-interface
 test-net-interface: $(BUILD)/shen-jit
-	$(BUILD)/shen-jit eval -m tests/net_interface.shenmod -e '(net-interface-test.run)' | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m tests/net_interface.shenmod -e '(do (net-interface-test.run) (net-interface-test.host) (net-interface-test.multiport))' | $(FFI_RESULT)
 
 # Optional Linux integration. Run test-net-tun inside a disposable network namespace.
 .PHONY: tun test-net-tun

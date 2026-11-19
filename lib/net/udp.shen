@@ -6,11 +6,11 @@
   (use net-ipv4)
   (import struct defstruct)
   (shadow bind)
-  (export link device peer recv-info recv-info.source recv-info.port recv-info.length
+  (export link device peer peer.port recv-info recv-info.source recv-info.port recv-info.length
           make-link left right ipv4 bind make-recv-info packet-send packet-recv-into
           send recv-into echo-step
           sent would-block too-large received empty budget-exhausted too-small
-          inbox inbox.peer inbox.dropped make-inbox inbox-ingress inbox-recv-into)
+          inbox inbox.peer inbox.dropped make-inbox inbox-ingress inbox-recv-into inbox-ready?)
 
 (synonyms link net-link.link device net-link.device)
 
@@ -221,6 +221,10 @@
       (if (net-link.ready? R 0)
           (receive-datagram R (net-link.ring.data R) (net-link.head-offset R) (net-link.head-length R) Out Info)
           empty)))
+
+(define inbox-ready?
+  {inbox --> boolean}
+  Q -> (net-link.ready? (inbox.queue Q) 0))
 
 (preclude [peer.%match recv-info.%match inbox.%match])
 )

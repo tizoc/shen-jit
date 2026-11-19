@@ -8,7 +8,8 @@
   (shadow listen release)
   (export peer make-peer listen connect state send recv-into shutdown-write poll
           listener make-listener listener-poll accept connection-index connection-state
-          listener-ingress listener-transmit
+          listener-ingress listener-transmit make-table table-ingress table-connect accept-on
+          listener-deadline connection-readable? connection-writable?
           connection-send connection-recv-into connection-shutdown-write release
           closed listen-state syn-sent syn-received established close-wait fin-wait-1 fin-wait-2
           closing last-ack time-wait timed-out reset)
@@ -16,7 +17,7 @@
 (defstruct peer
   (device : net-link.device)
   (local-ip : fixnum)
-  (local-port : fixnum)
+  (mutable local-port : fixnum)
   (mutable remote-ip : fixnum)
   (mutable remote-port : fixnum)
   (tx : buffer.view)
@@ -1235,6 +1236,10 @@
   (capacity : fixnum)
   (slots : (vector listener-slot))
   (mutable next-sequence : fixnum)
+  (mutable next-port : fixnum)
+  (key0 : fixnum)
+  (key1 : fixnum)
+  (hash : buffer.view)
   (mutable next-output : fixnum)
   (mutable next-accept : fixnum))
 
@@ -1253,12 +1258,21 @@
 
 (define make-listener
   {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
-  D IP Port Slots Initial ->
+  D IP Port Slots Initial -> (new-table D IP Port Slots Initial 0 0))
+
+(define make-table
+  {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
+  D IP Slots Key0 Key1 -> (new-table D IP 0 Slots 0 Key0 Key1))
+
+(define new-table
+  {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
+  D IP Port Slots Initial Key0 Key1 ->
     (let Mss (peer-mss D)
          N (buffer.index Slots)
-         _ (if (and (endpoint? IP Port) (fx> Mss 0) (fx> N 0)) true
+         _ (if (and (net-ipv4.unicast? IP) (fx>= Port 0) (fx<= Port 65535) (fx> Mss 0) (fx> N 0)) true
                  (error "tcp: listener needs a unicast endpoint, positive slots and an MTU of at least 41"))
-         _ (if (and (fx>= Initial 0) (fx<= Initial 4294967295)) true
+         _ (if (and (= Initial (seq-add Initial 0)) (= Key0 (seq-add Key0 0))
+                    (= Key1 (seq-add Key1 0))) true
                  (error "tcp: initial sequence must fit unsigned 32 bits"))
       (:listener
         device <- D
@@ -1267,6 +1281,10 @@
         capacity <- N
         slots <- (initialise-slots (vector (fx->number N)) D IP Port Mss N)
         next-sequence <- Initial
+        next-port <- (fx+ 49152 (shen-jit.bit-and Key1 16383))
+        key0 <- Key0
+        key1 <- Key1
+        hash <- (buffer.new 16)
         next-output <- 1
         next-accept <- 1)))
 
@@ -1287,14 +1305,15 @@
              true)))
 
 (define find-peer
-  {listener --> fixnum --> fixnum --> fixnum --> fixnum}
-  L IP Port I ->
+  {listener --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
+  L LocalPort IP Port I ->
     (if (fx> I (listener.capacity L)) 0
         (let S (slot-at L I) P (listener-slot.peer S)
           (if (and (not (= (listener-slot.lease S) vacant))
+                   (= LocalPort (peer.local-port P))
                    (= IP (peer.remote-ip P)) (= Port (peer.remote-port P)))
               I
-              (find-peer L IP Port (fx+ I 1))))))
+              (find-peer L LocalPort IP Port (fx+ I 1))))))
 
 (define find-vacant
   {listener --> fixnum --> fixnum}
@@ -1302,39 +1321,148 @@
     (if (fx> I (listener.capacity L)) 0
         (if (= (listener-slot.lease (slot-at L I)) vacant) I (find-vacant L (fx+ I 1)))))
 
+\\ HalfSipHash-2-4 over the fixed 12-byte IPv4 TCP tuple.
+(define rotate32
+  {fixnum --> fixnum --> fixnum}
+  X Bits -> (seq-add (shen-jit.shift-left X Bits) (shen-jit.shift-right X (fx- 32 Bits))))
+
+(define hash-round
+  {buffer.view --> buffer.view}
+  H ->
+    (let V0 (buffer.u32-be H 0)
+         V1 (buffer.u32-be H 4)
+         V2 (buffer.u32-be H 8)
+         V3 (buffer.u32-be H 12)
+         A (seq-add V0 V1)
+         B (shen-jit.bit-xor (rotate32 V1 5) A)
+         C (seq-add V2 V3)
+         D (shen-jit.bit-xor (rotate32 V3 8) C)
+         E (seq-add (rotate32 A 16) D)
+         G (seq-add C B)
+      (do (buffer.u32-be-> H 0 E)
+          (buffer.u32-be-> H 4 (shen-jit.bit-xor (rotate32 B 13) G))
+          (buffer.u32-be-> H 8 (rotate32 G 16))
+          (buffer.u32-be-> H 12 (shen-jit.bit-xor (rotate32 D 7) E)))))
+
+(define hash-word
+  {buffer.view --> fixnum --> buffer.view}
+  H W ->
+    (do (buffer.u32-be-> H 12 (shen-jit.bit-xor (buffer.u32-be H 12) W))
+        (hash-round (hash-round H))
+        (buffer.u32-be-> H 0 (shen-jit.bit-xor (buffer.u32-be H 0) W))))
+
+(define tuple-hash
+  {listener --> fixnum --> fixnum --> fixnum --> fixnum}
+  L Local IP Port ->
+    (let H (listener.hash L)
+         K0 (listener.key0 L)
+         K1 (listener.key1 L)
+      (do (buffer.u32-be-> H 0 K0)
+          (buffer.u32-be-> H 4 K1)
+          (buffer.u32-be-> H 8 (shen-jit.bit-xor K0 1819895653))
+          (buffer.u32-be-> H 12 (shen-jit.bit-xor K1 1952801890))
+          (hash-word H (listener.ip L))
+          (hash-word H IP)
+          (hash-word H (fx+ (shen-jit.shift-left Local 16) Port))
+          (hash-word H 201326592)
+          (buffer.u32-be-> H 8 (shen-jit.bit-xor (buffer.u32-be H 8) 255))
+          (hash-round (hash-round (hash-round (hash-round H))))
+          (shen-jit.bit-xor (buffer.u32-be H 4) (buffer.u32-be H 12)))))
+
+(define next-sequence
+  {listener --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
+  L Local IP Port Now ->
+    (let Seq (listener.next-sequence L)
+      (do (listener.next-sequence-> L (seq-add Seq 65537))
+          (if (= (listener.port L) 0)
+              (seq-add (tuple-hash L Local IP Port) (seq-add Seq (fx* Now 250)))
+              Seq))))
+
+(define configure-peer
+  {peer --> fixnum --> fixnum --> fixnum --> peer}
+  P Local IP Port -> (do (peer.remote-ip-> P IP)
+                         (peer.remote-port-> P Port)
+                         (peer.local-port-> P Local)))
+
+(define lease
+  {listener --> listener-slot --> symbol --> fixnum}
+  L S Role ->
+    (let Token (fx+ (listener-slot.token S) (listener.capacity L))
+      (do (listener-slot.token-> S Token)
+          (listener-slot.lease-> S Role)
+          Token)))
+
 (define admit
-  {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
-  L B I Count IP Port Now ->
+  {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  L B I Count Local IP Port Now ->
     (if (and (= (segment-flags B I) 2) (= Count (fx+ 20 (header-length B I))) (endpoint? IP Port))
         (let Index (find-vacant L 1)
           (if (= Index 0) false
               (let S (slot-at L Index)
-                   P (listener-slot.peer S)
-                   Token (fx+ (listener-slot.token S) (listener.capacity L))
-                   Seq (listener.next-sequence L)
-                (do (peer.remote-ip-> P IP)
-                    (peer.remote-port-> P Port)
-                    (listen P Seq)
+                   P (configure-peer (listener-slot.peer S) Local IP Port)
+                (do (listen P (next-sequence L Local IP Port Now))
                     (if (receive-valid P B I Count Now)
-                        (do (listener-slot.token-> S Token)
-                            (listener-slot.lease-> S pending)
-                            (listener.next-sequence-> L (seq-add Seq 65537))
-                            true)
+                        (fx> (lease L S pending) 0)
                         (do (free-slot S) false))))))
+        false))
+
+(define table-ingress
+  {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
+  L B I Count Now Listening ->
+    (if (and (fx>= Count 40) (= (buffer.u32-be B (fx+ I 16)) (listener.ip L))
+             (valid-segment? B I Count))
+        (let IP (buffer.u32-be B (fx+ I 12))
+             Port (buffer.u16-be B (fx+ I 20))
+             Local (buffer.u16-be B (fx+ I 22))
+             Index (find-peer L Local IP Port 1)
+          (if (= Index 0)
+              (and Listening (admit L B I Count Local IP Port Now))
+              (receive-valid (listener-slot.peer (slot-at L Index)) B I Count Now)))
         false))
 
 (define listener-ingress
   {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   L B I Count Now ->
-    (if (and (fx>= Count 40) (addressed-to? B I (listener.ip L) (listener.port L))
-             (valid-segment? B I Count))
-        (let IP (buffer.u32-be B (fx+ I 12))
-             Port (buffer.u16-be B (fx+ I 20))
-             Index (find-peer L IP Port 1)
-          (if (= Index 0)
-              (admit L B I Count IP Port Now)
-              (receive-valid (listener-slot.peer (slot-at L Index)) B I Count Now)))
-        false))
+    (and (fx>= Count 40) (= (buffer.u16-be B (fx+ I 22)) (listener.port L))
+         (table-ingress L B I Count Now true)))
+
+(define bound-port?
+  {(list fixnum) --> fixnum --> boolean}
+  [] _ -> false
+  [P | Rest] Port -> (or (= P Port) (bound-port? Rest Port)))
+
+(define local-port-in-use?
+  {listener --> fixnum --> fixnum --> boolean}
+  L Port I ->
+    (and (fx<= I (listener.capacity L))
+         (let S (slot-at L I)
+           (or (and (not (= (listener-slot.lease S) vacant))
+                    (= (peer.local-port (listener-slot.peer S)) Port))
+               (local-port-in-use? L Port (fx+ I 1))))))
+
+(define claim-port
+  {listener --> (list fixnum) --> fixnum --> fixnum}
+  _ _ 0 -> 0
+  L Reserved Left ->
+    (let Port (listener.next-port L)
+      (do (listener.next-port-> L (if (= Port 65535) 49152 (fx+ Port 1)))
+          (if (or (bound-port? Reserved Port) (local-port-in-use? L Port 1))
+              (claim-port L Reserved (fx- Left 1))
+              Port))))
+
+(define table-connect
+  {listener --> (list fixnum) --> fixnum --> fixnum --> fixnum}
+  L Reserved IP Port ->
+    (if (endpoint? IP Port)
+        (let I (find-vacant L 1)
+             Local (if (= I 0) (type 0 fixnum) (claim-port L Reserved 16384))
+          (if (= Local 0) 0
+              (let S (slot-at L I)
+                   P (configure-peer (listener-slot.peer S) Local IP Port)
+                   Now (net-link.now (listener.device L))
+                (do (connect P (next-sequence L Local IP Port Now))
+                    (lease L S leased)))))
+        (error "tcp: invalid remote endpoint")))
 
 (define listener-input
   {listener --> net-link.ring --> fixnum --> fixnum --> fixnum --> fixnum}
@@ -1363,6 +1491,54 @@
   {listener --> fixnum --> boolean}
   L Now -> (listener-output L Now (listener.next-output L) (listener.capacity L)))
 
+(define earlier
+  {fixnum --> fixnum --> fixnum}
+  A B -> (if (fx< A 0) B (if (fx< B 0) A (smaller A B))))
+
+(define output-ready?
+  {peer --> boolean}
+  P ->
+    (let Flight (peer.tx-flight P)
+         Window (peer.remote-window P)
+         End (smaller Flight (if (= Window 0) 1 Window))
+         Replay (peer.tx-replay P)
+         Repair (peer.sack-next-repair P)
+         Credit (fx- (peer.cwnd P) (peer.sack-pipe P))
+      (or (peer.ack-needed P)
+          (fx> (peer.rx-duplicate-acks P) 0)
+          (if (not (= (peer.tx-flags P) 0)) (fx< (peer.tx-due P) 0)
+              (or (and (fx>= Replay 0) (fx< Replay (smaller End (peer.cwnd P))))
+                  (and (fx> Window 0)
+                       (or (and (peer.tx-fast-retransmit P) (fx> End 0)
+                                (or (not (sack-recovering? P)) (fx> Credit 0)))
+                           (and (fx>= Repair 0) (fx< Repair End) (fx> Credit 0))))
+                  (and (fx> (peer.tx-length P) Flight)
+                       (or (and (= Flight 0) (= Window 0))
+                           (fx> (smaller Window (peer.cwnd P)) (larger Flight (peer.sack-pipe P))))))))))
+
+(define peer-deadline
+  {peer --> fixnum --> boolean --> fixnum}
+  P Now Writable ->
+    (let Due (peer.tx-due P)
+         Wait (if (and (= (state P) time-wait) (not (peer.ack-needed P)))
+                  (peer.wait-until P) (type -1 fixnum))
+      (if (and Writable (output-ready? P)) Now
+          (earlier Wait (if (or Writable (fx>= (peer.tx-retries P) 6)) Due (type -1 fixnum))))))
+
+(define table-deadline
+  {listener --> fixnum --> boolean --> fixnum --> fixnum --> fixnum}
+  _ _ _ 0 At -> At
+  L Now Writable I At ->
+    (let S (slot-at L I)
+         Due (if (= (listener-slot.lease S) vacant) (type -1 fixnum)
+                 (peer-deadline (listener-slot.peer S) Now Writable))
+      (table-deadline L Now Writable (fx- I 1) (earlier At Due))))
+
+(define listener-deadline
+  {listener --> fixnum --> fixnum}
+  L Now -> (table-deadline L Now (not (net-link.full? (net-link.device.tx (listener.device L))))
+                          (listener.capacity L) -1))
+
 (define listener-poll
   {listener --> fixnum --> fixnum}
   L Budget ->
@@ -1373,20 +1549,25 @@
           Count)))
 
 (define accept-ready
-  {listener --> fixnum --> fixnum --> fixnum}
-  _ _ 0 -> 0
-  L I Left ->
-    (let S (slot-at L I) Phase (state (listener-slot.peer S))
+  {listener --> fixnum --> fixnum --> fixnum --> fixnum}
+  _ _ _ 0 -> 0
+  L Port I Left ->
+    (let S (slot-at L I) P (listener-slot.peer S) Phase (state P)
       (if (and (= (listener-slot.lease S) pending)
+               (or (= Port 0) (= Port (peer.local-port P)))
                (or (= Phase established) (= Phase close-wait)))
           (do (listener-slot.lease-> S leased)
               (listener.next-accept-> L (next-index L I))
               (listener-slot.token S))
-          (accept-ready L (next-index L I) (fx- Left 1)))))
+          (accept-ready L Port (next-index L I) (fx- Left 1)))))
 
 (define accept
   {listener --> fixnum}
-  L -> (accept-ready L (listener.next-accept L) (listener.capacity L)))
+  L -> (accept-on L 0))
+
+(define accept-on
+  {listener --> fixnum --> fixnum}
+  L Port -> (accept-ready L Port (listener.next-accept L) (listener.capacity L)))
 
 (define lease-slot
   {listener --> fixnum --> listener-slot}
@@ -1407,6 +1588,17 @@
 (define connection-state
   {listener --> fixnum --> symbol}
   L Token -> (state (listener-slot.peer (lease-slot L Token))))
+
+(define connection-readable?
+  {listener --> fixnum --> boolean}
+  L Token -> (let P (listener-slot.peer (lease-slot L Token))
+               (or (fx> (peer.rx-length P) 0) (peer.recv-eof P) (terminal? P))))
+
+(define connection-writable?
+  {listener --> fixnum --> boolean}
+  L Token -> (let P (listener-slot.peer (lease-slot L Token)) Phase (state P)
+               (and (or (= Phase established) (= Phase close-wait))
+                    (fx< (peer.tx-length P) (peer.capacity P)))))
 
 (define connection-send
   {listener --> fixnum --> buffer.view --> fixnum --> fixnum}

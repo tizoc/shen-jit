@@ -3803,6 +3803,15 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   check has passed. On the `net-dsl` branch, TCP's lossy run 170.8–171.2 against 162.0–162.8 ms, its UDP echo
   22.4–22.5 against 21.6–21.7.
 
+### Shared IPv4 endpoint table (2026-11-19, macOS arm64)
+
+- Multiple listener ports and outbound connects share the same bounded TCP slots. Bindings
+  are configured at setup and UDP ports keep independent receive queues. A caller-supplied
+  secret keys the TCP sequence offset, and deadlines expose queued packets and TCP timers.
+- The interface fixtures exercised two simultaneous active opens, accept by port, endpoint
+  exhaustion, UDP overflow isolation, and a 5 ms simulated link. The existing 9,000 TCP
+  and 10,000 UDP cycle workloads added zero collections under allocation stress.
+
 ### Pipelined TCP SACK repair (2026-11-19, Apple M3 Max and Linux in Docker Desktop)
 
 - A preallocated repair bitmap tracks retransmitted bytes during SACK recovery. The

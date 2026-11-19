@@ -4,7 +4,7 @@
   (import struct defstruct)
   (export link device ring ring.data device.rx device.tx make make-ring left right mtu now delivery
           sent would-block too-large
-          head-offset head-length tail-offset ready? full? publish consume packet-send packet-recv-into)
+          head-offset head-length head-deadline tail-offset ready? full? publish consume packet-send packet-recv-into)
 
 (defstruct ring
   (data : buffer.view)
@@ -96,6 +96,10 @@
 (define head-length
   {ring --> fixnum}
   R -> (fx<-vector (ring.lengths R) (ring.head R)))
+
+(define head-deadline
+  {ring --> fixnum}
+  R -> (if (fx> (ring.count R) 0) (fx<-vector (ring.times R) (ring.head R)) -1))
 
 (define ready?
   {ring --> fixnum --> boolean}

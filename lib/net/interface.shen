@@ -6,13 +6,15 @@
   (use tcp)
   (use udp)
   (import struct defstruct)
-  (export interface interface.listener make poll udp-send udp-recv-into udp-dropped)
+  (export interface interface.listener make make-host connect poll next-deadline
+          udp-binding udp-send udp-recv-into udp-dropped)
 
 (defstruct interface
   (device : net-link.device)
   (ip : fixnum)
   (listener : tcp.listener)
-  (udp : udp.inbox))
+  (tcp-ports : (list fixnum))
+  (udp-bindings : (list udp.inbox)))
 
 (define make
   {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> interface}
@@ -21,19 +23,68 @@
       device <- D
       ip <- IP
       listener <- (tcp.make-listener D IP TcpPort TcpSlots InitialSequence)
-      udp <- (udp.make-inbox D IP UdpPort UdpSlots)))
+      tcp-ports <- [TcpPort]
+      udp-bindings <- [(udp.make-inbox D IP UdpPort UdpSlots)]))
+
+(define list-has-port?
+  {(list fixnum) --> fixnum --> boolean}
+  [] _ -> false
+  [P | Rest] Port -> (or (= P Port) (list-has-port? Rest Port)))
+
+(define check-ports
+  {(list fixnum) --> boolean}
+  [] -> true
+  [P | Rest] -> (if (and (fx>= P 1) (fx<= P 65535) (not (list-has-port? Rest P)))
+                   (check-ports Rest)
+                   (error "net/interface: ports must be distinct within each transport and in 1..65535")))
+
+(define bind-udp
+  {net-link.device --> fixnum --> (list fixnum) --> fixnum --> (list udp.inbox)}
+  _ _ [] _ -> []
+  D IP [P | Rest] Slots -> [(udp.make-inbox D IP P Slots) | (bind-udp D IP Rest Slots)])
+
+(define make-host
+  {net-link.device --> fixnum --> (list fixnum) --> fixnum --> fixnum --> fixnum -->
+   (list fixnum) --> fixnum --> interface}
+  D IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots ->
+    (do (check-ports TcpPorts)
+        (check-ports UdpPorts)
+        (:interface
+          device <- D
+          ip <- IP
+          listener <- (tcp.make-table D IP TcpSlots Key0 Key1)
+          tcp-ports <- TcpPorts
+          udp-bindings <- (bind-udp D IP UdpPorts UdpSlots))))
+
+(define connect
+  {interface --> fixnum --> fixnum --> fixnum}
+  F IP Port -> (tcp.table-connect (interface.listener F) (interface.tcp-ports F) IP Port))
+
+(define find-binding
+  {(list udp.inbox) --> fixnum --> udp.inbox}
+  [] _ -> (error "net/interface: unbound UDP port")
+  [Q | Rest] Port -> (if (= (udp.peer.port (udp.inbox.peer Q)) Port) Q (find-binding Rest Port)))
+
+(define udp-binding
+  {interface --> fixnum --> udp.inbox}
+  F Port -> (find-binding (interface.udp-bindings F) Port))
+
+(define default-udp
+  {(list udp.inbox) --> udp.inbox}
+  [] -> (error "net/interface: no UDP bindings")
+  [Q | _] -> Q)
 
 (define udp-send
   {interface --> fixnum --> fixnum --> buffer.view --> fixnum --> symbol}
-  F IP Port Payload Count -> (udp.send (udp.inbox.peer (interface.udp F)) IP Port Payload Count))
+  F IP Port Payload Count -> (udp.send (udp.inbox.peer (default-udp (interface.udp-bindings F))) IP Port Payload Count))
 
 (define udp-recv-into
   {interface --> buffer.view --> udp.recv-info --> symbol}
-  F Out Info -> (udp.inbox-recv-into (interface.udp F) Out Info))
+  F Out Info -> (udp.inbox-recv-into (default-udp (interface.udp-bindings F)) Out Info))
 
 (define udp-dropped
   {interface --> fixnum}
-  F -> (udp.inbox.dropped (interface.udp F)))
+  F -> (udp.inbox.dropped (default-udp (interface.udp-bindings F))))
 
 \\ Write the reply straight into an available packet slot.
 (define echo-request
@@ -60,13 +111,24 @@
                 (net-link.publish Tx N (net-link.delivery D Now))))
           false)))
 
+(define udp-ingress
+  {(list udp.inbox) --> fixnum --> buffer.view --> fixnum --> fixnum --> boolean}
+  [] _ _ _ _ -> false
+  [Q | Rest] Port B I N ->
+    (if (= (udp.peer.port (udp.inbox.peer Q)) Port)
+        (udp.inbox-ingress Q B I N)
+        (udp-ingress Rest Port B I N)))
+
 (define ingress
   {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   F B I N Now ->
     (if (fx< N 20) false
         (let Proto (buffer.u8 B (fx+ I 9))
-          (cases (= Proto 6) (tcp.listener-ingress (interface.listener F) B I N Now)
-                 (= Proto 17) (udp.inbox-ingress (interface.udp F) B I N)
+          (cases (and (= Proto 6) (fx>= N 40))
+                   (tcp.table-ingress (interface.listener F) B I N Now
+                                      (list-has-port? (interface.tcp-ports F) (buffer.u16-be B (fx+ I 22))))
+                 (and (= Proto 17) (fx>= N 28))
+                   (udp-ingress (interface.udp-bindings F) (buffer.u16-be B (fx+ I 22)) B I N)
                  (= Proto 1) (echo-request F B I N Now)
                  true false))))
 
@@ -88,6 +150,15 @@
          Count (receive-ready F (net-link.device.rx D) Now (buffer.index Budget) 0)
       (do (tcp.listener-transmit (interface.listener F) Now)
           Count)))
+
+\\ Absolute milliseconds, or -1 when only external I/O can make progress.
+(define next-deadline
+  {interface --> fixnum}
+  F -> (let D (interface.device F)
+            Now (net-link.now D)
+            Rx (net-link.head-deadline (net-link.device.rx D))
+            Tcp (tcp.listener-deadline (interface.listener F) Now)
+         (if (or (fx< Rx 0) (and (fx>= Tcp 0) (fx< Tcp Rx))) Tcp Rx)))
 
 (preclude [interface.%match])
 )
