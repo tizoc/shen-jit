@@ -1,4 +1,4 @@
-\\ Construct and inspect the two response variants in the response module's type scope.
+\\ Construct HTTP responses in their private type scope.
 (shen.x.namespace http
   (use buffer)
   (use shen-jit)
@@ -18,49 +18,23 @@
   Status Fields Body ->
     (let Code (response-code Status)
          _ (buffer.check Body)
-      (:buffered-response status <- Code fields <- Fields body <- Body close <- false)))
+      (:response status <- Code fields <- Fields body <- Body close <- false)))
 
 (define response-check
   {response --> response}
-  Response ->
-    (if (or (buffered-response? Response) (stream-description? Response))
-        Response (error "http: not a response")))
-
-(define response-status
-  {response --> fixnum}
-  (:stream-description status <- Status ...) -> Status
-  (:buffered-response status <- Status ...) -> Status
-  _ -> (error "http: not a response"))
-
-(define response-field-list
-  {response --> (list (list string))}
-  (:stream-description fields <- Fields ...) -> Fields
-  (:buffered-response fields <- Fields ...) -> Fields
-  _ -> (error "http: not a response"))
-
-(define response-closes?
-  {response --> boolean}
-  (:stream-description close <- Close ...) -> Close
-  (:buffered-response close <- Close ...) -> Close
-  _ -> (error "http: not a response"))
+  R -> (if (response? R) R (error "http: not a response")))
 
 (define close-after
   {response --> response}
-  (:buffered-response status <- Status fields <- Fields body <- Body ...) ->
-    (:buffered-response status <- Status fields <- Fields body <- Body close <- true)
-  (:stream-description status <- Status fields <- Fields framing <- Framing source <- Source ...) ->
-    (:stream-description
-      status <- Status fields <- Fields framing <- Framing source <- Source close <- true)
+  (:response status <- Status fields <- Fields body <- Body ...) ->
+    (:response status <- Status fields <- Fields body <- Body close <- true)
   _ -> (error "http: not a response"))
 
 (define response-copy-fields
-  {response --> (list (list string)) --> boolean --> response}
-  (:stream-description status <- Status framing <- Framing source <- Source ...) Fields Close
-  -> (:stream-description
-       status <- Status fields <- Fields framing <- Framing source <- Source close <- Close)
-  (:buffered-response status <- Status body <- Body ...) Fields Close
-  -> (:buffered-response status <- Status fields <- Fields body <- Body close <- Close)
-  _ _ _ -> (error "http: not a response"))
+  {response --> (list (list string)) --> response}
+  (:response status <- Status body <- Body close <- Close ...) Fields ->
+    (:response status <- Status fields <- Fields body <- Body close <- Close)
+  _ _ -> (error "http: not a response"))
 
 (define framing-check
   {response-framing --> response-framing}
@@ -74,14 +48,13 @@
     (let Code (response-code Status)
          _ (source-check Source)
          Checked (framing-check Framing)
-      (:stream-description
+      (:response
         status <- Code
         fields <- Fields
-        framing <- Checked
-        source <- Source
+        body <- (:stream-body framing <- Checked source <- Source)
         close <- false)))
 
 )
 \\ The public signatures use http.response. Its representation rules are private.
-(preclude [http.buffered-response.%match http.stream-description.%match
-           http.response.%http.buffered-response http.response.%http.stream-description])
+(preclude [http.response.%match http.stream-body.%match
+           http.response-body.%buffer.view http.response-body.%http.stream-body])

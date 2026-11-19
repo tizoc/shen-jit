@@ -17,33 +17,25 @@
   (export close-after encode-response request response response-framing response-option
     send-response source source-close stream-response)
 
-\\ A response is a status, ordered fields and whether the connection closes after it, with either its
-\\ whole body or a stream description: framing and a source.
-(define show-buffered
-  R -> (make-string "#<response ~A>" (buffered-response.status R)))
-
-(defstruct buffered-response
-  (printer show-buffered)
-  (status : fixnum)
-  (fields : (list (list string)))
-  (body : buffer.view)
-  (close : boolean))
-
-(define show-stream
-  R -> (make-string "#<response ~A streamed>" (stream-description.status R)))
-
-(defstruct stream-description
-  (printer show-stream)
-  (status : fixnum)
-  (fields : (list (list string)))
+(defstruct stream-body
   (framing : response-framing)
-  (source : source)
-  (close : boolean))
+  (source : source))
 
-(struct.union response buffered-response stream-description)
+(struct.union response-body buffer.view stream-body)
+
+(define show-response
+  R -> (make-string "#<response ~A~A>" (response.status R)
+         (if (stream-body? (response.body R)) " streamed" "")))
+
+(defstruct response
+  (printer show-response)
+  (status : fixnum)
+  (fields : (list (list string)))
+  (body : response-body)
+  (close : boolean))
 
 (define response-source
-  (:stream-description source <- Source ...) -> Source
+  (:response body <- (:stream-body source <- Source ...) ...) -> Source
   _ -> [])
 
 (define reason
@@ -119,7 +111,7 @@
          MaxHead (buffer.index HeadLimit)
          _ (if (and (>= MaxHead 4) (<= MaxHead 1048576)) true
                (error "http: response head limit must be 4..1048576"))
-         Status (response-status Response)
+         Status (response.status Response)
          _ (if (and (element? Status [204 205 304]) (not (= Framing [length 0])))
                (error "http: bodyless status requires zero length") true)
          Connection (if Close "Connection: closec#13;c#10;c#13;c#10;" "c#13;c#10;")
@@ -130,7 +122,7 @@
          Start (shen-jit.string->bytes (make-string "HTTP/1.1 ~A ~Ac#13;c#10;" Status (reason Status)))
          Base (+ (shen-jit.bytes-length Start) (shen-jit.bytes-length Tail))
          _ (if (<= Base MaxHead) true (error "http: response head exceeds limit"))
-         Fields (response-fields (response-field-list Response) 0 (- MaxHead Base) [Start] Base)
+         Fields (response-fields (response.fields Response) 0 (- MaxHead Base) [Start] Base)
          Out (buffer.new (snd Fields))
          _ (response-copy Out 0 (append (fst Fields) [Tail]))
       Out))
@@ -144,15 +136,14 @@
 
 (define encode-mode
   Method Response HeadLimit BodyLimit Close ->
-    (let _ (response-check Response)
-         _ (if (buffered-response? Response) true
+    (let Body (response.body (response-check Response))
+         _ (if (buffer.view? Body) true
                (error "http: streaming responses require send-response"))
-         Body (buffered-response.body Response)
          N (buffer.length Body)
          Maximum (buffer.index BodyLimit)
          _ (if (<= N Maximum) true (error "http: response body exceeds limit"))
          Head (encode-head Method Response [length N] Close HeadLimit)
-         Send (if (suppressed? Method (buffered-response.status Response)) 0 N)
+         Send (if (suppressed? Method (response.status Response)) 0 N)
          Out (buffer.new (+ (buffer.length Head) Send))
          _ (buffer.copy! Out 0 Head 0 (buffer.length Head))
       (do (buffer.copy! Out (buffer.length Head) Body 0 Send) Out)))
@@ -349,9 +340,8 @@
 
 (define prepare-output
   Method Response Limits Close D ->
-    (let _ (response-check Response)
-         S (response-source Response)
-      (if (empty? S)
+    (let Body (response.body (response-check Response))
+      (if (not (stream-body? Body))
           (:plan
             wire <- (encode-mode Method Response (output-limits.head-limit Limits)
                                   (output-limits.body-limit Limits) Close)
@@ -360,11 +350,12 @@
             first <- [suppressed]
             limits <- Limits
             sent <- false)
-          (let _ (source-claim S)
-               Framing (stream-description.framing Response)
+          (let S (stream-body.source Body)
+               _ (source-claim S)
+               Framing (stream-body.framing Body)
                _ (length-limit Framing (output-limits.body-limit Limits))
                Head (encode-head Method Response Framing Close (output-limits.head-limit Limits))
-               First (if (suppressed? Method (stream-description.status Response)) [suppressed]
+               First (if (suppressed? Method (response.status Response)) [suppressed]
                          (pull S Framing Limits 0 0 D))
             (:plan
               wire <- Head

@@ -157,8 +157,8 @@
 (server-test.check "leap day" "Tue, 29 Feb 2000 00:00:00 GMT" (freeze (http.date-value 951782400)))
 
 (server-test.check "native server supplies a Date when absent" true
-  (freeze (http.has-date? (http.buffered-response.fields
-                            (http.server-response (http.response 200 [] (buffer.new 0)))))))
+  (freeze (let Response (http.server-response (http.response 200 [] (buffer.new 0)))
+            (http.has-date? (http.response.fields Response)))))
 
 (let Text "GET / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;"
      Bytes (shen-jit.string->bytes Text)
