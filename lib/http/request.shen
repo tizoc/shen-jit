@@ -15,7 +15,7 @@
     defgrammar done fixed http http-body http-request more require text timeout
     too-large trailer-fields-limit trailer-limit unsupported])
   (shadow digit? version)
-  (export <token> body body-reader body-reader-with chunk-option chunked? content-length
+  (export <token> body body-reader body-reader-with chunk-option chunked? connection-close? content-length
     forbidden-trailer? header-values headers method parse-request read-body read-body-until
     read-request request target trailers version)
 
@@ -410,6 +410,11 @@
                  Fields (fields B (+ Line 2) End 0 [])
               (validate-request RequestLine Fields Limit))
             (function syntax-error)))))
+
+(define connection-close?
+  Request -> (element? "close" (token-list (header-values Request "connection"))))
+
+(declare connection-close? [request --> boolean])
 
 \\ Requests retain immutable metadata; a body read returns a new request with owned body bytes.
 (define complete-request

@@ -186,6 +186,20 @@
   "HTTP/1.1 200 OKc#13;c#10;X: ac#13;c#10;Content-Length: 5c#13;c#10;Connection: closec#13;c#10;c#13;c#10;hello"
   (freeze (buffer.string (http.encode-response (value request-test.get)
             (http.response 200 [["X" "a"]] (buffer.from-string "hello")) 1024 5))))
+(request-test.check "persistent encoding frames the body"
+  "HTTP/1.1 200 OKc#13;c#10;Content-Length: 5c#13;c#10;c#13;c#10;hello"
+  (freeze (buffer.string (http.encode-response-with-close (value request-test.get)
+            (http.response 200 [] (buffer.from-string "hello")) 1024 5 false))))
+(request-test.check "persistent encoding honors a response's close policy"
+  "HTTP/1.1 200 OKc#13;c#10;Content-Length: 5c#13;c#10;Connection: closec#13;c#10;c#13;c#10;hello"
+  (freeze (buffer.string (http.encode-response-with-close (value request-test.get)
+            (http.close-after (http.response 200 [] (buffer.from-string "hello"))) 1024 5 false))))
+(request-test.check "persistent encoding honors a request's close token"
+  "HTTP/1.1 200 OKc#13;c#10;Content-Length: 5c#13;c#10;Connection: closec#13;c#10;c#13;c#10;hello"
+  (freeze (let Q (request-test.ok (request-test.parse
+                   (request-test.head "Connection: Keep-Alive, CLOSEc#13;c#10;") 0))
+            (buffer.string (http.encode-response-with-close Q
+              (http.response 200 [] (buffer.from-string "hello")) 1024 5 false)))))
 (request-test.check "HEAD advertises representation length without bytes"
   "HTTP/1.1 200 OKc#13;c#10;Content-Length: 5c#13;c#10;Connection: closec#13;c#10;c#13;c#10;"
   (freeze (buffer.string (http.encode-response (value request-test.head-request)

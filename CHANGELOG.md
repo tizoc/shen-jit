@@ -19,6 +19,10 @@ All notable changes to this project are documented in this file. The format is b
   is not compared as a plain fixnum.
 - `(skip N)` in a grammar passes N bytes of anything, N an expression such as a length read before them, in one step,
   and waits for them in a read from a reader.
+- `http.encode-response-with-close` encodes a whole response for a connection kept open, adding `Connection: close`
+  only when asked, when the request carries a close token, or when the response was marked with `http.close-after`;
+  `http.connection-close?` says whether a request asked to close. Code that drives its own connections can answer
+  persistent and pipelined requests with replies encoded once.
 
 ### Fixed
 

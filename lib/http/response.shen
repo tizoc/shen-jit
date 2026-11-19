@@ -14,7 +14,7 @@
   (externals [active application chunked closed deadline http-response
     response-body-limit response-chunk-count-limit response-chunk-size response-head-limit
     suppressed timeout])
-  (export close-after encode-response request response response-framing response-option
+  (export close-after encode-response encode-response-with-close request response response-framing response-option
     send-response source source-close stream-response)
 
 (defstruct stream-body
@@ -154,6 +154,11 @@
 (define encode-response
   Request Response HeadLimit BodyLimit ->
     (encode-for (method Request) Response HeadLimit BodyLimit))
+
+(define encode-response-with-close
+  Request Response HeadLimit BodyLimit Close ->
+    (encode-mode (method Request) Response HeadLimit BodyLimit
+                (or Close (connection-close? Request) (response.close (response-check Response)))))
 
 \\ Sources transfer to the sender, which closes them on every exit. Each callback
 \\ receives a byte bound and the one absolute write deadline. No prefetch queue.
@@ -512,6 +517,7 @@
   [[number --> [deadline --> [result.t [io.error * [option.t buffer.view]]]]] --> [[lazy [result.t [io.error * result.empty]]] --> source]])
 (declare source-close [source --> [result.t [io.error * result.empty]]])
 (declare encode-response [request --> [response --> [fixnum --> [fixnum --> buffer.view]]]])
+(declare encode-response-with-close [request --> [response --> [fixnum --> [fixnum --> [boolean --> buffer.view]]]]])
 (declare send-response
   [io.endpoint --> [request --> [response --> [deadline -->
     [[list response-option] --> [result.t [io.error * number]]]]]]])

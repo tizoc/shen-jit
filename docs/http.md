@@ -185,6 +185,12 @@ storage. Complete bodies remain owned in memory; streaming body delivery is a se
 alive and stable until encoding. `http.encode-response Request Response HeadLimit BodyLimit` validates
 the description and returns independent wire bytes. All validation happens before any network write.
 
+`http.encode-response-with-close Request Response HeadLimit BodyLimit Close`
+lets a connection driver encode a fixed reply for a persistent connection.
+It includes `Connection: close` when `Close` is true, the request carries a
+close token, or the response was marked with `http.close-after`.
+`http.connection-close? Request` checks the request's Connection tokens.
+
 ```shen
 (let Head (buffer.from-string "HEAD / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;")
      Response (http.response 200 [["Content-Type" "text/plain"]] (buffer.from-string "hello"))

@@ -249,7 +249,7 @@
          Prepared (trap-error
                     (let R (server-response Response)
                          Close (or (response.close R)
-                                   (element? "close" (token-list (header-values Q "connection")))
+                                   (connection-close? Q)
                                    (>= (+ (session.requests C) 1) (server-config.request-limit Config))
                                    (thaw (session.stop C)))
                          Plan (prepare-response (method Q) R
