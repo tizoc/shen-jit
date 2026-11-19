@@ -74,14 +74,13 @@
 (define server-response
   Response ->
     (let _ (response-check Response)
-         Fields (response-field-list Response)
+         Fields (response.fields Response)
       (if (has-date? Fields)
           Response
           (let Date (trap-error (date-value (c-time [])) (/. X []))
             (if (empty? Date)
                 Response
-                (response-copy-fields Response [["Date" Date] | Fields]
-                                           (response-closes? Response)))))))
+                (response-copy-fields Response [["Date" Date] | Fields]))))))
 
 (define option-index
   head-limit -> 0
@@ -249,7 +248,7 @@
          _ (io.socket-deadline (session.endpoint C) D)
          Prepared (trap-error
                     (let R (server-response Response)
-                         Close (or (response-closes? R)
+                         Close (or (response.close R)
                                    (element? "close" (token-list (header-values Q "connection")))
                                    (>= (+ (session.requests C) 1) (server-config.request-limit Config))
                                    (thaw (session.stop C)))

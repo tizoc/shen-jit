@@ -1,8 +1,8 @@
 (define http-test.check-rules
   Expected -> (let Active (included)
                    Rules [http.request.t http.response.t http.server.t http.listener.t
-                          http.buffered-response.%match http.stream-description.%match
-                          http.response.%http.buffered-response http.response.%http.stream-description]
+                          http.response.%match http.stream-body.%match
+                          http.response-body.%buffer.view http.response-body.%http.stream-body]
                    Found (intersection Rules Active)
                 (if (and (empty? (difference Expected Found)) (empty? (difference Found Expected)))
                     true (error "expected HTTP rules ~S, found ~S" Expected Found))))

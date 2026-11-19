@@ -17,7 +17,7 @@
 (define counter-test.response
   Method Target ->
     (let Response (counter-app.route (value counter-test.path) Method Target)
-      [(http.buffered-response.status Response) (buffer.string (http.buffered-response.body Response))]))
+      [(http.response.status Response) (buffer.string (http.response.body Response))]))
 
 (counter-app.initialize (value counter-test.path))
 (counter-test.check "health" [200 "{c#34;statusc#34;:c#34;okc#34;}"]
@@ -63,7 +63,7 @@
          Full (fixture.success (http.read-body (http.body-reader (io.reader E []) Q)))
          _ (io.close E)
          Response (counter-app.handle (value counter-test.path) Full)
-      [(http.buffered-response.status Response) (buffer.string (http.buffered-response.body Response))]))
+      [(http.response.status Response) (buffer.string (http.response.body Response))]))
 
 (counter-test.check "JSON body updates the database" [200 "{c#34;valuec#34;:42}"]
   (freeze (counter-test.put "{c#34;valuec#34;:42}" "application/json")))
@@ -84,7 +84,7 @@
 (define counter-test.owned
   Db Method Target ->
     (let Response (counter-app.route Db Method Target)
-      [(http.buffered-response.status Response) (buffer.string (http.buffered-response.body Response))]))
+      [(http.response.status Response) (buffer.string (http.response.body Response))]))
 
 (let Owner (counter-app.open (value counter-test.path))
      Db (counter-app.db Owner)

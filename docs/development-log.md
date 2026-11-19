@@ -3183,6 +3183,18 @@ Next experiments: batch NDJSON rows within the existing chunk bound; compare sma
 capacities before changing defaults; repeat on other platforms and with a separate load generator.
 The current required fast tier, raw-record invariants and publication scan pass.
 
+### Shared HTTP response metadata (2026-11-18, Apple M3 Max, macOS arm64, against the preceding commit)
+
+A response has one struct for status, ordered fields, its body and the close flag. The body holds a
+buffer view directly or a stream body that pairs framing with its source. Adding a Date field and
+forcing connection close both preserve the body as-is. The encoder and sender handle the body kind.
+Both public constructors keep their signatures, and the representation's typing rules stay private.
+
+Seven alternating runs of 160,000 responses each took a median of 106.5 to 105.2 ms for buffered
+construction, close-after and encoding, and 271.0 to 271.7 ms for streamed construction, close-after
+and writing a single chunk to a buffer. Typed request and stream clients still cost 7,146 and
+3,640 inferences, respectively.
+
 ### Streaming responses and persistent HTTP connections (2026-11-07, M3 Max, macOS arm64)
 
 Compared with the preceding complete-body, one-response connection path, responses can now pull bounded
