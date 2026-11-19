@@ -7,7 +7,7 @@
   (use shen-jit)
   (use net-wire => wire)
   (import struct defstruct)
-  (import layout write-layout)
+  (import layout write-layout defflags flag-bits)
   (shadow listen release)
   (export peer make-peer listen connect state send recv-into shutdown-write poll
           listener make-listener listener-poll accept connection-index connection-state
@@ -17,6 +17,9 @@
           connection-send connection-send-from connection-recv-into connection-recv-at connection-shutdown-write release
           closed listen-state syn-sent syn-received established close-wait fin-wait-1 fin-wait-2
           closing last-ack time-wait timed-out reset)
+
+\\ RFC 9293's control bits, the most significant first.
+(defflags control cwr ece urg ack psh rst syn fin)
 
 (defstruct peer
   (device : net-link.device)
@@ -315,7 +318,7 @@
 
 (define connect
   {peer --> fixnum --> boolean}
-  P Seq -> (and (begin P Seq syn-sent) (queue-control P 2)))
+  P Seq -> (and (begin P Seq syn-sent) (queue-control P (flag-bits control syn))))
 
 (define window
   {peer --> fixnum}
@@ -408,7 +411,7 @@
   P ->
     (let Phase (state P)
       (if (and (or (= Phase established) (= Phase close-wait)) (= (peer.tx-length P) 0))
-          (do (queue-control P 17)
+          (do (queue-control P (flag-bits control fin ack))
               (peer.phase-> P (if (= Phase established) fin-wait-1 last-ack))
               true)
           false)))
@@ -481,9 +484,9 @@
 (define write-syn-options
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum}
   P B At Flags ->
-    (let Sack (and (sack-capable? P) (or (= Flags 2) (peer.sack-enabled P)))
+    (let Sack (and (sack-capable? P) (or (= Flags (flag-bits control syn)) (peer.sack-enabled P)))
          Scale (and (sack-capable? P)
-                    (if (= Flags 2) (fx> (peer.window-scale P) 0)
+                    (if (= Flags (flag-bits control syn)) (fx> (peer.window-scale P) 0)
                         (fx>= (peer.remote-scale P) 0)))
          N (if Sack (let _ (buffer.u32-be-> B At 67239936) (type 4 fixnum)) (type 0 fixnum))
          M (fx+ At N)
@@ -502,15 +505,15 @@
 (define write-options
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum}
   P B I Flags ->
-    (cases (flag? Flags 2) (write-syn-options P B (fx+ I 20) Flags)
-           (and (= Flags 16) (wants-sack? P)) (write-sack P B (fx+ I 20))
+    (cases (flag? Flags (flag-bits control syn)) (write-syn-options P B (fx+ I 20) Flags)
+           (and (= Flags (flag-bits control ack)) (wants-sack? P)) (write-sack P B (fx+ I 20))
            true 0))
 
 (define advertised-window
   {peer --> fixnum --> fixnum}
   P Flags ->
     (let Space (window P)
-         Shift (if (or (flag? Flags 2) (fx< (peer.remote-scale P) 0))
+         Shift (if (or (flag? Flags (flag-bits control syn)) (fx< (peer.remote-scale P) 0))
                    (type 0 fixnum) (peer.window-scale P))
       (smaller 65535 (shen-jit.shift-right Space Shift))))
 
@@ -521,7 +524,7 @@
       (do (write-layout wire.tcp B T
             (source-port (peer.local-port P)) (destination-port (peer.remote-port P))
             (sequence Seq)
-            (acknowledgement (if (flag? Flags 16) (peer.recv-next P) 0))
+            (acknowledgement (if (flag? Flags (flag-bits control ack)) (peer.recv-next P) 0))
             (data-offset (shen-jit.shift-right Header 2)) (flags Flags) (window (advertised-window P Flags)))
           (if (= Count 0) B
               (copy-from-ring B (fx+ T Header) (peer.tx P) At (peer.capacity P) Count)))))
@@ -543,7 +546,7 @@
           (write-segment P B T Flags Seq At Count Options)
           (wire.tcp.checksum-> B T (transport-checksum B I IpBytes TcpBytes))
           (net-link.publish R Size Delivery)
-          (if (and (flag? Flags 16) (or (= Flags 16) (not (wants-sack? P))))
+          (if (and (flag? Flags (flag-bits control ack)) (or (= Flags (flag-bits control ack)) (not (wants-sack? P))))
               (peer.ack-needed-> P false) P)
           true)))
 
@@ -600,7 +603,7 @@
               (let End (seq-add Next 1)
                 (do (peer.send-next-> P End)
                     (peer.tx-due-> P (fx+ Now (peer.tx-rto P)))
-                    (if (flag? Flags 2) (start-rtt-sample P Now End) true)
+                    (if (flag? Flags (flag-bits control syn)) (start-rtt-sample P Now End) true)
                     true))
               (do (peer.rtt-sample-at-> P -1)
                   (backoff P Now))))))
@@ -857,7 +860,7 @@
            (= (wire.tcp.reserved B T) 0)
            (fx>= (header-length B T) (wire.tcp.size))
            (fx<= (header-length B T) Count)
-           (not (flag? (wire.tcp.flags B T) 32))                     \\ URG is refused.
+           (not (flag? (wire.tcp.flags B T) (flag-bits control urg)))                     \\ URG is refused.
            (= (transport-checksum B I IpBytes Count) 0))))
 
 (define addressed-to?
@@ -868,7 +871,7 @@
 \\ ECN is declined by leaving the negotiation bits clear in replies.
 (define segment-flags
   {buffer.view --> fixnum --> fixnum}
-  B I -> (shen-jit.bit-and (wire.tcp.flags B I) 31))
+  B I -> (shen-jit.bit-and (wire.tcp.flags B I) (flag-bits control ack psh rst syn fin)))
 
 (define enter-time-wait
   {peer --> fixnum --> boolean}
@@ -1188,9 +1191,9 @@
 (define answer-duplicate
   {peer --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
   P Flags Seq N Now ->
-    (if (or (fx> N 0) (flag? Flags 3))
+    (if (or (fx> N 0) (flag? Flags (flag-bits control syn fin)))
         (do (peer.ack-needed-> P true)
-            (if (and (= (state P) time-wait) (flag? Flags 1)
+            (if (and (= (state P) time-wait) (flag? Flags (flag-bits control fin))
                      (= (seq-add Seq (fx+ N 1)) (peer.recv-next P)))
                 (enter-time-wait P Now)
                 true))
@@ -1204,20 +1207,20 @@
          Window (window P)
          Ahead (seq-distance Seq Next)
          Skip (seq-distance Next Seq)
-         Fin (flag? Flags 1)
+         Fin (flag? Flags (flag-bits control fin))
          Span (if Fin (fx+ N 1) N)
          Overlap (fx< Skip Span)
          Acceptable (or (= Ahead 0) Overlap (fx< Ahead Window))
       (cases (= (state P) time-wait) (answer-duplicate P Flags Seq N Now)
-             (flag? Flags 4)
+             (flag? Flags (flag-bits control rst))
                (cases (= Seq Next) (stop-peer P reset)
                       Acceptable (do (peer.ack-needed-> P true) true)
                       true false)
-             (flag? Flags 2) (answer-duplicate P Flags Seq N Now)
-             (or (not (flag? Flags 16)) (seq-after? Ack (peer.send-next P))) false
+             (flag? Flags (flag-bits control syn)) (answer-duplicate P Flags Seq N Now)
+             (or (not (flag? Flags (flag-bits control ack))) (seq-after? Ack (peer.send-next P))) false
              (not Acceptable) (answer-duplicate P Flags Seq N Now)
              true
-               (do (acknowledge P Seq Ack Win Now (and (= Flags 16) (= N 0)))
+               (do (acknowledge P Seq Ack Win Now (and (= Flags (flag-bits control ack)) (= N 0)))
                    (if (peer.sack-enabled P) (accept-sack P B Options Start Ack Previous) false)
                    (if (and (fx> Span 0) (not (peer.recv-eof P)))
                        (if Overlap
@@ -1230,9 +1233,9 @@
    boolean --> boolean}
   P Flags Seq Ack Win N Mss Now Scale Sacked ->
     (let Phase (state P)
-      (cases (and (= Phase syn-sent) (flag? Flags 4) (flag? Flags 16) (acknowledge? P Ack))
+      (cases (and (= Phase syn-sent) (flag? Flags (flag-bits control rst)) (flag? Flags (flag-bits control ack)) (acknowledge? P Ack))
                (stop-peer P reset)
-             (and (= Phase listen-state) (= Flags 2) (= N 0))
+             (and (= Phase listen-state) (= Flags (flag-bits control syn)) (= N 0))
                (do (peer.recv-next-> P (seq-add Seq 1))
                    (remember-window P Seq Ack Win)
                    (peer.send-mss-> P Mss)
@@ -1242,8 +1245,8 @@
                          Scale (type -1 fixnum)))
                    (peer.sack-enabled-> P Sacked)
                    (peer.phase-> P syn-received)
-                   (queue-control P 18))
-             (and (= Phase syn-sent) (= Flags 18) (= N 0) (acknowledge? P Ack))
+                   (queue-control P (flag-bits control syn ack)))
+             (and (= Phase syn-sent) (= Flags (flag-bits control syn ack)) (= N 0) (acknowledge? P Ack))
                (do (peer.recv-next-> P (seq-add Seq 1))
                    (remember-window P Seq Ack Win)
                    (peer.send-mss-> P Mss)
@@ -1291,11 +1294,11 @@
                                     (if (fx< (option-offset B Options Start 2) 0) (smaller Mss (if (= (peer.ip-header P) (wire.ipv4.size)) 536 1220)) Mss)
                                     Now (read-scale B Options Start)
                                     (and (sack-capable? P) (fx>= (option-offset B Options Start 4) 0)))
-                 (and (= Phase syn-received) (flag? Flags 4) (= Seq (peer.recv-next P)))
+                 (and (= Phase syn-received) (flag? Flags (flag-bits control rst)) (= Seq (peer.recv-next P)))
                    (stop-peer P reset)
                  (and (= Phase syn-received)
-                      (not (and (= Seq (peer.recv-next P)) (flag? Flags 16) (acknowledge? P Ack))))
-                   (if (and (= Flags 2) (= (seq-add Seq 1) (peer.recv-next P))
+                      (not (and (= Seq (peer.recv-next P)) (flag? Flags (flag-bits control ack)) (acknowledge? P Ack))))
+                   (if (and (= Flags (flag-bits control syn)) (= (seq-add Seq 1) (peer.recv-next P))
                             (fx>= (peer.tx-due P) 0))
                        (do (peer.tx-due-> P Now) true)
                        false)
@@ -1599,19 +1602,19 @@
   {buffer.view --> fixnum --> buffer.view --> fixnum --> fixnum --> buffer.view}
   Out At B T Count ->
     (let Flags (segment-flags B T)
-         Ack (flag? Flags 16)
+         Ack (flag? Flags (flag-bits control ack))
          Space (fx+ (fx- Count (header-length B T))
-                    (fx+ (if (flag? Flags 2) (type 1 fixnum) (type 0 fixnum))
-                         (if (flag? Flags 1) (type 1 fixnum) (type 0 fixnum))))
+                    (fx+ (if (flag? Flags (flag-bits control syn)) (type 1 fixnum) (type 0 fixnum))
+                         (if (flag? Flags (flag-bits control fin)) (type 1 fixnum) (type 0 fixnum))))
       (write-layout wire.tcp Out At
         (source-port (wire.tcp.destination-port B T)) (destination-port (wire.tcp.source-port B T))
         (sequence (if Ack (wire.tcp.acknowledgement B T) 0))
         (acknowledgement (if Ack 0 (seq-add (wire.tcp.sequence B T) Space)))
-        (data-offset 5) (flags (if Ack 4 20)))))
+        (data-offset 5) (flags (if Ack (flag-bits control rst) (flag-bits control rst ack))))))
 
 (define reset-allowed?
   {net-link.ring --> buffer.view --> fixnum --> boolean}
-  Tx B T -> (and (not (flag? (segment-flags B T) 4)) (not (net-link.full? Tx))))
+  Tx B T -> (and (not (flag? (segment-flags B T) (flag-bits control rst))) (not (net-link.full? Tx))))
 
 (define reject-segment
   {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
@@ -1648,7 +1651,7 @@
   {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum -->
    fixnum --> boolean --> boolean}
   L B T Count Local IP Port Now Listening ->
-    (if (and Listening (not (flag? (segment-flags B T) 16)))
+    (if (and Listening (not (flag? (segment-flags B T) (flag-bits control ack))))
         (let Index (opening-index L B T Count)
           (and (fx> Index 0)
                (let S (slot-at L Index)
@@ -1675,7 +1678,7 @@
   {listener --> buffer.view --> fixnum --> fixnum --> net-ipv6.address --> net-ipv6.address -->
    fixnum --> fixnum --> fixnum --> boolean --> boolean}
   L B T Count LocalIP RemoteIP Local Port Now Listening ->
-    (if (and Listening (not (flag? (segment-flags B T) 16)))
+    (if (and Listening (not (flag? (segment-flags B T) (flag-bits control ack))))
         (let Index (opening-index L B T Count)
           (and (fx> Index 0)
                (let S (slot-at L Index)
