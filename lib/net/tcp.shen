@@ -34,6 +34,8 @@
   (mutable tx-due : fixnum)
   (mutable tx-rto : fixnum)
   (mutable tx-retries : fixnum)
+  (mutable tx-duplicate-acks : fixnum)
+  (mutable tx-fast-retransmit : boolean)
   (mutable remote-window : fixnum)
   (mutable remote-window-seq : fixnum)
   (mutable remote-window-ack : fixnum)
@@ -45,6 +47,7 @@
   (mutable rx-fin : fixnum)
   (mutable recv-eof : boolean)
   (mutable ack-needed : boolean)
+  (mutable rx-duplicate-acks : fixnum)
   (mutable wait-until : fixnum))
 
 (define smaller
@@ -84,6 +87,8 @@
         tx-due <- -1
         tx-rto <- 1000
         tx-retries <- 0
+        tx-duplicate-acks <- 0
+        tx-fast-retransmit <- false
         remote-window <- 0
         remote-window-seq <- 0
         remote-window-ack <- 0
@@ -95,6 +100,7 @@
         rx-fin <- -1
         recv-eof <- false
         ack-needed <- false
+        rx-duplicate-acks <- 0
         wait-until <- 0)))
 
 (define make-peer
@@ -133,6 +139,12 @@
              (do (buffer.u8-> Map I 0)
                  (clear-presence Map I))))
 
+(define clear-duplicate-acks
+  {peer --> boolean}
+  P -> (do (peer.tx-duplicate-acks-> P 0)
+           (peer.tx-fast-retransmit-> P false)
+           true))
+
 (define begin
   {peer --> fixnum --> symbol --> boolean}
   P Seq Phase ->
@@ -148,6 +160,7 @@
               (peer.tx-due-> P -1)
               (peer.tx-rto-> P 1000)
               (peer.tx-retries-> P 0)
+              (clear-duplicate-acks P)
               (peer.remote-window-> P 0)
               (peer.send-mss-> P (peer.mss P))
               (peer.recv-next-> P 0)
@@ -157,6 +170,7 @@
               (peer.rx-fin-> P -1)
               (peer.recv-eof-> P false)
               (peer.ack-needed-> P false)
+              (peer.rx-duplicate-acks-> P 0)
               (peer.phase-> P Phase)
               true))
         false))
@@ -270,6 +284,14 @@
           (if (flag? Flags 16) (peer.ack-needed-> P false) P)
           true)))
 
+(define emit-ack
+  {peer --> net-link.ring --> fixnum --> boolean}
+  P R Now ->
+    (let Pending (peer.rx-duplicate-acks P)
+      (do (if (and (not (peer.ack-needed P)) (fx> Pending 0))
+              (peer.rx-duplicate-acks-> P (fx- Pending 1)) P)
+          (emit-segment P R Now 16 (peer.send-next P) 0 0))))
+
 (define stop-peer
   {peer --> symbol --> boolean}
   P Phase -> (do (peer.phase-> P Phase)
@@ -278,7 +300,9 @@
                  (peer.tx-flight-> P 0)
                  (peer.tx-replay-> P -1)
                  (peer.tx-due-> P -1)
+                 (clear-duplicate-acks P)
                  (peer.ack-needed-> P false)
+                 (peer.rx-duplicate-acks-> P 0)
                  true))
 
 (define backoff
@@ -319,7 +343,11 @@
          Next (fx+ Offset N)
       (do (emit-data P R Now Offset N)
           (peer.tx-replay-> P (if (fx< Next End) Next -1))
-          (if Retry (backoff P Now) true))))
+          (if Retry
+              (do (peer.tx-fast-retransmit-> P false)
+                  (peer.tx-duplicate-acks-> P 3)
+                  (backoff P Now))
+              true))))
 
 (define send-new-data
   {peer --> net-link.ring --> fixnum --> fixnum --> fixnum --> boolean}
@@ -341,6 +369,11 @@
          N (smaller (fx- (peer.tx-length P) Flight) (smaller (peer.send-mss P) Available))
       (cases (and (fx>= Replay 0) (fx< Replay End)) (replay-data P R Now Replay End false)
              (and Expired (fx> End 0)) (replay-data P R Now 0 End true)
+             (and (peer.tx-fast-retransmit P) (fx> End 0) (fx> Window 0))
+               (do (emit-data P R Now 0 (smaller (peer.send-mss P) End))
+                   (peer.tx-fast-retransmit-> P false)
+                   true)
+             (and (fx> (peer.rx-duplicate-acks P) 0) (not (peer.ack-needed P))) (emit-ack P R Now)
              (fx> N 0) (send-new-data P R Now Flight N)
              true false)))
 
@@ -355,7 +388,8 @@
              (net-link.full? R) false
              (and Control (or (fx< Due 0) Expired)) (send-control P R Now)
              true (or (and (not Control) (flush-data P R Now Expired))
-                      (and (peer.ack-needed P) (emit-segment P R Now 16 (peer.send-next P) 0 0))))))
+                      (and (or (peer.ack-needed P) (fx> (peer.rx-duplicate-acks P) 0))
+                           (emit-ack P R Now))))))
 
 (define header-length
   {buffer.view --> fixnum --> fixnum}
@@ -463,11 +497,23 @@
           (peer.tx-length-> P (fx- (peer.tx-length P) N))
           (peer.tx-flight-> P Left)
           (peer.tx-replay-> P (cases (or (= Left 0) (fx< Replay 0)) -1 (fx< At 0) 0 true At))
+          (clear-duplicate-acks P)
           (reset-timer P Left Now))))
 
+(define count-duplicate-ack
+  {peer --> boolean}
+  P ->
+    (let Count (peer.tx-duplicate-acks P)
+      (if (fx< Count 3)
+          (let Next (fx+ Count 1)
+            (do (peer.tx-duplicate-acks-> P Next)
+                (peer.tx-fast-retransmit-> P (= Next 3))
+                true))
+          false)))
+
 (define acknowledge-data
-  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
-  P Seq Ack Window Now ->
+  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
+  P Seq Ack Window Now PureAck ->
     (let Flight (peer.tx-flight P)
          Una (seq-add (peer.send-next P) (fx- 0 Flight))
          N (seq-distance Ack Una)
@@ -477,14 +523,18 @@
               (cases (fx> N 0) (advance-ack P N Flight Now)
                      (and (fx> Flight 0) (= OldWindow 0) (fx> (peer.remote-window P) 0))
                        (do (peer.tx-replay-> P 0) true)
+                     (and PureAck (fx> Flight 0) (fx> Window 0) (= Window OldWindow)
+                          (fx< (peer.tx-replay P) 0)) (count-duplicate-ack P)
+                     (fx< (peer.tx-duplicate-acks P) 3) (clear-duplicate-acks P)
+                     (= (peer.remote-window P) 0) (do (peer.tx-fast-retransmit-> P false) true)
                      true true))
           false)))
 
 (define acknowledge
-  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
-  P Seq Ack Window Now ->
+  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
+  P Seq Ack Window Now PureAck ->
     (if (= (peer.tx-flags P) 0)
-        (acknowledge-data P Seq Ack Window Now)
+        (acknowledge-data P Seq Ack Window Now PureAck)
         (acknowledge-control P Seq Ack Window Now)))
 
 (define presence-mask
@@ -525,6 +575,7 @@
   {peer --> fixnum --> boolean}
   P N -> (do (peer.rx-length-> P (fx+ (peer.rx-length P) N))
              (peer.recv-next-> P (seq-add (peer.recv-next P) N))
+             (peer.rx-duplicate-acks-> P 0)
              true))
 
 (define receive-bytes
@@ -554,6 +605,7 @@
           (peer.rx-fin-> P -1)
           (peer.recv-next-> P (seq-add (peer.recv-next P) 1))
           (peer.ack-needed-> P true)
+          (peer.rx-duplicate-acks-> P 0)
           (cases (= Phase established) (do (peer.phase-> P close-wait) true)
                  (= Phase fin-wait-1) (do (peer.phase-> P closing) true)
                  (= Phase fin-wait-2) (enter-time-wait P Now)
@@ -569,7 +621,9 @@
          Final (peer.rx-fin P)
          Limit (if (fx< Final 0) Window (smaller Window (seq-distance Final Next)))
          Count (smaller N (fx- Limit Offset))
-      (do (peer.ack-needed-> P true)
+      \\ Keep up to three gap ACKs across polls even when several segments arrive together.
+      (do (if (= Offset 0) (peer.ack-needed-> P true)
+              (peer.rx-duplicate-acks-> P (smaller 3 (fx+ (peer.rx-duplicate-acks P) 1))))
           (if (fx> Count 0) (receive-bytes P B Start Offset Count Limit) true)
           (if (= Final (peer.recv-next P)) (receive-fin P Now) true))))
 
@@ -601,7 +655,7 @@
              (or (not (flag? Flags 16)) (seq-after? Ack (peer.send-next P))) false
              (not Acceptable) (answer-duplicate P Flags Seq N Now)
              true
-               (do (acknowledge P Seq Ack Win Now)
+               (do (acknowledge P Seq Ack Win Now (and (= Flags 16) (= N 0)))
                    (if (and (fx> Span 0) (not (peer.recv-eof P)))
                        (if Overlap
                            (receive-text P B (fx+ Start Skip) 0 (fx- N Skip) Fin Window Now)

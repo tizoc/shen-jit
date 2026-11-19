@@ -3803,6 +3803,19 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   check has passed. On the `net-dsl` branch, TCP's lossy run 170.8–171.2 against 162.0–162.8 ms, its UDP echo
   22.4–22.5 against 21.6–21.7.
 
+### TCP fast retransmit (2026-11-19, Apple M3 Max and Linux in Docker Desktop)
+
+- Three duplicate pure ACKs with the same advertised window schedule one retry at the
+  oldest unacknowledged byte. The receiver retains up to three gap ACKs across polls,
+  and the sender keeps the original timeout armed after sending the retry.
+- A simulated middle-segment loss recovered at 25 ms with a retransmission timeout of
+  1,000 ms. The test held the transmit ring full at the third ACK, verified that window
+  updates did not count, and recovered a second gap on the same connection when the fast
+  retry itself was lost.
+- The direct probe recorded zero Shen heap words across 16 runs of the fast-retransmit
+  test and the other simulated recovery cases, followed by the shared Linux TUN workload.
+  The allocating control used five words. The 5,000-connection stress run added zero collections.
+
 ### Bounded out-of-order TCP receive (2026-11-19, Apple M3 Max and Linux in Docker Desktop)
 
 - A preallocated bitmap marks out-of-order bytes in the existing receive ring, one bit per byte.

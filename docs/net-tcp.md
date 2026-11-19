@@ -42,9 +42,16 @@ An overlapping segment preserves bytes already received. When the gap closes, th
 contiguous range becomes readable and the ACK advances across it. An early FIN takes effect
 once all preceding bytes arrive.
 
-On timeout, the sender replays outstanding bytes from the oldest unacknowledged byte, within
-the current window. A cumulative ACK can cancel the rest of the replay. One byte can probe a
-zero window and recover a lost window update. The clock makes these transitions reproducible.
+Three duplicate pure ACKs for the oldest unacknowledged byte with an unchanged positive
+advertised window schedule one fast retransmission of up to one MSS. It stays pending while
+the transmit queue is full. An advancing ACK cancels it and resets the count. The receiver
+keeps up to three pending gap ACKs when out-of-order packets arrive in one poll.
+[TCP fast retransmit](https://www.rfc-editor.org/rfc/rfc5681.html#section-3.2)
+
+The original timeout remains armed after a fast retry. On timeout, the sender replays
+outstanding bytes from the oldest unacknowledged byte, within the current window. A cumulative
+ACK can cancel the rest of the replay. One byte can probe a zero window and recover a lost
+window update. The clock makes these transitions reproducible.
 [TCP incoming segment processing](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.10.7.4)
 
 ## Byte stream
@@ -83,9 +90,10 @@ and reuse of a slot gives the next connection a fresh token. Access through a re
 `make test-net-tcp` builds a typed executable and checks independent SYN bytes, segmentation at
 the peer's MSS, cumulative ACKs, and reordering across ring and sequence wraparound. It also
 checks loss and overlapping retransmissions, clipping at the receive window edge, out-of-order
-FIN, zero-window probes, and reuse of a listener slot that held staged data at reset.
-The allocation regression runs 4,000 typed connections under allocation stress, with a
-warmup-only baseline and an allocating positive control.
+FIN, zero-window probes, and reuse of a listener slot that held staged data at reset. Its
+fast-retransmit test recovers a dropped segment at 25 ms of simulated time and exercises
+a lost fast retry on the same connection. The allocation regression runs 5,000 typed
+connections under allocation stress, with a warmup-only baseline and an allocating positive control.
 
 ## Simulated throughput
 

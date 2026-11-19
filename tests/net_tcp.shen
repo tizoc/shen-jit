@@ -22,17 +22,18 @@
   (peers : pair)
   (payload : buffer.view)
   (suffix : buffer.view)
-  (output : buffer.view))
+  (output : buffer.view)
+  (fast-output : buffer.view))
 
 (define clock
   {fixnum --> (vector fixnum)}
   Now -> (fxvector-> (vector 1) 1 Now))
 
-(define setup
-  {fixnum --> pair}
-  Mtu ->
+(define setup-link
+  {fixnum --> fixnum --> pair}
+  Mtu Slots ->
     (let Time (clock 0)
-         L (net-link.make 2 Mtu 0 (freeze (fx<-vector Time 1)))
+         L (net-link.make Slots Mtu 0 (freeze (fx<-vector Time 1)))
          Left (net-link.left L)
          Right (net-link.right L)
          A (net-ipv4.address 192 0 2 1)
@@ -49,6 +50,10 @@
         original <- (buffer.new 43)
         wire <- (buffer.new 43))))
 
+(define setup
+  {fixnum --> pair}
+  Mtu -> (setup-link Mtu 2))
+
 (define expect
   {boolean --> string --> boolean}
   true _ -> true
@@ -58,6 +63,12 @@
   {buffer.view --> fixnum --> (list fixnum) --> buffer.view}
   B _ [] -> B
   B I [X | Rest] -> (fill (buffer.u8-> B I X) (fx+ I 1) Rest))
+
+(define checksum-segment
+  {buffer.view --> fixnum --> buffer.view}
+  B Size ->
+    (do (buffer.u16-be-> B 36 0)
+        (buffer.u16-be-> B 36 (net-ipv4.transport-checksum B 0 6 Size))))
 
 \\ SYN bytes computed independently with Python struct and a one's complement sum.
 (define fixture
@@ -277,6 +288,115 @@
           (expect (= (tcp.recv-into S Out 6) 0) "reordering delivers each byte once")
           (close-pair F false))))
 
+(define send-window-update
+  {net-link.device --> buffer.view --> fixnum --> boolean}
+  R Ack Window ->
+    (do (buffer.u16-be-> Ack 34 Window)
+        (checksum-segment Ack 20)
+        (expect (= (net-link.packet-send R Ack 40) net-link.sent) "queue a window-only update")))
+
+(define below-fast-threshold
+  {pair --> buffer.view --> fixnum --> boolean}
+  _ _ 0 -> true
+  F Wire N ->
+    (do (tcp.poll (pair.server F) 0)
+        (expect (= (tcp.poll (pair.client F) 1) 1) "process one duplicate ACK")
+        (expect (= (net-link.packet-recv-into (pair.right F) Wire) -1) "fewer than three duplicate ACKs do not retransmit")
+        (below-fast-threshold F Wire (fx- N 1))))
+
+(define queue-padding
+  {net-link.device --> buffer.view --> fixnum --> boolean}
+  _ _ 0 -> true
+  D Wire N ->
+    (do (expect (= (net-link.packet-send D Wire 0) net-link.sent) "fill the egress ring")
+        (queue-padding D Wire (fx- N 1))))
+
+(define drain-padding
+  {net-link.device --> buffer.view --> fixnum --> boolean}
+  _ _ 0 -> true
+  D Wire N ->
+    (do (expect (= (net-link.packet-recv-into D Wire) 0) "free a slot in the egress ring")
+        (drain-padding D Wire (fx- N 1))))
+
+(define fast-flight
+  {pair --> buffer.view --> buffer.view --> fixnum --> boolean --> boolean}
+  F Payload Out Gap DropFast ->
+    (let C (pair.client F) S (pair.server F)
+         Left (pair.left F) Right (pair.right F)
+         Retry (pair.original F) Ack (pair.wire F)
+         Start (fx<-vector (pair.time F) 1)
+      (do (expect (= (tcp.send C Payload 15) 15) "queue five segments")
+          (tcp.poll C 0)
+          (tcp.poll C 0)
+          (expect (= (net-link.packet-recv-into Right Retry) 43) "capture the first segment")
+          (expect (= (net-link.packet-recv-into Right Ack) 43) "lose the second segment")
+          (expect (= (buffer.u32-be Ack 24) Gap) "missing segment's sequence")
+          (expect (= (net-link.packet-send Left Retry 43) net-link.sent) "restore the first segment")
+          (tcp.poll C 0)
+          (tcp.poll C 0)
+          (tcp.poll C 0)
+          (expect (= (tcp.poll S 4) 4) "receive all later segments in one batch")
+          (expect (= (net-link.packet-recv-into Left Ack) 40) "capture the first advancing ACK")
+          (expect (= (buffer.u32-be Ack 28) Gap) "first ACK reaches the gap")
+          (expect (= (buffer.u16-be Ack 34) 21) "first ACK advertises space after three bytes")
+          (expect (= (net-link.packet-send Right Ack 40) net-link.sent) "deliver the advancing ACK")
+          (expect (= (tcp.poll C 1) 1) "consume the advancing ACK")
+          (send-window-update Right Ack 22)
+          (send-window-update Right Ack 23)
+          (send-window-update Right Ack 24)
+          (send-window-update Right Ack 21)
+          (expect (= (tcp.poll C 4) 4) "consume window-only updates")
+          (expect (= (net-link.packet-recv-into Right Retry) -1) "window changes do not count as duplicates")
+          (advance F 25)
+          (below-fast-threshold F Retry 2)
+          (tcp.poll S 0)
+          (expect (= (net-link.packet-recv-into Left Ack) 40) "capture the third duplicate ACK")
+          (expect (and (= (buffer.u32-be Ack 28) Gap) (= (buffer.u8 Ack 33) 16)
+                       (= (buffer.u16-be Ack 34) 21)) "the third duplicate is a pure ACK for the gap")
+          (expect (= (net-link.packet-send Right Ack 40) net-link.sent) "deliver the third duplicate ACK")
+          (if DropFast
+              (expect (= (tcp.poll C 1) 1) "process the third duplicate with space available")
+              (do (queue-padding Left Retry 4)
+                  (expect (= (tcp.poll C 1) 1) "process the third duplicate while egress is full")
+                  (drain-padding Right Retry 4)
+                  (tcp.poll C 0)
+                  true))
+          (expect (= (net-link.packet-recv-into Right Retry) 43) "fast retransmission before timeout")
+          (expect (and (= (buffer.u32-be Retry 24) Gap) (= (buffer.u8 Retry 40) 100)
+                       (= (buffer.u8 Retry 41) 101) (= (buffer.u8 Retry 42) 102)) "retransmit only the missing segment")
+          (expect (= (fx- (fx<-vector (pair.time F) 1) Start) 25) "fast retransmit fires at 25 ms")
+          (expect (= (net-link.packet-send Right Ack 40) net-link.sent) "repeat the duplicate ACK")
+          (expect (= (net-link.packet-send Right Ack 40) net-link.sent) "repeat again")
+          (expect (= (net-link.packet-send Right Ack 40) net-link.sent) "repeat a third time")
+          (expect (= (tcp.poll C 4) 3) "consume extra duplicates for the same gap")
+          (expect (= (net-link.packet-recv-into Right Ack) -1) "fast retransmit is latched until the ACK advances")
+          (if DropFast
+              (do (advance F 974)
+                  (tcp.poll C 0)
+                  (expect (= (net-link.packet-recv-into Right Ack) -1) "lost fast retry waits for the original deadline")
+                  (advance F 1)
+                  (tcp.poll C 0)
+                  (expect (= (net-link.packet-recv-into Right Retry) 43) "timeout recovers a lost fast retry")
+                  (expect (= (buffer.u32-be Retry 24) Gap) "timeout restarts at the same oldest byte"))
+              true)
+          (expect (= (net-link.packet-send Left Retry 43) net-link.sent) "deliver the retry")
+          (expect (= (tcp.poll S 4) 1) "fill the gap with one segment")
+          (expect (= (tcp.recv-into S Out 15) 15) "the entire flight becomes readable")
+          (expect (buffer.equal? Out Payload) "recovered bytes remain ordered")
+          (expect (= (tcp.recv-into S Out 15) 0) "no duplicate delivery")
+          (expect (= (tcp.poll C 4) 1) "cumulative ACK retires the flight")
+          (expect (= (net-link.packet-recv-into Right Ack) -1) "no suffix is replayed")
+          (tcp.poll S 0)
+          (expect (= (tcp.poll C 4) 1) "advertise the full window after reading"))))
+
+(define fast-loss
+  {pair --> buffer.view --> buffer.view --> boolean}
+  F Payload Out ->
+    (do (open-pair (pair.client F) (pair.server F))
+        (fast-flight F Payload Out 2 false)
+        (fast-flight F Payload Out 17 true)
+        (close-pair F false)))
+
 (define exercise
   {pair --> fixnum --> boolean --> boolean}
   _ 0 _ -> true
@@ -290,10 +410,11 @@
   {fixnum --> window-case}
   Mtu ->
     (:window-case
-      peers <- (setup Mtu)
-      payload <- (buffer.from-string "abcdefghi")
+      peers <- (setup-link Mtu 4)
+      payload <- (buffer.from-string "abcdefghijklmno")
       suffix <- (buffer.from-string "defghi")
-      output <- (buffer.new 6)))
+      output <- (buffer.new 6)
+      fast-output <- (buffer.new 15)))
 
 (define exercise-window
   {window-case --> fixnum --> boolean}
@@ -301,6 +422,7 @@
   W N ->
     (and (window-loss (window-case.peers W) (window-case.payload W) (window-case.suffix W) (window-case.output W))
          (reorder-window (window-case.peers W) (window-case.payload W) (window-case.suffix W) (window-case.output W))
+         (fast-loss (window-case.peers W) (window-case.payload W) (window-case.fast-output W))
          (exercise-window W (fx- N 1))))
 
 (define verify
@@ -398,12 +520,6 @@
            (tcp.poll S 2)
            (expect (= (tcp.recv-into S Tail 6) 6) "read across the receive ring boundary")
            (expect (buffer.equal? Tail Suffix) "ring wrap preserves bytes"))))
-
-(define checksum-segment
-  {buffer.view --> fixnum --> buffer.view}
-  B Size ->
-    (do (buffer.u16-be-> B 36 0)
-        (buffer.u16-be-> B 36 (net-ipv4.transport-checksum B 0 6 Size))))
 
 (define overlapping-replay
   {fixnum --> boolean}
