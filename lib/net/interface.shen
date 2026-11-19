@@ -23,6 +23,21 @@
 
 \\ A packet for one of the host's addresses, for a group it listens to, or for an address it is still
 \\ checking for duplicates.
+\\ RFC 4443 3: the errors this host sends over IPv6, port unreachable, reassembly timed out, and the
+\\ header walk's parameter problems; and RFC 792's over IPv4.
+(datatype icmp-errors
+  if (element? Error [port-unreachable reassembly-timeout])
+  _________________________________________________________
+  Error : icmp6-error;
+
+  Error : net-ipv6-headers.parameter-problem;
+  ___________________________________________
+  Error : icmp6-error;
+
+  if (element? Error [protocol-unreachable port-unreachable])
+  ___________________________________________________________
+  Error : icmp-error;)
+
 (datatype scopes
   if (element? Scope [unicast multicast tentative])
   _________________________________________________
@@ -339,16 +354,22 @@
           (let Out (net-link.ring.data Tx)
                At (net-link.tail-offset Tx)
                Body (fx+ At (wire.ipv4.size))
-            (do (net-ipv4.write-header Out At N 1 IP (wire.ipv4.source B I))
+            (do (net-ipv4.write-header Out At N (wire.icmp-protocol) IP (wire.ipv4.source B I))
                 (write-layout wire.icmp Out Body (type 0) (code 0))                 \\ The reply,
                 (buffer.copy-into! Out (wire.icmp.rest-at Body) B (wire.icmp.rest-at Start) (fx- Count 4))  \\ with the same rest.
                 (wire.icmp.checksum-> Out Body (net-ipv4.packet-checksum Out Body Count))
                 (net-link.publish Tx N (net-link.delivery D Now))))
           false)))
 
+\\ The code of an ICMP destination unreachable.
+(define unreachable-code
+  {icmp-error --> fixnum}
+  protocol-unreachable -> 2
+  port-unreachable -> 3)
+
 (define unreachable
-  {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
-  F B I N Code Now ->
+  {interface --> buffer.view --> fixnum --> fixnum --> icmp-error --> fixnum --> boolean}
+  F B I N Error Now ->
     (let D (interface.device F)
          Tx (net-link.device.tx D)
          Headers (fx+ (wire.ipv4.size) (wire.icmp.size))
@@ -358,8 +379,8 @@
           (let Out (net-link.ring.data Tx)
                At (net-link.tail-offset Tx)
                Body (fx+ At (wire.ipv4.size))
-            (do (net-ipv4.write-header Out At Count 1 (interface.ip F) (wire.ipv4.source B I))
-                (write-layout wire.icmp Out Body (type 3) (code Code))             \\ Destination unreachable.
+            (do (net-ipv4.write-header Out At Count (wire.icmp-protocol) (interface.ip F) (wire.ipv4.source B I))
+                (write-layout wire.icmp Out Body (type 3) (code (unreachable-code Error)))   \\ Destination unreachable.
                 (buffer.copy-into! Out (fx+ Body (wire.icmp.size)) B I Quote)
                 (wire.icmp.checksum-> Out Body (net-ipv4.packet-checksum Out Body (fx+ Quote (wire.icmp.size))))
                 (net-link.publish Tx Count (net-link.delivery D Now))))
@@ -369,7 +390,7 @@
   {interface --> (list udp.inbox) --> fixnum --> buffer.view --> fixnum --> fixnum --> fixnum -->
    boolean --> boolean}
   F [] _ B I N Now Multicast ->
-    (and (not Multicast) (udp.valid-datagram? B I N) (unreachable F B I N 3 Now))
+    (and (not Multicast) (udp.valid-datagram? B I N) (unreachable F B I N port-unreachable Now))
   F [Q | Rest] Port B I N Now Multicast ->
     (if (= (udp.peer.port (udp.inbox.peer Q)) Port)
         (if Multicast (udp.inbox-ingress-multicast Q B I N) (udp.inbox-ingress Q B I N))
@@ -395,15 +416,15 @@
   F B I N Now Multicast ->
     (let Proto (wire.ipv4.protocol B I)
          T (fx+ I (wire.ipv4.size))
-      (cases (and (= Proto 17) (fx>= N (fx+ (wire.ipv4.size) (wire.udp.size))))
+      (cases (and (= Proto (wire.udp-protocol)) (fx>= N (fx+ (wire.ipv4.size) (wire.udp.size))))
                (udp-ingress F (interface.udp-bindings F) (wire.udp.destination-port B T) B I N Now Multicast)
              Multicast false                                     \\ A group's datagrams are UDP.
-             (and (= Proto 6) (fx>= N (fx+ (wire.ipv4.size) (wire.tcp.size))))
+             (and (= Proto (wire.tcp-protocol)) (fx>= N (fx+ (wire.ipv4.size) (wire.tcp.size))))
                (tcp.table-ingress (interface.listener F) B I N Now
                                   (list-has-port? (interface.tcp-ports F) (wire.tcp.destination-port B T)))
-             (= Proto 1) (icmp-ingress F B I N Now)
-             (or (= Proto 6) (= Proto 17)) false
-             true (unreachable F B I N 2 Now))))
+             (= Proto (wire.icmp-protocol)) (icmp-ingress F B I N Now)
+             (or (= Proto (wire.tcp-protocol)) (= Proto (wire.udp-protocol))) false
+             true (unreachable F B I N protocol-unreachable Now))))
 
 (define dhcp-broadcast
   {(list udp.inbox) --> buffer.view --> fixnum --> fixnum --> boolean}
@@ -429,13 +450,13 @@
          (net-ipv4.unicast? (wire.ipv4.source B I))
          (let Dst (wire.ipv4.destination B I)
               T (fx+ I (wire.ipv4.size))
-           (cases (and (= Dst 4294967295) (fx>= N (fx+ (wire.ipv4.size) (wire.udp.size)))
-                       (= (wire.ipv4.protocol B I) 17)
+           (cases (and (= Dst (net-ipv4.broadcast)) (fx>= N (fx+ (wire.ipv4.size) (wire.udp.size)))
+                       (= (wire.ipv4.protocol B I) (wire.udp-protocol))
                        (= (wire.udp.source-port B T) 67) (= (wire.udp.destination-port B T) 68))   \\ A DHCP server's broadcast.
                     (dhcp-broadcast (interface.udp-bindings F) B I N)
                   (= Dst (interface.ip F))
                     (ipv4-deliver F B I N Now false)
-                  (and (= (wire.ipv4.protocol B I) 17)
+                  (and (= (wire.ipv4.protocol B I) (wire.udp-protocol))
                        (multicast-from4? F Dst (wire.ipv4.source B I)))
                     (ipv4-deliver F B I N Now true)
                   true false))))
@@ -444,7 +465,7 @@
   {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   F B I N Now ->
     (and (fx>= N (wire.ipv4.size))
-         (if (= (wire.ipv4.protocol B I) 2)                              \\ IGMP.
+         (if (= (wire.ipv4.protocol B I) (wire.igmp-protocol))                              \\ IGMP.
              (let Groups (interface.groups F)
                (and (not (= Groups [])) (net-multicast.ingress4 (membership-of Groups) B I N Now)))
              (ipv4-data F B I N Now))))
@@ -468,10 +489,10 @@
           (let Out (net-link.ring.data Tx)
                At (net-link.tail-offset Tx)
                ICMP (fx+ At (wire.ipv6.size))
-            (do (net-ipv6.write-header Out At Count 58 64 Source Remote)
+            (do (net-ipv6.write-header Out At Count (wire.icmp6-protocol) 64 Source Remote)
                 (write-layout wire.icmp Out ICMP (type Type) (code Code) (rest Detail))
                 (buffer.copy-into! Out (fx+ ICMP (wire.icmp.size)) B Start Bytes)
-                (wire.icmp.checksum-> Out ICMP (net-ipv6.transport-checksum Out At 58 (fx+ Bytes (wire.icmp.size))))
+                (wire.icmp.checksum-> Out ICMP (net-ipv6.transport-checksum Out At (wire.icmp6-protocol) (fx+ Bytes (wire.icmp.size))))
                 (net-link.publish Tx Count (net-link.delivery D Now))))
           false)))
 
@@ -486,14 +507,30 @@
           (ipv6-state.error-tokens-> S Tokens)
           Tokens)))
 
+\\ An ICMPv6 error's type and code.
+(define error-type
+  {icmp6-error --> fixnum}
+  port-unreachable -> 1                                                  \\ Destination unreachable.
+  reassembly-timeout -> 3                                                \\ Time exceeded.
+  _ -> 4)                                                                \\ Parameter problem.
+
+(define error-code
+  {icmp6-error --> fixnum}
+  port-unreachable -> 4
+  reassembly-timeout -> 1
+  net-ipv6-headers.erroneous-field -> 0
+  net-ipv6-headers.unrecognized-next-header -> 1
+  net-ipv6-headers.unrecognized-option -> 2
+  net-ipv6-headers.incomplete-chain -> 3)
+
 (define error6
   {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum -->
-   fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
-  F S Local B I N Type Code Pointer Now ->
+   fixnum --> icmp6-error --> fixnum --> fixnum --> boolean}
+  F S Local B I N Error Pointer Now ->
     (let Remote (net-ipv6.read-address (ipv6-state.remote S) B (wire.ipv6.source-at I))
       (and (net-ipv6.unicast? Remote) (net-ipv6-headers.can-report? B I N)
            (fx> (refill-errors S Now) 0)
-           (emit-icmp6 F Local Remote B I (smaller N 1232) Type Code Pointer Now)
+           (emit-icmp6 F Local Remote B I (smaller N (net-ipv6.error-quote)) (error-type Error) (error-code Error) Pointer Now)
            (do (ipv6-state.error-tokens-> S (fx- (ipv6-state.error-tokens S) 1)) true))))
 
 (define icmp6
@@ -502,7 +539,7 @@
   F Local Remote B I N At Now ->
     (let Count (fx- (fx+ I N) At)
          Body (fx+ At (wire.icmp.size))
-      (and (fx>= Count (wire.icmp.size)) (= (net-ipv6.transport-checksum-at B I At 58 Count) 0)
+      (and (fx>= Count (wire.icmp.size)) (= (net-ipv6.transport-checksum-at B I At (wire.icmp6-protocol) Count) 0)
            (let Type (wire.icmp.type B At)
                 Code (wire.icmp.code B At)
              (cases (and (= Type 128) (= Code 0))                \\ An echo request, answered with its rest.
@@ -518,7 +555,7 @@
    buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
   F S [] _ Local B I N At Now Multicast ->
     (and (not Multicast) (udp.valid-datagram6-at? B I N At)
-         (error6 F S Local B I N 1 4 0 Now))                       \\ Port unreachable.
+         (error6 F S Local B I N port-unreachable 0 Now))
   F S [Q | Rest] Port Local B I N At Now Multicast ->
     (if (= (udp.peer.port (udp.inbox.peer Q)) Port)
         (udp.inbox-ingress6-at Q B I N At)
@@ -540,21 +577,21 @@
          At (net-ipv6-headers.cursor.at Cursor)
          Count (fx- (fx+ I N) At)
          H (ipv6-state.ndp S)
-      (or (and (= Proto 58) (not Fragmented)
+      (or (and (= Proto (wire.icmp6-protocol)) (not Fragmented)
                (or (net-ndp.ingress-at H B I N At Now)
                    (and (= Scope multicast) (mld-ingress (interface.groups F) S B I N At Now))))
           (and (or (= Scope unicast) (= Scope multicast))
                (let Remote (net-ipv6.read-address (ipv6-state.remote S) B (wire.ipv6.source-at I))
                  (and (net-ipv6.unicast? Remote)
-                      (cases (and (= Proto 17) (fx>= Count (wire.udp.size))
+                      (cases (and (= Proto (wire.udp-protocol)) (fx>= Count (wire.udp.size))
                                   (or (= Scope unicast) (multicast-from6? F B I)))
                                (udp-ingress6 F S (interface.udp-bindings F) (wire.udp.destination-port B At)
                                              Local B I N At Now (= Scope multicast))
                              (not (= Scope unicast)) false
-                             (and (= Proto 6) (fx>= Count (wire.tcp.size)))
+                             (and (= Proto (wire.tcp-protocol)) (fx>= Count (wire.tcp.size)))
                                (tcp.table-ingress6-at (interface.listener F) B I N At Now
                                  (list-has-port? (interface.tcp-ports F) (wire.tcp.destination-port B At)) Local)
-                             (= Proto 58) (icmp6 F Local Remote B I N At Now)
+                             (= Proto (wire.icmp6-protocol)) (icmp6 F Local Remote B I N At Now)
                              true false)))))))
 
 (define complain6
@@ -564,14 +601,14 @@
     (let H (ipv6-state.ndp S)
          Cursor (ipv6-state.headers S)
          Pointer (fx- (net-ipv6-headers.cursor.at Cursor) I)
-         Code (net-ipv6-headers.cursor.problem-code Cursor)
+         Problem (net-ipv6-headers.cursor.problem Cursor)
       (cases (= Scope unicast)
-               (error6 F S Local B I N 4 Code Pointer Now)
+               (error6 F S Local B I N Problem Pointer Now)
              (and (= Scope multicast) (net-ipv6-headers.cursor.multicast-error Cursor))
                (cases (net-ndp.local-ready? H)
-                        (error6 F S (net-ndp.host.link-local H) B I N 4 Code Pointer Now)
+                        (error6 F S (net-ndp.host.link-local H) B I N Problem Pointer Now)
                       (net-ndp.global-ready? H Now)
-                        (error6 F S (net-ndp.host.global H) B I N 4 Code Pointer Now)
+                        (error6 F S (net-ndp.host.global H) B I N Problem Pointer Now)
                       true false)
              true false)))
 
@@ -580,14 +617,14 @@
   Cursor B End ->
     (let At (net-ipv6-headers.cursor.at Cursor)
          Left (fx- End At)
-      (if (= (net-ipv6-headers.cursor.protocol Cursor) 6)
+      (if (= (net-ipv6-headers.cursor.protocol Cursor) (wire.tcp-protocol))
           (tcp.header-fits? B At Left)
           (fx>= Left 8))))
 
 (define fragmented-discovery?
   {net-ipv6-headers.cursor --> buffer.view --> boolean}
   Cursor B ->
-    (and (= (net-ipv6-headers.cursor.protocol Cursor) 58)
+    (and (= (net-ipv6-headers.cursor.protocol Cursor) (wire.icmp6-protocol))
          (let Kind (wire.icmp.type B (net-ipv6-headers.cursor.at Cursor))
            (and (fx>= Kind 133) (fx<= Kind 137)))))
 
@@ -612,9 +649,9 @@
       (cases (= Next net-ipv6-headers.problem) (complain6 F S Local B I N Now Scope)
              (or (= Next net-ipv6-headers.incomplete)
                  (and (= Next net-ipv6-headers.upper) (not (upper-fits? Cursor B (fx+ I N)))))
-               (and (= Scope unicast) (error6 F S Local B I N 4 3 0 Now))
+               (and (= Scope unicast) (error6 F S Local B I N net-ipv6-headers.incomplete-chain 0 Now))
              (and (= Next net-ipv6-headers.upper) (not (fragmented-discovery? Cursor B))
-                  (or (= Scope unicast) (= (net-ipv6-headers.cursor.protocol Cursor) 17)))
+                  (or (= Scope unicast) (= (net-ipv6-headers.cursor.protocol Cursor) (wire.udp-protocol))))
                (reassemble6 F S Local B I N Frag Prev Now Scope)
              true false)))
 
@@ -640,9 +677,9 @@
                              true false))
                   (= Bytes 0) false
                   (and More (not (= (fxremainder Bytes 8) 0)))
-                    (and (= Scope unicast) (error6 F S Local B I N 4 0 (wire.ipv6.payload-length-at 0) Now))
+                    (and (= Scope unicast) (error6 F S Local B I N net-ipv6-headers.erroneous-field (wire.ipv6.payload-length-at 0) Now))
                   (fx> (fx+ Offset Bytes) 65535)
-                    (and (= Scope unicast) (error6 F S Local B I N 4 0 (fx- (wire.ipv6-fragment.offset-at Frag) I) Now))
+                    (and (= Scope unicast) (error6 F S Local B I N net-ipv6-headers.erroneous-field (fx- (wire.ipv6-fragment.offset-at Frag) I) Now))
                   (= Offset 0) (first-fragment F S Local B I N Frag Prev Now Scope)
                   true (reassemble6 F S Local B I N Frag Prev Now Scope)))))
 
@@ -690,9 +727,9 @@
                    Local (net-ndp.host.link-local H)
                    Global (net-ndp.host.global H)
                 (cases (and (net-ndp.local-ready? H) (net-ipv6.address-at? Local Packet (wire.ipv6.destination-at 0)))
-                         (error6 F S Local Packet 0 Bytes 3 1 0 Now)
+                         (error6 F S Local Packet 0 Bytes reassembly-timeout 0 Now)
                        (and (net-ndp.global-ready? H Now) (net-ipv6.address-at? Global Packet (wire.ipv6.destination-at 0)))
-                         (error6 F S Global Packet 0 Bytes 3 1 0 Now)
+                         (error6 F S Global Packet 0 Bytes reassembly-timeout 0 Now)
                        true false))
               false)
           (expire-slots6 F S Table (fx- Index 1) Now))))

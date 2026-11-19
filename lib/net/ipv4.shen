@@ -4,7 +4,7 @@
   (use shen-jit)
   (use net-wire => wire)
   (import layout write-layout)
-  (export address unicast? multicast? multicast-mac write-header write-header-ttl header-length valid-envelope? valid? valid-header? fragmented?
+  (export address broadcast unicast? multicast? multicast-mac write-header write-header-ttl header-length valid-envelope? valid? valid-header? fragmented?
           packet-checksum transport-checksum sum16 checksum)
 
 (define octet
@@ -21,6 +21,11 @@
 (define unicast?
   {fixnum --> boolean}
   IP -> (and (fx>= IP 16777216) (fx< IP 3758096384)))
+
+\\ 255.255.255.255, the limited broadcast address.
+(define broadcast
+  {--> fixnum}
+  -> 4294967295)
 
 (define multicast?
   {fixnum --> boolean}

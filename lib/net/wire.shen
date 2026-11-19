@@ -215,4 +215,16 @@
   (hardware-length 8) (protocol-length 8) (operation 16)
   (sender-hardware 48) (sender-protocol 32)
   (target-hardware 48) (target-protocol 32))
+
+\\ What the fields hold. IANA's protocol numbers, which IPv4's protocol field and IPv6's next header
+\\ give, and the ether types of IEEE 802.3.
+(define icmp-protocol {--> fixnum} -> 1)
+(define igmp-protocol {--> fixnum} -> 2)
+(define tcp-protocol {--> fixnum} -> 6)
+(define udp-protocol {--> fixnum} -> 17)
+(define icmp6-protocol {--> fixnum} -> 58)
+
+(define ipv4-type {--> fixnum} -> 2048)
+(define arp-type {--> fixnum} -> 2054)
+(define ipv6-type {--> fixnum} -> 34525)
 )

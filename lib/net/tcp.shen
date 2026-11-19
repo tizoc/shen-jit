@@ -149,16 +149,22 @@
 (define transport-checksum
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
   B I IpBytes N ->
-    (if (= IpBytes (wire.ipv4.size)) (net-ipv4.transport-checksum B I 6 N)
-        (net-ipv6.transport-checksum B I 6 N)))
+    (if (= IpBytes (wire.ipv4.size)) (net-ipv4.transport-checksum B I (wire.tcp-protocol) N)
+        (net-ipv6.transport-checksum B I (wire.tcp-protocol) N)))
 
 (define endpoint?
   {fixnum --> fixnum --> boolean}
   IP Port -> (and (net-ipv4.unicast? IP) (fx>= Port 1) (fx<= Port 65535)))
 
+\\ RFC 9293 3.7.1: the size a peer may send when it offers none, behind IPv4 or IPv6. This end offers
+\\ IPv4's default, or less on a smaller link.
+(define default-mss
+  {fixnum --> fixnum}
+  IpBytes -> (if (= IpBytes (wire.ipv4.size)) 536 1220))
+
 (define peer-mss
   {net-link.device --> fixnum}
-  D -> (smaller 536 (fx- (net-link.mtu D) 40)))
+  D -> (smaller (default-mss (wire.ipv4.size)) (fx- (net-link.mtu D) (fx+ (wire.ipv4.size) (wire.tcp.size)))))
 
 (define scale-for
   {fixnum --> fixnum --> fixnum}
@@ -577,8 +583,8 @@
          TcpBytes (fx+ (fx+ Count (wire.tcp.size)) Options)
          Size (fx+ TcpBytes IpBytes)
       (do (if (= IpBytes (wire.ipv4.size))
-                (net-ipv4.write-header B I Size 6 (peer.local-ip P) (peer.remote-ip P))
-                (net-ipv6.write-header B I Size 6 64 (peer.local-ip6 P) (peer.remote-ip6 P)))
+                (net-ipv4.write-header B I Size (wire.tcp-protocol) (peer.local-ip P) (peer.remote-ip P))
+                (net-ipv6.write-header B I Size (wire.tcp-protocol) 64 (peer.local-ip6 P) (peer.remote-ip6 P)))
           (write-segment P B T Flags Seq At Count Options)
           (wire.tcp.checksum-> B T (transport-checksum B I IpBytes TcpBytes))
           (net-link.publish R Size Delivery)
@@ -610,10 +616,19 @@
                  (peer.rx-duplicate-acks-> P 0)
                  true))
 
+\\ RFC 6298 2.4 and 2.5: a retransmission timeout is at least a second and at most a minute.
+(define min-rto
+  {--> fixnum}
+  -> 1000)
+
+(define max-rto
+  {--> fixnum}
+  -> 60000)
+
 (define backoff
   {peer --> fixnum --> boolean}
   P Now ->
-    (let Rto (smaller 60000 (fx* 2 (peer.tx-rto P)))
+    (let Rto (smaller (max-rto) (fx* 2 (peer.tx-rto P)))
       (do (peer.tx-rto-> P Rto)
           (peer.tx-due-> P (fx+ Now Rto))
           (peer.tx-retries-> P (fx+ (peer.tx-retries P) 1))
@@ -907,7 +922,7 @@
     (let T (fx+ I (wire.ipv4.size))
          Count (fx- N (wire.ipv4.size))
       (and (net-ipv4.valid? B I N 6) (valid-tcp? B T Count)
-           (= (net-ipv4.transport-checksum B I 6 Count) 0))))
+           (= (net-ipv4.transport-checksum B I (wire.tcp-protocol) Count) 0))))
 
 (define addressed-to?
   {buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
@@ -941,7 +956,7 @@
 (define record-rtt
   {peer --> fixnum --> boolean}
   P Ms ->
-    (let Sample (fx* (larger 1 (smaller 60000 Ms)) 8)
+    (let Sample (fx* (larger 1 (smaller (max-rto) Ms)) 8)
          Previous (peer.srtt P)
          Delta (fx- Previous Sample)
          Error (larger Delta (fx- 0 Delta))
@@ -951,7 +966,7 @@
          Rto (fxquotient (fx+ (fx+ Smoothed (larger 8 (fx* Variation 4))) 7) 8)
       (do (peer.srtt-> P Smoothed)
           (peer.rttvar-> P Variation)
-          (peer.tx-rto-> P (larger 1000 (smaller 60000 Rto)))
+          (peer.tx-rto-> P (larger (min-rto) (smaller (max-rto) Rto)))
           true)))
 
 (define take-rtt-sample
@@ -1350,7 +1365,7 @@
     (let Seq (segment.sequence Seg)
          Offered (segment.mss Seg)
          Limit (smaller (peer.mss P) (fx- (peer.path-mtu P) (minimum-header P)))
-         Mss (smaller Limit (if (fx>= Offered 0) Offered (if (= (peer.ip-header P) (wire.ipv4.size)) 536 1220)))
+         Mss (smaller Limit (if (fx>= Offered 0) Offered (default-mss (peer.ip-header P))))
          Sacked (and (sack-capable? P) (segment.sack-permitted Seg))
       (do (peer.recv-next-> P (seq-add Seq 1))
           (remember-window P Seq (segment.acknowledgement Seg) (segment.window Seg))
@@ -1660,8 +1675,8 @@
          I (net-link.tail-offset Tx)
          T (fx+ I H)
       (do (if (= H (wire.ipv4.size))
-              (net-ipv4.write-header B I Size 6 (listener.ip L) (wait-entry.remote4 W))
-              (net-ipv6.write-header B I Size 6 64 (wait-entry.local6 W) (wait-entry.remote6 W)))
+              (net-ipv4.write-header B I Size (wire.tcp-protocol) (listener.ip L) (wait-entry.remote4 W))
+              (net-ipv6.write-header B I Size (wire.tcp-protocol) 64 (wait-entry.local6 W) (wait-entry.remote6 W)))
           (write-layout wire.tcp B T
             (source-port (wait-entry.local-port W)) (destination-port (wait-entry.remote-port W))
             (sequence (seq-number (wait-entry.send-next W)))
@@ -1873,10 +1888,10 @@
       (if (reset-allowed? Tx B T)
           (let Out (net-link.ring.data Tx)
                At (net-link.tail-offset Tx)
-            (do (net-ipv4.write-header Out At (headers4) 6 (listener.ip L) IP)
+            (do (net-ipv4.write-header Out At (headers4) (wire.tcp-protocol) (listener.ip L) IP)
                 (write-reset Out (fx+ At (wire.ipv4.size)) B T Count)
                 (wire.tcp.checksum-> Out (fx+ At (wire.ipv4.size))
-                                     (net-ipv4.transport-checksum Out At 6 (wire.tcp.size)))
+                                     (net-ipv4.transport-checksum Out At (wire.tcp-protocol) (wire.tcp.size)))
                 (net-link.publish Tx (headers4) (net-link.delivery D Now))))
           false)))
 
@@ -1889,10 +1904,10 @@
       (if (reset-allowed? Tx B T)
           (let Out (net-link.ring.data Tx)
                At (net-link.tail-offset Tx)
-            (do (net-ipv6.write-header Out At (headers6) 6 64 LocalIP RemoteIP)
+            (do (net-ipv6.write-header Out At (headers6) (wire.tcp-protocol) 64 LocalIP RemoteIP)
                 (write-reset Out (fx+ At (wire.ipv6.size)) B T Count)
                 (wire.tcp.checksum-> Out (fx+ At (wire.ipv6.size))
-                                     (net-ipv6.transport-checksum Out At 6 (wire.tcp.size)))
+                                     (net-ipv6.transport-checksum Out At (wire.tcp-protocol) (wire.tcp.size)))
                 (net-link.publish Tx (headers6) (net-link.delivery D Now))))
           false)))
 
@@ -1940,7 +1955,7 @@
 (define table-ingress6
   {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> net-ipv6.address --> boolean}
   L B I Count Now Listening LocalIP ->
-    (and (fx>= Count (fx+ (wire.ipv6.size) (wire.tcp.size))) (= (wire.ipv6.next-header B I) 6)
+    (and (fx>= Count (fx+ (wire.ipv6.size) (wire.tcp.size))) (= (wire.ipv6.next-header B I) (wire.tcp-protocol))
          (table-ingress6-at L B I Count (fx+ I (wire.ipv6.size)) Now Listening LocalIP)))
 
 \\ A segment at T, after the base header and any extension headers.
@@ -1950,7 +1965,7 @@
   L B I Count T Now Listening LocalIP ->
     (let Bytes (fx- (fx+ I Count) T)
       (and (fx>= T (fx+ I (wire.ipv6.size))) (net-ipv6.valid-header? B I Count) (valid-tcp? B T Bytes)
-           (= (net-ipv6.transport-checksum-at B I T 6 Bytes) 0)
+           (= (net-ipv6.transport-checksum-at B I T (wire.tcp-protocol) Bytes) 0)
            (net-ipv6.address-at? LocalIP B (wire.ipv6.destination-at I))
            (let Remote (net-ipv6.read-address (listener.input-ip6 L) B (wire.ipv6.source-at I))
                 Port (wire.tcp.source-port B T)
@@ -2020,7 +2035,7 @@
   {listener --> (list fixnum) --> net-ipv6.address --> net-ipv6.address --> fixnum --> fixnum}
   L Reserved LocalIP RemoteIP Port ->
     (if (and (net-ipv6.unicast? LocalIP) (net-ipv6.unicast? RemoteIP)
-             (fx>= Port 1) (fx<= Port 65535) (fx>= (net-link.mtu (listener.device L)) 1280))
+             (fx>= Port 1) (fx<= Port 65535) (fx>= (net-link.mtu (listener.device L)) (net-ipv6.minimum-mtu)))
         (let I (find-vacant L 1)
              Local (if (= I 0) (type 0 fixnum) (claim-port L Reserved 16384))
           (if (= Local 0) 0
@@ -2292,7 +2307,7 @@
     (let T (fx+ I (wire.ipv4.size))                       \\ The quote: our IP header, then 8 bytes of TCP.
       (and (fx>= Count (fx+ (wire.ipv4.size) 8))
            (= (wire.ipv4.version B I) 4) (= (wire.ipv4.header-length B I) 5)
-           (= (wire.ipv4.protocol B I) 6)
+           (= (wire.ipv4.protocol B I) (wire.tcp-protocol))
            (= (wire.ipv4.source B I) (listener.ip L))
            (= (net-ipv4.packet-checksum B I (wire.ipv4.size)) 0)
            (fx>= Mtu 68) (fx< Mtu (wire.ipv4.total-length B I))
@@ -2306,7 +2321,7 @@
     (let T (fx+ I (wire.ipv6.size))                       \\ The quote: our IPv6 header, then TCP's first 8 bytes.
       (and (fx>= Count (fx+ (wire.ipv6.size) 8))
            (= (wire.ipv6.version B I) 6)
-           (= (wire.ipv6.next-header B I) 6)
+           (= (wire.ipv6.next-header B I) (wire.tcp-protocol))
            (net-ipv6.address-at? LocalIP B (wire.ipv6.source-at I))
            (fx>= Mtu 1280) (fx< Mtu (fx+ (wire.ipv6.size) (wire.ipv6.payload-length B I)))
            (let Remote (net-ipv6.read-address (listener.input-ip6 L) B (wire.ipv6.destination-at I))

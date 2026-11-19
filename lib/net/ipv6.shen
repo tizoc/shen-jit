@@ -8,7 +8,7 @@
   (import layout write-layout)
   (export address make-address address.a address.b address.c address.d copy-address read-address
           write-address compose-prefix same? address-at? unspecified? multicast? multicast-at? scope unicast? link-local?
-          solicited-node solicited-node? multicast-mac-at
+          solicited-node solicited-node? multicast-mac-at link-group minimum-mtu error-quote
           valid-header? write-header transport-checksum transport-checksum-at)
 
 (defstruct address
@@ -98,11 +98,29 @@
   {address --> boolean}
   A -> (and (not (unspecified? A)) (not (multicast? A))))
 
+\\ RFC 4291 2.7: ff02::, the first word of a group of link scope, and the group ff02::Id.
+(define link-scope
+  {--> fixnum}
+  -> 4278321152)
+
+(define link-group
+  {fixnum --> address}
+  Id -> (make-address (link-scope) 0 0 Id))
+
+\\ RFC 8200 5: every link carries 1,280 bytes; RFC 4443 2.4: an error quotes what fits in them.
+(define minimum-mtu
+  {--> fixnum}
+  -> 1280)
+
+(define error-quote
+  {--> fixnum}
+  -> (fx- (minimum-mtu) (fx+ (wire.ipv6.size) (wire.icmp.size))))
+
 (define solicited-node
   {address --> address --> address}
   Out Target ->
     (let Low (fx+ 4278190080 (shen-jit.bit-and (address.d Target) 16777215))
-      (do (address.a-> Out 4278321152)
+      (do (address.a-> Out (link-scope))
           (address.b-> Out 0)
           (address.c-> Out 1)
           (address.d-> Out Low))))
@@ -110,7 +128,7 @@
 (define solicited-node?
   {address --> address --> boolean}
   Group Target ->
-    (and (= (address.a Group) 4278321152) (= (address.b Group) 0)
+    (and (= (address.a Group) (link-scope)) (= (address.b Group) 0)
          (= (address.c Group) 1)
          (= (address.d Group) (fx+ 4278190080 (shen-jit.bit-and (address.d Target) 16777215)))))
 

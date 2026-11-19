@@ -128,7 +128,7 @@
 
 (define udp-checksum
   {buffer.view --> fixnum --> fixnum --> fixnum}
-  B I N -> (net-ipv4.transport-checksum B I 17 N))
+  B I N -> (net-ipv4.transport-checksum B I (wire.udp-protocol) N))
 
 (define write-packet
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum -->
@@ -136,8 +136,8 @@
   B I Src SrcPort Dst DstPort Payload Start N ->
     (let Length (fx+ N (wire.udp.size))
          T (datagram4 I)
-      (do (if (net-ipv4.multicast? Dst) (net-ipv4.write-header-ttl B I (fx+ N (headers4)) 17 Src Dst 1)
-              (net-ipv4.write-header B I (fx+ N (headers4)) 17 Src Dst))
+      (do (if (net-ipv4.multicast? Dst) (net-ipv4.write-header-ttl B I (fx+ N (headers4)) (wire.udp-protocol) Src Dst 1)
+              (net-ipv4.write-header B I (fx+ N (headers4)) (wire.udp-protocol) Src Dst))
           (write-layout wire.udp B T (source-port SrcPort) (destination-port DstPort) (length Length))
           (buffer.copy-into! B (fx+ T (wire.udp.size)) Payload Start N)
           (wire.udp.checksum-> B T (as-sent (udp-checksum B I Length))))))
@@ -179,17 +179,17 @@
                                 (fx>= (net-ipv6.scope Destination) 2)                     \\ or wider.
                                 (fx<= (net-ipv6.scope Destination) 14)))
                        (port? Port)
-                       (fx>= (net-link.mtu D) 1280))) (error "udp: invalid IPv6 endpoints or MTU")
+                       (fx>= (net-link.mtu D) (net-ipv6.minimum-mtu)))) (error "udp: invalid IPv6 endpoints or MTU")
              (fx> Size (net-link.mtu D)) too-large
              (net-link.full? Tx) would-block
              true (let Delivery (net-link.delivery D (net-link.now D))
                        B (net-link.ring.data Tx)
                        I (net-link.tail-offset Tx)
                        T (datagram6 I)
-                    (do (net-ipv6.write-header B I Size 17 (if (net-ipv6.multicast? Destination) 1 64) Source Destination)
+                    (do (net-ipv6.write-header B I Size (wire.udp-protocol) (if (net-ipv6.multicast? Destination) 1 64) Source Destination)
                         (write-layout wire.udp B T (source-port (peer.port P)) (destination-port Port) (length Length))
                         (buffer.copy-into! B (fx+ T (wire.udp.size)) Payload 0 N)
-                        (wire.udp.checksum-> B T (as-sent (net-ipv6.transport-checksum B I 17 Length)))
+                        (wire.udp.checksum-> B T (as-sent (net-ipv6.transport-checksum B I (wire.udp-protocol) Length)))
                         (net-link.publish Tx Size Delivery)
                         sent)))))
 
@@ -203,11 +203,11 @@
            (port? (wire.udp.destination-port B T))
            (= (wire.udp.length B T) Length)
            (not (= (wire.udp.checksum B T) 0))
-           (= (net-ipv6.transport-checksum-at B I T 17 Length) 0))))
+           (= (net-ipv6.transport-checksum-at B I T (wire.udp-protocol) Length) 0))))
 
 (define valid-datagram6?
   {buffer.view --> fixnum --> fixnum --> boolean}
-  B I N -> (and (fx>= N (headers6)) (= (wire.ipv6.next-header B I) 17)
+  B I N -> (and (fx>= N (headers6)) (= (wire.ipv6.next-header B I) (wire.udp-protocol))
                 (valid-datagram6-at? B I N (datagram6 I))))
 
 \\ Length checks precede reading the transport header.
@@ -355,7 +355,7 @@
 (define inbox-ingress6
   {inbox --> buffer.view --> fixnum --> fixnum --> boolean}
   Q B I N ->
-    (and (fx>= N (headers6)) (= (wire.ipv6.next-header B I) 17)
+    (and (fx>= N (headers6)) (= (wire.ipv6.next-header B I) (wire.udp-protocol))
          (inbox-ingress6-at Q B I N (datagram6 I))))
 
 (define inbox-ingress-multicast
@@ -370,7 +370,7 @@
   {inbox --> buffer.view --> fixnum --> fixnum --> boolean}
   Q B I N ->
     (and (valid-datagram? B I N)
-         (= (wire.ipv4.destination B I) 4294967295)               \\ The limited broadcast address.
+         (= (wire.ipv4.destination B I) (net-ipv4.broadcast))
          (= (wire.udp.destination-port B (datagram4 I)) (peer.port (inbox.peer Q)))
          (store-inbox Q B I N)))
 

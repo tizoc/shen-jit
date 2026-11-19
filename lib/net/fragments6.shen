@@ -61,7 +61,7 @@
           entries <- (initialise (vector (fx->number Slots)) Slots Limit)
           slots <- Slots
           limit <- Limit
-          quote <- (buffer.new 1232)
+          quote <- (buffer.new (net-ipv6.error-quote))
           ready-index <- 0)
         (error "IPv6: need 1..16 reassembly slots of 1500..65575 bytes")))
 
@@ -80,13 +80,18 @@
         (net-ipv6.read-address (assembly.source A) B (wire.ipv6.source-at I))
         (net-ipv6.read-address (assembly.destination A) B (wire.ipv6.destination-at I))
         (assembly.identification-> A Id)
-        (assembly.expires-> A (fx+ Now 60000))
+        (assembly.expires-> A (fx+ Now (reassembly-timeout)))
         (assembly.received-> A 0)
         (assembly.highest-> A 0)
         (assembly.end-> A -1)
         (assembly.first-size-> A 0)
         (assembly.header-size-> A 0)
         (assembly.rejected-> A false)))
+
+\\ RFC 8200 4.5: a datagram's fragments all arrive within a minute of the first.
+(define reassembly-timeout
+  {--> fixnum}
+  -> 60000)
 
 (define find
   {table --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
@@ -193,7 +198,7 @@
           (do (assembly.expires-> A -1)
               (if (and (not (assembly.rejected A)) (fx> Size 0))
                   (let Out (table.quote T)
-                       Available (fx- 1232 Size)
+                       Available (fx- (net-ipv6.error-quote) Size)
                        First (assembly.first-size A)
                        N (if (fx< First Available) First Available)
                     (do (buffer.copy-into! Out 0 (assembly.header A) 0 Size)

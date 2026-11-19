@@ -275,7 +275,7 @@
       (if (net-link.full? Tx) false
           (do (udp.write-packet (net-link.ring.data Tx) (net-link.tail-offset Tx)
                                 (if Configured (client.address C) 0) 68
-                                (if Broadcast 4294967295 (client.server C)) 67
+                                (if Broadcast (net-ipv4.broadcast) (client.server C)) 67
                                 (write-payload C Configured Broadcast) 0 300)
               (net-link.publish Tx 328 (net-link.delivery D Now))
               (client.attempts-> C (fx+ Attempts 1))

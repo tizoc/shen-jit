@@ -40,6 +40,16 @@
         (fx+ (shen-jit.shift-left High 32) Low)
         (error "net/ethernet: MAC address is wider than 48 bits")))
 
+\\ ff:ff:ff:ff:ff:ff, every station on the link.
+(define broadcast-mac
+  {--> fixnum}
+  -> 281474976710655)
+
+\\ How long a neighbor's address is kept without a new answer.
+(define neighbor-lifetime
+  {--> fixnum}
+  -> 60000)
+
 (define unicast-mac?
   {fixnum --> boolean}
   Mac -> (and (fx> Mac 0) (fx<= Mac 281474976710655)
@@ -181,9 +191,9 @@
           (let B (net-link.ring.data Tx)
                I (net-link.tail-offset Tx)
                Start (fx+ I (wire.ethernet.size))
-            (do (ethernet-header A B I Dst 2054)
+            (do (ethernet-header A B I Dst (wire.arp-type))
                 (write-layout wire.arp B Start
-                  (hardware-type 1) (protocol-type 2048) (hardware-length 6) (protocol-length 4) (operation Op)
+                  (hardware-type 1) (protocol-type (wire.ipv4-type)) (hardware-length 6) (protocol-length 4) (operation Op)
                   (sender-hardware (adapter.mac A)) (sender-protocol (adapter.ip A))
                   (target-hardware TargetMac) (target-protocol TargetIP))
                 (pad B (fx+ Start (wire.arp.size)) (fx+ I (minimum-frame)))
@@ -196,7 +206,7 @@
       (if (= I 0) false
           (let N (neighbor-at A I)
             (do (neighbor.mac-> N Mac)
-                (neighbor.expires-> N (fx+ Now 60000))
+                (neighbor.expires-> N (fx+ Now (neighbor-lifetime)))
                 true)))))
 
 (define arp-input
@@ -204,7 +214,7 @@
   A B I N Now ->
     (let S (fx+ I (wire.ethernet.size))
       (and (fx>= N (fx+ (wire.ethernet.size) (wire.arp.size))) (fx> (adapter.ip A) 0)
-           (= (wire.arp.hardware-type B S) 1) (= (wire.arp.protocol-type B S) 2048)      \\ IPv4 over Ethernet.
+           (= (wire.arp.hardware-type B S) 1) (= (wire.arp.protocol-type B S) (wire.ipv4-type))      \\ IPv4 over Ethernet.
            (= (wire.arp.hardware-length B S) 6) (= (wire.arp.protocol-length B S) 4)
            (= (wire.arp.target-protocol B S) (adapter.ip A))
            (let Op (wire.arp.operation B S)
@@ -239,16 +249,16 @@
               IP (fx+ I (wire.ethernet.size))
               Payload (fx- N (wire.ethernet.size))
               Ours (= Dst (adapter.mac A))
-              Broadcast (= Dst 281474976710655)
-           (cases (and (= Kind 2054) (or Ours Broadcast)) (arp-input A B I N Now)
-                  (and (= Kind 2048) (fx>= Payload (wire.ipv4.size))
+              Broadcast (= Dst (broadcast-mac))
+           (cases (and (= Kind (wire.arp-type)) (or Ours Broadcast)) (arp-input A B I N Now)
+                  (and (= Kind (wire.ipv4-type)) (fx>= Payload (wire.ipv4.size))
                        (= (wire.ipv4.version B IP) 4)
                        (or Ours Broadcast
                            (let Address (wire.ipv4.destination B IP)                          \\ Or a group
                              (and (net-ipv4.multicast? Address) (= Dst (net-ipv4.multicast-mac Address))))))
                     (let Count (wire.ipv4.total-length B IP)
                       (and (fx>= Count (wire.ipv4.size)) (receive-ip A B IP Payload Count Now)))
-                  (and (= Kind 34525) (fx>= Payload (wire.ipv6.size)) (not (= (adapter.ipv6 A) []))
+                  (and (= Kind (wire.ipv6-type)) (fx>= Payload (wire.ipv6.size)) (not (= (adapter.ipv6 A) []))
                        (= (wire.ipv6.version B IP) 6)
                        (or Ours (and (net-ipv6.multicast-at? B (wire.ipv6.destination-at IP))    \\ Multicast,
                                      (= Dst (net-ipv6.multicast-mac-at B (wire.ipv6.destination-at IP))))))  \\ to our group.
@@ -296,15 +306,15 @@
     (if (fx< (net-link.head-length R) 20) (note-drop A)
         (let Dst (buffer.u32-be (net-link.ring.data R) (fx+ (net-link.head-offset R) 16))
              Hop (net-routes.lookup (adapter.routes A) Dst)
-          (cases (= Dst 4294967295) (send-ip A R 281474976710655 2048 Now)
-                 (net-ipv4.multicast? Dst) (send-ip A R (net-ipv4.multicast-mac Dst) 2048 Now)
+          (cases (= Dst (net-ipv4.broadcast)) (send-ip A R (broadcast-mac) (wire.ipv4-type) Now)
+                 (net-ipv4.multicast? Dst) (send-ip A R (net-ipv4.multicast-mac Dst) (wire.ipv4-type) Now)
                  (= Hop 0) (note-drop A)
                  true (let I (claim A Hop Now)
                          (if (= I 0) (note-drop A)
                              (let N (neighbor-at A I)
                                   Q (neighbor.pending N)
                                (if (and (fx> (neighbor.mac N) 0) (not (net-link.ready? Q 0)))
-                                   (send-ip A R (neighbor.mac N) 2048 Now)
+                                   (send-ip A R (neighbor.mac N) (wire.ipv4-type) Now)
                                    (stash A R Q)))))))))
 
 (define emit-ipv6
@@ -315,13 +325,13 @@
         (let B (net-link.ring.data R)
              At (fx+ (net-link.head-offset R) 24)
           (if (net-ipv6.multicast-at? B At)
-              (send-ip A R (net-ipv6.multicast-mac-at B At) 34525 Now)
+              (send-ip A R (net-ipv6.multicast-mac-at B At) (wire.ipv6-type) Now)
               (let I (net-ndp.route H B At Now)
                 (if (= I 0) (note-drop A)
                     (let N (net-ndp.neighbor-at H I)
                          Q (net-ndp.neighbor.pending N)
                       (if (and (fx> (net-ndp.neighbor.mac N) 0) (not (net-link.ready? Q 0)))
-                          (send-ip A R (net-ndp.neighbor.mac N) 34525 Now)
+                          (send-ip A R (net-ndp.neighbor.mac N) (wire.ipv6-type) Now)
                           (stash A R Q)))))))))
 
 (define emit-ip
@@ -352,9 +362,9 @@
     (let Q (neighbor.pending N)
       (cases (not (net-link.ready? Q 0)) false
              (fx<= (neighbor.expires N) Now) (do (clear-neighbor N) (note-drop A))
-             (fx> (neighbor.mac N) 0) (and (send-ip A Q (neighbor.mac N) 2048 Now) (net-link.consume Q))
+             (fx> (neighbor.mac N) 0) (and (send-ip A Q (neighbor.mac N) (wire.ipv4-type) Now) (net-link.consume Q))
              (fx<= (neighbor.request-at N) Now)
-               (and (arp A (neighbor.ip N) 0 281474976710655 1 Now)
+               (and (arp A (neighbor.ip N) 0 (broadcast-mac) 1 Now)
                     (do (neighbor.request-at-> N (fx+ Now 1000)) true))
              true false)))
 
@@ -377,7 +387,7 @@
     (let N (net-ndp.neighbor-at H I)
          Next (if (= I (net-ndp.host.slots H)) (type 1 fixnum) (fx+ I 1))
          Pending (net-ndp.neighbor.pending N)
-      (if (and (net-ndp.neighbor-ready? N Now) (send-ip A Pending (net-ndp.neighbor.mac N) 34525 Now))
+      (if (and (net-ndp.neighbor-ready? N Now) (send-ip A Pending (net-ndp.neighbor.mac N) (wire.ipv6-type) Now))
           (do (net-link.consume Pending)
               (adapter.next6-> A Next)
               (drain6 A H Now Next (fx- Left 1) (fx- Budget 1) (fx+ Done 1)))

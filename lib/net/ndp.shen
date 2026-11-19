@@ -80,7 +80,7 @@
   {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> host}
   D Mac IdHigh IdLow Slots ->
     (let Mtu (net-link.mtu D)
-      (if (and (fx>= Mtu 1280) (fx>= Slots 0) (fx<= Slots 256)
+      (if (and (fx>= Mtu (net-ipv6.minimum-mtu)) (fx>= Slots 0) (fx<= Slots 256)
                (fx>= Mac 0) (fx<= Mac 281474976710655)
                (= (shen-jit.bit-and Mac 1099511627776) 0)
                (or (= Mac 0) (fx> Slots 0))
@@ -96,8 +96,8 @@
             prefix <- (blank-address)
             router <- (blank-address)
             unspecified <- (blank-address)
-            all-nodes <- (net-ipv6.make-address 4278321152 0 0 1)
-            all-routers <- (net-ipv6.make-address 4278321152 0 0 2)
+            all-nodes <- (net-ipv6.link-group 1)
+            all-routers <- (net-ipv6.link-group 2)
             group <- (blank-address)
             source <- (blank-address)
             destination <- (blank-address)
@@ -297,7 +297,7 @@
                IncludeMac (and (fx> Mac 0) (not (net-ipv6.unspecified? Source)))
                N (if IncludeMac (fx+ Base (wire.ndp-link-address.size)) Base)
                Count (fx+ N (wire.ipv6.size))
-            (do (net-ipv6.write-header B At Count 58 255 Source Destination)
+            (do (net-ipv6.write-header B At Count (wire.icmp6-protocol) 255 Source Destination)
                 (cases (= Kind 133) (write-layout wire.ndp-router-solicitation B Body (type 133))
                        (= Kind 135) (do (write-layout wire.ndp-neighbor-solicitation B Body (type 135))
                                         (net-ipv6.write-address B (wire.ndp-neighbor-solicitation.target-at Body) Target))
@@ -305,7 +305,7 @@
                                   (type 136) (solicited Solicited) (override Override))
                                 (net-ipv6.write-address B (wire.ndp-neighbor-advertisement.target-at Body) Target)))
                 (if IncludeMac (write-option B (fx+ Body Base) (if (= Kind 136) 2 1) Mac) B)   \\ Target or source address.
-                (wire.icmp.checksum-> B Body (net-ipv6.transport-checksum B At 58 N))
+                (wire.icmp.checksum-> B Body (net-ipv6.transport-checksum B At (wire.icmp6-protocol) N))
                 (net-link.publish Tx Count (net-link.delivery D Now)))))))
 
 (define duplicate-if-probing
@@ -365,13 +365,18 @@
                (advertise-neighbor H Target (link-mac (host.target-link H))
                                    (wire.ndp-neighbor-advertisement.override B Body) Now)))))
 
-\\ Apply the unauthenticated-advertisement lifetime rule from RFC 4862.
+\\ RFC 4862 5.5.3 (e): an advertisement not authenticated shortens a valid lifetime to no less than
+\\ two hours.
+(define two-hours
+  {--> fixnum}
+  -> 7200000)
+
 (define refreshed-valid
   {fixnum --> fixnum --> fixnum --> fixnum}
   Old New Now ->
-    (cases (or (fx> New 7200000) (fx> (fx+ Now New) Old)) (fx+ Now New)
-           (fx<= Old (fx+ Now 7200000)) Old
-           true (fx+ Now 7200000)))
+    (cases (or (fx> New (two-hours)) (fx> (fx+ Now New) Old)) (fx+ Now New)
+           (fx<= Old (fx+ Now (two-hours))) Old
+           true (fx+ Now (two-hours))))
 
 (define set-prefix
   {host --> buffer.view --> fixnum --> fixnum --> boolean}
@@ -450,7 +455,7 @@
 
 (define ingress
   {host --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
-  H B I N Now -> (and (fx>= N (fx+ (wire.ipv6.size) (wire.icmp.size))) (= (wire.ipv6.next-header B I) 58)
+  H B I N Now -> (and (fx>= N (fx+ (wire.ipv6.size) (wire.icmp.size))) (= (wire.ipv6.next-header B I) (wire.icmp6-protocol))
                       (ingress-at H B I N (fx+ I (wire.ipv6.size)) Now)))
 
 \\ A message at Body, after the base header and any extension headers.
@@ -468,7 +473,7 @@
                          (= Kind 135) (fx>= Message (wire.ndp-neighbor-solicitation.size))
                          (= Kind 136) (fx>= Message (wire.ndp-neighbor-advertisement.size))
                          true false)
-                  (= (net-ipv6.transport-checksum-at B I Body 58 Message) 0)
+                  (= (net-ipv6.transport-checksum-at B I Body (wire.icmp6-protocol) Message) 0)
                   (do (net-ipv6.read-address (host.source H) B (wire.ipv6.source-at I))
                       (net-ipv6.read-address (host.destination H) B (wire.ipv6.destination-at I))
                       (cases (= Kind 134) (router-advertisement H B Body End Now)

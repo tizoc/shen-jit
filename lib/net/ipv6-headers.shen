@@ -7,9 +7,10 @@
   (import struct defstruct)
   (externals [defgrammar <end> skip at u16-be])
   (export cursor make parse after-fragment can-report?
-          cursor.protocol cursor.at cursor.next-field cursor.problem-code
+          cursor.protocol cursor.at cursor.next-field cursor.problem
           cursor.multicast-error cursor.router-alert
-          upper fragment problem incomplete ignored outcome)
+          upper fragment problem incomplete ignored outcome
+          parameter-problem erroneous-field unrecognized-next-header unrecognized-option incomplete-chain)
 
 \\ Where a walk ends: at an upper-layer header, at a fragment header, at a problem to report, in a
 \\ header cut short, or at a packet dropped without a report.
@@ -17,6 +18,13 @@
   if (element? Outcome [upper fragment problem incomplete ignored])
   _________________________________________________________________
   Outcome : outcome;)
+
+\\ RFC 4443 3.4: what a parameter problem points at: a field in error, a next header or an option not
+\\ recognized, or a first fragment without the whole header chain.
+(datatype parameter-problems
+  if (element? Problem [erroneous-field unrecognized-next-header unrecognized-option incomplete-chain])
+  __________________________________________________________________________________________________
+  Problem : parameter-problem;)
 
 \\ What a next header is to this receiver.
 (datatype kinds
@@ -33,7 +41,7 @@
   (mutable at : fixnum)
   (mutable next-field : fixnum)
   (mutable left : fixnum)
-  (mutable problem-code : fixnum)
+  (mutable problem : parameter-problem)
   (mutable multicast-error : boolean)
   (mutable router-alert : fixnum)
   (mutable base : fixnum)
@@ -49,7 +57,7 @@
       at <- 0
       next-field <- 0
       left <- 0
-      problem-code <- 0
+      problem <- erroneous-field
       multicast-error <- false
       router-alert <- -1
       base <- 0
@@ -74,16 +82,16 @@
         Result))
 
 (define fail-at
-  {cursor --> fixnum --> fixnum --> boolean --> outcome}
-  C At Code Multicast ->
+  {cursor --> fixnum --> parameter-problem --> boolean --> outcome}
+  C At Problem Multicast ->
     (do (cursor.at-> C At)
-        (cursor.problem-code-> C Code)
+        (cursor.problem-> C Problem)
         (cursor.multicast-error-> C Multicast)
         problem))
 
 (define truncated
   {cursor --> fixnum --> outcome}
-  C Pointer -> (do (fail-at C Pointer 0 false) incomplete))
+  C Pointer -> (do (fail-at C Pointer erroneous-field false) incomplete))
 
 \\ What each next header is to this receiver. ESP's and AH's payloads are not read, so neither is
 \\ anything after them.
@@ -113,13 +121,13 @@
 (defgrammar (<options> C Hop) {cursor --> boolean ==> outcome}
   <end> := upper;
   0 (<options> C Hop) := <options>;                                      \\ Pad1.
-  (at At) 5 Length (where (and Hop (not (= Length 2)))) (* _) := (fail-at C (fx+ At 1) 0 false);
+  (at At) 5 Length (where (and Hop (not (= Length 2)))) (* _) := (fail-at C (fx+ At 1) erroneous-field false);
   5 2 (where Hop) (u16-be Value) (<options> (cursor.router-alert-> C Value) Hop) := <options>;
   Type Length (where (= (action Type) 0)) (skip Length) (<options> C Hop) := <options>;
   Type Length (where (= (action Type) 1)) (skip Length) (* _) := ignored;
-  (at At) Type Length (skip Length) (* _) := (fail-at C At 2 (= (action Type) 2));
-  (at At) _ _ (* _) := (fail-at C (fx+ At 1) 0 false);                   \\ Past the header's end.
-  (at At) _ := (fail-at C At 0 false);)                                  \\ A type and no length.
+  (at At) Type Length (skip Length) (* _) := (fail-at C At unrecognized-option (= (action Type) 2));
+  (at At) _ _ (* _) := (fail-at C (fx+ At 1) erroneous-field false);                   \\ Past the header's end.
+  (at At) _ := (fail-at C At erroneous-field false);)                                  \\ A type and no length.
 
 (grammar.finish)
 
@@ -154,9 +162,9 @@
   {kind --> cursor --> buffer.view --> fixnum --> fixnum --> fixnum --> outcome}
   upper C _ At Next Protocol -> (found C Protocol At Next upper)
   none _ _ _ _ _ -> ignored
-  unknown C _ _ Next _ -> (fail-at C Next 1 false)
+  unknown C _ _ Next _ -> (fail-at C Next unrecognized-next-header false)
   _ C _ At _ _ -> ignored where (or (= (cursor.left C) 0) (fx> (fx- At (cursor.base C)) 296))
-  hop-by-hop C _ At Next _ -> (fail-at C Next 1 false)
+  hop-by-hop C _ At Next _ -> (fail-at C Next unrecognized-next-header false)
     where (not (= At (fx+ (cursor.base C) (wire.ipv6.size))))
   _ C _ At Next _ -> (truncated C Next) where (fx> (fx+ At (wire.ipv6-extension.size)) (cursor.end C))
   fragment C _ At Next Protocol -> (do (cursor.left-> C (fx- (cursor.left C) 1))
@@ -186,7 +194,7 @@
 (define contents
   {kind --> cursor --> buffer.view --> fixnum --> fixnum --> outcome}
   routing C B At _ -> (if (= (wire.ipv6-routing.segments-left B At) 0) upper
-                          (fail-at C (wire.ipv6-routing.routing-type-at At) 0 false))
+                          (fail-at C (wire.ipv6-routing.routing-type-at At) erroneous-field false))
   Kind C B At Stop -> (<options>.parse-at C (= Kind hop-by-hop) (cursor.options-state C) B
                                           (wire.ipv6-extension.options-at At) Stop (/. Position Message ignored)))
 

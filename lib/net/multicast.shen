@@ -104,9 +104,9 @@
           blank6 <- (net-ipv6.make-address 0 0 0 0)
           scratch6 <- (net-ipv6.make-address 0 0 0 0)
           sender6 <- (net-ipv6.make-address 0 0 0 0)
-          nodes6 <- (net-ipv6.make-address 4278321152 0 0 1)
-          routers6 <- (net-ipv6.make-address 4278321152 0 0 2)
-          reports6 <- (net-ipv6.make-address 4278321152 0 0 22)
+          nodes6 <- (net-ipv6.link-group 1)
+          routers6 <- (net-ipv6.link-group 2)
+          reports6 <- (net-ipv6.link-group 22)
           seed <- Seed
           next <- 1
           igmp1-until <- 0
@@ -319,7 +319,7 @@
 (define join-source6
   {membership --> net-ipv6.address --> net-ipv6.address --> fixnum --> boolean}
   M Group Source Now ->
-    (and (ssm6? Group) (net-ipv6.unicast? Source) (fx>= (net-link.mtu (membership.device M)) 1280)
+    (and (ssm6? Group) (net-ipv6.unicast? Source) (fx>= (net-link.mtu (membership.device M)) (net-ipv6.minimum-mtu))
          (add-source M 6 0 Group 0 Source Now)))
 
 (define leave-source4
@@ -436,6 +436,12 @@
                     (group.reporter-> G false)
                     true)))))
 
+\\ RFC 3376 8.12 and RFC 3810 9.12: how long a router of an older version is taken to be present,
+\\ twice the query interval of 125 seconds and the 10-second response.
+(define older-version-timeout
+  {--> fixnum}
+  -> 260000)
+
 (define igmp-delay
   {fixnum --> fixnum}
   Code ->
@@ -457,8 +463,8 @@
            (or (and Old (or (not (= Code 0)) (= IP 0)))
                (and Modern (= Bytes (fx+ (wire.igmp3-query.size) (fx* Count (wire.ipv4-address.size))))))
            (do (if Old
-                   (if (= Code 0) (membership.igmp1-until-> M (fx+ Now 260000))
-                       (membership.igmp2-until-> M (fx+ Now 260000)))
+                   (if (= Code 0) (membership.igmp1-until-> M (fx+ Now (older-version-timeout)))
+                       (membership.igmp2-until-> M (fx+ Now (older-version-timeout))))
                    M)
                (if (= IP 0) (query-all M (membership.slots M) 4 Span Now Modern)
                    (let I (find M 4 IP (membership.blank6 M) (membership.slots M))
@@ -470,7 +476,7 @@
   {membership --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   M B I N Now ->
     (and (net-ipv4.valid-envelope? B I N) (not (net-ipv4.fragmented? B I))
-         (= (wire.ipv4.time-to-live B I) 1) (= (wire.ipv4.protocol B I) 2)
+         (= (wire.ipv4.time-to-live B I) 1) (= (wire.ipv4.protocol B I) (wire.igmp-protocol))
          (let Bytes (net-ipv4.header-length B I)
               Body (fx- N Bytes)
               At (fx+ I Bytes)
@@ -510,7 +516,7 @@
                (and (or (usable6? M Group) (and Modern (ssm6? Group)))
                     (net-ipv6.address-at? Group B To)))
            (or Old (and Modern (= Bytes (fx+ (wire.mld2-query.size) (fx* Count (wire.ipv6-address.size))))))
-           (do (if Old (membership.mld1-until-> M (fx+ Now 260000)) M)
+           (do (if Old (membership.mld1-until-> M (fx+ Now (older-version-timeout))) M)
                (if General (query-all M (membership.slots M) 6 Span Now Modern)
                    (let Index (find M 6 0 Group (membership.slots M))
                      (if (= Count 0) (query M Index 6 Span Now Modern)
@@ -525,7 +531,7 @@
   M Local B I N At Alert Now ->
     (let Bytes (fx- (fx+ I N) At)
       (and (= Alert 0) (fx>= Bytes (wire.mld.size)) (= (wire.ipv6.hop-limit B I) 1) (= (wire.mld.code B At) 0)
-           (= (net-ipv6.transport-checksum-at B I At 58 Bytes) 0)
+           (= (net-ipv6.transport-checksum-at B I At (wire.icmp6-protocol) Bytes) 0)
            (let Source (net-ipv6.read-address (membership.sender6 M) B (wire.ipv6.source-at I))
                 Kind (wire.mld.type B At)
              (and (not (net-ipv6.same? Source Local))
@@ -621,7 +627,7 @@
   {membership --> net-link.ring --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   M Tx B I Size Now ->
     (let At (fx+ I (mld-offset))
-      (do (wire.mld.checksum-> B At (net-ipv6.transport-checksum-at B I At 58 (fx- Size (mld-offset))))
+      (do (wire.mld.checksum-> B At (net-ipv6.transport-checksum-at B I At (wire.icmp6-protocol) (fx- Size (mld-offset))))
           (net-link.publish Tx Size (net-link.delivery (membership.device M) Now)))))
 
 (define send6
