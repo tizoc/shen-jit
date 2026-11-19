@@ -15,3 +15,7 @@
 (define tun-test.main
   -> (let Args (tl (value *argv*))
        (if (= (hd (tl Args)) "tap") (tun-test.run-tap (hd Args)) (tun-test.run (hd Args)))))
+
+(define net-host-test.main
+  -> (let Args (tl (value *argv*))
+       (if (= (hd (tl Args)) "tap") (net-host-test.tap (hd Args)) (net-host-test.tun (hd Args)))))

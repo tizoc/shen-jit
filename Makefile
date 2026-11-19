@@ -383,7 +383,7 @@ test-isolates-stress: $(BUILD)/shen-jit
 	SHEN_JIT_GC_STRESS=1 $(BUILD)/shen-jit eval -l tests/isolates.shen | $(FFI_RESULT)
 
 # Every library's suite, without the collections test-lib-stress adds (about 30 s).
-test-libs: test-buffer test-layout test-json test-io test-net-udp test-net-tcp test-net-interface test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces \
+test-libs: test-buffer test-layout test-json test-io test-net-udp test-net-tcp test-net-interface test-net-clients test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces \
   test-parallel
 
 .PHONY: test-isolates test-isolates-stress test-parallel
@@ -497,6 +497,11 @@ test-net-tcp: $(BUILD)/shen-jit
 test-net-interface: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -m tests/net_interface.shenmod -e '(do (net-interface-test.run) (net-interface-test.host) (net-interface-test.multiport) (net-interface-test.fragments) (net-interface-test.errors) (net-interface-test.window-scale) (net-interface-test.pmtu))' | $(FFI_RESULT)
 
+# Portable DHCP and DNS state and wire checks.
+.PHONY: test-net-clients
+test-net-clients: $(BUILD)/shen-jit
+	$(BUILD)/shen-jit eval -m tests/net_clients.shenmod -e '(net-clients-test.run)' | $(FFI_RESULT)
+
 # Optional Linux integration. Run test-net-tun inside a disposable network namespace.
 .PHONY: tun test-net-tun test-net-tap
 tun: $(BUILD)/shen-tun.so
@@ -510,10 +515,12 @@ $(BUILD)/shen-test-tun.so: tests/net_tun_probe.c $(RUNTIME_HDR) | $(BUILD)
 
 test-net-tun test-net-tap: test-net-device-build
 	python3 tests/net_tun.py $(abspath $(BUILD)/net-tun-test) $(@:test-net-%=%)
+	python3 tests/net_host.py $(abspath $(BUILD)/net-host-test) $(@:test-net-%=%)
 
 .PHONY: test-net-device-build
 test-net-device-build: $(BUILD)/shen-jit $(BUILD)/shen-tun.so $(BUILD)/shen-test-tun.so
 	$(SHEN_JIT) build tests/net_tun.shenmod -o $(BUILD)/net-tun-test
+	$(SHEN_JIT) build tests/net_host.shenmod -o $(BUILD)/net-host-test
 
 # Complete request parsing, bounded bodies, response streams and persistent connections.
 test-http: $(BUILD)/shen-jit

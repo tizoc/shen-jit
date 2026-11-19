@@ -13,7 +13,7 @@ HOST, GUEST = "192.0.2.1", "192.0.2.2"
 
 
 def configure(interface, mode):
-    address = [HOST, "peer", GUEST] if mode == "tun" else [HOST + "/24"]
+    address = [HOST, "peer", GUEST] if mode == "tun" else [HOST + "/25"]
     subprocess.run(["ip", "addr", "add", *address, "dev", interface], check=True)
     if mode == "tap":
         subprocess.run(["ip", "link", "set", "dev", interface, "address", "02:00:00:00:00:01"], check=True)
@@ -126,7 +126,7 @@ def main():
     if mode not in ("tun", "tap"):
         raise ValueError(f"unknown link mode {mode!r}")
     if mode == "tap":
-        HOST, GUEST = "192.0.3.1", "192.0.3.2"
+        HOST, GUEST = "192.0.2.129", "192.0.2.130"
     interface = f"sj{mode}{os.getpid()}"
     subprocess.run(["ip", "tuntap", "add", "dev", interface, "mode", mode], check=True)
     try:

@@ -181,17 +181,29 @@
              (= Proto 1) (icmp-ingress F B I N Now)
              true (unreachable F B I N 2 Now))))
 
+(define dhcp-broadcast
+  {(list udp.inbox) --> buffer.view --> fixnum --> fixnum --> boolean}
+  [] _ _ _ -> false
+  [Q | Rest] B I N ->
+    (if (= (udp.peer.port (udp.inbox.peer Q)) 68)
+        (udp.inbox-ingress-broadcast Q B I N)
+        (dhcp-broadcast Rest B I N)))
+
 (define ingress
   {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   F B I N Now ->
     (and (net-ipv4.valid-header? B I N)
-         (= (buffer.u32-be B (fx+ I 16)) (interface.ip F))
          (net-ipv4.unicast? (buffer.u32-be B (fx+ I 12)))
-         (if (net-ipv4.fragmented? B I)
-             (let T (interface.fragments F)
-                  Count (net-fragments.receive T B I N Now)
-               (and (fx> Count 0) (dispatch F (net-fragments.packet T) 0 Count Now)))
-             (dispatch F B I N Now))))
+         (let Dst (buffer.u32-be B (fx+ I 16))
+           (cases (and (= Dst 4294967295) (fx>= N 28) (= (buffer.u8 B (fx+ I 9)) 17)
+                       (= (buffer.u32-be B (fx+ I 20)) 4390980))
+                    (dhcp-broadcast (interface.udp-bindings F) B I N)
+                  (not (= Dst (interface.ip F))) false
+                  (net-ipv4.fragmented? B I)
+                    (let T (interface.fragments F)
+                         Count (net-fragments.receive T B I N Now)
+                      (and (fx> Count 0) (dispatch F (net-fragments.packet T) 0 Count Now)))
+                  true (dispatch F B I N Now)))))
 
 (define receive-ready
   {interface --> net-link.ring --> fixnum --> fixnum --> fixnum --> fixnum}

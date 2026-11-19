@@ -1,0 +1,214 @@
+\\ One bounded UDP A lookup, with compression-safe decoding and CNAME following.
+(shen.x.namespace net-dns
+  (use buffer)
+  (use udp)
+  (use net-ipv4)
+  (use shen-jit)
+  (import struct defstruct)
+  (export resolver make start poll
+          resolver.state resolver.ip resolver.ttl resolver.deadline
+          idle pending resolved not-found failed)
+
+(defstruct resolver
+  (socket : udp.inbox)
+  (query : buffer.view)
+  (reply : buffer.view)
+  (info : udp.recv-info)
+  (mutable server : fixnum)
+  (mutable id : fixnum)
+  (mutable query-length : fixnum)
+  (mutable state : symbol)
+  (mutable ip : fixnum)
+  (mutable ttl : fixnum)
+  (mutable deadline : fixnum)
+  (mutable attempts : fixnum))
+
+(define make
+  {udp.inbox --> fixnum --> resolver}
+  Socket ReceiveBytes ->
+    (if (and (fx>= ReceiveBytes 512) (fx<= ReceiveBytes 65507))
+        (:resolver
+          socket <- Socket
+          query <- (buffer.new 271)
+          reply <- (buffer.new ReceiveBytes)
+          info <- (udp.make-recv-info)
+          server <- 0
+          id <- 0
+          query-length <- 0
+          state <- idle
+          ip <- 0
+          ttl <- 0
+          deadline <- -1
+          attempts <- 0)
+        (error "net/dns: receive buffer must be in 512..65507 bytes")))
+
+(define after-name
+  {buffer.view --> fixnum --> fixnum --> boolean --> fixnum}
+  B I End Compressed ->
+    (if (fx>= I End) -1
+        (let Len (buffer.u8 B I) Next (fx+ I 1)
+          (cases (= Len 0) Next
+                 (and Compressed (fx>= Len 192) (fx< Next End)) (fx+ Next 1)
+                 (or (fx> Len 63) (fx> (fx+ Next Len) End)) -1
+                 true (after-name B (fx+ Next Len) End Compressed)))))
+
+(define start
+  {resolver --> fixnum --> fixnum --> buffer.view --> fixnum --> boolean}
+  R Server Id Name Now ->
+    (let N (buffer.length Name)
+         Q (resolver.query R)
+      (if (and (not (= (resolver.state R) pending)) (net-ipv4.unicast? Server)
+               (fx>= Id 0) (fx<= Id 65535) (fx>= N 1) (fx<= N 255)
+               (= (after-name Name 0 N false) N))
+          (do (buffer.u16-be-> Q 0 Id)
+              (buffer.u16-be-> Q 2 256)
+              (buffer.u16-be-> Q 4 1)
+              (buffer.u32-be-> Q 6 0)
+              (buffer.u16-be-> Q 10 0)
+              (buffer.copy-into! Q 12 Name 0 N)
+              (buffer.u32-be-> Q (fx+ 12 N) 65537)
+              (resolver.server-> R Server)
+              (resolver.id-> R Id)
+              (resolver.query-length-> R (fx+ N 16))
+              (resolver.ip-> R 0)
+              (resolver.ttl-> R 0)
+              (resolver.attempts-> R 0)
+              (resolver.deadline-> R Now)
+              (resolver.state-> R pending)
+              true)
+          false)))
+
+(define fold-ascii
+  {fixnum --> fixnum}
+  C -> (if (and (fx>= C 65) (fx<= C 90)) (fx+ C 32) C))
+
+(define equal-label?
+  {buffer.view --> fixnum --> buffer.view --> fixnum --> fixnum --> boolean}
+  _ _ _ _ 0 -> true
+  A I B J N ->
+    (and (= (fold-ascii (buffer.u8 A I)) (fold-ascii (buffer.u8 B J)))
+         (equal-label? A (fx+ I 1) B (fx+ J 1) (fx- N 1))))
+
+(define label-offset
+  {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
+  B At End Left ->
+    (if (or (fx< At 0) (fx>= At End) (= Left 0)) -1
+        (let Head (buffer.u8 B At)
+          (cases (fx<= Head 63) At
+                 (and (fx>= Head 192) (fx< (fx+ At 1) End))
+                   (let Target (shen-jit.bit-and (buffer.u16-be B At) 16383)
+                     (if (fx< Target At) (label-offset B Target End (fx- Left 1)) (type -1 fixnum)))
+                 true -1))))
+
+(define name-equal?
+  {buffer.view --> fixnum --> fixnum --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  A I EndA B J EndB Left ->
+    (let X (label-offset A I EndA 32)
+         Y (label-offset B J EndB 32)
+      (and (fx>= X 0) (fx>= Y 0)
+           (let N (buffer.u8 A X)
+                StartA (fx+ X 1)
+                StartB (fx+ Y 1)
+                NextA (fx+ StartA N)
+                NextB (fx+ StartB N)
+             (and (= N (buffer.u8 B Y)) (fx<= NextA EndA) (fx<= NextB EndB)
+                  (fx<= N Left)
+                  (or (= N 0)
+                      (and (equal-label? A StartA B StartB N)
+                           (name-equal? A NextA EndA B NextB EndB (fx- (fx- Left N) 1)))))))))
+
+(define finish
+  {resolver --> symbol --> symbol}
+  R State -> (do (resolver.state-> R State) (resolver.deadline-> R -1) State))
+
+\\ Return an A record or the first well-formed CNAME for the current owner.
+(define find-answer
+  {buffer.view --> fixnum --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
+  _ _ _ _ _ _ 0 -> -1
+  Name Owner B N I EndName Count ->
+    (let Fields (after-name B I N true)
+      (if (or (fx< Fields 0) (fx> (fx+ Fields 10) N)) -1
+          (let Data (fx+ Fields 10)
+               Size (buffer.u16-be B (fx+ Fields 8))
+               Next (fx+ Data Size)
+               Kind (buffer.u16-be B Fields)
+            (cases (fx> Next N) -1
+                   (and (= (buffer.u16-be B (fx+ Fields 2)) 1)
+                        (or (and (= Kind 1) (= Size 4))
+                            (and (= Kind 5) (fx> Size 0) (= (after-name B Data Next true) Next)))
+                        (name-equal? Name Owner EndName B I N 255))
+                     Fields
+                   true (find-answer Name Owner B N Next EndName (fx- Count 1)))))))
+
+(define resolve-answer
+  {resolver --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  _ _ _ _ _ _ _ 0 -> false
+  R Name Owner EndName N Start Ttl Left ->
+    (let B (resolver.reply R)
+         Fields (find-answer Name Owner B N Start EndName (buffer.u16-be B 6))
+      (if (fx< Fields 0) false
+          (let Data (fx+ Fields 10)
+               Lifetime (buffer.u32-be B (fx+ Fields 4))
+               Min (if (fx< Lifetime Ttl) Lifetime Ttl)
+            (if (= (buffer.u16-be B Fields) 1)
+                (do (resolver.ip-> R (buffer.u32-be B Data))
+                    (resolver.ttl-> R Min)
+                    (finish R resolved)
+                    true)
+                (resolve-answer R B Data N N Start Min (fx- Left 1)))))))
+
+(define accept
+  {resolver --> fixnum --> boolean}
+  R N ->
+    (let B (resolver.reply R)
+      (and (fx>= N 12) (= (buffer.u16-be B 0) (resolver.id R))
+           (= (shen-jit.bit-and (buffer.u16-be B 2) 63488) 32768)
+           (= (buffer.u16-be B 4) 1)
+           (let Q (resolver.query R)
+                Stop (after-name B 12 N true)
+                Flags (buffer.u16-be B 2)
+                Rcode (shen-jit.bit-and Flags 15)
+             (and (fx>= Stop 0) (fx<= (fx+ Stop 4) N)
+                  (= (buffer.u32-be B Stop) 65537)
+                  (name-equal? Q 12 (resolver.query-length R) B 12 N 255)
+                  (cases (or (not (= (shen-jit.bit-and Flags 512) 0))
+                             (and (not (= Rcode 0)) (not (= Rcode 3))))
+                           (= (finish R failed) failed)
+                         (= Rcode 3) (= (finish R not-found) not-found)
+                         true (or (resolve-answer R Q 12 (resolver.query-length R)
+                                                  N (fx+ Stop 4) 4294967295 9)
+                                  (= (finish R not-found) not-found))))))))
+
+(define receive-reply
+  {resolver --> fixnum --> boolean}
+  _ 0 -> false
+  R Left ->
+    (let S (resolver.socket R)
+         Info (resolver.info R)
+         Status (udp.inbox-recv-into S (resolver.reply R) Info)
+      (cases (= Status udp.empty) false
+             (= Status udp.too-small) (do (udp.inbox-discard S) (receive-reply R (fx- Left 1)))
+             (and (= (udp.recv-info.source Info) (resolver.server R))
+                  (= (udp.recv-info.port Info) 53)
+                  (accept R (udp.recv-info.length Info))) true
+             true (receive-reply R (fx- Left 1)))))
+
+(define poll
+  {resolver --> fixnum --> symbol}
+  R Now ->
+    (cases (not (= (resolver.state R) pending)) (resolver.state R)
+           (receive-reply R 4) (resolver.state R)
+           (fx< Now (resolver.deadline R)) pending
+           (= (resolver.attempts R) 4) (finish R failed)
+           true (let Status (udp.send (udp.inbox.peer (resolver.socket R)) (resolver.server R) 53
+                                       (resolver.query R) (resolver.query-length R))
+                  (cases (= Status udp.sent)
+                           (let N (resolver.attempts R)
+                             (do (resolver.deadline-> R (fx+ Now (shen-jit.shift-left 1000 N)))
+                                 (resolver.attempts-> R (fx+ N 1))
+                                 pending))
+                         (= Status udp.would-block) pending
+                         true (finish R failed)))))
+
+(preclude [resolver.%match])
+)

@@ -11,7 +11,7 @@
           listener-ingress listener-transmit make-table table-ingress table-connect accept-on
           listener-deadline connection-readable? connection-writable? connection-abort
           make-table-sized path-mtu
-          connection-send connection-recv-into connection-shutdown-write release
+          connection-send connection-send-from connection-recv-into connection-recv-at connection-shutdown-write release
           closed listen-state syn-sent syn-received established close-wait fin-wait-1 fin-wait-2
           closing last-ack time-wait timed-out reset)
 
@@ -337,29 +337,37 @@
 
 (define send
   {peer --> buffer.view --> fixnum --> fixnum}
-  P Payload Count ->
+  P Payload Count -> (send-from P Payload 0 Count))
+
+(define send-from
+  {peer --> buffer.view --> fixnum --> fixnum --> fixnum}
+  P Payload At Count ->
     (let Limit (buffer.index Count)
-         _ (buffer.range (buffer.length Payload) 0 Limit)
+         _ (buffer.range (buffer.length Payload) At Limit)
          Phase (state P)
          Capacity (peer.capacity P)
          Length (peer.tx-length P)
          N (smaller Limit (fx- Capacity Length))
       (if (and (or (= Phase established) (= Phase close-wait)) (fx> N 0))
           (let Tail (wrap-offset (fx+ (peer.tx-head P) Length) Capacity)
-            (do (copy-into-ring (peer.tx P) Tail Capacity Payload 0 N)
+            (do (copy-into-ring (peer.tx P) Tail Capacity Payload At N)
                 (peer.tx-length-> P (fx+ Length N))
                 N))
           0)))
 
 (define recv-into
   {peer --> buffer.view --> fixnum --> fixnum}
-  P Out Count ->
+  P Out Count -> (recv-at P Out 0 Count))
+
+(define recv-at
+  {peer --> buffer.view --> fixnum --> fixnum --> fixnum}
+  P Out At Count ->
     (let Limit (buffer.index Count)
-         _ (buffer.range (buffer.length Out) 0 Limit)
+         _ (buffer.range (buffer.length Out) At Limit)
          N (smaller Limit (peer.rx-length P))
       (cases (fx> N 0)
                (let Left (fx- (peer.rx-length P) N)
-                 (do (copy-from-ring Out 0 (peer.rx P) (peer.rx-start P) (peer.capacity P) N)
+                 (do (copy-from-ring Out At (peer.rx P) (peer.rx-start P) (peer.capacity P) N)
                      (peer.rx-start-> P (wrap-offset (fx+ (peer.rx-start P) N) (peer.capacity P)))
                      (peer.rx-length-> P Left)
                      (if (peer.recv-eof P) P (peer.ack-needed-> P true))
@@ -1721,6 +1729,14 @@
 (define connection-recv-into
   {listener --> fixnum --> buffer.view --> fixnum --> fixnum}
   L Token Out Count -> (recv-into (listener-slot.peer (lease-slot L Token)) Out Count))
+
+(define connection-send-from
+  {listener --> fixnum --> buffer.view --> fixnum --> fixnum --> fixnum}
+  L Token B At Count -> (send-from (listener-slot.peer (lease-slot L Token)) B At Count))
+
+(define connection-recv-at
+  {listener --> fixnum --> buffer.view --> fixnum --> fixnum --> fixnum}
+  L Token B At Count -> (recv-at (listener-slot.peer (lease-slot L Token)) B At Count))
 
 (define connection-shutdown-write
   {listener --> fixnum --> boolean}

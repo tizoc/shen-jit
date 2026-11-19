@@ -10,7 +10,7 @@
           make-link left right ipv4 bind make-recv-info packet-send packet-recv-into
           send recv-into echo-step
           sent would-block too-large received empty budget-exhausted too-small
-          inbox inbox.peer inbox.dropped make-inbox inbox-ingress inbox-recv-into inbox-ready? valid-datagram? write-packet)
+          inbox inbox.peer inbox.dropped make-inbox inbox-ingress inbox-recv-into inbox-ready? inbox-discard inbox-ingress-broadcast valid-datagram? write-packet)
 
 (synonyms link net-link.link device net-link.device)
 
@@ -209,17 +209,26 @@
         dropped <- 0)))
 
 \\ The interface always consumes ingress, even when just this inbox is full.
-(define inbox-ingress
+(define store-inbox
   {inbox --> buffer.view --> fixnum --> fixnum --> boolean}
   Q B I N ->
-    (let P (inbox.peer Q)
-         R (inbox.queue Q)
-      (if (and (fx<= N (net-link.mtu (peer.device P))) (accept? P B I N))
-          (if (net-link.full? R)
-              (do (inbox.dropped-> Q (fx+ (inbox.dropped Q) 1)) false)
-              (do (buffer.copy-into! (net-link.ring.data R) (net-link.tail-offset R) B I N)
-                  (net-link.publish R N 0)))
-          false)))
+    (let R (inbox.queue Q)
+      (cases (fx> N (net-link.mtu (peer.device (inbox.peer Q)))) false
+             (net-link.full? R) (do (inbox.dropped-> Q (fx+ (inbox.dropped Q) 1)) false)
+             true (do (buffer.copy-into! (net-link.ring.data R) (net-link.tail-offset R) B I N)
+                      (net-link.publish R N 0)))))
+
+(define inbox-ingress
+  {inbox --> buffer.view --> fixnum --> fixnum --> boolean}
+  Q B I N -> (and (accept? (inbox.peer Q) B I N) (store-inbox Q B I N)))
+
+(define inbox-ingress-broadcast
+  {inbox --> buffer.view --> fixnum --> fixnum --> boolean}
+  Q B I N ->
+    (and (valid-datagram? B I N)
+         (= (buffer.u32-be B (fx+ I 16)) 4294967295)
+         (= (buffer.u16-be B (fx+ I 22)) (peer.port (inbox.peer Q)))
+         (store-inbox Q B I N)))
 
 (define inbox-recv-into
   {inbox --> buffer.view --> recv-info --> symbol}
@@ -232,6 +241,10 @@
 (define inbox-ready?
   {inbox --> boolean}
   Q -> (net-link.ready? (inbox.queue Q) 0))
+
+(define inbox-discard
+  {inbox --> boolean}
+  Q -> (let R (inbox.queue Q) (and (net-link.ready? R 0) (net-link.consume R))))
 
 (preclude [peer.%match recv-info.%match inbox.%match])
 )

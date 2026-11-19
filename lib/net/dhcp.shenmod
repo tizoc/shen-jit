@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name net/dhcp)
+  (requires net/udp)
+  (typed)
+  (sources tc+ "dhcp.shen"))

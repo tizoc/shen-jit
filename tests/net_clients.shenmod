@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name net-clients-test)
+  (requires net/interface net/dhcp net/dns)
+  (typed)
+  (sources tc+ "net_clients.shen"))

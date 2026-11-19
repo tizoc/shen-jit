@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name net/stream)
+  (requires net/interface)
+  (typed)
+  (sources tc+ "stream.shen"))

@@ -1,0 +1,7 @@
+(shen.module
+  (version 1)
+  (name net-host-test)
+  (requires net/tun net/ethernet net/stream net/dhcp net/dns)
+  (typed)
+  (main net-host-test.main)
+  (sources tc- "net_tun_native.shen" tc+ "net_host.shen"))

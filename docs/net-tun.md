@@ -1,4 +1,4 @@
-# Linux TUN packet I/O
+# Linux TUN and TAP packet I/O
 
 The optional `net/tun` module attaches a Linux TUN descriptor to one side of a `net/link` packet queue.
 A protocol peer or a shared IPv4 interface uses the other side. TUN carries whole IP packets between Shen
@@ -31,13 +31,18 @@ The typed packet path reuses this storage and returns immediate values.
 
 ## Shared IPv4 interface
 
-Load `net/interface` to put one TCP listener, one bound UDP port, and an ICMP echo responder on a
-single IPv4 address. It owns ingress for one side of a packet link. The other side can be a TUN
-adapter or an in-memory peer. Call only `net-interface.poll` to drive this side of the link.
+Load `net/interface` to serve multiple TCP and UDP ports on a single IPv4 address. It owns
+ingress for one side of a packet link. The other side can be a TUN adapter, an Ethernet
+adapter, or an in-memory peer. Call only `net-interface.poll` to drive this side of the link.
 
 | Operation | Meaning |
 | --- | --- |
 | `net-interface.make Device IP TcpPort TcpSlots InitialSequence UdpPort UdpSlots` | Preallocate the TCP listener and a UDP receive queue. Each UDP slot holds one packet of up to the link MTU. |
+| `net-interface.make-host Device IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots` | Set up listener and UDP bindings from lists of port fixnums. All TCP connections share `TcpSlots`. UDP uses `UdpSlots` per port. Supply two independently randomized unsigned 32-bit key words at setup. |
+| `net-interface.make-host-sized Device IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots Bytes` | Choose 1 through 1,048,576 bytes per TCP send and receive buffer. Setup also reserves the appropriate presence and SACK bitmaps. |
+| `net-interface.connect Interface RemoteIP RemotePort` | Claim a TCP slot, pick an unused ephemeral port, and start an active open. Returns a token, or zero when no slot or port is free. |
+| `net-interface.next-deadline Interface` | Give the earliest ingress or TCP deadline in absolute monotonic milliseconds, or `-1` while waiting for external I/O. |
+| `net-interface.udp-binding Interface Port` | Get an inbox for `udp.inbox-recv-into`, `udp.inbox-ready?`, or `udp.send` with `udp.inbox.peer`. |
 | `net-interface.poll Interface Budget` | Process at most `Budget` ingress packets and return the number examined. Drive TCP timers and output even with a zero ingress budget. |
 | `net-interface.interface.listener Interface` | Get the listener for `tcp.accept` and the [connection operations](net-tcp.md#bounded-listeners). |
 | `net-interface.udp-send Interface IP Port View Count` | Send from the bound port. Returns `udp.sent`, `udp.would-block`, or `udp.too-large`. |
@@ -45,8 +50,10 @@ adapter or an in-memory peer. Call only `net-interface.poll` to drive this side 
 | `net-interface.udp-dropped Interface` | Count valid datagrams dropped because this port's receive queue was full. |
 
 A full UDP queue drops the newest datagram, preserving the queued datagrams and allowing TCP and ICMP
-to continue. The ICMP responder handles IPv4 Echo Requests addressed to the interface. It writes
-replies directly into the transmit queue when space is available. [ICMP echo format](https://www.rfc-editor.org/rfc/rfc792.html)
+to continue. ICMP handles echo requests plus protocol and UDP port unreachable replies. A valid
+fragmentation-needed message quoting outstanding TCP data can reduce its segment size. Two
+preallocated IPv4 assembly slots each hold up to one link-MTU datagram. They accept fragments
+out of order, reject overlaps, and expire after 30 seconds. [ICMP echo format](https://www.rfc-editor.org/rfc/rfc792.html)
 
 ## Linux kernel integration test
 
@@ -61,7 +68,9 @@ one verifies recovery. The second TCP wave reuses the same slots. The test check
 bytes and EOF on all eight sockets. A test-only probe checks the Shen heap across 16 runs each
 of simulated reordering, timeout recovery, fast retransmit, adaptive timing, congestion
 control, and SACK recovery with two and five losses in a window. It also covers the
-entire TUN workload and uses a freshly allocated view as a positive control.
+entire TUN workload and uses a freshly allocated view as a positive control. A second
+test drops the first HTTP request data segment on TUN and delivers the response segments
+out of order. Shen initiates this connection to a Linux server.
 
 ## Ethernet and TAP
 
@@ -81,3 +90,38 @@ next deadline in monotonic milliseconds.
 Run `make test-net-tap` under the same Linux requirements as the TUN check. The
 test uses a separate subnet and measures the Ethernet, ARP, and IPv4 echo path
 with the same direct Shen heap probe.
+
+## DHCP, DNS, and outbound streams
+
+With TAP, initialize `net-ethernet.make` with the local MAC, IPv4 address zero,
+and an empty route list. During address acquisition, alternate Ethernet and device pumps
+with `net-dhcp.poll` on the IPv4 link. Create the DHCP client with a setup-time
+transaction ID. When it returns `net-dhcp.bound`, read `net-dhcp.client.address`,
+`net-dhcp.client.mask`, `net-dhcp.client.gateway`, and `net-dhcp.client.dns`.
+Configure the Ethernet adapter and create the shared IPv4 interface with those
+settings. To maintain the lease, bind UDP port 68 at setup and call
+`net-dhcp.maintain` with that inbox after polling the interface. The client handles
+renewal, rebinding, and lease expiry. Stop using the interface when the lease
+expires and reacquire an address before configuring it again.
+
+`net-dns.make` reserves storage for one lookup. Pass it a dedicated UDP inbox
+and the maximum size of the response buffer. `net-dns.start` takes a resolver IP,
+an unsigned 16-bit transaction ID, and a buffer containing a DNS wire-format
+name. For instance, `"c#4;testc#0;"` encodes the name `test`. Pass the
+monotonic clock to `net-dns.poll` until it reports a result. The UDP resolver
+follows bounded CNAME chains and exposes the IPv4 address and TTL on success.
+A truncated reply reports failure. Choose the source port and a fresh transaction
+ID at the application boundary.
+
+Allocate a `net-stream.make` handle for each application stream. Open it with
+`net-stream.connect` or attach an accepted connection with `net-stream.accept`.
+The read and write calls work with offsets and partial counts in existing
+buffer views. Continue polling the interface while the stream is live, then
+release the terminal connection. [The outbound HTTP example and allocation fixture](../tests/net_host.shen)
+uses this API to send a request, check the reply, and perform a clean shutdown.
+The TAP test runs it with a DHCP lease and a DNS server on a different subnet
+so both DNS and HTTP exercise gateway resolution. [DHCP](https://www.rfc-editor.org/rfc/rfc2131.html), [DNS](https://www.rfc-editor.org/rfc/rfc1035.html)
+
+The TAP test uses four 128 KiB TCP slots. Each slot reserves 311,296 bytes for the
+send and receive buffers and three bitmaps, plus fixed metadata. The two links
+reserve 48,224 packet bytes and the four ARP pending queues reserve 24,000 more.

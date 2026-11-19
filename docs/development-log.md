@@ -3803,6 +3803,19 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   check has passed. On the `net-dsl` branch, TCP's lossy run 170.8–171.2 against 162.0–162.8 ms, its UDP echo
   22.4–22.5 against 21.6–21.7.
 
+### DHCP, DNS, and outbound streams (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
+
+- Added a DHCP client with allocation-free acquisition, renewal, rebind and expiry,
+  a bounded DNS A resolver that follows compressed CNAMEs, and a TCP stream handle
+  that reads and writes buffer ranges through partial transfers.
+- TAP acquired a lease and resolved a compressed DNS result through its configured
+  gateway, made an outbound HTTP request, and renewed the lease. On TUN the HTTP
+  fixture dropped the request's first data segment and reordered the response. Each
+  measured phase used zero Shen heap words, with a five-word positive control.
+- Portable tests check DHCP rebind and expiry, transaction validation, and malformed
+  DNS compression. The prior 128 KiB throughput benchmark held at 63, 630 and 3,150 ms
+  with simulated RTTs of 2, 20 and 100 ms.
+
 ### Ethernet and Linux TAP (2026-11-19, Linux x86-64 in Docker Desktop)
 
 - Reused the Linux descriptor adapter for TAP and added typed Ethernet and ARP.

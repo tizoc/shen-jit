@@ -3,7 +3,7 @@
 The optional `net/tcp` module, [lib/net/tcp.shen](../lib/net/tcp.shen), provides individual TCP peers and a
 bounded TCP listener over the [packet link](net-udp.md). Each connection uses bounded send and receive
 windows with cumulative and selective acknowledgments. The stack emits 20-byte IPv4 headers,
-honors the MSS option in incoming SYNs, and can add SACK options to TCP headers. TCP runs entirely in
+advertises and honors MSS, negotiates scaled windows, and can add SACK options to TCP headers. TCP runs entirely in
 managed Shen/JIT. [Linux TUN](net-tun.md) connects the link to kernel TCP sockets. To share a link
 with UDP and ICMP, use [the shared IPv4 interface](net-tun.md#shared-ipv4-interface).
 
@@ -28,7 +28,10 @@ writes and partial reads with the same preallocated buffers.
 
 The MTU must be at least 41. Each peer reserves two circular byte buffers of
 `8 × min(536, Mtu - 40)` bytes each, up to 4,288 bytes for sending and 4,288 for receiving.
-The receive ring has one presence bit per byte, using up to 536 additional bytes per peer.
+Three bitmaps each reserve one bit per buffer byte for out-of-order data, SACKed data,
+and repairs. A peer with the default 4,288-byte windows reserves 10,184 byte-buffer
+bytes. With a configured buffer size `N`, the total is `2 × N + 3 × ceil(N / 8)`
+per slot, plus the peer and view metadata.
 The sender limits in-flight bytes by both the advertised receive window and the congestion window.
 It segments writes at the negotiated MSS. The link reserves `Slots × Mtu` packet bytes in each
 direction, plus fixed queue metadata. Reuse device handles, peer state, application buffers and a
@@ -69,7 +72,7 @@ recently received range comes first, and the cumulative ACK stays at the next mi
 Peers without negotiated SACK use cumulative ACK recovery. [TCP SACK options](https://www.rfc-editor.org/rfc/rfc2018.html)
 
 The sender uses one preallocated bitmap for reported bytes and another for repairs already
-sent. Each uses up to 536 bytes per peer. During fast recovery, the sender can retry multiple
+sent. During fast recovery, the sender can retry multiple
 gaps before the first repair is acknowledged. It infers loss when a gap has at least three
 separate SACKed ranges or more than two MSS of SACKed bytes above it.
 
@@ -114,10 +117,13 @@ and both stream buffers for every slot. Admission, polling, and slot reuse use t
 | `tcp.listener-poll Listener Budget` | Consume at most `Budget` incoming packets and return the number examined. Check timers and allow up to one outgoing segment per slot. The output rotation advances after a segment is queued. |
 | `tcp.accept Listener` | Return the next established connection's fixnum token, or `0` if none is ready. |
 | `tcp.connection-index Listener Token` | Return the physical slot index in 1 through `Slots` for caller-owned preallocated buffers. |
+| `tcp.accept-on Listener Port` | Accept an established stream for a particular local port. |
+| `tcp.connection-readable? Listener Token`, `tcp.connection-writable? Listener Token` | Check for a read or write that can progress, including a terminal read. |
 | `tcp.connection-state Listener Token` | Return the state of an accepted connection. |
 | `tcp.connection-send Listener Token Payload Count` | Accept bytes with the same return contract as `tcp.send`. |
 | `tcp.connection-recv-into Listener Token Out Count` | Receive bytes with the same return contract as `tcp.recv-into`. |
 | `tcp.connection-shutdown-write Listener Token` | Queue FIN with the same return contract as `tcp.shutdown-write`. |
+| `tcp.connection-abort Listener Token` | Abort the stream and send a reset when the transmit queue has room. An unestablished active open is canceled locally. |
 | `tcp.release Listener Token` | Recycle a terminal connection, discarding any unread data. Returns false while the connection is live, including TIME-WAIT. |
 
 Half-open handshakes take up slots and are reclaimed on timeout. A full listener drops new SYNs, allowing
