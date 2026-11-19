@@ -798,6 +798,14 @@ cannot. The kernel suite is the kernel's `tests/runme.shen`; the stlib install l
 
 ### Bytecode and lowering rules
 
+- **Wide closure captures** (2026-11-19, macOS arm64). The loader accepts up to 4096 captures using the existing
+  bytecode representation and encodes the operands of `closure` and `prim` in one pass. With the raised cap
+  in both builds, the median of five alternating runs of 40 installs of a 4096-capture code object went from
+  93.02 to 0.57 ms. **Rejected:** switching the lowerer's capture list to a dictionary after 24 entries. The
+  median of three alternating runs of capture bookkeeping for 400 builders with 257 entries went from
+  89.31 to 6.32 ms. Loading, calling and collecting a generated Shen closure with 4096 distinct captures took
+  about 2.20 s in both builds, so the lowerer keeps the ordered list.
+
 - **Register bytecode, lowerer in Shen** (design, 2026-11-01). An earlier bytecode VM's profiles had constant, stack and global traffic
   dominating retired instructions, so the JIT's only input is register bytecode with resolved slots and literal
   operands, with no interpreter. The lowerer emits symbolic Shen lists that C encodes by name, so no encoder is

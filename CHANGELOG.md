@@ -7,6 +7,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- A closure can capture up to 4096 values, up from 256, with the same bytecode and native instructions for existing closures.
+
 - Each library's rules for typed clients are one datatype named for its namespace: `io.t`, `json.t`, `http.t`,
   `process.t` and so on, and `isolate.t` and `channel.t` in the image. The old names, such as `json-values`,
   `process-options` and `isolate.types`, are gone, so `preclude` and `include` take the new ones.
