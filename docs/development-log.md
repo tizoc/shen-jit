@@ -3803,6 +3803,20 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   check has passed. On the `net-dsl` branch, TCP's lossy run 170.8–171.2 against 162.0–162.8 ms, its UDP echo
   22.4–22.5 against 21.6–21.7.
 
+### Validate checksum spans once (2026-11-19, Linux x86-64 in Docker Desktop)
+
+- The one's-complement sum shared by IPv4 and IPv6 validates the packet span
+  once and then reads 16-bit words from its storage. A UDP regression covers
+  unaligned subviews, odd-length spans, seeded sums, and the subview boundary.
+- Compared with `4cc537b` in three alternating runs per build and device.
+  Each run timed 240,000 requests across four keep-alive connections, two per
+  address family. The mix was 90% `/health` and 10% 8 KiB `/payload`.
+  TUN rose from 29,473 to 40,430 requests/s and p99 fell from 475 to 268 µs.
+  TAP rose from 24,560 to 36,334 requests/s and p99 fell from 562 to 297 µs.
+- All six optimized benchmark runs measured zero heap words allocated in
+  transport after setup, with a five-word positive control. The portable
+  networking suites and the Linux TUN and TAP integration suites passed.
+
 ### Bounded TCP TIME-WAIT records (2026-11-19, Linux x86-64 in Docker Desktop)
 
 - With the original four-slot HTTP example on TUN and TAP, the fifth
@@ -3925,6 +3939,15 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   lines); and tcp.shen split into four files of one namespace. Each against the one before: UDP echo
   and TCP connections within 0.3 ms throughout. lib/net grew from 6,433 to 6,608 lines, mostly
   datatypes and names. Linux's TUN and TAP suites pass with no heap words.
+- Brought the other branch's checksum change (its dd24bd7, "Validate checksum spans once"): the sum checks
+  its span once and reads the view's storage directly. On this branch's workloads UDP echo went from 38.8
+  to 27.8 ms and TCP connections from 370.3 to 277.0: a checked read per word had been a quarter of each.
+  Then summed in the machine's byte order, 32 bits at a time, and swapped once (RFC 1071 2(B)): TCP 274.2 to
+  265.0 ms, UDP 27.0 to 26.2, with the same checksums.
+- **Not adopted from the other branch:** shared packet storage across Ethernet and IP queues (its
+  e41c023), about 300 lines for under 1% in its own HTTP benchmark (TUN 40,102 to 40,384 requests/s),
+  which is the kind of machinery for little gain this project declines; and a cache of Ethernet egress
+  routes, which it reverted itself (66cde9e, 5b203e8) when native runs showed no gain.
 
 ### Source-specific multicast (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
 

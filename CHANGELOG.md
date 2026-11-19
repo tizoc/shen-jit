@@ -51,6 +51,8 @@ All notable changes to this project are documented in this file. The format is b
   and IGMPv3 and MLDv2 reports for source changes and source-specific queries.
 - Releasing TCP streams can retain TIME-WAIT in a separate preallocated table,
   so later connections can reuse the stream slots during the two-minute wait.
+- The checksum loop shared by IPv4 and IPv6 validates the buffer range once per
+  span, reducing per-packet processing time.
 
 ### Changed
 

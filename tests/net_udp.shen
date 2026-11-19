@@ -62,6 +62,16 @@
            (udp-test.expect-int "computed zero packet size" 30 (udp.packet-recv-into Right Wire))
            (udp-test.expect "zero checksum encoded as all ones" true (buffer.equal? ComputedZero Wire)))))
 
+(define udp-test.checksum-span
+  {--> boolean}
+  -> (let Bytes (udp-test.fill (buffer.new 7) 0 [222 1 2 3 4 5 223])
+          Span (buffer.slice Bytes 1 5)
+       (do (udp-test.expect-int "odd span at an unaligned view offset" 2317 (net-ipv4.sum16 Span 0 5 7))
+           (udp-test.expect-int "even span with an additional offset" 1551 (net-ipv4.sum16 Span 1 4 7))
+           (udp-test.expect-int "zero-length checksum preserves the seed" 7 (net-ipv4.sum16 Span 5 0 7))
+           (udp-test.expect "checksum span cannot cross the view boundary" true
+             (trap-error (do (net-ipv4.sum16 Span 4 2 0) false) (/. E true))))))
+
 (define udp-test.discards
   {--> boolean}
   -> (let L (udp.make-link 8 32 0 (freeze 0))
@@ -147,4 +157,5 @@
 
 (define udp-test.run
   {--> boolean}
-  -> (and (udp-test.wire) (udp-test.checksum-edges) (udp-test.discards) (udp-test.fifo)))
+  -> (and (udp-test.wire) (udp-test.checksum-edges) (udp-test.checksum-span)
+          (udp-test.discards) (udp-test.fifo)))

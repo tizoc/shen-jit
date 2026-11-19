@@ -35,12 +35,32 @@
   {fixnum --> fixnum}
   IP -> (fx+ 1101088686080 (shen-jit.bit-and IP 8388607)))
 
-\\ One's complement sum in network byte order. The odd tail has an implicit low zero byte.
+\\ RFC 1071 2(B): a one's-complement sum does not depend on byte order, so a span is summed in the
+\\ machine's order, little-endian on every platform this runs on, four bytes at a time, and its folded
+\\ sum swapped once into network order. The caller has validated the whole span; an odd tail's byte is
+\\ the low byte of a word read so.
+(define sum-storage
+  {buffer.storage --> fixnum --> fixnum --> fixnum --> fixnum}
+  B I Count Sum ->
+    (cases (fx>= Count 4) (sum-storage B (fx+ I 4) (fx- Count 4) (fx+ Sum (shen-jit.u32 B I)))
+           (fx>= Count 2) (sum-storage B (fx+ I 2) (fx- Count 2) (fx+ Sum (shen-jit.u16 B I)))
+           (= Count 1) (fx+ Sum (shen-jit.u8 B I))
+           true Sum))
+
+(define fold-all
+  {fixnum --> fixnum}
+  N -> (if (fx< N 65536) N (fold-all (fx+ (shen-jit.bit-and N 65535) (shen-jit.shift-right N 16)))))
+
+(define swap16
+  {fixnum --> fixnum}
+  N -> (shen-jit.bit-or (shen-jit.shift-left (shen-jit.bit-and N 255) 8) (shen-jit.shift-right N 8)))
+
 (define sum16
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
   _ _ 0 Sum -> Sum
-  B I 1 Sum -> (fx+ Sum (shen-jit.shift-left (buffer.u8 B I) 8))
-  B I Count Sum -> (sum16 B (fx+ I 2) (fx- Count 2) (fx+ Sum (buffer.u16-be B I))))
+  B I Count Sum ->
+    (let Start (buffer.range (buffer.length B) I Count)
+      (fx+ Sum (swap16 (fold-all (sum-storage (buffer.owner B) (fx+ (buffer.offset B) Start) Count 0))))))
 
 (define fold16
   {fixnum --> fixnum}
