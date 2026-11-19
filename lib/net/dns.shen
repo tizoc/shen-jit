@@ -5,8 +5,10 @@
   (use net-ipv4)
   (use shen-jit)
   (use net-wire => wire)
+  (use grammar)
   (import struct defstruct)
   (import layout write-layout)
+  (externals [defgrammar])
   (export resolver make start poll
           resolver.state resolver.ip resolver.ttl resolver.deadline
           idle pending resolved not-found failed)
@@ -23,7 +25,8 @@
   (mutable ip : fixnum)
   (mutable ttl : fixnum)
   (mutable deadline : fixnum)
-  (mutable attempts : fixnum))
+  (mutable attempts : fixnum)
+  (names : grammar.state))
 
 (define make
   {udp.inbox --> fixnum --> resolver}
@@ -34,6 +37,7 @@
           query <- (buffer.new 271)
           reply <- (buffer.new ReceiveBytes)
           info <- (udp.make-recv-info)
+          names <- (grammar.state)
           server <- 0
           id <- 0
           query-length <- 0
@@ -44,15 +48,19 @@
           attempts <- 0)
         (error "net/dns: receive buffer must be in 512..65507 bytes")))
 
+\\ A name's bytes, RFC 1035 4.1.4: labels, each a length of at most 63 and its bytes, to the empty label,
+\\ or, where compression is allowed, to a pointer, two bytes whose first has its top two bits set.
+(defgrammar (<name> Compressed) {boolean ==> fixnum}
+  0 := 0;
+  Head (where (and Compressed (fx>= Head 192))) _ := 0;
+  Length (where (fx<= Length 63)) (wire.<bytes> Length) (<name> Compressed) := 0;)
+
+(grammar.finish)
+
+\\ Where the name at I ends, before End, or -1.
 (define after-name
-  {buffer.view --> fixnum --> fixnum --> boolean --> fixnum}
-  B I End Compressed ->
-    (if (fx>= I End) -1
-        (let Len (buffer.u8 B I) Next (fx+ I 1)
-          (cases (= Len 0) Next
-                 (and Compressed (fx>= Len 192) (fx< Next End)) (fx+ Next 1)
-                 (or (fx> Len 63) (fx> (fx+ Next Len) End)) -1
-                 true (after-name B (fx+ Next Len) End Compressed)))))
+  {grammar.state --> buffer.view --> fixnum --> fixnum --> boolean --> fixnum}
+  S B I End Compressed -> (<name>.end-at Compressed S B I End))
 
 (define start
   {resolver --> fixnum --> fixnum --> buffer.view --> fixnum --> boolean}
@@ -61,7 +69,7 @@
          Q (resolver.query R)
       (if (and (not (= (resolver.state R) pending)) (net-ipv4.unicast? Server)
                (fx>= Id 0) (fx<= Id 65535) (fx>= N 1) (fx<= N 255)
-               (= (after-name Name 0 N false) N))
+               (= (after-name (resolver.names R) Name 0 N false) N))
           (do (write-layout wire.dns Q 0 (id Id) (recursion-desired 1) (questions 1))
               (buffer.copy-into! Q (wire.dns.size) Name 0 N)
               (write-layout wire.dns-question Q (fx+ (wire.dns.size) N) (type 1) (class 1))   \\ A, IN.
@@ -121,10 +129,10 @@
 
 \\ Return an A record or the first well-formed CNAME for the current owner.
 (define find-answer
-  {buffer.view --> fixnum --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
-  _ _ _ _ _ _ 0 -> -1
-  Name Owner B N I EndName Count ->
-    (let Fields (after-name B I N true)
+  {grammar.state --> buffer.view --> fixnum --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
+  _ _ _ _ _ _ _ 0 -> -1
+  S Name Owner B N I EndName Count ->
+    (let Fields (after-name S B I N true)
       (if (or (fx< Fields 0) (fx> (fx+ Fields (wire.dns-record.size)) N)) -1
           (let Data (fx+ Fields (wire.dns-record.size))
                Size (wire.dns-record.length B Fields)
@@ -133,17 +141,17 @@
             (cases (fx> Next N) -1
                    (and (= (wire.dns-record.class B Fields) 1)             \\ IN, and A or CNAME.
                         (or (and (= Kind 1) (= Size 4))
-                            (and (= Kind 5) (fx> Size 0) (= (after-name B Data Next true) Next)))
+                            (and (= Kind 5) (fx> Size 0) (= (after-name S B Data Next true) Next)))
                         (name-equal? Name Owner EndName B I N 255))
                      Fields
-                   true (find-answer Name Owner B N Next EndName (fx- Count 1)))))))
+                   true (find-answer S Name Owner B N Next EndName (fx- Count 1)))))))
 
 (define resolve-answer
   {resolver --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
   _ _ _ _ _ _ _ 0 -> false
   R Name Owner EndName N Start Ttl Left ->
     (let B (resolver.reply R)
-         Fields (find-answer Name Owner B N Start EndName (wire.dns.answers B 0))
+         Fields (find-answer (resolver.names R) Name Owner B N Start EndName (wire.dns.answers B 0))
       (if (fx< Fields 0) false
           (let Data (fx+ Fields (wire.dns-record.size))
                Lifetime (wire.dns-record.ttl B Fields)
@@ -163,7 +171,7 @@
            (= (wire.dns.response B 0) 1) (= (wire.dns.opcode B 0) 0)      \\ An answer to a query,
            (= (wire.dns.questions B 0) 1)                                  \\ to one question.
            (let Q (resolver.query R)
-                Stop (after-name B (wire.dns.size) N true)
+                Stop (after-name (resolver.names R) B (wire.dns.size) N true)
                 Rcode (wire.dns.rcode B 0)
              (and (fx>= Stop 0) (fx<= (fx+ Stop (wire.dns-question.size)) N)
                   (= (wire.dns-question.type B Stop) 1) (= (wire.dns-question.class B Stop) 1)   \\ A, IN.
