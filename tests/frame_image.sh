@@ -7,7 +7,7 @@ if command -v cygpath > /dev/null; then dir=$(cygpath -m "$dir"); fi
 "$SHEN" --save "$dir/frame.img" eval -m frame \
   -e '(define fixture.frame-tag (:result.ok [(:frame.frame Tag _)]) -> Tag)' \
   -e '(define fixture.frame-payload (:result.ok [(:frame.frame _ V)]) -> V)' \
-  -e '(do (set frame-image.reader (let A (frame.encode 1 (buffer.from-string "a") 8) B (frame.encode 2 (buffer.from-string "bc") 8) Wire (buffer.new 15) _ (buffer.copy! Wire 0 A 0 7) _ (buffer.copy! Wire 7 B 0 8) (frame.reader (io.reader (io.input-buffer Wire) []) 8))) true)' \
+  -e '(do (set frame-image.reader (let A (frame.encode 1 (buffer.from-string "a") 8) B (frame.encode 2 (buffer.from-string "bc") 8) Wire (buffer.new 15) _ (buffer.copy-into! Wire 0 A 0 7) _ (buffer.copy-into! Wire 7 B 0 8) (frame.reader (io.reader (io.input-buffer Wire) []) 8))) true)' \
   -e '(frame.next (value frame-image.reader))' > "$dir/save.out" 2>&1
 SHEN_JIT_IMAGE="$dir/frame.img" "$SHEN" eval \
   -e '(let F (value frame-image.reader) Result (frame.next F) (output "saved: ~A ~A ~A ~A~%" (fixture.frame-tag Result) (buffer.string (fixture.frame-payload Result)) (frame.position F) (frame.next F)))' > "$dir/load.out" 2>&1

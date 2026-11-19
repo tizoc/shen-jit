@@ -126,7 +126,7 @@
   {head-reader --> buffer.view --> fixnum --> head-reader}
   F V Count ->
     (let Used (head-reader.used F)
-      (do (buffer.copy! (head-storage (head-reader.storage F)) Used V 0 Count)
+      (do (buffer.copy-into! (head-storage (head-reader.storage F)) Used V 0 Count)
           (io.consume (head-reader.reader F) Count)
           (head-reader.used-> F (fx+ Used Count))
           F)))

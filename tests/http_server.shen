@@ -186,7 +186,7 @@
   Text N -> (server-test.repeat (cn Text Text) (- N 1)))
 
 (let Body (buffer.new 32768)
-     _ (buffer.u8! Body 32767 255)
+     _ (buffer.u8-> Body 32767 255)
      Wire (cn (make-string "POST / HTTP/1.1c#13;c#10;Host: localc#13;c#10;X-Padding: ~Ac#13;c#10;Content-Length: 32768c#13;c#10;c#13;c#10;"
                 (server-test.repeat "z" 11)) (buffer.string Body))
      Exchange (server-test.exchange Wire [[read-buffer-size 7]] (function server-test.handler) false)

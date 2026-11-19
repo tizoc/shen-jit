@@ -9,8 +9,8 @@
   (use option)
   (import struct defstruct)
   (shadow index length)
-  (export append! append-byte! builder builder-length bytes copy! buffer.cursor => cursor
-    equal? finish from-string make new slice storage buffer.string => string wrap)
+  (export append! append-byte! builder builder-length bytes copy-into!
+    buffer.cursor => cursor equal? finish from-string make new slice storage buffer.string => string wrap)
 
 (define make
   Storage Start End -> (view.make Storage Start End))

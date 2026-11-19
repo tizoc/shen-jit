@@ -20,7 +20,7 @@
 
 (define frame-test.fill
   V _ [] -> V
-  V At [Byte | Rest] -> (frame-test.fill (buffer.u8! V At Byte) (+ At 1) Rest))
+  V At [Byte | Rest] -> (frame-test.fill (buffer.u8-> V At Byte) (+ At 1) Rest))
 
 (define frame-test.value
   (:result.ok [(:frame.frame Tag Payload)]) -> [Tag (buffer.string Payload)]

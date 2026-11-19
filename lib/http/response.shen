@@ -145,8 +145,8 @@
          Head (encode-head Method Response [length N] Close HeadLimit)
          Send (if (suppressed? Method (response.status Response)) 0 N)
          Out (buffer.new (+ (buffer.length Head) Send))
-         _ (buffer.copy! Out 0 Head 0 (buffer.length Head))
-      (do (buffer.copy! Out (buffer.length Head) Body 0 Send) Out)))
+         _ (buffer.copy-into! Out 0 Head 0 (buffer.length Head))
+      (do (buffer.copy-into! Out (buffer.length Head) Body 0 Send) Out)))
 
 (define encode-for
   Method Response HeadLimit BodyLimit -> (encode-mode Method Response HeadLimit BodyLimit true))
@@ -479,9 +479,9 @@
          N (buffer.length V)
          P (buffer.length Prefix)
          Out (buffer.new (+ P N 2))
-         _ (buffer.copy! Out 0 Prefix 0 P)
-         _ (buffer.copy! Out P V 0 N)
-      (do (buffer.u8! Out (+ P N) 13) (buffer.u8! Out (+ P N 1) 10) Out)))
+         _ (buffer.copy-into! Out 0 Prefix 0 P)
+         _ (buffer.copy-into! Out P V 0 N)
+      (do (buffer.u8-> Out (+ P N) 13) (buffer.u8-> Out (+ P N 1) 10) Out)))
 
 (datatype http.response.t
   N : fixnum;

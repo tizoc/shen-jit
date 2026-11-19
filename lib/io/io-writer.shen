@@ -85,7 +85,7 @@
       (if (= Room 0)
           (buffer-write-step W V At End (io.flush W))
           (let N (min-count Room (fx- End At))
-            (do (buffer.copy! B (writer.end W) V At N)
+            (do (buffer.copy-into! B (writer.end W) V At N)
                 (writer.end-> W (fx+ (writer.end W) N))
                 (buffer-write W V (fx+ At N) End))))))
 

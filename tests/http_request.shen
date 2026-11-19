@@ -133,7 +133,7 @@
 
 (let Source (buffer.from-string (request-test.head "X-Foo: firstc#13;c#10;x-foo: secondc#13;c#10;"))
      Q (request-test.ok (http.parse-request Source 0))
-     _ (buffer.u8! Source 0 88)
+     _ (buffer.u8-> Source 0 88)
   (do (request-test.check "metadata owns strings after input mutation" ["GET" "/" "HTTP/1.1"]
         (freeze [(http.method Q) (http.target Q) (http.version Q)]))
       (request-test.check "ordered repeated field values" ["first" "second"]
@@ -142,7 +142,7 @@
 
 (let Q (request-test.ok (request-test.parse (request-test.head "Content-Length: 3c#13;c#10;") 3))
      Wire (buffer.from-string "ac#0;zNEXT")
-     _ (buffer.u8! Wire 2 255)
+     _ (buffer.u8-> Wire 2 255)
      E (io.input-buffer Wire)
      R (io.reader E [[chunk-size 1]])
      B (http.body-reader R Q)

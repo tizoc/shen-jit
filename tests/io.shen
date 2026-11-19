@@ -114,7 +114,7 @@
   (do (io-test.check "aggregate failure has total" [read 3] (freeze (io-test.failure (io.read-all R 10)))) (io.close E)))
 
 (let V (buffer.from-string "abc") E (io.input-buffer V)
-  (do (buffer.u8! V 0 88)
+  (do (buffer.u8-> V 0 88)
       (io-test.check "memory source snapshots input" "abc" (freeze (io-test.view (io.read-all (io.reader E []) 3)))) (io.close E)))
 (let Out (buffer.from-string "!---?") E (io.output-buffer (buffer.slice Out 1 3))
   (do (io-test.check "fixed memory sink partial total" 3

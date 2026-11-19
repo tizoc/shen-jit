@@ -38,7 +38,7 @@
                Grow (if (= Cap 0) (if (fx< Limit 256) Limit 256)
                         (fx+ Cap (if (fx< Cap (fx- Limit Cap)) Cap (fx- Limit Cap))))
                Next (new (if (fx> Need Grow) Need Grow))
-               _ (copy! Next 0 Old 0 (builder.length B))
+               _ (copy-into! Next 0 Old 0 (builder.length B))
             (do (builder.storage-> B (option.some Next)) Next)))))
 
 (define append!
@@ -50,7 +50,7 @@
          _ (if (fx<= N (fx- (builder.limit B) At)) true (error "buffer: builder exceeds byte limit"))
          End (fx+ At N)
          Out (builder-reserve B Old End)
-         _ (copy! Out At V 0 N)
+         _ (copy-into! Out At V 0 N)
       (builder.length-> B End)))
 
 (define append-byte!
@@ -63,7 +63,7 @@
          _ (if (fx< At (builder.limit B)) true (error "buffer: builder exceeds byte limit"))
          End (fx+ At 1)
          Out (builder-reserve B Old End)
-         _ (u8! Out At Value)
+         _ (u8-> Out At Value)
       (builder.length-> B End)))
 
 (define finish

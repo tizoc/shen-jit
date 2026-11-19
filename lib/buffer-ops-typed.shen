@@ -1,7 +1,7 @@
 (shen.x.namespace buffer
   (use shen-jit)
   (shadow index length)
-  (export from-string slice bytes buffer.string => string copy! equal?)
+  (export from-string slice bytes buffer.string => string copy-into! equal?)
 
 (define from-string
   {string --> view}
@@ -27,7 +27,7 @@
   V -> (let Checked (check V) Start (view.start Checked)
          (shen-jit.bytes->string (view.owner Checked) Start (fx- (view.end Checked) Start))))
 
-(define copy!
+(define copy-into!
   {view --> fixnum --> view --> fixnum --> fixnum --> view}
   To I From J Count ->
     (let T (check To) F (check From)

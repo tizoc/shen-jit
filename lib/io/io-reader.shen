@@ -85,7 +85,7 @@
       (if (fx> At 0)
           (let B (reader.buffer R)
                N (fx- (reader.end R) At)
-            (do (buffer.copy! B 0 B At N)
+            (do (buffer.copy-into! B 0 B At N)
                 (reader.start-> R 0)
                 (reader.end-> R N)))
           R)))
@@ -193,7 +193,7 @@
           (let _ (fill-reader R 1)
                N (min-count Count (fx- (reader.end R) (reader.start R)))
             (if (fx> N 0)
-                (do (buffer.copy! V 0 (reader.buffer R) (reader.start R) N)
+                (do (buffer.copy-into! V 0 (reader.buffer R) (reader.start R) N)
                     (consume R N)
                     (ok (option.some N)))
                 (reader-terminal R))))))
@@ -255,7 +255,7 @@
   {buffer.view --> fixnum --> (list buffer.view) --> buffer.view}
   Out _ [] -> Out
   Out At [V | Rest] ->
-    (do (buffer.copy! Out At V 0 (buffer.length V))
+    (do (buffer.copy-into! Out At V 0 (buffer.length V))
         (join-loop Out (fx+ At (buffer.length V)) Rest)))
 
 )

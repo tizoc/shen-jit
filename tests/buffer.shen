@@ -35,10 +35,10 @@
       (buffer-test.raises "integral float index" (freeze (buffer.u8 V (+ 0.5 0.5))))
       (buffer-test.raises "negative count" (freeze (buffer.slice V 0 -1)))
       (buffer-test.raises "count overflow" (freeze (buffer.slice V 1 2305843009213693951)))
-      (buffer-test.raises "invalid byte" (freeze (buffer.u8! V 1 256)))
+      (buffer-test.raises "invalid byte" (freeze (buffer.u8-> V 1 256)))
       (buffer-test.check "failed store changes nothing" "!abcdef?" (freeze (buffer.string B)))
       (let Saved (buffer.string V) Bytes (buffer.bytes V)
-        (do (buffer.u8! V 1 88)
+        (do (buffer.u8-> V 1 88)
             (buffer-test.check "shared mutation" "!abXdef?" (freeze (buffer.string B)))
             (buffer-test.check "independent string" "bcd" (freeze Saved))
             (buffer-test.check "independent bytes" "bcd"
@@ -46,15 +46,41 @@
       (shen-jit.collect)
       (buffer-test.check "owner remains reachable" "bXd" (freeze (buffer.string V)))))
 
+(let B (buffer.from-string "!......?") V (buffer.slice B 1 6)
+  (do (buffer-test.check "u16-be store returns the view" true
+        (freeze (shen-jit.same? V (buffer.u16-be-> V 0 4660))))
+      (buffer-test.check "u32-be store returns the view" true
+        (freeze (shen-jit.same? V (buffer.u32-be-> V 2 2309737967))))
+      (buffer-test.check "unaligned big-endian values" [4660 2309737967]
+        (freeze [(buffer.u16-be V 0) (buffer.u32-be V 2)]))
+      (buffer-test.check "big-endian bytes and view margins" [33 18 52 137 171 205 239 63]
+        (freeze (map (/. I (buffer.u8 B I)) [0 1 2 3 4 5 6 7])))
+      (buffer-test.raises "u16-be read crosses the view" (freeze (buffer.u16-be V 5)))
+      (buffer-test.raises "u32-be read crosses the view" (freeze (buffer.u32-be V 3)))
+      (buffer-test.raises "u16-be write crosses the view" (freeze (buffer.u16-be-> V 5 0)))
+      (buffer-test.raises "u32-be write crosses the view" (freeze (buffer.u32-be-> V 3 0)))
+      (buffer-test.raises "negative big-endian index" (freeze (buffer.u32-be V -1)))
+      (buffer-test.raises "integral float big-endian index" (freeze (buffer.u16-be V (+ 0.5 0.5))))
+      (buffer-test.raises "negative unsigned store" (freeze (buffer.u16-be-> V 0 -1)))
+      (buffer-test.raises "integral float unsigned store" (freeze (buffer.u32-be-> V 2 (+ 0.5 0.5))))
+      (buffer-test.raises "u16-be overflow" (freeze (buffer.u16-be-> V 0 65536)))
+      (buffer-test.raises "u32-be overflow" (freeze (buffer.u32-be-> V 2 4294967296)))
+      (buffer-test.check "failed big-endian stores preserve the bytes" [33 18 52 137 171 205 239 63]
+        (freeze (map (/. I (buffer.u8 B I)) [0 1 2 3 4 5 6 7])))
+      (buffer.u16-be-> V 0 65535)
+      (buffer.u32-be-> V 2 4294967295)
+      (buffer-test.check "max unsigned values" [65535 4294967295]
+        (freeze [(buffer.u16-be V 0) (buffer.u32-be V 2)]))))
+
 (let B (buffer.from-string "abcdef")
-  (do (buffer.copy! B 1 B 0 5)
+  (do (buffer.copy-into! B 1 B 0 5)
       (buffer-test.check "overlap to the right" "aabcde" (freeze (buffer.string B)))
-      (buffer.copy! B 0 B 1 5)
+      (buffer.copy-into! B 0 B 1 5)
       (buffer-test.check "overlap to the left" "abcdee" (freeze (buffer.string B)))
-      (buffer-test.raises "copy destination range" (freeze (buffer.copy! B 2 B 0 5)))
-      (buffer-test.raises "copy source range" (freeze (buffer.copy! B 0 B 2 5)))
+      (buffer-test.raises "copy destination range" (freeze (buffer.copy-into! B 2 B 0 5)))
+      (buffer-test.raises "copy source range" (freeze (buffer.copy-into! B 0 B 2 5)))
       (buffer-test.check "failed copies change nothing" "abcdee" (freeze (buffer.string B)))
-      (buffer-test.check "empty copy" true (freeze (shen-jit.same? B (buffer.copy! B 6 B 6 0))))))
+      (buffer-test.check "empty copy" true (freeze (shen-jit.same? B (buffer.copy-into! B 6 B 6 0))))))
 
 (buffer-test.check "logical equality ignores owner margins" true
   (freeze (buffer.equal? (buffer.slice (buffer.from-string "!abc?") 1 3)
@@ -85,12 +111,12 @@
             (buffer-test.check "forked positions" [1 3]
               (freeze [(cursor.position C) (cursor.position Fork)]))))
       (let Borrowed (cursor.view C 2)
-        (do (buffer.u8! Borrowed 0 88)
+        (do (buffer.u8-> Borrowed 0 88)
             (buffer-test.check "borrowed cursor capture" "tXg=42"
               (freeze (buffer.string (cursor.buffer C))))))
       (cursor.seek C 0)
       (let Owned (cursor.bytes C 3)
-        (do (buffer.u8! (cursor.buffer C) 0 90)
+        (do (buffer.u8-> (cursor.buffer C) 0 90)
             (buffer-test.check "owned cursor capture" "tXg"
               (freeze (buffer.string (buffer.wrap Owned))))))
       (cursor.seek C 6)
@@ -116,6 +142,6 @@
   _ -> false)
 (buffer-test.check "calls of the checks know their arities" [false false false false]
   (freeze (map (/. F (buffer-test.tests-arity? (shen-jit.code F)))
-               [buffer.slice buffer.copy! buffer.append! buffer.append-byte!])))
+               [buffer.slice buffer.copy-into! buffer.append! buffer.append-byte!])))
 
 (output "~A passed, ~A failed~%" (value buffer-test.*passed*) (value buffer-test.*failed*))

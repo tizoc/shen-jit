@@ -4,16 +4,9 @@
   (use buffer)
   (use io)
   (use option)
-  (use shen-jit)
   (import struct defstruct)
   (shadow limit)
   (export frame frame? encode next position reader)
-
-\\ Decode from the header's own storage without checking a view at each byte.
-(define uint
-  {buffer.storage --> fixnum --> fixnum --> fixnum --> fixnum}
-  _ _ 0 N -> N
-  B At Count N -> (uint B (fx+ At 1) (fx- Count 1) (fx+ (fx* N 256) (shen-jit.u8 B At))))
 
 (define reader
   {io.reader --> fixnum --> reader}
@@ -55,14 +48,14 @@
   _ _ (:err Error) -> (:err (io.progress Error (fx+ 6 (io.error-progress Error)))))
 
 (define read-header
-  {reader --> buffer.storage --> (io.result io.transfer) -->
+  {reader --> buffer.view --> (io.result io.transfer) -->
    (io.result (option.t frame))}
   _ _ (:ok (:io.transfer false 0)) -> (:ok (option.none))
   _ _ (:ok (:io.transfer false N)) -> (frame.error "incomplete header" N)
   _ _ (:err Error) -> (:err Error)
   F B (:ok (:io.transfer true 6)) ->
-    (let Tag (uint B 0 2 0)
-         N (uint B 2 4 0)
+    (let Tag (buffer.u16-be B 0)
+         N (buffer.u32-be B 2)
       (if (fx> N (reader.limit F))
           (frame.error "payload exceeds limit" 6)
           (let Payload (buffer.new N)
@@ -73,10 +66,10 @@
    (io.result (option.t frame))}
   _ [Terminal] -> Terminal
   F [] ->
-    (let B (shen-jit.bytes 6)
+    (let B (buffer.new 6)
          Start (io.position (reader.input F))
          _ (reader.busy-> F true)
-         Result (trap-error (read-header F B (io.reader-exact (reader.input F) (buffer.wrap B)))
+         Result (trap-error (read-header F B (io.reader-exact (reader.input F) B))
                   (/. X (do (reader.busy-> F false)
                             \\ Record how much of this frame was read before the exception.
                             (cache-error F (error-to-string X)

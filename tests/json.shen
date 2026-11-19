@@ -15,7 +15,7 @@
 
 (define json-test.bytes
   _ _ [] -> true
-  V At [Byte | Rest] -> (do (buffer.u8! V At Byte) (json-test.bytes V (+ At 1) Rest)))
+  V At [Byte | Rest] -> (do (buffer.u8-> V At Byte) (json-test.bytes V (+ At 1) Rest)))
 
 (json-test.check "ordered object and exact tokens" [object ["a" [[number "-0"] true null]] ["b" [object]]]
   (freeze (json.parse " {c#34;ac#34;:[-0,true,null],c#34;bc#34;:{}} " [])))
@@ -40,7 +40,7 @@
   (freeze (json.decode (buffer.slice (buffer.from-string "!1!") 1 1) [])))
 (let V (buffer.from-string "{c#34;xc#34;:c#34;stablec#34;}")
      Value (json.decode V [])
-     _ (buffer.u8! V 6 88)
+     _ (buffer.u8-> V 6 88)
   (json-test.check "decoded strings own their bytes" [object ["x" "stable"]] (freeze Value)))
 
 (map (/. Text (json-test.raises Text (freeze (json.parse Text []))))
@@ -53,9 +53,9 @@
 (map (/. Bytes
        (json-test.raises "invalid UTF-8 decode"
          (freeze (let V (buffer.new (+ 2 (length Bytes)))
-                      _ (buffer.u8! V 0 34)
+                      _ (buffer.u8-> V 0 34)
                       _ (json-test.bytes V 1 Bytes)
-                      _ (buffer.u8! V (- (buffer.length V) 1) 34)
+                      _ (buffer.u8-> V (- (buffer.length V) 1) 34)
                    (json.decode V [])))))
   [[128] [192 128] [224 128 128] [237 160 128] [244 144 128 128] [245 128 128 128] [226 130]])
 
@@ -85,7 +85,7 @@
 (let B (buffer.builder 1024)
      Source (buffer.from-string "abc")
      _ (buffer.append! B Source)
-     _ (buffer.u8! Source 0 88)
+     _ (buffer.u8-> Source 0 88)
      _ (buffer.append! B (buffer.new 700))
      _ (buffer.append-byte! B 255)
      Result (buffer.finish B)

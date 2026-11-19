@@ -19,9 +19,11 @@ transport EOF declaration. Failed captures and movement leave its position uncha
 | `buffer.wrap Storage` | Borrow an existing managed buffer or sized pointer |
 | `buffer.slice V Start Count` | A subview relative to V, bounded by V rather than the whole owner |
 | `buffer.length V`, `buffer.owner V`, `buffer.offset V`, `buffer.end V` | Logical length, original owner and owner-relative start/exclusive end |
-| `buffer.u8 V I`, `buffer.u8! V I Byte` | Checked relative byte access; a store returns V |
+| `buffer.u8 V I`, `buffer.u8-> V I Byte` | Checked relative byte access. A store returns V. |
+| `buffer.u16-be V I`, `buffer.u32-be V I` | Read an unsigned 16- or 32-bit fixnum in big-endian order at relative byte offset I |
+| `buffer.u16-be-> V I X`, `buffer.u32-be-> V I X` | Store an unsigned fixnum in big-endian order at relative byte offset I and return V |
 | `buffer.bytes V`, `buffer.string V` | Independent copies of the logical bytes; no UTF-8 validation |
-| `buffer.copy! To I From J Count` | Checked overlapping copy, returning To |
+| `buffer.copy-into! To I From J Count` | Checked overlapping copy, returning To |
 | `buffer.equal? A B` | Compare logical bytes, without comparing owner margins |
 | `cursor.new V`, `cursor.fork C` | New cursor or independent position sharing C's view |
 | `cursor.buffer C`, `cursor.position C`, `cursor.offset C`, `cursor.remaining C` | View, relative position, owner-relative position and remaining count |
@@ -30,6 +32,8 @@ transport EOF declaration. Failed captures and movement leave its position uncha
 | `cursor.view C Count`, `cursor.bytes C Count`, `cursor.string C Count` | Borrow or copy Count bytes, then advance |
 
 Indices/counts must be nonnegative fixnums; an integral boxed float is refused. Empty views are valid.
+Big-endian accesses allow any alignment. The entire field must fit inside the view. A store also checks that
+its value fits the unsigned width and that the view's storage is writable before changing any bytes.
 Views share mutations; captures copy. Generic `=` on view records is not logical byte equality, and mutable
 views should not be dictionary keys. Hot scanners can unpack owner/start/end once instead of using a cursor
 for each byte.
@@ -39,7 +43,7 @@ for each byte.
 The private builder state uses a [managed struct](structs.md) for its limit, storage, length and sealed
 flag. The storage layout and public builder operations below keep their existing behavior.
 
-`buffer.builder Limit` creates an empty single-owner builder. `buffer.append! B View` copies input bytes;
+`buffer.builder Limit` creates an empty single-owner builder. `buffer.append! B View` copies input bytes.
 `buffer.append-byte! B Byte` appends one exact byte. Both return B. `buffer.builder-length B` reports the
 current length, and `buffer.finish B` transfers managed storage to an owned logical view and seals B.
 Subsequent appends or finishes raise. Empty builders are valid, including a zero byte limit.
@@ -74,10 +78,9 @@ which `buffer` requires: `(buffer.u8 V 0)` and `(buffer.slice V 0 (buffer.length
 arithmetic on them takes `fx+` and the other fixnum operators. As with other opaque FFI values, a typed foreign allocator needs an explicit
 compatible declaration at its boundary.
 
-The checks each access makes, and `buffer.u8`, `buffer.u8!`, `buffer.length`, `buffer.offset`, `buffer.end` and
-`buffer.owner` over them, are typed, in `lib/buffer-typed.shen`. In a [typed program](modules.md#typed-programs) a
-loop over a view inlines them and keeps the view's offsets and the bytes it reads in registers, still checking the
-view and the index as untyped code does:
+The byte and big-endian operations and the view checks they use are typed in `lib/buffer-typed.shen`.
+In a [typed program](modules.md#typed-programs), the loop below inlines `buffer.u8` and keeps the view's
+offsets and the bytes it reads in registers while checking the view and index.
 
 ```shen
 (define sum-bytes {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}

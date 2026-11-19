@@ -6,7 +6,7 @@
 (shen.x.namespace buffer
   (use shen-jit)
   (shadow index length)
-  (export check end index length new offset owner range u8 u8! wrap)
+  (export check end index length new offset owner range u8 u8-> u16-be u16-be-> u32-be u32-be-> wrap)
 
 \\ An index: a fixnum that is not negative. The bit operation raises for a number that is not one.
 (define index
@@ -74,7 +74,7 @@
                (shen-jit.u8 (view.owner Checked) (fx+ Start At))
                (error "buffer: range ~A + ~A exceeds ~A bytes" At 1 Length))))
 
-(define u8!
+(define u8->
   {view --> fixnum --> fixnum --> view}
   V I Byte -> (let Checked (check V)
                    Start (view.start Checked)
@@ -83,6 +83,44 @@
                 (if (fx< At Length)
                     (do (shen-jit.u8! (view.owner Checked) (fx+ Start At) Byte) V)
                     (error "buffer: range ~A + ~A exceeds ~A bytes" At 1 Length))))
+
+(define field-offset
+  {view --> fixnum --> fixnum --> fixnum}
+  Checked I Width ->
+    (let Start (view.start Checked)
+      (fx+ Start (range (fx- (view.end Checked) Start) I Width))))
+
+(define swap16
+  {fixnum --> fixnum}
+  N -> (shen-jit.bit-or (shen-jit.shift-left (shen-jit.bit-and N 255) 8)
+                      (shen-jit.shift-right N 8)))
+
+(define u16-be
+  {view --> fixnum --> fixnum}
+  V I -> (let Checked (check V)
+           (swap16 (shen-jit.u16 (view.owner Checked) (field-offset Checked I 2)))))
+
+(define u32-be
+  {view --> fixnum --> fixnum}
+  V I -> (let Checked (check V)
+           (shen-jit.bswap32 (shen-jit.u32 (view.owner Checked) (field-offset Checked I 4)))))
+
+(define u16-be->
+  {view --> fixnum --> fixnum --> view}
+  V I Value ->
+    (let Checked (check V)
+         At (field-offset Checked I 2)
+         N (shen-jit.bit-or Value 0)
+      (if (and (fx>= N 0) (fx<= N 65535))
+          (do (shen-jit.u16! (view.owner Checked) At (swap16 N)) V)
+          (error "buffer: ~S does not fit in an unsigned 16-bit field" Value))))
+
+(define u32-be->
+  {view --> fixnum --> fixnum --> view}
+  V I Value ->
+    (let Checked (check V)
+         At (field-offset Checked I 4)
+      (do (shen-jit.u32! (view.owner Checked) At (shen-jit.bswap32 Value)) V)))
 
 (define wrap
   {storage --> view}

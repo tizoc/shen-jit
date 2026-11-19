@@ -7,6 +7,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- `buffer.u16-be`, `buffer.u32-be`, `buffer.u16-be->`, and `buffer.u32-be->` read and store checked
+  big-endian unsigned fields.
 - The module `option` types an absent value, `[]`, and a present one, `[X]`, as `(option.t A)`; `(option.none)` and
   `(option.some X)` give one where no type is expected yet, as in a `let`.
 - A C library none of whose file names opens as written is looked for again from the executable's directory, so a
@@ -93,6 +95,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- Use `buffer.u8->` for byte stores and `buffer.copy-into!` for in-place copies.
 - A closure can capture up to 4096 values, up from 256, with the same bytecode and native instructions for existing closures.
 - Each library in `lib/` is a module, with a `.shenmod` descriptor beside it, so `-m http/server` loads the HTTP
   server and everything it needs. Libraries of several files moved into directories: `lib/io/` (`io`, `io/file`,

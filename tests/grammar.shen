@@ -134,13 +134,13 @@
   (freeze (grammar.parse <g.loop-require> (grammar-test.view "x5x1.") (function grammar-test.fail))))
 (grammar-test.check "big-endian fields" [258 16909060]
   (freeze (let V (buffer.new 6)
-               _ (map (/. I (buffer.u8! V I (hd (tl (assoc I [[0 1] [1 2] [2 1] [3 2] [4 3] [5 4]])))))
+               _ (map (/. I (buffer.u8-> V I (hd (tl (assoc I [[0 1] [1 2] [2 1] [3 2] [4 3] [5 4]])))))
                       [0 1 2 3 4 5])
             (grammar.parse <g.binary> V (function grammar-test.fail)))))
 (grammar-test.check "short field fails" [error 2 "no match"]
   (freeze (grammar.parse <g.binary> (buffer.slice (buffer.new 8) 2 5) (function grammar-test.fail))))
 (grammar-test.check "first rule wins" 255
-  (freeze (grammar.parse <g.byte> (buffer.u8! (buffer.new 1) 0 255) (function grammar-test.fail))))
+  (freeze (grammar.parse <g.byte> (buffer.u8-> (buffer.new 1) 0 255) (function grammar-test.fail))))
 (grammar-test.check "a loop that matches nothing stops" empty
   (freeze (grammar.parse <g.empty> (grammar-test.view "") (function grammar-test.fail))))
 (grammar-test.check "a message can be computed" [error 0 "want ab"]
@@ -189,7 +189,7 @@
                ["'abc'" "c#34;a'bc#34;" "'abc#34;"])))
 (grammar-test.check "arguments are evaluated before parameters are bound" [2 1 3]
   (freeze (let V (buffer.new 3)
-               _ (buffer.u8! (buffer.u8! (buffer.u8! V 0 1) 1 2) 2 3)
+               _ (buffer.u8-> (buffer.u8-> (buffer.u8-> V 0 1) 1 2) 2 3)
             (grammar.parse <g.swap> V (function grammar-test.fail)))))
 (grammar-test.check "a parameter in a guard" ["2026" [error 0 "no match"]]
   (freeze (map (/. T (grammar.parse <g.year> (grammar-test.view T) (function grammar-test.fail))) ["2026" "26"])))

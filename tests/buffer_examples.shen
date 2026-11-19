@@ -69,8 +69,8 @@
 
 \\ Header: tag 0x1234, big-endian length 3, then three payload bytes including NUL.
 (let Raw (buffer.new 11) V (buffer.slice Raw 1 9)
-     _ (buffer.u8! V 0 18) _ (buffer.u8! V 1 52) _ (buffer.u8! V 5 3)
-     _ (buffer.u8! V 6 97) _ (buffer.u8! V 7 0) _ (buffer.u8! V 8 255)
+     _ (buffer.u8-> V 0 18) _ (buffer.u8-> V 1 52) _ (buffer.u8-> V 5 3)
+     _ (buffer.u8-> V 6 97) _ (buffer.u8-> V 7 0) _ (buffer.u8-> V 8 255)
      Result (buffer-example.packet V 3)
   (do (buffer-example-test.check "binary endian tag" 4660 (freeze (hd (tl Result))))
       (buffer-example-test.check "binary owned payload" "ac#0;c#255;"
@@ -79,7 +79,7 @@
       (buffer-example-test.raises "binary incomplete header" (freeze (buffer-example.packet (buffer.slice V 0 5) 3)))
       (buffer-example-test.raises "binary incomplete payload" (freeze (buffer-example.packet (buffer.slice V 0 8) 3)))
       (buffer-example-test.raises "binary trailing byte" (freeze (buffer-example.packet (buffer.slice Raw 1 10) 3)))
-      (buffer.u8! V 6 88)
+      (buffer.u8-> V 6 88)
       (buffer-example-test.check "payload survives mutation" 97
         (freeze (shen-jit.u8 (hd (tl (tl Result))) 0)))))
 

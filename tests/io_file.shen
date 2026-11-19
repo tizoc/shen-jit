@@ -19,7 +19,7 @@
            (= (io.error-message (io-file-test.err Result)) "foreign: this static build cannot load libraries"))
       (do (output "1 passed, 0 failed (a static build)~%") (shen-jit.exit 0)) skip))
 
-(let Path (io-file-test.path "binary") V (buffer.from-string "ac#0;c#13;c#10;c#26;z") _ (buffer.u8! V 5 255)
+(let Path (io-file-test.path "binary") V (buffer.from-string "ac#0;c#13;c#10;c#26;z") _ (buffer.u8-> V 5 255)
   (do (io-file-test.check "write binary file" (:result.ok 6) (freeze (io.write-file Path V)))
       (io-file-test.check "read binary file" true (freeze (buffer.equal? V (io-file-test.ok (io.read-file Path 6)))))
       (io-file-test.check "read limit" 5 (freeze (io.error-progress (io-file-test.err (io.read-file Path 5)))))
@@ -93,7 +93,7 @@
             (io.close Input) (shen-jit.pointer-kill RO)))
       (memory.free M)
       (io-file-test.raises "dead foreign input" (freeze (io.input-buffer V)))))
-(let Path (io-file-test.path "large") V (buffer.new 131089) _ (buffer.u8! V 0 17) _ (buffer.u8! V 131088 29)
+(let Path (io-file-test.path "large") V (buffer.new 131089) _ (buffer.u8-> V 0 17) _ (buffer.u8-> V 131088 29)
   (do (io-file-test.check "multi-chunk file write" (:result.ok 131089) (freeze (io.write-file Path V)))
       (io-file-test.check "multi-chunk file read" true
         (freeze (buffer.equal? V (io-file-test.ok (io.read-file Path 131089)))))

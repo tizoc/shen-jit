@@ -3694,6 +3694,14 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   `fs.name` does; a root such as `/` keeps its own. A check in `tests/fs.shen` failed before.
   `fs.lstat` of `link/` still reports the directory, which is what POSIX means by the slash.
 
+### Buffer fields and mutation names (2026-11-19, Apple M3 Max)
+
+- Added typed unsigned 16- and 32-bit big-endian reads and stores on buffer views. A store checks
+  the whole field before writing. Binary framing uses these accessors for its header.
+- Buffer stores follow Shen's `vector->` convention. `copy-into!`, `append!`, and `append-byte!`
+  mark operations that modify a destination view or builder. Tests cover typed calls, unaligned
+  fields, subview bounds, invalid values and read-only foreign storage.
+
 ### Independent bounded chunk I/O (2026-11-07, M3 Max, macOS arm64)
 
 - Added optional `lib/io.shen` and `lib/io-file.shen`, over existing buffers and FFI only: no runtime

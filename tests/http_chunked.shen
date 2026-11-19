@@ -170,7 +170,7 @@
      V (hd (chunk-test.ok (io.peek-up-to R 64)))
   (do (chunk-test.check "bounded peek waits for availability, not a full span" "x" (freeze (buffer.string V)))
       (chunk-test.check "bounded peek leaves bytes queued" 0 (freeze (io.position R)))
-      (buffer.u8! V 0 88)
+      (buffer.u8-> V 0 88)
       (chunk-test.check "bounded peek returns owned bytes" "x"
         (freeze (buffer.string (hd (chunk-test.ok (io.peek-up-to R 1))))))
       (chunk-test.check "zero bounded peek does not probe transport" 0
