@@ -130,8 +130,8 @@
       (and (data-at-head? R (net-link.now Wire)) (net-link.consume R))))
 
 (define reorder-data
-  {net-link.device --> faults --> boolean}
-  Wire Faults ->
+  {net-interface.interface --> net-link.device --> faults --> boolean}
+  F Wire Faults ->
     (let R (net-link.device.tx Wire)
          Now (net-link.now Wire)
       (if (or (faults.reordered Faults) (not (data-at-head? R Now))) false
@@ -144,28 +144,43 @@
                        (do (buffer.copy-into! Held 0 B I Count)
                            (faults.size-> Faults Count)
                            (net-link.consume R)
-                           (reorder-data Wire Faults)))
+                           (reorder-data F Wire Faults)))
                    (= (buffer.u32-be Held 24) (buffer.u32-be B (fx+ I 24)))
                      (net-link.consume R)
-                   (net-link.full? R) false
                    true
-                     (do (buffer.copy-into! B (net-link.tail-offset R) Held 0 N)
+                     (do (net-interface.poll F 1)
+                         (buffer.copy-into! B (net-link.tail-offset R) Held 0 N)
                          (net-link.publish R N Now)
                          (faults.reordered-> Faults true)
                          true))))))
+
+(define tun-input
+  {net-interface.interface --> net-link.device --> faults --> fixnum --> boolean}
+  _ _ _ 0 -> true
+  F Wire Faults Budget ->
+    (let _ (reorder-data F Wire Faults)
+         R (net-link.device.tx Wire)
+      (if (net-link.ready? R (net-link.now Wire))
+          (do (net-interface.poll F 1)
+              (tun-input F Wire Faults (fx- Budget 1)))
+          (do (net-interface.poll F 0) true))))
+
+(define tun-pump
+  {net-tun.adapter --> net-link.device --> boolean --> boolean}
+  Device Wire Dropped ->
+    (let Lost (or Dropped (drop-first-data Wire))
+      (do (net-tun.pump Device (if Lost 8 1)) Lost)))
 
 (define tun-loop
   {net-tun.adapter --> net-link.device --> net-interface.interface --> request-state -->
    faults --> fixnum --> boolean --> boolean}
   Device Wire F Q Faults Until Dropped ->
-    (let _ (net-tun.pump Device 8)
-         _ (reorder-data Wire Faults)
-         _ (net-interface.poll F 8)
-         _ (net-tun.pump Device 8)
+    (let First (tun-pump Device Wire Dropped)
+         _ (tun-input F Wire Faults 8)
+         Second (tun-pump Device Wire First)
          _ (exchange Q)
-         _ (net-interface.poll F 8)
-         Lost (or Dropped (drop-first-data Wire))
-         _ (net-tun.pump Device 8)
+         _ (tun-input F Wire Faults 8)
+         Lost (tun-pump Device Wire Second)
       (cases (request-state.done Q) (and Lost (faults.reordered Faults) (correct-reply? Q))
              (fx>= (net-tun.monotonic 0) Until) (error "TUN outbound HTTP timed out")
              true (do (net-tun.wait Device 5) (tun-loop Device Wire F Q Faults Until Lost)))))
@@ -184,7 +199,7 @@
          Good (tun-loop Device Wire F Q Faults Until false)
          Heap (tun-test.words 0)
       (if Good (report Heap Control "TUN outbound HTTP with TCP loss and reordering")
-          (error "TUN outbound HTTP reply or loss check failed"))))
+          (error "TUN outbound HTTP reply or fault injection check failed"))))
 
 (define tun
   {string --> boolean}

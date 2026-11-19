@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name net/multicast)
+  (requires net/link net/ipv6 net/wire layout)
+  (typed)
+  (sources tc+ "multicast.shen"))

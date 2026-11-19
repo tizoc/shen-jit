@@ -6,6 +6,7 @@
   (use net-ipv6-headers)
   (use net-fragments6)
   (use net-ndp)
+  (use net-multicast)
   (use shen-jit)
   (use net-fragments)
   (use net-link)
@@ -15,6 +16,8 @@
   (import struct defstruct)
   (import layout write-layout)
   (export interface interface.listener make make-host make-host-sized connect poll next-deadline
+          enable-multicast enable-multicast-sized join4 join6 leave4 leave6 joined4? joined6?
+          join-source4 join-source6 leave-source4 leave-source6
           enable-ipv6 enable-ipv6-sized connect6 udp-send6 no-address udp-binding udp-send udp-recv-into udp-dropped)
 
 (defstruct ipv6-state
@@ -29,6 +32,7 @@
   (device : net-link.device)
   (ip : fixnum)
   (mutable ipv6 : (list ipv6-state))
+  (mutable groups : (list net-multicast.membership))
   (fragments : net-fragments.table)
   (listener : tcp.listener)
   (tcp-ports : (list fixnum))
@@ -41,6 +45,7 @@
       device <- D
       ip <- IP
       ipv6 <- []
+      groups <- []
       fragments <- (net-fragments.make 2 (net-link.mtu D))
       listener <- (tcp.make-listener D IP TcpPort TcpSlots InitialSequence)
       tcp-ports <- [TcpPort]
@@ -84,10 +89,120 @@
           device <- D
           ip <- IP
           ipv6 <- []
+          groups <- []
           fragments <- (net-fragments.make 2 (net-link.mtu D))
           listener <- L
           tcp-ports <- TcpPorts
           udp-bindings <- (bind-udp D IP UdpPorts UdpSlots))))
+
+(define enable-multicast
+  {interface --> fixnum --> fixnum --> boolean}
+  F Slots Seed ->
+    (if (= (interface.groups F) [])
+        (do (interface.groups-> F [(net-multicast.make (interface.device F) (interface.ip F) Slots Seed)])
+            true)
+        (error "net/interface: enable multicast once during setup")))
+
+(define enable-multicast-sized
+  {interface --> fixnum --> fixnum --> fixnum --> boolean}
+  F Slots Sources Seed ->
+    (if (= (interface.groups F) [])
+        (do (interface.groups-> F
+              [(net-multicast.make-sized (interface.device F) (interface.ip F) Slots Sources Seed)])
+            true)
+        (error "net/interface: enable multicast once during setup")))
+
+(define membership-of
+  {(list net-multicast.membership) --> net-multicast.membership}
+  [M] -> M
+  _ -> (error "net/interface: multicast is disabled"))
+
+(define join4
+  {interface --> fixnum --> boolean}
+  F IP ->
+    (let Groups (interface.groups F)
+      (and (not (= Groups []))
+           (net-multicast.join4 (membership-of Groups) IP (net-link.now (interface.device F))))))
+
+(define join6
+  {interface --> net-ipv6.address --> boolean}
+  F IP ->
+    (let Groups (interface.groups F)
+      (and (not (= Groups [])) (not (= (interface.ipv6 F) []))
+           (net-multicast.join6 (membership-of Groups) IP (net-link.now (interface.device F))))))
+
+(define leave4
+  {interface --> fixnum --> boolean}
+  F IP ->
+    (let Groups (interface.groups F)
+      (and (not (= Groups []))
+           (net-multicast.leave4 (membership-of Groups) IP (net-link.now (interface.device F))))))
+
+(define leave6
+  {interface --> net-ipv6.address --> boolean}
+  F IP ->
+    (let Groups (interface.groups F)
+      (and (not (= Groups []))
+           (net-multicast.leave6 (membership-of Groups) IP (net-link.now (interface.device F))))))
+
+(define join-source4
+  {interface --> fixnum --> fixnum --> boolean}
+  F IP Source ->
+    (let Groups (interface.groups F)
+      (and (not (= Groups []))
+           (net-multicast.join-source4 (membership-of Groups) IP Source (net-link.now (interface.device F))))))
+
+(define join-source6
+  {interface --> net-ipv6.address --> net-ipv6.address --> boolean}
+  F IP Source ->
+    (let Groups (interface.groups F)
+      (and (not (= Groups [])) (not (= (interface.ipv6 F) []))
+           (net-multicast.join-source6 (membership-of Groups) IP Source (net-link.now (interface.device F))))))
+
+(define leave-source4
+  {interface --> fixnum --> fixnum --> boolean}
+  F IP Source ->
+    (let Groups (interface.groups F)
+      (and (not (= Groups []))
+           (net-multicast.leave-source4 (membership-of Groups) IP Source (net-link.now (interface.device F))))))
+
+(define leave-source6
+  {interface --> net-ipv6.address --> net-ipv6.address --> boolean}
+  F IP Source ->
+    (let Groups (interface.groups F)
+      (and (not (= Groups []))
+           (net-multicast.leave-source6 (membership-of Groups) IP Source (net-link.now (interface.device F))))))
+
+(define joined4?
+  {interface --> fixnum --> boolean}
+  F IP ->
+    (let Groups (interface.groups F)
+      (and (not (= Groups [])) (net-multicast.joined4? (membership-of Groups) IP))))
+
+(define joined6?
+  {interface --> net-ipv6.address --> boolean}
+  F IP ->
+    (let Groups (interface.groups F)
+      (and (not (= Groups [])) (net-multicast.joined6? (membership-of Groups) IP))))
+
+(define joined6-at?
+  {interface --> buffer.view --> fixnum --> boolean}
+  F B I ->
+    (let Groups (interface.groups F)
+      (and (not (= Groups [])) (net-multicast.joined6-at? (membership-of Groups) B I))))
+
+(define multicast-from4?
+  {interface --> fixnum --> fixnum --> boolean}
+  F Group Source ->
+    (let Groups (interface.groups F)
+      (and (not (= Groups [])) (net-multicast.accepts4? (membership-of Groups) Group Source))))
+
+(define multicast-from6?
+  {interface --> buffer.view --> fixnum --> boolean}
+  F B I ->
+    (let Groups (interface.groups F)
+      (and (not (= Groups []))
+           (net-multicast.accepts6-at? (membership-of Groups) B (wire.ipv6.destination-at I) (wire.ipv6.source-at I)))))
 
 (define connect
   {interface --> fixnum --> fixnum --> fixnum}
@@ -227,13 +342,14 @@
           false)))
 
 (define udp-ingress
-  {interface --> (list udp.inbox) --> fixnum --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
-  F [] _ B I N Now ->
-    (and (udp.valid-datagram? B I N) (unreachable F B I N 3 Now))
-  F [Q | Rest] Port B I N Now ->
+  {interface --> (list udp.inbox) --> fixnum --> buffer.view --> fixnum --> fixnum --> fixnum -->
+   boolean --> boolean}
+  F [] _ B I N Now Multicast ->
+    (and (not Multicast) (udp.valid-datagram? B I N) (unreachable F B I N 3 Now))
+  F [Q | Rest] Port B I N Now Multicast ->
     (if (= (udp.peer.port (udp.inbox.peer Q)) Port)
-        (udp.inbox-ingress Q B I N)
-        (udp-ingress F Rest Port B I N Now)))
+        (if Multicast (udp.inbox-ingress-multicast Q B I N) (udp.inbox-ingress Q B I N))
+        (udp-ingress F Rest Port B I N Now Multicast)))
 
 (define icmp-ingress
   {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
@@ -251,18 +367,18 @@
                    true false)))))
 
 (define dispatch
-  {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
-  F B I N Now ->
+  {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
+  F B I N Now Multicast ->
     (let Proto (wire.ipv4.protocol B I)
          T (fx+ I (wire.ipv4.size))
-      (cases (= Proto 6)
-               (and (fx>= N (fx+ (wire.ipv4.size) (wire.tcp.size)))
-                    (tcp.table-ingress (interface.listener F) B I N Now
-                                       (list-has-port? (interface.tcp-ports F) (wire.tcp.destination-port B T))))
-             (= Proto 17)
-               (and (fx>= N (fx+ (wire.ipv4.size) (wire.udp.size)))
-                    (udp-ingress F (interface.udp-bindings F) (wire.udp.destination-port B T) B I N Now))
+      (cases (and (= Proto 17) (fx>= N (fx+ (wire.ipv4.size) (wire.udp.size))))
+               (udp-ingress F (interface.udp-bindings F) (wire.udp.destination-port B T) B I N Now Multicast)
+             Multicast false                                     \\ A group's datagrams are UDP.
+             (and (= Proto 6) (fx>= N (fx+ (wire.ipv4.size) (wire.tcp.size))))
+               (tcp.table-ingress (interface.listener F) B I N Now
+                                  (list-has-port? (interface.tcp-ports F) (wire.tcp.destination-port B T)))
              (= Proto 1) (icmp-ingress F B I N Now)
+             (or (= Proto 6) (= Proto 17)) false
              true (unreachable F B I N 2 Now))))
 
 (define dhcp-broadcast
@@ -273,7 +389,16 @@
         (udp.inbox-ingress-broadcast Q B I N)
         (dhcp-broadcast Rest B I N)))
 
-(define ingress4
+(define ipv4-deliver
+  {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
+  F B I N Now Multicast ->
+    (if (net-ipv4.fragmented? B I)
+        (let T (interface.fragments F)
+             Count (net-fragments.receive T B I N Now)
+          (and (fx> Count 0) (dispatch F (net-fragments.packet T) 0 Count Now Multicast)))
+        (dispatch F B I N Now Multicast)))
+
+(define ipv4-data
   {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   F B I N Now ->
     (and (net-ipv4.valid-header? B I N)
@@ -284,12 +409,21 @@
                        (= (wire.ipv4.protocol B I) 17)
                        (= (wire.udp.source-port B T) 67) (= (wire.udp.destination-port B T) 68))   \\ A DHCP server's broadcast.
                     (dhcp-broadcast (interface.udp-bindings F) B I N)
-                  (not (= Dst (interface.ip F))) false
-                  (net-ipv4.fragmented? B I)
-                    (let T (interface.fragments F)
-                         Count (net-fragments.receive T B I N Now)
-                      (and (fx> Count 0) (dispatch F (net-fragments.packet T) 0 Count Now)))
-                  true (dispatch F B I N Now)))))
+                  (= Dst (interface.ip F))
+                    (ipv4-deliver F B I N Now false)
+                  (and (= (wire.ipv4.protocol B I) 17)
+                       (multicast-from4? F Dst (wire.ipv4.source B I)))
+                    (ipv4-deliver F B I N Now true)
+                  true false))))
+
+(define ingress4
+  {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  F B I N Now ->
+    (and (fx>= N (wire.ipv4.size))
+         (if (= (wire.ipv4.protocol B I) 2)                              \\ IGMP.
+             (let Groups (interface.groups F)
+               (and (not (= Groups [])) (net-multicast.ingress4 (membership-of Groups) B I N Now)))
+             (ipv4-data F B I N Now))))
 
 (define smaller
   {fixnum --> fixnum --> fixnum}
@@ -357,14 +491,21 @@
 
 (define udp-ingress6
   {interface --> ipv6-state --> (list udp.inbox) --> fixnum --> net-ipv6.address -->
-   buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
-  F S [] _ Local B I N At Now ->
-    (and (udp.valid-datagram6-at? B I N At)
+   buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
+  F S [] _ Local B I N At Now Multicast ->
+    (and (not Multicast) (udp.valid-datagram6-at? B I N At)
          (error6 F S Local B I N 1 4 0 Now))                       \\ Port unreachable.
-  F S [Q | Rest] Port Local B I N At Now ->
+  F S [Q | Rest] Port Local B I N At Now Multicast ->
     (if (= (udp.peer.port (udp.inbox.peer Q)) Port)
         (udp.inbox-ingress6-at Q B I N At)
-        (udp-ingress6 F S Rest Port Local B I N At Now)))
+        (udp-ingress6 F S Rest Port Local B I N At Now Multicast)))
+
+(define mld-ingress
+  {(list net-multicast.membership) --> ipv6-state --> buffer.view -->
+   fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  [] _ _ _ _ _ _ -> false
+  [M] S B I N At Now -> (net-multicast.ingress6 M (net-ndp.host.link-local (ipv6-state.ndp S)) B I N At
+                                                (net-ipv6-headers.cursor.router-alert (ipv6-state.headers S)) Now))
 
 (define dispatch6
   {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum --> fixnum -->
@@ -375,16 +516,20 @@
          At (net-ipv6-headers.cursor.at Cursor)
          Count (fx- (fx+ I N) At)
          H (ipv6-state.ndp S)
-      (or (and (= Proto 58) (not Fragmented) (net-ndp.ingress-at H B I N At Now))
-          (and (= Scope unicast)
+      (or (and (= Proto 58) (not Fragmented)
+               (or (net-ndp.ingress-at H B I N At Now)
+                   (and (= Scope multicast) (mld-ingress (interface.groups F) S B I N At Now))))
+          (and (or (= Scope unicast) (= Scope multicast))
                (let Remote (net-ipv6.read-address (ipv6-state.remote S) B (wire.ipv6.source-at I))
                  (and (net-ipv6.unicast? Remote)
-                      (cases (and (= Proto 6) (fx>= Count (wire.tcp.size)))
+                      (cases (and (= Proto 17) (fx>= Count (wire.udp.size))
+                                  (or (= Scope unicast) (multicast-from6? F B I)))
+                               (udp-ingress6 F S (interface.udp-bindings F) (wire.udp.destination-port B At)
+                                             Local B I N At Now (= Scope multicast))
+                             (not (= Scope unicast)) false
+                             (and (= Proto 6) (fx>= Count (wire.tcp.size)))
                                (tcp.table-ingress6-at (interface.listener F) B I N At Now
                                  (list-has-port? (interface.tcp-ports F) (wire.tcp.destination-port B At)) Local)
-                             (and (= Proto 17) (fx>= Count (wire.udp.size)))
-                               (udp-ingress6 F S (interface.udp-bindings F) (wire.udp.destination-port B At)
-                                             Local B I N At Now)
                              (= Proto 58) (icmp6 F Local Remote B I N At Now)
                              true false)))))))
 
@@ -424,28 +569,29 @@
 
 (define reassemble6
   {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum --> fixnum -->
-   fixnum --> fixnum --> fixnum --> boolean}
-  F S Local B I N Frag Prev Now ->
+   fixnum --> fixnum --> fixnum --> symbol --> boolean}
+  F S Local B I N Frag Prev Now Scope ->
     (let Table (ipv6-state.fragments S)
          Cursor (ipv6-state.headers S)
          Length (net-fragments6.receive Table B I N Frag Prev Now)
       (and (fx> Length 0)
            (let Packet (net-fragments6.packet Table)
              (and (= (net-ipv6-headers.parse Cursor Packet 0 Length) net-ipv6-headers.upper)
-                  (dispatch6 F S Local Packet 0 Length Now unicast true))))))
+                  (dispatch6 F S Local Packet 0 Length Now Scope true))))))
 
 (define first-fragment
   {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum --> fixnum -->
-   fixnum --> fixnum --> fixnum --> boolean}
-  F S Local B I N Frag Prev Now ->
+   fixnum --> fixnum --> fixnum --> symbol --> boolean}
+  F S Local B I N Frag Prev Now Scope ->
     (let Cursor (ipv6-state.headers S)
          Next (net-ipv6-headers.after-fragment Cursor B I N)
-      (cases (= Next net-ipv6-headers.problem) (complain6 F S Local B I N Now unicast)
+      (cases (= Next net-ipv6-headers.problem) (complain6 F S Local B I N Now Scope)
              (or (= Next net-ipv6-headers.incomplete)
                  (and (= Next net-ipv6-headers.upper) (not (upper-fits? Cursor B (fx+ I N)))))
-               (error6 F S Local B I N 4 3 0 Now)
-             (and (= Next net-ipv6-headers.upper) (not (fragmented-discovery? Cursor B)))
-               (reassemble6 F S Local B I N Frag Prev Now)
+               (and (= Scope unicast) (error6 F S Local B I N 4 3 0 Now))
+             (and (= Next net-ipv6-headers.upper) (not (fragmented-discovery? Cursor B))
+                  (or (= Scope unicast) (= (net-ipv6-headers.cursor.protocol Cursor) 17)))
+               (reassemble6 F S Local B I N Frag Prev Now Scope)
              true false)))
 
 (define fragment6
@@ -459,7 +605,8 @@
          More (= (wire.ipv6-fragment.more B Frag) 1)
          Bytes (fx- (fx+ I N) (fx+ Frag (wire.ipv6-fragment.size)))
          Remote (net-ipv6.read-address (ipv6-state.remote S) B (wire.ipv6.source-at I))
-      (and (= Scope unicast) (net-ipv6.unicast? Remote)
+      (and (net-ipv6.unicast? Remote)
+           (or (= Scope unicast) (and (= Scope multicast) (multicast-from6? F B I)))
            (cases (and (= Offset 0) (not More))
                     (let Next (net-ipv6-headers.after-fragment Cursor B I N)
                       (cases (or (= Next net-ipv6-headers.problem) (= Next net-ipv6-headers.incomplete))
@@ -469,11 +616,11 @@
                              true false))
                   (= Bytes 0) false
                   (and More (not (= (fxremainder Bytes 8) 0)))
-                    (error6 F S Local B I N 4 0 (wire.ipv6.payload-length-at 0) Now)
+                    (and (= Scope unicast) (error6 F S Local B I N 4 0 (wire.ipv6.payload-length-at 0) Now))
                   (fx> (fx+ Offset Bytes) 65535)
-                    (error6 F S Local B I N 4 0 (fx- (wire.ipv6-fragment.offset-at Frag) I) Now)
-                  (= Offset 0) (first-fragment F S Local B I N Frag Prev Now)
-                  true (reassemble6 F S Local B I N Frag Prev Now)))))
+                    (and (= Scope unicast) (error6 F S Local B I N 4 0 (fx- (wire.ipv6-fragment.offset-at Frag) I) Now))
+                  (= Offset 0) (first-fragment F S Local B I N Frag Prev Now Scope)
+                  true (reassemble6 F S Local B I N Frag Prev Now Scope)))))
 
 (define packet6
   {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum --> fixnum -->
@@ -499,7 +646,7 @@
                     (packet6 F S Local B I N Now unicast)
                   (and (net-ndp.global-ready? H Now) (net-ipv6.address-at? Global B At))
                     (packet6 F S Global B I N Now unicast)
-                  (net-ndp.multicast-at? H B At Now)
+                  (or (net-ndp.multicast-at? H B At Now) (joined6-at? F B At))
                     (packet6 F S Local B I N Now multicast)
                   (or (and (= (net-ndp.host.local-state H) net-ndp.tentative)
                            (net-ipv6.address-at? Local B At))
@@ -556,6 +703,23 @@
   [S] Now -> (earlier (net-ndp.next-deadline (ipv6-state.ndp S) Now)
                      (net-fragments6.next-deadline (ipv6-state.fragments S))))
 
+(define multicast-source
+  {(list ipv6-state) --> net-multicast.membership --> net-ipv6.address}
+  [] M -> (net-multicast.membership.blank6 M)
+  [S] M ->
+    (let H (ipv6-state.ndp S)
+      (if (net-ndp.local-ready? H) (net-ndp.host.link-local H) (net-multicast.membership.blank6 M))))
+
+(define multicast-poll
+  {(list net-multicast.membership) --> (list ipv6-state) --> fixnum --> boolean}
+  [] _ _ -> false
+  [M] V6 Now -> (net-multicast.poll M (multicast-source V6 M) Now))
+
+(define multicast-deadline
+  {(list net-multicast.membership) --> (list ipv6-state) --> fixnum}
+  [] _ -> -1
+  [M] V6 -> (net-multicast.next-deadline M (net-ipv6.link-local? (multicast-source V6 M))))
+
 (define receive-ready
   {interface --> net-link.ring --> fixnum --> fixnum --> fixnum --> fixnum}
   _ _ _ 0 Done -> Done
@@ -574,6 +738,7 @@
          _ (expire-ipv6 F (interface.ipv6 F) Now)
          Count (receive-ready F (net-link.device.rx D) Now (buffer.index Budget) 0)
       (do (ipv6-poll (interface.ipv6 F) (interface.listener F) Now)
+          (multicast-poll (interface.groups F) (interface.ipv6 F) Now)
           (tcp.listener-transmit (interface.listener F) Now)
           Count)))
 
@@ -584,7 +749,8 @@
             Now (net-link.now D)
             Rx (net-link.head-deadline (net-link.device.rx D))
             Tcp (tcp.listener-deadline (interface.listener F) Now)
-         (earlier (ipv6-deadline (interface.ipv6 F) Now) (earlier Rx Tcp))))
+         (earlier (multicast-deadline (interface.groups F) (interface.ipv6 F))
+                  (earlier (ipv6-deadline (interface.ipv6 F) Now) (earlier Rx Tcp)))))
 
 (preclude [interface.%match ipv6-state.%match])
 )

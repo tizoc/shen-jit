@@ -241,13 +241,16 @@
               Ours (= Dst (adapter.mac A))
               Broadcast (= Dst 281474976710655)
            (cases (and (= Kind 2054) (or Ours Broadcast)) (arp-input A B I N Now)
-                  (and (= Kind 2048) (fx>= Payload (wire.ipv4.size)) (or Ours Broadcast)
-                       (= (wire.ipv4.version B IP) 4))
+                  (and (= Kind 2048) (fx>= Payload (wire.ipv4.size))
+                       (= (wire.ipv4.version B IP) 4)
+                       (or Ours Broadcast
+                           (let Address (wire.ipv4.destination B IP)                          \\ Or a group
+                             (and (net-ipv4.multicast? Address) (= Dst (net-ipv4.multicast-mac Address))))))
                     (let Count (wire.ipv4.total-length B IP)
                       (and (fx>= Count (wire.ipv4.size)) (receive-ip A B IP Payload Count Now)))
                   (and (= Kind 34525) (fx>= Payload (wire.ipv6.size)) (not (= (adapter.ipv6 A) []))
                        (= (wire.ipv6.version B IP) 6)
-                       (or Ours (and (= (buffer.u8 B (wire.ipv6.destination-at IP)) 255)        \\ Multicast,
+                       (or Ours (and (net-ipv6.multicast-at? B (wire.ipv6.destination-at IP))    \\ Multicast,
                                      (= Dst (net-ipv6.multicast-mac-at B (wire.ipv6.destination-at IP))))))  \\ to our group.
                     (receive-ip A B IP Payload (fx+ (wire.ipv6.size) (wire.ipv6.payload-length B IP)) Now)
                   true false))))
@@ -294,6 +297,7 @@
         (let Dst (buffer.u32-be (net-link.ring.data R) (fx+ (net-link.head-offset R) 16))
              Hop (net-routes.lookup (adapter.routes A) Dst)
           (cases (= Dst 4294967295) (send-ip A R 281474976710655 2048 Now)
+                 (net-ipv4.multicast? Dst) (send-ip A R (net-ipv4.multicast-mac Dst) 2048 Now)
                  (= Hop 0) (note-drop A)
                  true (let I (claim A Hop Now)
                          (if (= I 0) (note-drop A)
@@ -310,7 +314,7 @@
     (if (fx< (net-link.head-length R) 40) (note-drop A)
         (let B (net-link.ring.data R)
              At (fx+ (net-link.head-offset R) 24)
-          (if (= (buffer.u8 B At) 255)
+          (if (net-ipv6.multicast-at? B At)
               (send-ip A R (net-ipv6.multicast-mac-at B At) 34525 Now)
               (let I (net-ndp.route H B At Now)
                 (if (= I 0) (note-drop A)

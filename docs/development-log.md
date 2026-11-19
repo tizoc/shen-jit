@@ -3881,6 +3881,45 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   as its rules compile to untyped definitions; compiling them as typed code would help every grammar.
   The walker's `router-alert?`, which nothing called, was left out, for the multicast code to bring back
   through the options grammar.
+- Brought the other branch's IGMP and MLD memberships and source-specific subscriptions (its bf59fa6
+  and 0a110bb), adapted where they met converted code. The first cost UDP echo 38.1 to 39.1 ms and 38.4
+  to 39.0, as every IPv4 packet received went through the check that accepts options, which only IGMP
+  needs, and every send passed its TTL as a value. Linux's TUN and TAP suites passed both, IGMP and MLD
+  group and source changes included, with no heap words.
+- Then rewrote them: layouts for IGMP's and MLD's queries, reports, records and both router alerts,
+  37 raw byte reads and writes to 0, and MLD's router alert read from what the header walk's grammar
+  kept, where it walked the options again. A header without options has its own check again, and a
+  unicast send its constant TTL: four runs against the build before multicast, +0.8, +0.2, +0.8 and
+  -0.2 ms of UDP echo, TCP within noise. **Found: a case's generality on the frequent path**, IGMP's
+  options in every packet's check, cost 2% until the frequent case had its own. Linux's TUN and TAP
+  suites pass the rewrite, IGMP and MLD against Linux's own, with no heap words.
+
+### Source-specific multicast (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
+
+- Extended the group table with preallocated INCLUDE filters. Sources stop
+  receiving UDP immediately on leave. Their slots retain the addresses through
+  two BLOCK reports, then return to the free pool. Portable tests with two
+  sources per group cover exhaustion, reuse, intersecting and combining queries,
+  and keeping IGMPv3 reports under an older querier.
+- Linux TUN and TAP each verified IGMPv3 and MLDv2 ALLOW and BLOCK records,
+  including both records in one report during replacement, and the subscribed
+  subset of a two-source query. On both devices, two selected datagrams per
+  family reached the application across the replacement, with zero Shen heap
+  words allocated after setup and a five-word positive control.
+
+### IPv4 and IPv6 multicast (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
+
+- Added a shared, setup-sized multicast table and any-source UDP delivery. Both
+  families send state changes and answer general and group-specific queries.
+  Portable fixtures cover capacity, retries under backpressure, and IGMPv1,
+  IGMPv2, and MLDv1 compatibility.
+- Linux TUN and TAP each observed two join and two leave reports per family,
+  general and group-specific query responses, bidirectional multicast UDP, and
+  filtering after leave. The probe measured zero Shen heap words after setup
+  with a five-word positive control on each device.
+- Made TUN HTTP fault injection inspect the queue before each poll and pump.
+  The fixture passed its full-suite run and three immediate repeats with zero
+  Shen heap words.
 
 ### IPv6 extension headers and reassembly (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
 

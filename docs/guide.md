@@ -1227,7 +1227,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | Target | What it does |
 | --- | --- |
 | `make test-core` | `test`, `test-jit`, `test-ops`, `test-kl`, `check-lowerer`, `check-generated`, `test-kernel`, `test-stlib`, `test-thorn`, `test-native`, `test-ffi`, `test-overrides`, `test-structs`, `test-isolates`, `test-modules` and `test-typed` |
-| `make test-libs` | `test-buffer`, `test-json`, `test-io`, `test-net-udp`, `test-net-tcp`, `test-net-interface`, `test-net-clients`, `test-net-ipv6`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl`, `test-namespaces` and `test-parallel` |
+| `make test-libs` | `test-buffer`, `test-json`, `test-io`, `test-net-udp`, `test-net-tcp`, `test-net-interface`, `test-net-clients`, `test-net-ipv6`, `test-net-multicast`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl`, `test-namespaces` and `test-parallel` |
 | `make test` | The runtime's unit tests |
 | `make test-jit`, `make test-ops` | The JIT and the instructions, on small programs |
 | `make test-kl` | The `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
@@ -1249,7 +1249,8 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-net-interface` | Shared IPv4 dispatch, UDP overflow, receive retry, and ICMP wire fixtures |
 | `make test-net-clients` | DHCP lease lifecycle and DNS response handling |
 | `make test-net-ipv6` | IPv6 extension headers and bounded reassembly, UDP checksums, ICMPv6, TCP path MTU, and SLAAC |
-| `make test-net-tun test-net-tap` | Linux IPv4 and IPv6 TCP, UDP, and ping over both devices with direct heap allocation checks. TAP also exercises DHCP, DNS, and SLAAC. |
+| `make test-net-multicast` | IGMP and MLD membership capacity, report deadlines, legacy querier compatibility, and bounded source filters |
+| `make test-net-tun test-net-tap` | Linux IPv4 and IPv6 TCP, UDP, and ping over both devices with direct heap allocation checks. Both exercise multicast UDP with IGMP and MLD. TAP also exercises DHCP, DNS, and SLAAC. |
 | `make test-http` | Request/response framing, streaming, persistent connections, shutdown, SQLite example, typing and images/GC |
 | `make test-datalog` | Datalog answers/errors/generated programs against its plain evaluator, also in isolates, in parts and with joins shared out; Shen/KL dependency analysis and source-fact matching/reach/impact with independent graph oracles |
 | `make test-datalog-swipl` | The same generated programs against SWI-Prolog's tabling, if `swipl` is there |

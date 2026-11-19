@@ -1,0 +1,7 @@
+(shen.module
+  (version 1)
+  (name net-multicast-test)
+  (requires net/ethernet net/interface net/tun net/ipv6 net/ndp)
+  (typed)
+  (main net-multicast-test.main)
+  (sources tc- "net_tun_native.shen" tc+ "net_multicast.shen"))

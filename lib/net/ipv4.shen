@@ -4,7 +4,7 @@
   (use shen-jit)
   (use net-wire => wire)
   (import layout write-layout)
-  (export address unicast? write-header valid? valid-header? fragmented?
+  (export address unicast? multicast? multicast-mac write-header write-header-ttl header-length valid-envelope? valid? valid-header? fragmented?
           packet-checksum transport-checksum sum16 checksum)
 
 (define octet
@@ -21,6 +21,14 @@
 (define unicast?
   {fixnum --> boolean}
   IP -> (and (fx>= IP 16777216) (fx< IP 3758096384)))
+
+(define multicast?
+  {fixnum --> boolean}
+  IP -> (and (fx>= IP 3758096384) (fx< IP 4026531840)))
+
+(define multicast-mac
+  {fixnum --> fixnum}
+  IP -> (fx+ 1101088686080 (shen-jit.bit-and IP 8388607)))
 
 \\ One's complement sum in network byte order. The odd tail has an implicit low zero byte.
 (define sum16
@@ -56,16 +64,41 @@
           (source Src) (destination Dst))
         (wire.ipv4.checksum-> B I (packet-checksum B I (wire.ipv4.size)))))
 
-(define valid-header?
-  {buffer.view --> fixnum --> fixnum --> boolean}
-  B I N ->
-    (and (fx>= N (wire.ipv4.size))
-         (= (wire.ipv4.version B I) 4)
-         (= (wire.ipv4.header-length B I) 5)
-         (= (wire.ipv4.total-length B I) N)
+\\ The same with another TTL, as a group's datagrams take 1.
+(define write-header-ttl
+  {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> buffer.view}
+  B I Count Proto Src Dst TTL ->
+    (do (write-layout wire.ipv4 B I
+          (version 4) (header-length 5) (total-length Count)
+          (dont-fragment 1) (time-to-live TTL) (protocol Proto)
+          (source Src) (destination Dst))
+        (wire.ipv4.checksum-> B I (packet-checksum B I (wire.ipv4.size)))))
+
+(define header-length
+  {buffer.view --> fixnum --> fixnum}
+  B I -> (fx* 4 (wire.ipv4.header-length B I)))
+
+\\ RFC 791: what a header of Bytes bytes, options included, says of a packet of N.
+(define sound?
+  {buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  B I N Bytes ->
+    (and (= (wire.ipv4.total-length B I) N)
          (fx> (wire.ipv4.time-to-live B I) 0)
          (= (wire.ipv4.reserved B I) 0)
-         (= (packet-checksum B I (wire.ipv4.size)) 0)))
+         (= (packet-checksum B I Bytes) 0)))
+
+\\ A header without options, as all here are but IGMP's.
+(define valid-header?
+  {buffer.view --> fixnum --> fixnum --> boolean}
+  B I N -> (and (fx>= N (wire.ipv4.size)) (= (wire.ipv4.version B I) 4) (= (wire.ipv4.header-length B I) 5)
+                (sound? B I N (wire.ipv4.size))))
+
+\\ A header with options or without.
+(define valid-envelope?
+  {buffer.view --> fixnum --> fixnum --> boolean}
+  B I N -> (and (fx>= N (wire.ipv4.size)) (= (wire.ipv4.version B I) 4)
+                (let Bytes (header-length B I)
+                  (and (fx>= Bytes (wire.ipv4.size)) (fx<= Bytes N) (sound? B I N Bytes)))))
 
 (define fragmented?
   {buffer.view --> fixnum --> boolean}

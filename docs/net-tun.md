@@ -58,7 +58,7 @@ out of order, reject overlaps, and expire after 30 seconds. [ICMP echo format](h
 ## Linux kernel integration test
 
 Run `make test-net-tun` in a disposable Linux network namespace with `/dev/net/tun`, network administration
-capability, `iproute2`, `ping`, and Python 3. For example, a Linux test container can use Docker's
+and raw packet capabilities, `iproute2`, `ping`, and Python 3. For example, a Linux test container can use Docker's
 `--network none`, `--cap-add NET_ADMIN`, `--cap-add NET_RAW`, and `--device /dev/net/tun` options.
 
 The test fills a two-slot UDP queue, overflows it, and keeps it full through the first wave of four
@@ -192,3 +192,64 @@ whose 2,189-byte payload arrives in three reordered fragments. The fixture check
 every reassembled payload byte and rejects an overlapping datagram. Allocation
 measurement starts before duplicate address detection and ends after the streams
 and datagrams finish.
+
+
+## IPv4 and IPv6 multicast
+
+Call `net-interface.enable-multicast Interface Slots Seed` during setup to reserve
+1 through 64 group slots shared by IPv4 and IPv6. Supply an unsigned 32-bit seed
+for report jitter. Enable IPv6 before joining IPv6 groups.
+
+Use `net-interface.join4 Interface IP` or `net-interface.join6 Interface IP` to
+receive UDP for a group on the interface's bound ports. Joins return true if the
+group is already joined or a slot was available. Use `leave4` and `leave6` to
+stop accepting new datagrams for that group. Datagrams already in an inbox can
+still be read. A leaving slot is released once its control reports have drained.
+Use `joined4?` and `joined6?` to inspect current membership. The normal interface
+poll and deadline operations drive pending reports.
+
+`udp.recv-info.destination` gives the IPv4 destination of a received datagram.
+For IPv6, use `udp.recv-info.destination6`. Send multicast datagrams with
+`udp.send`, `udp.send6`, or the corresponding interface operation. The IPv4 TTL
+and IPv6 Hop Limit are 1 on multicast sends. On TAP, the Ethernet adapter maps
+multicast IP destinations to multicast MAC addresses.
+
+Membership is interface-wide. The any-source group API uses IGMPv3 and MLDv2
+state-change reports and answers general and group-specific queries. An older
+querier selects IGMPv1, IGMPv2, or MLDv1 reports for those memberships until its
+timer expires. External routers handle multicast forwarding.
+[IGMPv3](https://www.rfc-editor.org/rfc/rfc9776.html),
+[MLDv2](https://www.rfc-editor.org/rfc/rfc9777.html)
+
+### Source-specific multicast
+
+Use `net-interface.enable-multicast-sized Interface Slots Sources Seed` during
+setup to reserve 0 through 64 source slots per group. The device MTU must fit
+the largest IPv4 report for that capacity. Ordinary `enable-multicast` reserves
+up to eight sources per group, capped by the MTU.
+
+Use `join-source4 Interface Group Source` or `join-source6 Interface Group Source`
+to accept UDP from a unicast source in an IPv4 `232/8` or IPv6 `ff3x::/32`
+group. IPv6 requires an enabled IPv6 interface, an MTU of at least 1280 bytes,
+and a group scope from 2 through 14. Joins return true for a new or existing
+subscription and false for an invalid address or a full table. Multiple
+subscriptions to the same group form an INCLUDE list.
+
+`leave-source4` and `leave-source6` take the same arguments and stop accepting
+new datagrams from that source immediately. The removed source holds its slot
+until the last leave report is sent. Rejoining that source can reuse its slot
+before the reports finish. A group's slot is released once its last source has
+left and the reports have drained. Datagrams already in an inbox remain readable.
+
+IGMPv3 and MLDv2 use ALLOW_NEW_SOURCES and BLOCK_OLD_SOURCES for changes. Reports
+to group-and-source-specific queries include the intersection with the
+subscribed sources. Source-specific memberships continue to use these report
+versions when older queriers are present.
+[SSM host requirements](https://www.rfc-editor.org/rfc/rfc4604.html)
+
+The Linux tests capture both families' join and leave reports, including
+Router Alert, query Linux-to-Shen, and verify multicast UDP in both directions.
+They replace a subscribed source in each family, check the reports against
+queries that name both sources, and verify delivery from the selected source.
+The heap probe covers group and source changes, queries, and multicast delivery
+from the first join through completion.

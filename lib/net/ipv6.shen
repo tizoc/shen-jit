@@ -7,7 +7,7 @@
   (import struct defstruct)
   (import layout write-layout)
   (export address make-address address.a address.b address.c address.d copy-address read-address
-          write-address compose-prefix same? address-at? unspecified? multicast? unicast? link-local?
+          write-address compose-prefix same? address-at? unspecified? multicast? multicast-at? scope unicast? link-local?
           solicited-node solicited-node? multicast-mac-at
           valid-header? write-header transport-checksum transport-checksum-at)
 
@@ -80,6 +80,15 @@
 (define multicast?
   {address --> boolean}
   A -> (= (shen-jit.shift-right (address.a A) 24) 255))
+
+\\ Whether the address at I of B is a group's, as its first byte says.
+(define multicast-at?
+  {buffer.view --> fixnum --> boolean}
+  B I -> (= (shen-jit.shift-right (wire.ipv6-address.a B I) 24) 255))
+
+(define scope
+  {address --> fixnum}
+  A -> (shen-jit.bit-and (shen-jit.shift-right (address.a A) 16) 15))
 
 (define link-local?
   {address --> boolean}

@@ -146,6 +146,7 @@ def use_socket(resources, family, kind, protocol=0):
 def run(binary, mode, interface):
     with ExitStack() as resources, ThreadPoolExecutor(max_workers=3) as pool:
         listener = use_socket(resources, socket.AF_INET, socket.SOCK_STREAM)
+        listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         host, guest = (TUN_HOST, TUN_GUEST) if mode == "tun" else (SERVICE, TAP_GUEST)
         listener.bind((host, 8080))
         listener.listen()

@@ -78,6 +78,55 @@
   (type 8) (code 8) (checksum 16)
   (rest 32))
 
+\\ RFC 2236 and RFC 3376: IGMP's messages, a version 3 query, whose sources follow it, and a
+\\ version 3 report's group records, whose sources follow each.
+(deflayout igmp
+  (type 8) (max-response 8) (checksum 16)
+  (group 32))
+
+(deflayout igmp3-query
+  (type 8) (max-response 8) (checksum 16)
+  (group 32)
+  (_ 4) (suppress 1) (robustness 3) (interval 8) (sources 16))
+
+(deflayout igmp3-record
+  (record-type 8) (aux-length 8) (sources 16)
+  (group 32))
+
+\\ RFC 2710 and RFC 3810: MLD's messages, as IGMP's.
+(deflayout mld
+  (type 8) (code 8) (checksum 16)
+  (max-response 16) (_ 16)
+  (group 128))
+
+(deflayout mld2-query
+  (type 8) (code 8) (checksum 16)
+  (max-response 16) (_ 16)
+  (group 128)
+  (_ 4) (suppress 1) (robustness 3) (interval 8) (sources 16))
+
+(deflayout mld2-record
+  (record-type 8) (aux-length 8) (sources 16)
+  (group 128))
+
+\\ IGMPv3's and MLDv2's reports start alike, and their records follow.
+(deflayout membership-report
+  (type 8) (_ 8) (checksum 16)
+  (_ 16) (records 16))
+
+\\ An IPv4 address in a list of them, as a query's or a record's sources are.
+(deflayout ipv4-address
+  (address 32))
+
+\\ RFC 2113 and RFC 2711: a router alert, as an IPv4 option, and as the one option of a hop-by-hop
+\\ header, which PadN fills to 8 bytes.
+(deflayout ipv4-router-alert
+  (type 8) (length 8) (value 16))
+
+(deflayout ipv6-router-alert
+  (next-header 8) (length 8) (type 8) (option-length 8)
+  (value 16) (pad 8) (pad-length 8))
+
 \\ RFC 1191: "fragmentation needed", with the next hop's MTU.
 (deflayout icmp-too-big
   (type 8) (code 8) (checksum 16)

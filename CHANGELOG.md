@@ -45,6 +45,10 @@ All notable changes to this project are documented in this file. The format is b
 - IPv6 receive supports extension headers and bounded fragment reassembly. Each interface can configure
   its slot count and datagram size. The Linux tests check reordering, overlap rejection, and zero Shen
   heap allocations after setup on TUN and TAP.
+- Added bounded IPv4 and IPv6 multicast UDP memberships with IGMPv3 and MLDv2 listener reports.
+  Linux TUN and TAP tests cover joins, leaves, query responses, and zero Shen heap allocations after setup.
+- Multicast UDP supports source-specific subscriptions in both families, with setup-sized INCLUDE filters
+  and IGMPv3 and MLDv2 reports for source changes and source-specific queries.
 
 ### Changed
 

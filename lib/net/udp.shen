@@ -9,11 +9,11 @@
   (import struct defstruct)
   (import layout write-layout)
   (shadow bind)
-  (export link device peer peer.port recv-info recv-info.source recv-info.family recv-info.source6 recv-info.destination6 recv-info.port recv-info.length
+  (export link device peer peer.port recv-info recv-info.source recv-info.destination recv-info.family recv-info.source6 recv-info.destination6 recv-info.port recv-info.length
           make-link left right ipv4 bind make-recv-info packet-send packet-recv-into
           send send6 recv-into echo-step valid-datagram6? valid-datagram6-at? inbox-ingress6 inbox-ingress6-at reserve-inbox
           sent would-block too-large received empty budget-exhausted too-small
-          inbox inbox.peer inbox.dropped make-inbox inbox-ingress inbox-recv-into inbox-ready? inbox-discard inbox-ingress-broadcast valid-datagram? write-packet)
+          inbox inbox.peer inbox.dropped make-inbox inbox-ingress inbox-recv-into inbox-ready? inbox-discard inbox-ingress-broadcast inbox-ingress-multicast valid-datagram? write-packet)
 
 (synonyms link net-link.link device net-link.device)
 
@@ -24,6 +24,7 @@
 
 (defstruct recv-info
   (mutable source : fixnum)
+  (mutable destination : fixnum)
   (mutable family : fixnum)
   (source6 : net-ipv6.address)
   (destination6 : net-ipv6.address)
@@ -107,6 +108,7 @@
   ->
     (:recv-info
       source <- 0
+      destination <- 0
       family <- 0
       source6 <- (net-ipv6.make-address 0 0 0 0)
       destination6 <- (net-ipv6.make-address 0 0 0 0)
@@ -123,7 +125,8 @@
   B I Src SrcPort Dst DstPort Payload Start N ->
     (let Length (fx+ N (wire.udp.size))
          T (datagram4 I)
-      (do (net-ipv4.write-header B I (fx+ N (headers4)) 17 Src Dst)
+      (do (if (net-ipv4.multicast? Dst) (net-ipv4.write-header-ttl B I (fx+ N (headers4)) 17 Src Dst 1)
+              (net-ipv4.write-header B I (fx+ N (headers4)) 17 Src Dst))
           (write-layout wire.udp B T (source-port SrcPort) (destination-port DstPort) (length Length))
           (buffer.copy-into! B (fx+ T (wire.udp.size)) Payload Start N)
           (wire.udp.checksum-> B T (as-sent (udp-checksum B I Length))))))
@@ -144,7 +147,7 @@
          _ (buffer.range (buffer.length Payload) 0 N)
          D (peer.device P)
          Tx (net-link.device.tx D)
-      (cases (not (and (net-ipv4.unicast? IP) (port? Port))) (error "udp: invalid destination")
+      (cases (not (and (or (net-ipv4.unicast? IP) (net-ipv4.multicast? IP)) (port? Port))) (error "udp: invalid destination")
              (fx> N (fx- (net-link.mtu D) (headers4))) too-large
              (net-link.full? Tx) would-block
              true (let Delivery (net-link.delivery D (net-link.now D))
@@ -159,7 +162,12 @@
          Tx (net-link.device.tx D)
          Length (fx+ N (wire.udp.size))
          Size (fx+ N (headers6))
-      (cases (not (and (net-ipv6.unicast? Source) (net-ipv6.unicast? Destination) (port? Port)
+      (cases (not (and (net-ipv6.unicast? Source)
+                       (or (net-ipv6.unicast? Destination)
+                           (and (net-ipv6.multicast? Destination)                       \\ A group of link scope
+                                (fx>= (net-ipv6.scope Destination) 2)                     \\ or wider.
+                                (fx<= (net-ipv6.scope Destination) 14)))
+                       (port? Port)
                        (fx>= (net-link.mtu D) 1280))) (error "udp: invalid IPv6 endpoints or MTU")
              (fx> Size (net-link.mtu D)) too-large
              (net-link.full? Tx) would-block
@@ -167,7 +175,7 @@
                        B (net-link.ring.data Tx)
                        I (net-link.tail-offset Tx)
                        T (datagram6 I)
-                    (do (net-ipv6.write-header B I Size 17 64 Source Destination)
+                    (do (net-ipv6.write-header B I Size 17 (if (net-ipv6.multicast? Destination) 1 64) Source Destination)
                         (write-layout wire.udp B T (source-port (peer.port P)) (destination-port Port) (length Length))
                         (buffer.copy-into! B (fx+ T (wire.udp.size)) Payload 0 N)
                         (wire.udp.checksum-> B T (as-sent (net-ipv6.transport-checksum B I 17 Length)))
@@ -221,10 +229,12 @@
       (if (fx> Count (buffer.length Out)) too-small
           (do (buffer.copy-into! Out 0 B (fx+ T (wire.udp.size)) Count)
               (recv-info.family-> Info (if V4 4 6))
-              (if V4 (recv-info.source-> Info (wire.ipv4.source B I))
+              (if V4 (do (recv-info.source-> Info (wire.ipv4.source B I))
+                         (recv-info.destination-> Info (wire.ipv4.destination B I)))
                   (do (net-ipv6.read-address (recv-info.source6 Info) B (wire.ipv6.source-at I))
                       (net-ipv6.read-address (recv-info.destination6 Info) B (wire.ipv6.destination-at I))
-                      (recv-info.source-> Info 0)))
+                      (recv-info.source-> Info 0)
+                      (recv-info.destination-> Info 0)))
               (recv-info.port-> Info (wire.udp.source-port B T))
               (recv-info.length-> Info Count)
               (net-link.consume R)
@@ -336,6 +346,14 @@
   Q B I N ->
     (and (fx>= N (headers6)) (= (wire.ipv6.next-header B I) 17)
          (inbox-ingress6-at Q B I N (datagram6 I))))
+
+(define inbox-ingress-multicast
+  {inbox --> buffer.view --> fixnum --> fixnum --> boolean}
+  Q B I N ->
+    (and (valid-datagram? B I N)
+         (net-ipv4.multicast? (wire.ipv4.destination B I))
+         (= (wire.udp.destination-port B (datagram4 I)) (peer.port (inbox.peer Q)))
+         (store-inbox Q B I N)))
 
 (define inbox-ingress-broadcast
   {inbox --> buffer.view --> fixnum --> fixnum --> boolean}

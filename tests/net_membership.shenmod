@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name net-membership-test)
+  (requires net/multicast net/ipv6 net/ipv6-headers)
+  (typed)
+  (sources tc+ "net_membership.shen"))

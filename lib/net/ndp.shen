@@ -136,7 +136,8 @@
 (define source-address
   {host --> net-ipv6.address --> fixnum --> net-ipv6.address}
   H Destination Now ->
-    (cases (net-ipv6.link-local? Destination)
+    (cases (or (net-ipv6.link-local? Destination)
+               (and (net-ipv6.multicast? Destination) (= (net-ipv6.scope Destination) 2)))
              (if (local-ready? H) (host.link-local H) (host.unspecified H))
            (global-ready? H Now) (host.global H)
            true (host.unspecified H)))
@@ -433,7 +434,7 @@
 (define multicast-at?
   {host --> buffer.view --> fixnum --> fixnum --> boolean}
   H B At Now ->
-    (and (= (buffer.u8 B At) 255)
+    (and (net-ipv6.multicast-at? B At)
          (let Group (net-ipv6.read-address (host.destination H) B At)
            (or (net-ipv6.same? Group (host.all-nodes H))
                (and (not (= (host.local-state H) duplicate))

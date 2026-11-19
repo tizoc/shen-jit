@@ -5,15 +5,16 @@
   (use grammar)
   (use net-wire => wire)
   (import struct defstruct)
-  (externals [defgrammar <end> skip at])
+  (externals [defgrammar <end> skip at u16-be])
   (export cursor make parse after-fragment can-report?
           cursor.protocol cursor.at cursor.next-field cursor.problem-code
-          cursor.multicast-error
+          cursor.multicast-error cursor.router-alert
           upper fragment problem incomplete ignored)
 
 \\ Where a walk stopped: the upper-layer header or fragment header found, at At, and the next-header
-\\ field that named it, or a problem's offset and code. The packet's bounds, the headers it may still
-\\ have and whether a fragment header may come are the walk's own.
+\\ field that named it, or a problem's offset and code, and the value of a router alert in a hop-by-hop
+\\ header, or -1. The packet's bounds, the headers it may still have and whether a fragment header may
+\\ come are the walk's own.
 (defstruct cursor
   (mutable protocol : fixnum)
   (mutable at : fixnum)
@@ -21,6 +22,7 @@
   (mutable left : fixnum)
   (mutable problem-code : fixnum)
   (mutable multicast-error : boolean)
+  (mutable router-alert : fixnum)
   (mutable base : fixnum)
   (mutable end : fixnum)
   (mutable fragments : boolean)
@@ -36,6 +38,7 @@
       left <- 0
       problem-code <- 0
       multicast-error <- false
+      router-alert <- -1
       base <- 0
       end <- 0
       fragments <- false
@@ -92,12 +95,13 @@
   Type -> (shen-jit.shift-right Type 6))
 
 \\ RFC 8200 4.2: options, each a type and a length but Pad1. All are skipped as unrecognized but the
-\\ router alert, RFC 2711, which has 2 bytes in a hop-by-hop header. Each alternative takes the rest
-\\ of the options too, so that a problem's alternative ends the parse.
+\\ router alert, RFC 2711, which has 2 bytes in a hop-by-hop header, and whose value is kept. Each
+\\ alternative takes the rest of the options too, so that a problem's alternative ends the parse.
 (defgrammar (<options> C Hop) {cursor --> boolean ==> symbol}
   <end> := upper;
   0 (<options> C Hop) := <options>;                                      \\ Pad1.
   (at At) 5 Length (where (and Hop (not (= Length 2)))) (* _) := (fail-at C (fx+ At 1) 0 false);
+  5 2 (where Hop) (u16-be Value) (<options> (cursor.router-alert-> C Value) Hop) := <options>;
   Type Length (where (= (action Type) 0)) (skip Length) (<options> C Hop) := <options>;
   Type Length (where (= (action Type) 1)) (skip Length) (* _) := ignored;
   (at At) Type Length (skip Length) (* _) := (fail-at C At 2 (= (action Type) 2));
@@ -114,6 +118,7 @@
         (let Protocol (wire.ipv6.next-header B I)
              At (fx+ I (wire.ipv6.size))
              Next (wire.ipv6.next-header-at I)
+             _ (cursor.router-alert-> C -1)
           (if (= (header Protocol) upper) (found C Protocol At Next upper)
               (walk (start C I N 8 true) B At Next Protocol)))))
 

@@ -23,3 +23,7 @@
 (define net-dual-test.main
   -> (let Args (tl (value *argv*))
        (if (= (hd (tl Args)) "tap") (net-dual-test.tap (hd Args)) (net-dual-test.tun (hd Args)))))
+
+(define net-multicast-test.main
+  -> (let Args (tl (value *argv*))
+       (if (= (hd (tl Args)) "tap") (net-multicast-test.tap (hd Args)) (net-multicast-test.tun (hd Args)))))
