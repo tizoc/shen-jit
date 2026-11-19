@@ -37,6 +37,12 @@
   Op [[Op | _] | _] -> true
   Op [_ | Is] -> (typed.has-in? Op Is))
 
+\\ Whether X appears anywhere in a tree.
+(define typed.mentions?
+  X X -> true
+  X [Y | Z] -> (or (typed.mentions? X Y) (typed.mentions? X Z))
+  _ _ -> false)
+
 \\ What the typechecker gives X for T, or false.
 (define typed.as
   X T -> (shen.typecheck X T))
@@ -97,6 +103,8 @@
 (typed.check "not without numbers" "type error"
   (trap-error (module.load "tests/typed/unrequired.shenmod") (/. E (typed.prefix 10 (error-to-string E)))))
 (typed.check "a square" 2.25 (typed-sq 1.5))
+(typed.check "a literal's fixnum, in a binding, at no cost" [5 3 false]
+  [(typed-step true 4) (typed-step false 4) (typed.mentions? shen-jit.fixnum? (shen-jit.code typed-step))])
 (typed.check "an orbit" 3 (typed-orbit 0.5 1.5 5))
 (typed.check "a mean" 2.5 (typed-mean 1.5 3.5))
 (typed.check "a sum of steps" 55 (typed-steps 10 0))

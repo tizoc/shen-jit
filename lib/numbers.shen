@@ -63,6 +63,11 @@
   N -> N where (shen-jit.fixnum? N)
   N -> (error "~S is not a fixnum" N))
 
+\\ Of an integer literal, fixnum is read as an annotation, which costs nothing: (fixnum 0) is
+\\ (type 0 fixnum). Of anything else it is the conversion, which checks at run time.
+(defmacro fixnum-literal
+  [fixnum N] -> [type N fixnum] where (shen-jit.fixnum? N))
+
 (map (/. F (declare F [float --> [float --> float]]))
      [fl+ fl- fl* fl/])
 (map (/. F (declare F [float --> [float --> boolean]]))

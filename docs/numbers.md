@@ -38,7 +38,8 @@ without searching, and code that uses only `number` never tries the rules of thi
 An integer literal can supply an expected `fixnum` and a float literal an expected `float`.
 Without an expected kind, a literal infers as `number`. For example, `(fx+ 1 2)` checks
 both literals as fixnums. Use `(let N (fixnum 1) (fx+ N 2))` to bind a fixnum before
-its use, and `(float 1.5)` to bind a float. The reader gives the integer 2 for `2.0`,
+its use: of an integer literal, `fixnum` is read as `(type 1 fixnum)` and costs nothing,
+where of anything else it checks at run time. Use `(float 1.5)` to bind a float. The reader gives the integer 2 for `2.0`,
 so write `(float 2)` for a float with no fraction.
 
 Polymorphic calls check arguments from left to right. If `N` is a fixnum,

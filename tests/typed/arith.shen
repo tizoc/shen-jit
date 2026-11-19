@@ -1,6 +1,10 @@
 \\ Typed definitions over fixnums and floats, module arith, which requires numbers for their types.
 (define typed-sq {float --> float} X -> (fl* X X))
 
+\\ A literal bound by let infers as number, so a fixnum binding says so, at no cost.
+(define typed-step {boolean --> fixnum --> fixnum}
+  Up N -> (let Step (if Up (fixnum 1) (fixnum -1)) (fx+ N Step)))
+
 (define typed-orbit {float --> float --> fixnum --> fixnum}
   _ _ 0 -> 0
   X C N -> (if (fl> (typed-sq X) 4.5) N (typed-orbit (fl+ (typed-sq X) C) C (fx- N 1))))

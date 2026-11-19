@@ -24,6 +24,11 @@ All notable changes to this project are documented in this file. The format is b
   `http.connection-close?` says whether a request asked to close. Code that drives its own connections can answer
   persistent and pipelined requests with replies encoded once.
 
+### Changed
+
+- `(fixnum N)` of an integer literal is read as `(type N fixnum)`, so binding a literal as a fixnum, as in
+  `(let Step (if Up (fixnum 1) (fixnum -1)) ...)`, costs nothing; of anything else it still checks at run time.
+
 ### Fixed
 
 - In a typed program, a sealed call of a function of no arguments that is not inlined, such as one written before
