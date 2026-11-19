@@ -62,7 +62,7 @@ SHA256 := $(shell command -v sha256sum 2>/dev/null || echo shasum -a 256)
 # An image loads only into the build that wrote it.
 BUILD_ID := $(shell cat $(RUNTIME_SRC) $(RUNTIME_HDR) | $(SHA256) | cut -c1-16)
 
-.PHONY: test-layout all release install stlib test-stlib test-thorn test-native test-buffer test-json test-io test-http test-datalog test-datalog-swipl bench-datalog bench-datalog-souffle test-ffi test-differential test-overrides differential-scheme fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-lib-stress test-core test-libs test-ctrlc-windows test-linux bench bench-independent bench-numeric stage0 check-lowerer measure load-kernel clean
+.PHONY: test-layout all release install stlib test-stlib test-thorn test-native test-buffer test-json test-io test-net-udp test-net-tcp test-http test-datalog test-datalog-swipl bench-datalog bench-datalog-souffle test-ffi test-differential test-overrides differential-scheme fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-lib-stress test-core test-libs test-ctrlc-windows test-linux bench bench-independent bench-numeric stage0 check-lowerer measure load-kernel clean
 
 all: $(BUILD)/shen-jit
 
@@ -270,7 +270,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words option result buffers layout grammar io fs processes parallel tree-sitter framing io-sockets deadlines http-head http http-streaming http-listener json datalog curl
+GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words option result buffers layout grammar io fs processes parallel tree-sitter framing io-sockets net-udp net-tcp net-tun deadlines http-head http http-streaming http-listener json datalog curl
 PANDOC ?= pandoc
 GUIDE_PANDOC := $(PANDOC) -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
@@ -383,7 +383,7 @@ test-isolates-stress: $(BUILD)/shen-jit
 	SHEN_JIT_GC_STRESS=1 $(BUILD)/shen-jit eval -l tests/isolates.shen | $(FFI_RESULT)
 
 # Every library's suite, without the collections test-lib-stress adds (about 30 s).
-test-libs: test-buffer test-layout test-json test-io test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces \
+test-libs: test-buffer test-layout test-json test-io test-net-udp test-net-tcp test-net-interface test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces \
   test-parallel
 
 .PHONY: test-isolates test-isolates-stress test-parallel
@@ -483,6 +483,34 @@ test-io: $(BUILD)/shen-jit
 # Binary layouts: generated accessors against raw bytes, ranges, offsets, namespaces and inlining.
 test-layout: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -m tests/layout-test.shenmod | $(FFI_RESULT)
+
+# In-memory IPv4/UDP wire, echo and steady-state allocation regression.
+test-net-udp: $(BUILD)/shen-jit
+	sh tests/net_alloc.sh $(SHEN_JIT) tests/net_udp.shenmod UDP "10,000 typed UDP cycles"
+
+# In-memory TCP connection, loss recovery and steady-state allocation regression.
+test-net-tcp: $(BUILD)/shen-jit
+	sh tests/net_alloc.sh $(SHEN_JIT) tests/net_tcp.shenmod TCP "2,000 typed TCP connections"
+
+# Shared ingress, UDP overflow and ICMP wire checks.
+.PHONY: test-net-interface
+test-net-interface: $(BUILD)/shen-jit
+	$(BUILD)/shen-jit eval -m tests/net_interface.shenmod -e '(net-interface-test.run)' | $(FFI_RESULT)
+
+# Optional Linux integration. Run test-net-tun inside a disposable network namespace.
+.PHONY: tun test-net-tun
+tun: $(BUILD)/shen-tun.so
+
+$(BUILD)/shen-tun.so: lib/net/tun.c | $(BUILD)
+	@test "$$(uname -s)" = Linux || { echo "TUN adapter requires Linux"; exit 1; }
+	$(CC) $(CFLAGS) -fPIC -shared -o $@ $<
+
+$(BUILD)/shen-test-tun.so: tests/net_tun_probe.c $(RUNTIME_HDR) | $(BUILD)
+	$(CC) $(CFLAGS) -fPIC -shared -o $@ $<
+
+test-net-tun: $(BUILD)/shen-jit $(BUILD)/shen-tun.so $(BUILD)/shen-test-tun.so
+	$(SHEN_JIT) build tests/net_tun.shenmod -o $(BUILD)/net-tun-test
+	python3 tests/net_tun.py $(abspath $(BUILD)/net-tun-test)
 
 # Complete request parsing, bounded bodies, response streams and persistent connections.
 test-http: $(BUILD)/shen-jit

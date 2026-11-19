@@ -3803,6 +3803,58 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   check has passed. On the `net-dsl` branch, TCP's lossy run 170.8–171.2 against 162.0–162.8 ms, its UDP echo
   22.4–22.5 against 21.6–21.7.
 
+### Shared IPv4 interface (2026-11-19, Linux in Docker Desktop)
+
+- One typed interface dispatches IPv4 to a TCP listener, a UDP port, and an ICMP echo responder.
+  UDP egress still uses the link's transmit queue. Valid UDP packets go into a preallocated
+  receive queue and overflow drops the new datagram without holding the link's ingress slot.
+- The TUN test filled a two-slot UDP queue and checked Linux ping while all four TCP streams
+  were open. The complete first wave echoed and closed before UDP was drained. The two retained
+  datagrams and a new datagram echoed, and the second TCP wave reused the listener slots.
+  The eight streams echoed 131,124 bytes in total. The heap probe measured zero Shen heap words
+  for the full workload and five words for the positive control.
+
+### Bounded TCP listeners (2026-11-19, Linux 7.0.14 in Docker Desktop)
+
+- The listener preallocates connection state and two stream buffers per slot. It routes incoming
+  segments by endpoint, rotates output after a successful send, and reclaims expired half-open
+  handshakes. Accepted connections keep a generation-specific fixnum token until release.
+- The Linux TUN test echoed 131,124 bytes on eight kernel TCP connections in two waves of four. A
+  fifth connection attempt timed out while all slots were occupied. The direct Shen heap measurement
+  recorded zero words across both waves, including slot reuse, and five words for the positive control.
+
+### Linux TUN interoperation (2026-11-19, Linux 7.0.14 in Docker Desktop)
+
+- Added a Linux TUN adapter over the bounded packet rings. It keeps one ingress scratch buffer and
+  writes from the queued packet in place. TCP validates incoming option lengths and honors MSS on SYN.
+- A Linux kernel TCP socket sent 16,387 binary bytes through TUN, half-closed, and received the exact
+  echo and EOF. The Shen heap probe measured zero words from before the handshake through shutdown.
+  The positive control detected five words for one new buffer view. The test ran in an isolated network
+  namespace. The in-memory TCP and UDP suites also passed on Linux and macOS.
+
+### Single TCP connection over the in-memory link (2026-11-19, Apple M3 Max, macOS arm64)
+
+- Moved the bounded link and IPv4 header and checksum code into shared typed modules, with the UDP
+  API using the same rings. The TCP peers reserve their send and receive buffers at setup and retain
+  one segment for retransmission. Fixed clocks let the test drop data, standalone acknowledgments,
+  and the final acknowledgment, then exercise retry and shutdown deterministically.
+- The VM heap probe measured zero words in 2,000 TCP connections starting immediately after setup
+  and in a separate warmed run. Those connections opened, retransmitted, echoed, and shut down.
+  The positive control used 80 words for 16 freshly allocated views. Under allocation stress both
+  the warmup-only and full runs counted 42 collections, and the control counted 58. The shared-link
+  UDP check still counted 29 collections for both its baseline and 10,000-cycle run.
+
+### In-memory IPv4 and UDP (2026-11-19, Apple M3 Max, macOS arm64)
+
+- Added a typed UDP peer and a two-direction in-memory link. Fixed packet arenas and ring metadata
+  are allocated at setup. The injected clock sets packet delivery times, and an echo request stays
+  queued while its reply has nowhere to go.
+- A VM heap probe measured zero words allocated across 10,000 warmed echo cycles, including empty
+  polls and full queues. A separate run starting immediately after setup also measured zero words.
+  Allocating one buffer view per cycle as a positive control used 80 words across 16 cycles. The portable `test-net-udp` check measures 29 collections with warmup alone,
+  29 after the same warmup and all echo cycles, and 45 with the positive control under allocation stress.
+  Independent wire fixtures check both directions and the zero-checksum cases.
+
 ### Independent bounded chunk I/O (2026-11-07, M3 Max, macOS arm64)
 
 - Added optional `lib/io.shen` and `lib/io-file.shen`, over existing buffers and FFI only: no runtime

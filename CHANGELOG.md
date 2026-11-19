@@ -24,6 +24,15 @@ All notable changes to this project are documented in this file. The format is b
   `http.connection-close?` says whether a request asked to close. Code that drives its own connections can answer
   persistent and pipelined requests with replies encoded once.
 
+- `net/udp` exchanges IPv4/UDP datagrams over an in-memory link with bounded packet queues and an injectable clock.
+  The typed packet path reuses storage allocated at setup, and `tools/udp-echo.shenmod` demonstrates a round trip.
+- `net/tcp` adds TCP over that link with preallocated stream buffers, retransmission, shutdown, and a bounded
+  listener table. `tools/tcp-echo.shenmod` demonstrates a round trip.
+- `net/tun` connects the packet link to a Linux TUN interface. `make test-net-tun` checks concurrent echoes
+  against Linux kernel sockets and measures Shen heap allocations through the last shutdown.
+- `net/interface` serves TCP, UDP, and ICMP echo on one IPv4 link. When the bounded UDP receive queue fills,
+  TCP and ICMP continue to make progress.
+
 ### Changed
 
 - `(fixnum N)` of an integer literal is read as `(type N fixnum)`, so binding a literal as a fixnum, as in

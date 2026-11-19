@@ -31,6 +31,9 @@ on:
       - docs/tree-sitter.md
       - docs/framing.md
       - docs/io-sockets.md
+      - docs/net-udp.md
+      - docs/net-tcp.md
+      - docs/net-tun.md
       - docs/deadlines.md
       - docs/http-head.md
       - docs/http.md

@@ -1,0 +1,16 @@
+(shen.x.namespace tun-test
+  (use shen-jit)
+  (externals [define-foreign-procedure])
+  (export mark words notify)
+
+(shen-jit.library probe ["shen-test-tun.so" "build/shen-test-tun.so"])
+(define-foreign-procedure mark probe "shen_test_tun_mark" 1)
+(define-foreign-procedure words probe "shen_test_tun_words" 1)
+(define-foreign-procedure notify probe "shen_test_tun_notify" 1)
+(declare mark [fixnum --> fixnum])
+(declare words [fixnum --> fixnum])
+(declare notify [fixnum --> boolean])
+)
+
+(define tun-test.main
+  -> (tun-test.run (hd (tl (value *argv*)))))

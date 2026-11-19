@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name net-interface-test)
+  (requires net/interface)
+  (typed)
+  (sources tc+ "net_interface.shen"))

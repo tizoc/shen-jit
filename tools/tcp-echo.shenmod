@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name tcp-echo)
+  (requires net/tcp)
+  (typed)
+  (sources tc+ "tcp-echo.shen"))

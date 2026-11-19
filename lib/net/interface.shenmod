@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name net/interface)
+  (requires net/tcp net/udp)
+  (typed)
+  (sources tc+ "interface.shen"))

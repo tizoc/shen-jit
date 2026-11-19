@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name udp-echo)
+  (requires net/udp)
+  (typed)
+  (sources tc+ "udp-echo.shen"))

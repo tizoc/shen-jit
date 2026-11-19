@@ -1,0 +1,7 @@
+(shen.module
+  (version 1)
+  (name net-tcp-test)
+  (requires net/tcp)
+  (typed)
+  (main tcp-test.main)
+  (sources tc+ "net_tcp.shen" tc- "net_tcp_main.shen"))
