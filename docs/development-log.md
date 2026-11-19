@@ -3836,6 +3836,7 @@ explicit output. Loading `io` went from 86 report lines to zero.
   roots each run since a saved image may have moved. A source's `cd` once redirected the next file open. The loader
   now reads with an empty Shen home directory, restores the source's setting for evaluation and restores the
   caller's at the end. Tests cover later sources and sibling dependencies after `cd` (2026-11-19).
+  The requested name is an option so a real module name cannot collide with the path-load case.
 - **Rules scoped by the module graph.** A module checks against the image, its declared dependencies' public rules
   and its own rules. Filtering preserves the kernel's registry order. Loading the kernel's 12 typed programs as
   separate modules took 610,924 inferences and 87.0 ms against 1,830,950 and 122.6 as files in one process. The JSON

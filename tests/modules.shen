@@ -85,6 +85,9 @@
    ["not a name" "module.use: " (freeze (module.use "a"))]
    ["another name" "module: tests/modules/misnamed.shenmod names misnamed-other, not misnamed"
     (freeze (module.use [misnamed]))]
+   ["a module named like the missing-name marker still checks the name"
+    "module: tests/modules/shen-jit.module.none.shenmod names sentinel-other, not shen-jit.module.none"
+    (freeze (module.use [shen-jit.module.none]))]
    ["version 2" "module: tests/modules/v2.shenmod has [version 2]" (freeze (module.use [v2]))]
    ["a field twice" "module: tests/modules/twice.shenmod gives name twice" (freeze (module.use [twice]))]
    ["an unknown field" "module: tests/modules/unknown.shenmod has [author me]" (freeze (module.use [unknown]))]

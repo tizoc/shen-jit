@@ -63,7 +63,7 @@
 (define module.load
   Path -> (let Dir (directory Path)
                _ (module.set-path [Dir | (remove Dir (module.path))])
-            (in-modules (freeze (load-path Path none [])))))
+            (in-modules (freeze (load-path Path [] [])))))
 
 \\ Runs Load with paths taken as they are, and gives the modules it loaded.
 (define in-modules
@@ -91,7 +91,7 @@
   Name _ -> (already-loaded Name) where (element? Name (loaded-list))
   Name Chain -> (error "module: ~A requires itself, through ~A" Name (chain-text (reverse [Name | Chain])))
       where (element? Name Chain)
-  Name Chain -> (load-path (descriptor-path Name) Name Chain))
+  Name Chain -> (load-path (descriptor-path Name) [Name] Chain))
 
 \\ A build must load its graph in the requested compilation mode. Modules loaded during this
 \\ build can be shared; ones inherited from its image cannot be compiled again by loading them.
@@ -120,7 +120,7 @@
 (define exists?
   Path -> (trap-error (do (close (open Path in)) true) (/. E false)))
 
-\\ Expected is the name the module was asked for by, or none for a descriptor given by its path. A
+\\ Expected holds the requested name, or [] for a descriptor given by its path. A
 \\ module that a source uses while that module loads, itself or one requiring it, is refused, as
 \\ requiring it would be.
 (define load-path
@@ -183,9 +183,9 @@
 (define the-name
   Fields Path Expected
   -> (let Name (hd (field name Fields Path))
-       (if (or (= Expected none) (= Name Expected))
+       (if (or (empty? Expected) (= Expected [Name]))
            Name
-           (error "module: ~A names ~A, not ~A" Path Name Expected))))
+           (error "module: ~A names ~A, not ~A" Path Name (hd Expected)))))
 
 (define require-features
   [] _ -> skip
