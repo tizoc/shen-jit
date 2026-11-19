@@ -1231,36 +1231,39 @@
 (define receive-opening
   {peer --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum -->
    boolean --> boolean}
-  P Flags Seq Ack Win N Mss Now Scale Sacked ->
-    (let Phase (state P)
-      (cases (and (= Phase syn-sent) (flag? Flags (flag-bits control rst)) (flag? Flags (flag-bits control ack)) (acknowledge? P Ack))
-               (stop-peer P reset)
-             (and (= Phase listen-state) (= Flags (flag-bits control syn)) (= N 0))
-               (do (peer.recv-next-> P (seq-add Seq 1))
-                   (remember-window P Seq Ack Win)
-                   (peer.send-mss-> P Mss)
-                   (peer.remote-scale-> P
-                     (if (and (sack-capable? P)
-                              (or (= Phase listen-state) (fx> (peer.window-scale P) 0)))
-                         Scale (type -1 fixnum)))
-                   (peer.sack-enabled-> P Sacked)
-                   (peer.phase-> P syn-received)
-                   (queue-control P (flag-bits control syn ack)))
-             (and (= Phase syn-sent) (= Flags (flag-bits control syn ack)) (= N 0) (acknowledge? P Ack))
-               (do (peer.recv-next-> P (seq-add Seq 1))
-                   (remember-window P Seq Ack Win)
-                   (peer.send-mss-> P Mss)
-                   (peer.remote-scale-> P
-                     (if (and (sack-capable? P)
-                              (or (= Phase listen-state) (fx> (peer.window-scale P) 0)))
-                         Scale (type -1 fixnum)))
-                   (peer.sack-enabled-> P Sacked)
-                   (peer.tx-flags-> P 0)
-                   (finish-syn P Now)
-                   (peer.phase-> P established)
-                   (peer.ack-needed-> P true)
-                   true)
-             true false)))
+  P Flags Seq Ack Win N Mss Now Scale Sacked -> (opening (state P) Flags P Seq Ack Win N Mss Now Scale Sacked))
+
+\\ The handshake, RFC 9293 3.5: by the state the peer is in and the segment it receives.
+(define opening
+  {symbol --> fixnum --> peer --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum -->
+   boolean --> boolean}
+  syn-sent Flags P _ Ack _ _ _ _ _ _ -> (stop-peer P reset)
+    where (and (flag? Flags (flag-bits control rst)) (flag? Flags (flag-bits control ack)) (acknowledge? P Ack))
+  listen-state (flag-bits control syn) P Seq Ack Win 0 Mss _ Scale Sacked ->
+    (do (accept-syn P Seq Ack Win Mss Scale Sacked true)
+        (peer.phase-> P syn-received)
+        (queue-control P (flag-bits control syn ack)))
+  syn-sent (flag-bits control syn ack) P Seq Ack Win 0 Mss Now Scale Sacked ->
+    (do (accept-syn P Seq Ack Win Mss Scale Sacked false)
+        (peer.tx-flags-> P 0)
+        (finish-syn P Now)
+        (peer.phase-> P established)
+        (peer.ack-needed-> P true)
+        true)
+    where (acknowledge? P Ack)
+  _ _ _ _ _ _ _ _ _ _ _ -> false)
+
+\\ What either end takes from the other's SYN. A listener takes a window scale whenever it can, an
+\\ opener only if it offered one.
+(define accept-syn
+  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean --> boolean --> peer}
+  P Seq Ack Win Mss Scale Sacked Listening ->
+    (do (peer.recv-next-> P (seq-add Seq 1))
+        (remember-window P Seq Ack Win)
+        (peer.send-mss-> P Mss)
+        (peer.remote-scale-> P (if (and (sack-capable? P) (or Listening (fx> (peer.window-scale P) 0)))
+                                   Scale (type -1 fixnum)))
+        (peer.sack-enabled-> P Sacked)))
 
 (define read-scale
   {buffer.view --> fixnum --> fixnum --> fixnum}

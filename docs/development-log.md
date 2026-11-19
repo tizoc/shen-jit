@@ -3803,6 +3803,26 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   check has passed. On the `net-dsl` branch, TCP's lossy run 170.8–171.2 against 162.0–162.8 ms, its UDP echo
   22.4–22.5 against 21.6–21.7.
 
+### Declared packet formats (2026-11-19, Apple M3 Max, and Linux arm64 in Docker Desktop)
+
+- An experiment, on branch `net-dsl`: the networking code rewritten to say what its RFCs say, after
+  VPRI's STEPS, which drew TCP/IP's headers from the RFCs' diagrams. `deflayout` declares a header as
+  its rows are drawn and defines typed accessors that inline, `write-layout` writes a whole header in
+  packed stores with its constants folded, and `defflags` names a field's bits as constants made when
+  the code is read. `lib/net/wire.shen` declares 21 formats.
+- Offsets written by hand in `lib/net` went from 192 to 11, and numeric flag tests in TCP from 36 to
+  0; lines of code from 4,475 to 4,602, 96 of them declarations. TCP's handshake became rules on state
+  and segment.
+- Medians of 15 interleaved runs, 10,000 UDP echo cycles and the TCP connections: reading by name cost
+  nothing measurable (37.7 to 37.6 ms, 361.6 to 361.4 with packed writes). **Rejected: writing a
+  header field by field**, 37.6 to 42.0 ms and 361.7 to 385.0, a read, mask and store for each field
+  narrower than a byte; `write-layout` replaced it. The converted UDP and TCP measured 36.9 and
+  356.2 ms against 37.6 and 363.1 before them, and rules for the handshake 364.7 against 364.1.
+  Nothing allocates, and the TUN and TAP suites, against Linux's own TCP, ARP, DHCP and DNS, used no
+  heap words.
+- Found on the way: a sealed call of no arguments that was not inlined crashed the lowerer, now fixed
+  on `main` (see "Calls of no arguments taken for C calls").
+
 ### Dual-stack networking and SLAAC (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
 
 - Shared the TCP table and UDP bindings across IPv4 and IPv6. IPv6 adds mandatory
