@@ -34,6 +34,11 @@
   (mutable tx-due : fixnum)
   (mutable tx-rto : fixnum)
   (mutable tx-retries : fixnum)
+  (mutable srtt : fixnum)
+  (mutable rttvar : fixnum)
+  (mutable rtt-sample-at : fixnum)
+  (mutable rtt-sample-end : fixnum)
+  (mutable rtt-blocked-bytes : fixnum)
   (mutable tx-duplicate-acks : fixnum)
   (mutable tx-fast-retransmit : boolean)
   (mutable remote-window : fixnum)
@@ -53,6 +58,10 @@
 (define smaller
   {fixnum --> fixnum --> fixnum}
   A B -> (if (fx< A B) A B))
+
+(define larger
+  {fixnum --> fixnum --> fixnum}
+  A B -> (if (fx> A B) A B))
 
 (define endpoint?
   {fixnum --> fixnum --> boolean}
@@ -87,6 +96,11 @@
         tx-due <- -1
         tx-rto <- 1000
         tx-retries <- 0
+        srtt <- 0
+        rttvar <- 0
+        rtt-sample-at <- -1
+        rtt-sample-end <- 0
+        rtt-blocked-bytes <- 0
         tx-duplicate-acks <- 0
         tx-fast-retransmit <- false
         remote-window <- 0
@@ -160,6 +174,10 @@
               (peer.tx-due-> P -1)
               (peer.tx-rto-> P 1000)
               (peer.tx-retries-> P 0)
+              (peer.srtt-> P 0)
+              (peer.rttvar-> P 0)
+              (peer.rtt-sample-at-> P -1)
+              (peer.rtt-blocked-bytes-> P 0)
               (clear-duplicate-acks P)
               (peer.remote-window-> P 0)
               (peer.send-mss-> P (peer.mss P))
@@ -179,7 +197,6 @@
   {peer --> fixnum --> boolean}
   P Flags ->
     (do (peer.tx-due-> P -1)
-        (peer.tx-rto-> P 1000)
         (peer.tx-retries-> P 0)
         (peer.tx-flags-> P Flags)
         true))
@@ -300,6 +317,7 @@
                  (peer.tx-flight-> P 0)
                  (peer.tx-replay-> P -1)
                  (peer.tx-due-> P -1)
+                 (peer.rtt-sample-at-> P -1)
                  (clear-duplicate-acks P)
                  (peer.ack-needed-> P false)
                  (peer.rx-duplicate-acks-> P 0)
@@ -314,6 +332,15 @@
           (peer.tx-retries-> P (fx+ (peer.tx-retries P) 1))
           true)))
 
+(define start-rtt-sample
+  {peer --> fixnum --> fixnum --> boolean}
+  P Now End ->
+    (if (and (fx< (peer.rtt-sample-at P) 0) (= (peer.rtt-blocked-bytes P) 0))
+        (do (peer.rtt-sample-end-> P End)
+            (peer.rtt-sample-at-> P Now)
+            true)
+        false))
+
 (define send-control
   {peer --> net-link.ring --> fixnum --> boolean}
   P R Now ->
@@ -322,10 +349,13 @@
          Next (peer.send-next P)
       (do (emit-segment P R Now Flags (if First Next (seq-add Next -1)) 0 0)
           (if First
-              (do (peer.send-next-> P (seq-add Next 1))
-                  (peer.tx-due-> P (fx+ Now (peer.tx-rto P)))
-                  true)
-              (backoff P Now)))))
+              (let End (seq-add Next 1)
+                (do (peer.send-next-> P End)
+                    (peer.tx-due-> P (fx+ Now (peer.tx-rto P)))
+                    (if (flag? Flags 2) (start-rtt-sample P Now End) true)
+                    true))
+              (do (peer.rtt-sample-at-> P -1)
+                  (backoff P Now))))))
 
 \\ Queued bytes are split into an in-flight prefix and a never-sent suffix.
 \\ Replay uses offsets within that prefix relative to tx-head.
@@ -336,12 +366,20 @@
          At (wrap-offset (fx+ (peer.tx-head P) Offset) (peer.capacity P))
       (emit-segment P R Now 24 Seq At Count)))
 
+\\ A cumulative ACK across a retransmitted flight cannot give a clean sample.
+(define retransmit-data
+  {peer --> net-link.ring --> fixnum --> fixnum --> fixnum --> boolean}
+  P R Now Offset Count ->
+    (do (peer.rtt-sample-at-> P -1)
+        (peer.rtt-blocked-bytes-> P (peer.tx-flight P))
+        (emit-data P R Now Offset Count)))
+
 (define replay-data
   {peer --> net-link.ring --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
   P R Now Offset End Retry ->
     (let N (smaller (peer.send-mss P) (fx- End Offset))
          Next (fx+ Offset N)
-      (do (emit-data P R Now Offset N)
+      (do (retransmit-data P R Now Offset N)
           (peer.tx-replay-> P (if (fx< Next End) Next -1))
           (if Retry
               (do (peer.tx-fast-retransmit-> P false)
@@ -352,11 +390,13 @@
 (define send-new-data
   {peer --> net-link.ring --> fixnum --> fixnum --> fixnum --> boolean}
   P R Now Flight N ->
-    (do (emit-data P R Now Flight N)
-        (peer.tx-flight-> P (fx+ Flight N))
-        (peer.send-next-> P (seq-add (peer.send-next P) N))
-        (if (= Flight 0) (peer.tx-due-> P (fx+ Now (peer.tx-rto P))) P)
-        true))
+    (let End (seq-add (peer.send-next P) N)
+      (do (emit-data P R Now Flight N)
+          (peer.tx-flight-> P (fx+ Flight N))
+          (peer.send-next-> P End)
+          (if (fx> (peer.remote-window P) 0) (start-rtt-sample P Now End) false)
+          (if (= Flight 0) (peer.tx-due-> P (fx+ Now (peer.tx-rto P))) P)
+          true)))
 
 (define flush-data
   {peer --> net-link.ring --> fixnum --> boolean --> boolean}
@@ -370,7 +410,7 @@
       (cases (and (fx>= Replay 0) (fx< Replay End)) (replay-data P R Now Replay End false)
              (and Expired (fx> End 0)) (replay-data P R Now 0 End true)
              (and (peer.tx-fast-retransmit P) (fx> End 0) (fx> Window 0))
-               (do (emit-data P R Now 0 (smaller (peer.send-mss P) End))
+               (do (retransmit-data P R Now 0 (smaller (peer.send-mss P) End))
                    (peer.tx-fast-retransmit-> P false)
                    true)
              (and (fx> (peer.rx-duplicate-acks P) 0) (not (peer.ack-needed P))) (emit-ack P R Now)
@@ -446,13 +486,47 @@
                 (fx>= (peer.tx-due P) 0)
                 (= Ack (peer.send-next P))))
 
-(define reset-timer
+\\ SRTT and RTTVAR are fixed point in eighths of a millisecond. The
+\\ variance uses the old smoothed RTT. Quantize the timer upward to milliseconds.
+(define record-rtt
+  {peer --> fixnum --> boolean}
+  P Ms ->
+    (let Sample (fx* (larger 1 (smaller 60000 Ms)) 8)
+         Previous (peer.srtt P)
+         Delta (fx- Previous Sample)
+         Error (larger Delta (fx- 0 Delta))
+         Variation (if (= Previous 0) (fxquotient Sample 2)
+                       (fxquotient (fx+ (fx* (peer.rttvar P) 3) Error) 4))
+         Smoothed (if (= Previous 0) Sample (fxquotient (fx+ (fx* Previous 7) Sample) 8))
+         Rto (fxquotient (fx+ (fx+ Smoothed (larger 8 (fx* Variation 4))) 7) 8)
+      (do (peer.srtt-> P Smoothed)
+          (peer.rttvar-> P Variation)
+          (peer.tx-rto-> P (larger 1000 (smaller 60000 Rto)))
+          true)))
+
+(define take-rtt-sample
+  {peer --> fixnum --> boolean}
+  P Now ->
+    (let At (peer.rtt-sample-at P)
+      (if (fx>= At 0)
+          (do (peer.rtt-sample-at-> P -1)
+              (record-rtt P (fx- Now At)))
+          false)))
+
+(define restart-timer
   {peer --> fixnum --> fixnum --> boolean}
   P Flight Now ->
-    (do (peer.tx-due-> P (if (= Flight 0) -1 (fx+ Now 1000)))
-        (peer.tx-rto-> P 1000)
+    (do (peer.tx-due-> P (if (= Flight 0) -1 (fx+ Now (peer.tx-rto P))))
         (peer.tx-retries-> P 0)
         true))
+
+(define finish-syn
+  {peer --> fixnum --> boolean}
+  P Now ->
+    (do (if (fx> (peer.tx-retries P) 0)
+            (do (peer.tx-rto-> P 3000) true)
+            (take-rtt-sample P Now))
+        (restart-timer P 0 Now)))
 
 (define remember-window
   {peer --> fixnum --> fixnum --> fixnum --> boolean}
@@ -479,7 +553,7 @@
         (let Phase (state P)
           (do (remember-window P Seq Ack Window)
               (peer.tx-flags-> P 0)
-              (reset-timer P 0 Now)
+              (if (= Phase syn-received) (finish-syn P Now) (restart-timer P 0 Now))
               (cases (= Phase syn-received) (do (peer.phase-> P established) true)
                      (= Phase fin-wait-1) (do (peer.phase-> P fin-wait-2) true)
                      (= Phase closing) (enter-time-wait P Now)
@@ -488,17 +562,21 @@
         false))
 
 (define advance-ack
-  {peer --> fixnum --> fixnum --> fixnum --> boolean}
-  P N Flight Now ->
+  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  P Ack N Flight Now ->
     (let Left (fx- Flight N)
          Replay (peer.tx-replay P)
          At (fx- Replay N)
-      (do (peer.tx-head-> P (wrap-offset (fx+ (peer.tx-head P) N) (peer.capacity P)))
+         SampleEnd (peer.rtt-sample-end P)
+         Blocked (peer.rtt-blocked-bytes P)
+      (do (if (or (= Ack SampleEnd) (seq-after? Ack SampleEnd)) (take-rtt-sample P Now) false)
+          (if (fx> Blocked 0) (peer.rtt-blocked-bytes-> P (larger 0 (fx- Blocked N))) P)
+          (peer.tx-head-> P (wrap-offset (fx+ (peer.tx-head P) N) (peer.capacity P)))
           (peer.tx-length-> P (fx- (peer.tx-length P) N))
           (peer.tx-flight-> P Left)
           (peer.tx-replay-> P (cases (or (= Left 0) (fx< Replay 0)) -1 (fx< At 0) 0 true At))
           (clear-duplicate-acks P)
-          (reset-timer P Left Now))))
+          (restart-timer P Left Now))))
 
 (define count-duplicate-ack
   {peer --> boolean}
@@ -520,7 +598,7 @@
          OldWindow (peer.remote-window P)
       (if (fx<= N Flight)
           (do (update-window P Seq Ack Window)
-              (cases (fx> N 0) (advance-ack P N Flight Now)
+              (cases (fx> N 0) (advance-ack P Ack N Flight Now)
                      (and (fx> Flight 0) (= OldWindow 0) (fx> (peer.remote-window P) 0))
                        (do (peer.tx-replay-> P 0) true)
                      (and PureAck (fx> Flight 0) (fx> Window 0) (= Window OldWindow)
@@ -663,8 +741,8 @@
                        (answer-duplicate P Flags Seq N Now))))))
 
 (define receive-opening
-  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
-  P Flags Seq Ack Win N Mss ->
+  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  P Flags Seq Ack Win N Mss Now ->
     (let Phase (state P)
       (cases (and (= Phase listen-state) (= Flags 2) (= N 0))
                (do (peer.recv-next-> P (seq-add Seq 1))
@@ -677,7 +755,7 @@
                    (remember-window P Seq Ack Win)
                    (peer.send-mss-> P Mss)
                    (peer.tx-flags-> P 0)
-                   (reset-timer P 0 0)
+                   (finish-syn P Now)
                    (peer.phase-> P established)
                    (peer.ack-needed-> P true)
                    true)
@@ -702,7 +780,7 @@
              Mss (options B (fx+ I 40) Start (peer.mss P))
           (cases (fx< Mss 0) false
                  (or (= Phase listen-state) (= Phase syn-sent))
-                   (receive-opening P Flags Seq Ack Win N Mss)
+                   (receive-opening P Flags Seq Ack Win N Mss Now)
                  (and (= Phase syn-received)
                       (not (and (= Seq (peer.recv-next P)) (flag? Flags 16) (acknowledge? P Ack))))
                    (if (and (= Flags 2) (= (seq-add Seq 1) (peer.recv-next P))

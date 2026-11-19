@@ -34,8 +34,12 @@ negotiated MSS. The link reserves `Slots × Mtu` packet bytes in each direction,
 metadata. Reuse device handles, peer state, application buffers and a non-allocating clock for an
 allocation-free typed loop.
 
-The peers start a retransmission timer when a segment is queued onto the link. The timeout starts at one second,
-doubles on each retry up to 60 seconds, and the peer enters `tcp.timed-out` when the sixth retry expires.
+The retransmission timer starts when a segment is queued onto the link. Its initial value is
+one second. Clean handshake and data ACKs supply round-trip samples from the link clock.
+The timer uses the smoothed RTT plus four times its variation, clamped to one through 60
+seconds. ACKs that cover retransmitted data leave the estimator and any backoff in place.
+A fresh sample can replace the backed-off timeout. A retried SYN starts the data phase
+with a three-second timeout. [TCP retransmission timer](https://www.rfc-editor.org/rfc/rfc6298.html)
 A cumulative ACK advances the send buffer across 32-bit sequence wrap. The receiver retains
 in-window bytes ahead of a gap in the same ring and keeps the ACK at the next missing byte.
 An overlapping segment preserves bytes already received. When the gap closes, the entire
@@ -48,10 +52,11 @@ the transmit queue is full. An advancing ACK cancels it and resets the count. Th
 keeps up to three pending gap ACKs when out-of-order packets arrive in one poll.
 [TCP fast retransmit](https://www.rfc-editor.org/rfc/rfc5681.html#section-3.2)
 
-The original timeout remains armed after a fast retry. On timeout, the sender replays
-outstanding bytes from the oldest unacknowledged byte, within the current window. A cumulative
-ACK can cancel the rest of the replay. One byte can probe a zero window and recover a lost
-window update. The clock makes these transitions reproducible.
+The original deadline remains armed after a fast retry. On timeout, the sender doubles
+the interval up to 60 seconds and replays outstanding bytes from the oldest unacknowledged
+byte within the current window. A cumulative ACK can cancel the rest of the replay. The
+peer enters `tcp.timed-out` when the sixth retry expires. One byte can probe a zero window
+and recover a lost window update. The clock makes these transitions reproducible.
 [TCP incoming segment processing](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.10.7.4)
 
 ## Byte stream
@@ -92,8 +97,10 @@ the peer's MSS, cumulative ACKs, and reordering across ring and sequence wraparo
 checks loss and overlapping retransmissions, clipping at the receive window edge, out-of-order
 FIN, zero-window probes, and reuse of a listener slot that held staged data at reset. Its
 fast-retransmit test recovers a dropped segment at 25 ms of simulated time and exercises
-a lost fast retry on the same connection. The allocation regression runs 5,000 typed
-connections under allocation stress, with a warmup-only baseline and an allocating positive control.
+a lost fast retry on the same connection. The adaptive timer test varies RTT and checks
+the actual retry deadlines after loss and after fresh samples. The allocation regression
+runs 6,000 typed connections under allocation stress, with a warmup-only baseline and
+an allocating positive control.
 
 ## Simulated throughput
 

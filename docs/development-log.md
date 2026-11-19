@@ -3803,6 +3803,21 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   check has passed. On the `net-dsl` branch, TCP's lossy run 170.8–171.2 against 162.0–162.8 ms, its UDP echo
   22.4–22.5 against 21.6–21.7.
 
+### Adaptive TCP retransmission timeout (2026-11-19, Apple M3 Max and Linux in Docker Desktop)
+
+- TCP tracks a single pending RTT sample per connection. The smoothed RTT and its variation
+  are fixed-point values in eighths of a millisecond. Retransmission cancels the pending sample,
+  and a fresh sample can replace the backed-off timer. The timer retains the one-second minimum
+  and 60-second cap.
+- A 400 ms handshake and a 900 ms data RTT led to a 1,563 ms timeout. Loss doubled it to 3,126
+  and then 6,252 ms. Ambiguous ACKs left that backoff in place. Fresh 100 ms samples brought the
+  timeout down to 1,442 ms and eventually to 1,000 ms. A separate test checked the three-second
+  data timeout after a retried SYN.
+- The Linux heap probe included 16 runs of the adaptive RTT and loss test alongside the other
+  simulated recovery cases and the mixed TUN workload. It measured zero Shen heap words after
+  setup. The allocating control used five words. The 6,000-connection stress run added zero
+  collections.
+
 ### TCP fast retransmit (2026-11-19, Apple M3 Max and Linux in Docker Desktop)
 
 - Three duplicate pure ACKs with the same advertised window schedule one retry at the

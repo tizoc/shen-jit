@@ -59,5 +59,6 @@ Linux TCP streams. While all four are open, a fifth connection attempt times out
 gets a reply. After the first wave closes, both retained UDP datagrams echo in order and a new
 one verifies recovery. The second TCP wave reuses the same slots. The test checks 131,124 TCP
 bytes and EOF on all eight sockets. A test-only probe checks the Shen heap across 16 runs each
-of simulated reordering, timeout recovery, and fast retransmit with a lost retry. It also
-covers the entire TUN workload and uses a freshly allocated view as a positive control.
+of simulated reordering, timeout recovery, fast retransmit, and adaptive timing with changing
+RTTs and packet loss. It also covers the entire TUN workload and uses a freshly allocated view
+as a positive control.

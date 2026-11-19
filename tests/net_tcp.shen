@@ -397,6 +397,117 @@
         (fast-flight F Payload Out 17 true)
         (close-pair F false)))
 
+(define open-with-rtt
+  {pair --> fixnum --> boolean}
+  F Half ->
+    (let C (pair.client F) S (pair.server F)
+      (do (expect (tcp.listen S 100) "listen for RTT measurement")
+          (expect (tcp.connect C 4294967294) "open near sequence wrap")
+          (tcp.poll C 0)
+          (advance F Half)
+          (expect (= (tcp.poll S 2) 1) "SYN arrives after half an RTT")
+          (advance F Half)
+          (expect (= (tcp.poll C 2) 1) "SYN-ACK completes the first RTT sample")
+          (advance F Half)
+          (expect (= (tcp.poll S 2) 1) "complete the delayed handshake")
+          (expect (and (= (tcp.state C) tcp.established) (= (tcp.state S) tcp.established))
+                  "both peers are established"))))
+
+(define send-timed-data
+  {pair --> boolean}
+  F ->
+    (let C (pair.client F)
+      (do (expect (= (tcp.send C (pair.payload F) 3) 3) "queue a timed exchange")
+          (tcp.poll C 0)
+          true)))
+
+(define receive-timed-data
+  {pair --> fixnum --> boolean}
+  F Rtt ->
+    (let C (pair.client F) S (pair.server F)
+         Out (pair.server-out F)
+         Half (fxquotient Rtt 2)
+      (do (advance F Half)
+          (expect (= (tcp.poll S 2) 1) "receive the timed data")
+          (expect (= (tcp.recv-into S Out 3) 3) "read the timed data once")
+          (expect (buffer.equal? Out (pair.payload F)) "timed data is intact")
+          (advance F (fx- Rtt Half))
+          (expect (= (tcp.poll C 2) 1) "ACK arrives after the selected RTT"))))
+
+(define train-rtt
+  {pair --> fixnum --> fixnum --> boolean}
+  _ _ 0 -> true
+  F Rtt N ->
+    (do (send-timed-data F)
+        (receive-timed-data F Rtt)
+        (train-rtt F Rtt (fx- N 1))))
+
+(define drop-timed-data
+  {pair --> boolean}
+  F ->
+    (do (send-timed-data F)
+        (expect (= (net-link.packet-recv-into (pair.right F) (pair.wire F)) 43) "drop the timed data")))
+
+(define expect-data-timeout
+  {pair --> fixnum --> boolean}
+  F Interval ->
+    (let C (pair.client F) Right (pair.right F) Wire (pair.wire F)
+      (do (advance F (fx- Interval 1))
+          (tcp.poll C 0)
+          (expect (= (net-link.packet-recv-into Right Wire) -1) "no retransmit before the adaptive deadline")
+          (advance F 1)
+          (tcp.poll C 0)
+          (expect (= (net-link.packet-recv-into Right Wire) 43) "retransmit at the adaptive deadline"))))
+
+(define deliver-timed-retry
+  {pair --> boolean}
+  F ->
+    (do (expect (= (net-link.packet-send (pair.left F) (pair.wire F) 43) net-link.sent) "deliver the retry")
+        (receive-timed-data F 50)))
+
+(define adaptive-rto
+  {pair --> boolean}
+  F ->
+    (do (open-with-rtt F 200)
+        (train-rtt F 900 1)
+        (drop-timed-data F)
+        (expect-data-timeout F 1563) \\ SRTT 462.5 ms plus four times RTTVAR 275 ms.
+        (expect-data-timeout F 3126) \\ The first retry is also lost.
+        (deliver-timed-retry F)
+        (drop-timed-data F)
+        (expect-data-timeout F 6252) \\ An ambiguous ACK leaves exponential backoff in place.
+        (deliver-timed-retry F)
+        (train-rtt F 100 4)
+        (drop-timed-data F)
+        (expect-data-timeout F 1442) \\ Clean, shorter RTTs replace the backed-off timer.
+        (deliver-timed-retry F)
+        (train-rtt F 100 5)
+        (drop-timed-data F)
+        (expect-data-timeout F 1000) \\ The computed RTO reaches the one-second floor.
+        (deliver-timed-retry F)
+        (close-pair F false)))
+
+(define timeout-after-syn-loss
+  {fixnum --> boolean}
+  Mtu ->
+    (let F (setup Mtu)
+         C (pair.client F) S (pair.server F)
+      (do (expect (tcp.listen S 100) "listen after SYN loss")
+          (expect (tcp.connect C 4294967294) "queue the original SYN")
+          (tcp.poll C 0)
+          (expect (= (net-link.packet-recv-into (pair.right F) (pair.wire F)) 40) "drop the original SYN")
+          (advance F 1000)
+          (tcp.poll C 0)
+          (advance F 50)
+          (expect (= (tcp.poll S 2) 1) "receive the retransmitted SYN")
+          (advance F 50)
+          (expect (= (tcp.poll C 2) 1) "receive the ambiguous SYN-ACK")
+          (expect (= (tcp.poll S 2) 1) "complete the handshake")
+          (drop-timed-data F)
+          (expect-data-timeout F 3000)
+          (deliver-timed-retry F)
+          (close-pair F false))))
+
 (define exercise
   {pair --> fixnum --> boolean --> boolean}
   _ 0 _ -> true
@@ -423,6 +534,7 @@
     (and (window-loss (window-case.peers W) (window-case.payload W) (window-case.suffix W) (window-case.output W))
          (reorder-window (window-case.peers W) (window-case.payload W) (window-case.suffix W) (window-case.output W))
          (fast-loss (window-case.peers W) (window-case.payload W) (window-case.fast-output W))
+         (adaptive-rto (window-case.peers W))
          (exercise-window W (fx- N 1))))
 
 (define verify
@@ -801,7 +913,8 @@
   {fixnum --> boolean}
   Mtu -> (and (fixture Mtu) (option-fixtures Mtu) (receive-window 41) (partial-read 45)
               (ring-wrap 43) (overlapping-replay 43) (receive-window-edge 43) (reordered-fin 43) (reset-staged-slot 43)
-              (listener-reuse Mtu) (listener-fairness Mtu) (listener-half-open-timeout Mtu) (verify 1 false)))
+              (timeout-after-syn-loss Mtu) (listener-reuse Mtu) (listener-fairness Mtu)
+              (listener-half-open-timeout Mtu) (verify 1 false)))
 
 (preclude [pair.%match window-case.%match])
 )
