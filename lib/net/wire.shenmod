@@ -1,6 +1,6 @@
 (shen.module
   (version 1)
   (name net/wire)
-  (requires layout)
+  (requires layout grammar)
   (typed)
   (sources tc+ "wire.shen"))

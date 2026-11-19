@@ -3822,6 +3822,14 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   heap words.
 - Found on the way: a sealed call of no arguments that was not inlined crashed the lowerer, now fixed
   on `main` (see "Calls of no arguments taken for C calls").
+- TCP's options became a grammar, `<options>`, by kind as RFC 9293 lists them, parsed with a new
+  `<rule>.parse-at` over the options' range and a state the peer keeps, as `.parse` made a state and
+  needed a view of the range: two allocations per segment. It cost 1.4% of the TCP connections (351.8
+  to 356.9 ms), which parse options on every segment, and passes against Linux's TCP options, timestamps
+  included. **Found: a typed grammar rule in a program saved sealed compiled again at every call**
+  unless `grammar.finish` had made its loops (1,206 code objects for 1,000 parses, against 9; the TCP
+  workload 265 s against 0.36), on `main` too; `grammar.finish` now has a type, so a typed library calls
+  it as it loads.
 
 ### Dual-stack networking and SLAAC (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
 

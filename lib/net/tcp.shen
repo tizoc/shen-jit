@@ -6,8 +6,10 @@
   (use net-ipv6)
   (use shen-jit)
   (use net-wire => wire)
+  (use grammar)
   (import struct defstruct)
   (import layout write-layout defflags flag-bits)
+  (externals [defgrammar u16-be <end> <e>])
   (shadow listen release)
   (export peer make-peer listen connect state send recv-into shutdown-write poll
           listener make-listener listener-poll accept connection-index connection-state
@@ -20,6 +22,18 @@
 
 \\ RFC 9293's control bits, the most significant first.
 (defflags control cwr ece urg ack psh rst syn fin)
+
+\\ A received segment, read once into a record its peer keeps: where it lies, and what its header says.
+(defstruct segment
+  (mutable data : buffer.view)
+  (mutable options : fixnum)
+  (mutable start : fixnum)
+  (mutable length : fixnum)
+  (mutable flags : fixnum)
+  (mutable sequence : fixnum)
+  (mutable acknowledgement : fixnum)
+  (mutable window : fixnum)
+  (mutable mss : fixnum))
 
 (defstruct peer
   (device : net-link.device)
@@ -81,7 +95,9 @@
   (mutable recv-eof : boolean)
   (mutable ack-needed : boolean)
   (mutable rx-duplicate-acks : fixnum)
-  (mutable wait-until : fixnum))
+  (mutable wait-until : fixnum)
+  (options-state : grammar.state)
+  (segment : segment))
 
 (define smaller
   {fixnum --> fixnum --> fixnum}
@@ -144,6 +160,9 @@
         mss <- Mss
         capacity <- Capacity
         map-bytes <- MapBytes
+        options-state <- (grammar.state)
+        segment <- (:segment data <- (buffer.new 0) options <- 0 start <- 0 length <- 0 flags <- 0
+                             sequence <- 0 acknowledgement <- 0 window <- 0 mss <- 0)
         window-scale <- (scale-for Capacity 0)
         remote-scale <- -1
         path-mtu <- (net-link.mtu D)
@@ -820,24 +839,22 @@
   {buffer.view --> fixnum --> fixnum}
   B I -> (fx* 4 (wire.tcp.data-offset B I)))
 
-\\ Read MSS and validate option boundaries before any other option reads.
-(define options
-  {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
-  B I End Mss ->
-    (if (= I End) Mss
-        (let Kind (buffer.u8 B I)
-          (cases (= Kind 0) Mss
-                 (= Kind 1) (options B (fx+ I 1) End Mss)
-                 (fx< (fx- End I) 2) -1
-                 true (let N (buffer.u8 B (fx+ I 1))
-                         (cases (or (fx< N 2) (fx> N (fx- End I))) -1
-                                (and (= Kind 4) (not (= N 2))) -1
-                                (and (= Kind 3) (not (= N 3))) -1
-                                (not (= Kind 2)) (options B (fx+ I N) End Mss)
-                                (not (= N 4)) -1
-                                true (let Advertised (buffer.u16-be B (fx+ I 2))
-                                       (if (= Advertised 0) -1
-                                           (options B (fx+ I N) End (smaller Mss Advertised))))))))))
+\\ TCP's options, RFC 9293 3.1: a kind, then, but for the end of the list and a no-op, a length that
+\\ counts both bytes. The value is the smallest maximum segment size offered, or Mss if none is. A known
+\\ kind with the wrong length, a size of 0, or a length past the end does not match. Each alternative
+\\ tests its kind and length before the rest of the list, so that none parses it again after another.
+(defgrammar (<options> Mss) {fixnum ==> fixnum}
+  <end> := Mss;
+  0 (* _) := Mss;                                                        \\ The end; padding follows.
+  1 (<options> Mss) := <options>;                                        \\ No-op.
+  2 4 (u16-be Size) (where (fx> Size 0)) (<options> (smaller Mss Size)) := <options>;   \\ Maximum segment size.
+  3 3 _ (<options> Mss) := <options>;                                    \\ Window scale.
+  4 2 (<options> Mss) := <options>;                                      \\ SACK permitted.
+  Kind Length (where (and (fx> Kind 4) (fx>= Length 2))) (wire.<bytes> (fx- Length 2)) (<options> Mss)
+    := <options>;)
+
+\\ Compile the rules' loops now, while the module loads, so that a saved program carries them.
+(grammar.finish)
 
 (define option-offset
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
@@ -1188,82 +1205,129 @@
               true)
           (if (= Final (peer.recv-next P)) (receive-fin P Now) true))))
 
-(define answer-duplicate
-  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
-  P Flags Seq N Now ->
-    (if (or (fx> N 0) (flag? Flags (flag-bits control syn fin)))
-        (do (peer.ack-needed-> P true)
-            (if (and (= (state P) time-wait) (flag? Flags (flag-bits control fin))
-                     (= (seq-add Seq (fx+ N 1)) (peer.recv-next P)))
-                (enter-time-wait P Now)
-                true))
-        false))
+\\ A segment's length in sequence space: a FIN takes one.
+(define span
+  {segment --> fixnum}
+  Seg -> (if (flag? (segment.flags Seg) (flag-bits control fin)) (fx+ (segment.length Seg) 1) (segment.length Seg)))
 
-(define receive-connected
-  {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
-  P B Options Start N Flags Seq Ack Win Now ->
-    (let Next (peer.recv-next P)
-         Previous (send-una P)
+\\ A segment repeated, or out of the window, is acknowledged again; time-wait restarts on a FIN repeated.
+(define answer-duplicate
+  {peer --> segment --> fixnum --> boolean}
+  P Seg Now ->
+    (let Flags (segment.flags Seg)
+      (if (or (fx> (segment.length Seg) 0) (flag? Flags (flag-bits control syn fin)))
+          (do (peer.ack-needed-> P true)
+              (if (and (= (state P) time-wait) (flag? Flags (flag-bits control fin))
+                       (= (seq-add (segment.sequence Seg) (fx+ (segment.length Seg) 1)) (peer.recv-next P)))
+                  (enter-time-wait P Now)
+                  true))
+          false)))
+
+\\ RFC 9293's test: the segment starts where we expect, overlaps what we expect, or starts in the window.
+(define acceptable?
+  {peer --> segment --> boolean}
+  P Seg -> (let Next (peer.recv-next P)
+                Seq (segment.sequence Seg)
+                Ahead (seq-distance Seq Next)
+             (or (= Ahead 0) (fx< (seq-distance Next Seq) (span Seg)) (fx< Ahead (window P)))))
+
+\\ A reset ends the connection at the sequence expected, and is acknowledged elsewhere in the window.
+(define reset-received
+  {peer --> segment --> boolean}
+  P Seg -> (cases (= (segment.sequence Seg) (peer.recv-next P)) (stop-peer P reset)
+                  (acceptable? P Seg) (do (peer.ack-needed-> P true) true)
+                  true false))
+
+\\ A segment past the handshake, RFC 9293 3.10.7.4, by the state and the flags, in order.
+(define connected
+  {symbol --> fixnum --> peer --> segment --> fixnum --> boolean}
+  time-wait _ P Seg Now -> (answer-duplicate P Seg Now)
+  _ Flags P Seg _ -> (reset-received P Seg) where (flag? Flags (flag-bits control rst))
+  _ Flags P Seg Now -> (answer-duplicate P Seg Now) where (flag? Flags (flag-bits control syn))
+  _ Flags P Seg _ -> false
+    where (or (not (flag? Flags (flag-bits control ack))) (seq-after? (segment.acknowledgement Seg) (peer.send-next P)))
+  _ _ P Seg Now -> (answer-duplicate P Seg Now) where (not (acceptable? P Seg))
+  _ _ P Seg Now -> (take-segment P Seg Now))
+
+\\ An acceptable segment: its acknowledgement and SACK blocks, then its data, from where we expect it.
+(define take-segment
+  {peer --> segment --> fixnum --> boolean}
+  P Seg Now ->
+    (let Previous (send-una P)
          Window (window P)
+         Next (peer.recv-next P)
+         Seq (segment.sequence Seg)
+         Ack (segment.acknowledgement Seg)
+         B (segment.data Seg)
+         Start (segment.start Seg)
+         N (segment.length Seg)
          Ahead (seq-distance Seq Next)
          Skip (seq-distance Next Seq)
-         Fin (flag? Flags (flag-bits control fin))
-         Span (if Fin (fx+ N 1) N)
-         Overlap (fx< Skip Span)
-         Acceptable (or (= Ahead 0) Overlap (fx< Ahead Window))
-      (cases (= (state P) time-wait) (answer-duplicate P Flags Seq N Now)
-             (flag? Flags (flag-bits control rst))
-               (cases (= Seq Next) (stop-peer P reset)
-                      Acceptable (do (peer.ack-needed-> P true) true)
-                      true false)
-             (flag? Flags (flag-bits control syn)) (answer-duplicate P Flags Seq N Now)
-             (or (not (flag? Flags (flag-bits control ack))) (seq-after? Ack (peer.send-next P))) false
-             (not Acceptable) (answer-duplicate P Flags Seq N Now)
-             true
-               (do (acknowledge P Seq Ack Win Now (and (= Flags (flag-bits control ack)) (= N 0)))
-                   (if (peer.sack-enabled P) (accept-sack P B Options Start Ack Previous) false)
-                   (if (and (fx> Span 0) (not (peer.recv-eof P)))
-                       (if Overlap
-                           (receive-text P B (fx+ Start Skip) 0 (fx- N Skip) Fin Window Now)
-                           (receive-text P B Start Ahead N Fin Window Now))
-                       (answer-duplicate P Flags Seq N Now))))))
-
-(define receive-opening
-  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum -->
-   boolean --> boolean}
-  P Flags Seq Ack Win N Mss Now Scale Sacked -> (opening (state P) Flags P Seq Ack Win N Mss Now Scale Sacked))
+         Fin (flag? (segment.flags Seg) (flag-bits control fin))
+         Win (shen-jit.shift-left (segment.window Seg) (larger 0 (peer.remote-scale P)))
+      (do (acknowledge P Seq Ack Win Now (and (= (segment.flags Seg) (flag-bits control ack)) (= N 0)))
+          (if (peer.sack-enabled P) (accept-sack P B (segment.options Seg) Start Ack Previous) false)
+          (if (and (fx> (span Seg) 0) (not (peer.recv-eof P)))
+              (if (fx< Skip (span Seg))
+                  (receive-text P B (fx+ Start Skip) 0 (fx- N Skip) Fin Window Now)
+                  (receive-text P B Start Ahead N Fin Window Now))
+              (answer-duplicate P Seg Now)))))
 
 \\ The handshake, RFC 9293 3.5: by the state the peer is in and the segment it receives.
 (define opening
-  {symbol --> fixnum --> peer --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum -->
-   boolean --> boolean}
-  syn-sent Flags P _ Ack _ _ _ _ _ _ -> (stop-peer P reset)
-    where (and (flag? Flags (flag-bits control rst)) (flag? Flags (flag-bits control ack)) (acknowledge? P Ack))
-  listen-state (flag-bits control syn) P Seq Ack Win 0 Mss _ Scale Sacked ->
-    (do (accept-syn P Seq Ack Win Mss Scale Sacked true)
+  {symbol --> fixnum --> peer --> segment --> fixnum --> boolean}
+  syn-sent Flags P Seg _ -> (stop-peer P reset)
+    where (and (flag? Flags (flag-bits control rst)) (flag? Flags (flag-bits control ack))
+               (acknowledge? P (segment.acknowledgement Seg)))
+  listen-state (flag-bits control syn) P Seg _ ->
+    (do (accept-syn P Seg true)
         (peer.phase-> P syn-received)
         (queue-control P (flag-bits control syn ack)))
-  syn-sent (flag-bits control syn ack) P Seq Ack Win 0 Mss Now Scale Sacked ->
-    (do (accept-syn P Seq Ack Win Mss Scale Sacked false)
+    where (= (segment.length Seg) 0)
+  syn-sent (flag-bits control syn ack) P Seg Now ->
+    (do (accept-syn P Seg false)
         (peer.tx-flags-> P 0)
         (finish-syn P Now)
         (peer.phase-> P established)
         (peer.ack-needed-> P true)
         true)
-    where (acknowledge? P Ack)
-  _ _ _ _ _ _ _ _ _ _ _ -> false)
+    where (and (= (segment.length Seg) 0) (acknowledge? P (segment.acknowledgement Seg)))
+  _ _ _ _ _ -> false)
 
-\\ What either end takes from the other's SYN. A listener takes a window scale whenever it can, an
-\\ opener only if it offered one.
+\\ A listener that sent its SYN-ACK: a reset at the sequence expected ends it, the ACK of its SYN
+\\ completes it, and the SYN again is answered again.
+(define half-open
+  {fixnum --> peer --> segment --> fixnum --> boolean}
+  Flags P Seg _ -> (stop-peer P reset)
+    where (and (flag? Flags (flag-bits control rst)) (= (segment.sequence Seg) (peer.recv-next P)))
+  Flags P Seg Now -> (connected syn-received Flags P Seg Now)
+    where (and (= (segment.sequence Seg) (peer.recv-next P)) (flag? Flags (flag-bits control ack))
+               (acknowledge? P (segment.acknowledgement Seg)))
+  (flag-bits control syn) P Seg Now -> (do (peer.tx-due-> P Now) true)
+    where (and (= (seq-add (segment.sequence Seg) 1) (peer.recv-next P)) (fx>= (peer.tx-due P) 0))
+  _ _ _ _ -> false)
+
+\\ What either end takes from the other's SYN: its sequence, window and size, with the default size if it
+\\ offers none, and window scaling and SACK if both ends can. A listener takes a window scale whenever it
+\\ can, an opener only if it offered one.
 (define accept-syn
-  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean --> boolean --> peer}
-  P Seq Ack Win Mss Scale Sacked Listening ->
-    (do (peer.recv-next-> P (seq-add Seq 1))
-        (remember-window P Seq Ack Win)
-        (peer.send-mss-> P Mss)
-        (peer.remote-scale-> P (if (and (sack-capable? P) (or Listening (fx> (peer.window-scale P) 0)))
-                                   Scale (type -1 fixnum)))
-        (peer.sack-enabled-> P Sacked)))
+  {peer --> segment --> boolean --> peer}
+  P Seg Listening ->
+    (let B (segment.data Seg)
+         Options (segment.options Seg)
+         Start (segment.start Seg)
+         Seq (segment.sequence Seg)
+         Mss (if (fx< (option-offset B Options Start 2) 0)
+                 (smaller (segment.mss Seg) (if (= (peer.ip-header P) (wire.ipv4.size)) 536 1220))
+                 (segment.mss Seg))
+         Scale (read-scale B Options Start)
+         Sacked (and (sack-capable? P) (fx>= (option-offset B Options Start 4) 0))
+      (do (peer.recv-next-> P (seq-add Seq 1))
+          (remember-window P Seq (segment.acknowledgement Seg) (segment.window Seg))
+          (peer.send-mss-> P Mss)
+          (peer.remote-scale-> P (if (and (sack-capable? P) (or Listening (fx> (peer.window-scale P) 0)))
+                                     Scale (type -1 fixnum)))
+          (peer.sack-enabled-> P Sacked))))
 
 (define read-scale
   {buffer.view --> fixnum --> fixnum --> fixnum}
@@ -1275,38 +1339,38 @@
   {peer --> boolean}
   P -> (let Phase (state P) (or (= Phase closed) (= Phase timed-out) (= Phase reset))))
 
+\\ Reads the segment of Count bytes at I of B into Seg, and whether its options are well formed.
+(define read-segment
+  {peer --> segment --> buffer.view --> fixnum --> fixnum --> boolean}
+  P Seg B I Count ->
+    (let H (header-length B I)
+         Start (fx+ I H)
+         Options (fx+ I (wire.tcp.size))
+         Mss (<options>.parse-at (smaller (peer.mss P) (fx- (peer.path-mtu P) (minimum-header P)))
+                                 (peer.options-state P) B Options Start (/. At Message -1))
+      (and (fx>= Mss 0)
+           (do (segment.data-> Seg B)
+               (segment.options-> Seg Options)
+               (segment.start-> Seg Start)
+               (segment.length-> Seg (fx- Count H))
+               (segment.flags-> Seg (segment-flags B I))
+               (segment.sequence-> Seg (wire.tcp.sequence B I))
+               (segment.acknowledgement-> Seg (wire.tcp.acknowledgement B I))
+               (segment.window-> Seg (wire.tcp.window B I))
+               (segment.mss-> Seg Mss)
+               true))))
+
 (define receive-valid
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   P B I Count Now ->
-    (if (terminal? P) false
-        (let Phase (state P)
-             Seq (wire.tcp.sequence B I)
-             Ack (wire.tcp.acknowledgement B I)
-             Flags (segment-flags B I)
-             Win (wire.tcp.window B I)
-             H (header-length B I)
-             Start (fx+ I H)
-             N (fx- Count H)
-             Options (fx+ I (wire.tcp.size))
-             Mss (options B Options Start (smaller (peer.mss P)
-                                                   (fx- (peer.path-mtu P) (minimum-header P))))
-             Shift (larger 0 (peer.remote-scale P))
-          (cases (fx< Mss 0) false
-                 (or (= Phase listen-state) (= Phase syn-sent))
-                   (receive-opening P Flags Seq Ack Win N
-                                    (if (fx< (option-offset B Options Start 2) 0) (smaller Mss (if (= (peer.ip-header P) (wire.ipv4.size)) 536 1220)) Mss)
-                                    Now (read-scale B Options Start)
-                                    (and (sack-capable? P) (fx>= (option-offset B Options Start 4) 0)))
-                 (and (= Phase syn-received) (flag? Flags (flag-bits control rst)) (= Seq (peer.recv-next P)))
-                   (stop-peer P reset)
-                 (and (= Phase syn-received)
-                      (not (and (= Seq (peer.recv-next P)) (flag? Flags (flag-bits control ack)) (acknowledge? P Ack))))
-                   (if (and (= Flags (flag-bits control syn)) (= (seq-add Seq 1) (peer.recv-next P))
-                            (fx>= (peer.tx-due P) 0))
-                       (do (peer.tx-due-> P Now) true)
-                       false)
-                 true (receive-connected P B Options Start N Flags Seq Ack
-                                         (shen-jit.shift-left Win Shift) Now)))))
+    (and (not (terminal? P))
+         (read-segment P (peer.segment P) B I Count)
+         (let Seg (peer.segment P)
+              Phase (state P)
+              Flags (segment.flags Seg)
+           (cases (or (= Phase listen-state) (= Phase syn-sent)) (opening Phase Flags P Seg Now)
+                  (= Phase syn-received) (half-open Flags P Seg Now)
+                  true (connected Phase Flags P Seg Now)))))
 
 (define receive-segment
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
