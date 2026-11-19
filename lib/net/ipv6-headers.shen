@@ -9,7 +9,20 @@
   (export cursor make parse after-fragment can-report?
           cursor.protocol cursor.at cursor.next-field cursor.problem-code
           cursor.multicast-error cursor.router-alert
-          upper fragment problem incomplete ignored)
+          upper fragment problem incomplete ignored outcome)
+
+\\ Where a walk ends: at an upper-layer header, at a fragment header, at a problem to report, in a
+\\ header cut short, or at a packet dropped without a report.
+(datatype outcomes
+  if (element? Outcome [upper fragment problem incomplete ignored])
+  _________________________________________________________________
+  Outcome : outcome;)
+
+\\ What a next header is to this receiver.
+(datatype kinds
+  if (element? Kind [upper hop-by-hop routing fragment destination none unknown])
+  _______________________________________________________________________________
+  Kind : kind;)
 
 \\ Where a walk stopped: the upper-layer header or fragment header found, at At, and the next-header
 \\ field that named it, or a problem's offset and code, and the value of a router alert in a hop-by-hop
@@ -53,7 +66,7 @@
         (cursor.fragments-> C Fragments)))
 
 (define found
-  {cursor --> fixnum --> fixnum --> fixnum --> symbol --> symbol}
+  {cursor --> fixnum --> fixnum --> fixnum --> outcome --> outcome}
   C Protocol At Next Result ->
     (do (cursor.protocol-> C Protocol)
         (cursor.at-> C At)
@@ -61,7 +74,7 @@
         Result))
 
 (define fail-at
-  {cursor --> fixnum --> fixnum --> boolean --> symbol}
+  {cursor --> fixnum --> fixnum --> boolean --> outcome}
   C At Code Multicast ->
     (do (cursor.at-> C At)
         (cursor.problem-code-> C Code)
@@ -69,13 +82,13 @@
         problem))
 
 (define truncated
-  {cursor --> fixnum --> symbol}
+  {cursor --> fixnum --> outcome}
   C Pointer -> (do (fail-at C Pointer 0 false) incomplete))
 
 \\ What each next header is to this receiver. ESP's and AH's payloads are not read, so neither is
 \\ anything after them.
 (define header
-  {fixnum --> symbol}
+  {fixnum --> kind}
   6 -> upper                                                             \\ TCP,
   17 -> upper                                                            \\ UDP,
   58 -> upper                                                            \\ ICMPv6.
@@ -97,7 +110,7 @@
 \\ RFC 8200 4.2: options, each a type and a length but Pad1. All are skipped as unrecognized but the
 \\ router alert, RFC 2711, which has 2 bytes in a hop-by-hop header, and whose value is kept. Each
 \\ alternative takes the rest of the options too, so that a problem's alternative ends the parse.
-(defgrammar (<options> C Hop) {cursor --> boolean ==> symbol}
+(defgrammar (<options> C Hop) {cursor --> boolean ==> outcome}
   <end> := upper;
   0 (<options> C Hop) := <options>;                                      \\ Pad1.
   (at At) 5 Length (where (and Hop (not (= Length 2)))) (* _) := (fail-at C (fx+ At 1) 0 false);
@@ -112,7 +125,7 @@
 
 \\ Most packets have no extension headers, and need no walk.
 (define parse
-  {cursor --> buffer.view --> fixnum --> fixnum --> symbol}
+  {cursor --> buffer.view --> fixnum --> fixnum --> outcome}
   C B I N ->
     (if (fx< N (wire.ipv6.size)) ignored
         (let Protocol (wire.ipv6.next-header B I)
@@ -124,7 +137,7 @@
 
 \\ The chain after a fragment header that parse found, in a datagram that is not in pieces.
 (define after-fragment
-  {cursor --> buffer.view --> fixnum --> fixnum --> symbol}
+  {cursor --> buffer.view --> fixnum --> fixnum --> outcome}
   C B I N ->
     (let At (cursor.at C)
       (walk (start C I N (cursor.left C) false) B (fx+ At (wire.ipv6-fragment.size)) At
@@ -132,13 +145,13 @@
 
 \\ The header at At, which the next-header field at Next names.
 (define walk
-  {cursor --> buffer.view --> fixnum --> fixnum --> fixnum --> symbol}
+  {cursor --> buffer.view --> fixnum --> fixnum --> fixnum --> outcome}
   C B At Next Protocol -> (follow (header Protocol) C B At Next Protocol))
 
 \\ RFC 8200 4.1: a chain holds up to 8 headers in 296 bytes, with the hop-by-hop header first if at all.
 \\ Past those bounds, or after a header not read here, the packet is dropped without a report.
 (define follow
-  {symbol --> cursor --> buffer.view --> fixnum --> fixnum --> fixnum --> symbol}
+  {kind --> cursor --> buffer.view --> fixnum --> fixnum --> fixnum --> outcome}
   upper C _ At Next Protocol -> (found C Protocol At Next upper)
   none _ _ _ _ _ -> ignored
   unknown C _ _ Next _ -> (fail-at C Next 1 false)
@@ -158,7 +171,7 @@
 
 \\ A hop-by-hop, routing or destination options header, from At to Stop, then the rest of the chain.
 (define extension
-  {symbol --> cursor --> buffer.view --> fixnum --> fixnum --> symbol}
+  {kind --> cursor --> buffer.view --> fixnum --> fixnum --> outcome}
   Kind C B At Stop ->
     (cases (fx> Stop (cursor.end C)) (truncated C (wire.ipv6-extension.length-at At))
            (fx> (fx- Stop (cursor.base C)) 296) ignored
@@ -171,7 +184,7 @@
 \\ RFC 8200 4.4: no routing type is known here, so a routing header with segments left is a problem,
 \\ at its type.
 (define contents
-  {symbol --> cursor --> buffer.view --> fixnum --> fixnum --> symbol}
+  {kind --> cursor --> buffer.view --> fixnum --> fixnum --> outcome}
   routing C B At _ -> (if (= (wire.ipv6-routing.segments-left B At) 0) upper
                           (fail-at C (wire.ipv6-routing.routing-type-at At) 0 false))
   Kind C B At Stop -> (<options>.parse-at C (= Kind hop-by-hop) (cursor.options-state C) B
@@ -190,7 +203,7 @@
   B Base End At Protocol Left -> (report? (header Protocol) B Base End At Protocol Left))
 
 (define report?
-  {symbol --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  {kind --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
   upper B _ End At 58 _ -> (and (fx< At End) (fx>= (wire.icmp.type B At) 128)        \\ Informational,
                                 (not (= (wire.icmp.type B At) 137)))                  \\ not a redirect.
   upper _ _ _ _ _ _ -> true

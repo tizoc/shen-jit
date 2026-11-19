@@ -12,10 +12,21 @@
   (export link device peer peer.port recv-info recv-info.source recv-info.destination recv-info.family recv-info.source6 recv-info.destination6 recv-info.port recv-info.length
           make-link left right ipv4 bind make-recv-info packet-send packet-recv-into
           send send6 recv-into echo-step valid-datagram6? valid-datagram6-at? inbox-ingress6 inbox-ingress6-at reserve-inbox
-          sent would-block too-large received empty budget-exhausted too-small
+          sent would-block too-large received empty budget-exhausted too-small send-result receive-result
           inbox inbox.peer inbox.dropped make-inbox inbox-ingress inbox-recv-into inbox-ready? inbox-discard inbox-ingress-broadcast inbox-ingress-multicast valid-datagram? write-packet)
 
 (synonyms link net-link.link device net-link.device)
+
+\\ A datagram is sent, waits for room, or is too large; one is received, none is waiting, the budget
+\\ of packets examined ran out first, or the caller's buffer is too small for it.
+(datatype results
+  if (element? Result [sent would-block too-large])
+  _________________________________________________
+  Result : send-result;
+
+  if (element? Result [received empty budget-exhausted too-small])
+  _______________________________________________________________
+  Result : receive-result;)
 
 (defstruct peer
   (device : device)
@@ -75,7 +86,7 @@
   L -> (net-link.right L))
 
 (define packet-send
-  {device --> buffer.view --> fixnum --> symbol}
+  {device --> buffer.view --> fixnum --> send-result}
   D B N -> (let Status (net-link.packet-send D B N)
              (cases (= Status net-link.sent) sent
                     (= Status net-link.would-block) would-block
@@ -141,7 +152,7 @@
           (net-link.publish Tx (fx+ N (headers4)) Delivery))))
 
 (define send
-  {peer --> fixnum --> fixnum --> buffer.view --> fixnum --> symbol}
+  {peer --> fixnum --> fixnum --> buffer.view --> fixnum --> send-result}
   P IP Port Payload Count ->
     (let N (buffer.index Count)
          _ (buffer.range (buffer.length Payload) 0 N)
@@ -154,7 +165,7 @@
                     (do (queue-datagram P IP Port Payload 0 N Delivery) sent)))))
 
 (define send6
-  {peer --> net-ipv6.address --> net-ipv6.address --> fixnum --> buffer.view --> fixnum --> symbol}
+  {peer --> net-ipv6.address --> net-ipv6.address --> fixnum --> buffer.view --> fixnum --> send-result}
   P Source Destination Port Payload Count ->
     (let N (buffer.index Count)
          _ (buffer.range (buffer.length Payload) 0 N)
@@ -221,7 +232,7 @@
          (valid-datagram? B I N)))
 
 (define receive-datagram
-  {net-link.ring --> buffer.view --> fixnum --> fixnum --> buffer.view --> recv-info --> symbol}
+  {net-link.ring --> buffer.view --> fixnum --> fixnum --> buffer.view --> recv-info --> receive-result}
   R B I N Out Info ->
     (let V4 (= (wire.ipv4.version B I) 4)
          T (if V4 (datagram4 I) (datagram6 I))
@@ -241,7 +252,7 @@
               received))))
 
 (define receive-ready
-  {peer --> net-link.ring --> buffer.view --> recv-info --> fixnum --> fixnum --> symbol}
+  {peer --> net-link.ring --> buffer.view --> recv-info --> fixnum --> fixnum --> receive-result}
   _ _ _ _ _ 0 -> budget-exhausted
   P R Out Info Now Budget ->
     (if (net-link.ready? R Now)
@@ -252,7 +263,7 @@
         empty))
 
 (define recv-into
-  {peer --> buffer.view --> recv-info --> fixnum --> symbol}
+  {peer --> buffer.view --> recv-info --> fixnum --> receive-result}
   P Out Info Budget ->
     (let D (peer.device P)
          Count (buffer.index Budget)
@@ -364,7 +375,7 @@
          (store-inbox Q B I N)))
 
 (define inbox-recv-into
-  {inbox --> buffer.view --> recv-info --> symbol}
+  {inbox --> buffer.view --> recv-info --> receive-result}
   Q Out Info ->
     (let R (inbox.queue Q)
       (if (net-link.ready? R 0)

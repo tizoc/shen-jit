@@ -3,8 +3,14 @@
   (use buffer)
   (import struct defstruct)
   (export link device ring ring.data ring.mtu ring.slots device.rx device.tx make make-ring left right mtu now delivery
-          sent would-block too-large
+          sent would-block too-large send-result
           head-offset head-length head-deadline tail-offset ready? full? publish consume packet-send packet-recv-into)
+
+\\ A packet is sent, or waits for room, or is larger than the link carries.
+(datatype send-results
+  if (element? Result [sent would-block too-large])
+  _________________________________________________
+  Result : send-result;)
 
 (defstruct ring
   (data : buffer.view)
@@ -143,7 +149,7 @@
 
 \\ Raw packet operations for a device peer. The output buffer belongs to the caller.
 (define packet-send
-  {device --> buffer.view --> fixnum --> symbol}
+  {device --> buffer.view --> fixnum --> send-result}
   D Packet Count ->
     (let N (buffer.index Count)
          _ (buffer.range (buffer.length Packet) 0 N)

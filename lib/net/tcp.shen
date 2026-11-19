@@ -20,12 +20,25 @@
           table-ingress6 table-ingress6-at header-fits? table-connect6 expire-addresses6
           connection-send connection-send-from connection-recv-into connection-recv-at connection-shutdown-write release
           closed listen-state syn-sent syn-received established close-wait fin-wait-1 fin-wait-2
-          closing last-ack time-wait timed-out reset)
+          closing last-ack time-wait timed-out reset phase)
 
 \\ RFC 9293's control bits, the most significant first.
 (defflags control cwr ece urg ack psh rst syn fin)
 
 \\ A received segment, read once into a record its peer keeps: where it lies, and what its header says.
+\\ RFC 9293 3.3.2: the states a connection passes through, and the three it can end in.
+(datatype phases
+  if (element? Phase [closed listen-state syn-sent syn-received established close-wait fin-wait-1
+                      fin-wait-2 closing last-ack time-wait timed-out reset])
+  ___________________________________________________________________________________
+  Phase : phase;)
+
+\\ A listener's stream slot is free, holds a half-open connection, or is the application's.
+(datatype leases
+  if (element? Lease [vacant pending leased])
+  ___________________________________________
+  Lease : lease;)
+
 \\ A segment received, and what its options offer: the smallest maximum segment size and a window scale,
 \\ -1 if not offered, whether SACK is permitted, and where its SACK blocks are, -1 if it has none.
 (defstruct segment
@@ -69,7 +82,7 @@
   (mutable remote-scale : fixnum)
   (mutable path-mtu : fixnum)
   (mutable aborting : boolean)
-  (mutable phase : symbol)
+  (mutable phase : phase)
   (mutable send-next : seq)
   (mutable tx-flags : fixnum)
   (mutable tx-head : fixnum)
@@ -229,7 +242,7 @@
           (error "tcp: need two unicast endpoints and an MTU of at least 41"))))
 
 (define state
-  {peer --> symbol}
+  {peer --> phase}
   P -> (peer.phase P))
 
 \\ A 32-bit word's sum, as the hash of a connection's endpoints takes it.
@@ -283,7 +296,7 @@
            true))
 
 (define begin
-  {peer --> fixnum --> symbol --> boolean}
+  {peer --> fixnum --> phase --> boolean}
   P Seq Phase ->
     (if (and (= (state P) closed) (= (peer.rx-length P) 0))
         (let _ (if (and (fx>= Seq 0) (fx<= Seq 4294967295)) true
@@ -582,7 +595,7 @@
           (emit-segment P R Now 16 (peer.send-next P) 0 0))))
 
 (define stop-peer
-  {peer --> symbol --> boolean}
+  {peer --> phase --> boolean}
   P Phase -> (do (peer.phase-> P Phase)
                  (peer.tx-flags-> P 0)
                  (peer.tx-length-> P 0)
@@ -1260,7 +1273,7 @@
 
 \\ A segment past the handshake, RFC 9293 3.10.7.4, by the state and the flags, in order.
 (define connected
-  {symbol --> fixnum --> peer --> segment --> fixnum --> boolean}
+  {phase --> fixnum --> peer --> segment --> fixnum --> boolean}
   time-wait Flags _ _ _ -> false where (flag? Flags (flag-bits control rst))   \\ RFC 1337.
   time-wait _ P Seg Now -> (answer-duplicate P Seg Now)
   _ Flags P Seg _ -> (reset-received P Seg) where (flag? Flags (flag-bits control rst))
@@ -1296,7 +1309,7 @@
 
 \\ The handshake, RFC 9293 3.5: by the state the peer is in and the segment it receives.
 (define opening
-  {symbol --> fixnum --> peer --> segment --> fixnum --> boolean}
+  {phase --> fixnum --> peer --> segment --> fixnum --> boolean}
   syn-sent Flags P Seg _ -> (stop-peer P reset)
     where (and (flag? Flags (flag-bits control rst)) (flag? Flags (flag-bits control ack))
                (acknowledge? P (segment.acknowledgement Seg)))
@@ -1427,7 +1440,7 @@
   (index : fixnum)
   (peer : peer)
   (mutable token : fixnum)
-  (mutable lease : symbol))
+  (mutable lease : lease))
 
 \\ RFC 9293 3.6.1: a connection in TIME-WAIT whose stream slot was released, by its tuple, where its
 \\ sequences stood, the window it advertised, when the wait ends, and whether a segment awaits an
@@ -1812,7 +1825,7 @@
         (peer.local-port-> P Local)))
 
 (define lease
-  {listener --> listener-slot --> symbol --> fixnum}
+  {listener --> listener-slot --> lease --> fixnum}
   L S Role ->
     (let Token (fx+ (listener-slot.token S) (listener.capacity L))
       (do (listener-slot.token-> S Token)
@@ -2218,7 +2231,7 @@
   L Token -> (listener-slot.index (lease-slot L Token)))
 
 (define connection-state
-  {listener --> fixnum --> symbol}
+  {listener --> fixnum --> phase}
   L Token -> (state (listener-slot.peer (lease-slot L Token))))
 
 (define connection-readable?

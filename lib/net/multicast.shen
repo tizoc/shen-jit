@@ -13,10 +13,16 @@
           join-source4 join-source6 leave-source4 leave-source6 accepts4? accepts6-at?
           ingress4 ingress6 poll next-deadline membership.blank6)
 
+\\ A source slot is free, a source listened to, or one left and still reported.
+(datatype source-states
+  if (element? State [vacant included blocked])
+  _____________________________________________
+  State : source-state;)
+
 (defstruct source
   (mutable ip4 : fixnum)
   (ip6 : net-ipv6.address)
-  (mutable state : symbol)
+  (mutable state : source-state)
   (mutable reports : fixnum)
   (mutable queried : boolean))
 

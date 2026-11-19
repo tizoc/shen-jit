@@ -12,8 +12,14 @@
   (export host make configure-static poll ingress ingress-at multicast-at? next-deadline
           host.device host.link-local host.global host.local-state host.global-state
           host.preferred-until host.valid-until host.router host.router-until
-          tentative usable duplicate absent local-ready? global-ready? source-address
+          tentative usable duplicate absent address-state local-ready? global-ready? source-address
           neighbor neighbor.mac neighbor.pending neighbor-at neighbor-ready? host.slots host.mac route)
+
+\\ RFC 4862 5.4: an address being checked for duplicates, in use, found duplicate, or not had.
+(datatype address-states
+  if (element? State [tentative usable duplicate absent])
+  _______________________________________________________
+  State : address-state;)
 
 (defstruct neighbor
   (ip : net-ipv6.address)
@@ -39,8 +45,8 @@
   (hop : net-ipv6.address)
   (neighbors : (vector neighbor))
   (slots : fixnum)
-  (mutable local-state : symbol)
-  (mutable global-state : symbol)
+  (mutable local-state : address-state)
+  (mutable global-state : address-state)
   (mutable local-at : fixnum)
   (mutable global-at : fixnum)
   (mutable static : boolean)
@@ -548,7 +554,7 @@
       (probe-deadline H (fx- I 1) Now Free (earlier At Next))))
 
 (define dad-deadline
-  {symbol --> fixnum --> fixnum --> boolean --> fixnum}
+  {address-state --> fixnum --> fixnum --> boolean --> fixnum}
   State At Now Free ->
     (if (= State tentative)
         (if (fx>= At 0) At (due At Now Free))

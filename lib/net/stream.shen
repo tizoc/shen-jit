@@ -46,7 +46,7 @@
            (and (fx> T 0) (do (stream-handle.token-> S T) true)))))
 
 (define state
-  {stream-handle --> symbol}
+  {stream-handle --> tcp.phase}
   S -> (if (= (stream-handle.token S) 0) tcp.closed (tcp.connection-state (table S) (stream-handle.token S))))
 
 (define readable?

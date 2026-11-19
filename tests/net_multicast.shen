@@ -93,7 +93,7 @@
           (error "cannot leave both multicast groups"))))
 
 (define check-send
-  {symbol --> boolean}
+  {net-interface.send-result --> boolean}
   Status ->
     (cases (= Status udp.sent) false
            true (error "could not send multicast test reply: ~A" Status)))

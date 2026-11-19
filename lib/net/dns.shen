@@ -11,7 +11,13 @@
   (externals [defgrammar skip])
   (export resolver make start poll
           resolver.state resolver.ip resolver.ttl resolver.deadline
-          idle pending resolved not-found failed)
+          idle pending resolved not-found failed state)
+
+\\ A resolver is idle, waits for an answer, or has one: an address, none, or a failure.
+(datatype states
+  if (element? State [idle pending resolved not-found failed])
+  ____________________________________________________________
+  State : state;)
 
 (defstruct resolver
   (socket : udp.inbox)
@@ -21,7 +27,7 @@
   (mutable server : fixnum)
   (mutable id : fixnum)
   (mutable query-length : fixnum)
-  (mutable state : symbol)
+  (mutable state : state)
   (mutable ip : fixnum)
   (mutable ttl : fixnum)
   (mutable deadline : fixnum)
@@ -124,7 +130,7 @@
                            (name-equal? A NextA EndA B NextB EndB (fx- (fx- Left N) 1)))))))))
 
 (define finish
-  {resolver --> symbol --> symbol}
+  {resolver --> state --> state}
   R State -> (do (resolver.state-> R State) (resolver.deadline-> R -1) State))
 
 \\ Return an A record or the first well-formed CNAME for the current owner.
@@ -199,7 +205,7 @@
              true (receive-reply R (fx- Left 1)))))
 
 (define poll
-  {resolver --> fixnum --> symbol}
+  {resolver --> fixnum --> state}
   R Now ->
     (cases (not (= (resolver.state R) pending)) (resolver.state R)
            (receive-reply R 4) (resolver.state R)

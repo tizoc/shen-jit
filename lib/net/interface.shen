@@ -18,7 +18,25 @@
   (export interface interface.listener make make-host make-host-sized make-host-limits connect poll next-deadline
           enable-multicast enable-multicast-sized join4 join6 leave4 leave6 joined4? joined6?
           join-source4 join-source6 leave-source4 leave-source6
-          enable-ipv6 enable-ipv6-sized connect6 udp-send6 no-address udp-binding udp-send udp-recv-into udp-dropped)
+          enable-ipv6 enable-ipv6-sized connect6 udp-send6 no-address udp-binding udp-send udp-recv-into udp-dropped
+          send-result)
+
+\\ A packet for one of the host's addresses, for a group it listens to, or for an address it is still
+\\ checking for duplicates.
+(datatype scopes
+  if (element? Scope [unicast multicast tentative])
+  _________________________________________________
+  Scope : scope;)
+
+\\ Sending to IPv6 gives what UDP's sending does, or no-address when the host has no source address
+\\ for the destination yet.
+(datatype send-results
+  _______________________
+  no-address : send-result;
+
+  Result : udp.send-result;
+  _________________________
+  Result : send-result;)
 
 (defstruct ipv6-state
   (ndp : net-ndp.host)
@@ -276,12 +294,12 @@
   [Q | _] -> Q)
 
 (define udp-send
-  {interface --> fixnum --> fixnum --> buffer.view --> fixnum --> symbol}
+  {interface --> fixnum --> fixnum --> buffer.view --> fixnum --> udp.send-result}
   F IP Port Payload Count -> (udp.send (udp.inbox.peer (default-udp (interface.udp-bindings F))) IP Port Payload Count))
 
 (define send-ipv6
   {(list ipv6-state) --> interface --> fixnum --> net-ipv6.address --> fixnum --> buffer.view -->
-   fixnum --> symbol}
+   fixnum --> send-result}
   [] _ _ _ _ _ _ -> no-address
   [S] F LocalPort Destination Port Payload Count ->
     (let Source (net-ndp.source-address (ipv6-state.ndp S) Destination
@@ -291,12 +309,12 @@
           no-address)))
 
 (define udp-send6
-  {interface --> fixnum --> net-ipv6.address --> fixnum --> buffer.view --> fixnum --> symbol}
+  {interface --> fixnum --> net-ipv6.address --> fixnum --> buffer.view --> fixnum --> send-result}
   F LocalPort Destination Port Payload Count ->
     (send-ipv6 (interface.ipv6 F) F LocalPort Destination Port Payload Count))
 
 (define udp-recv-into
-  {interface --> buffer.view --> udp.recv-info --> symbol}
+  {interface --> buffer.view --> udp.recv-info --> udp.receive-result}
   F Out Info -> (udp.inbox-recv-into (default-udp (interface.udp-bindings F)) Out Info))
 
 (define udp-dropped
@@ -515,7 +533,7 @@
 
 (define dispatch6
   {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum --> fixnum -->
-   fixnum --> symbol --> boolean --> boolean}
+   fixnum --> scope --> boolean --> boolean}
   F S Local B I N Now Scope Fragmented ->
     (let Cursor (ipv6-state.headers S)
          Proto (net-ipv6-headers.cursor.protocol Cursor)
@@ -541,7 +559,7 @@
 
 (define complain6
   {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum -->
-   fixnum --> fixnum --> symbol --> boolean}
+   fixnum --> fixnum --> scope --> boolean}
   F S Local B I N Now Scope ->
     (let H (ipv6-state.ndp S)
          Cursor (ipv6-state.headers S)
@@ -575,7 +593,7 @@
 
 (define reassemble6
   {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum --> fixnum -->
-   fixnum --> fixnum --> fixnum --> symbol --> boolean}
+   fixnum --> fixnum --> fixnum --> scope --> boolean}
   F S Local B I N Frag Prev Now Scope ->
     (let Table (ipv6-state.fragments S)
          Cursor (ipv6-state.headers S)
@@ -587,7 +605,7 @@
 
 (define first-fragment
   {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum --> fixnum -->
-   fixnum --> fixnum --> fixnum --> symbol --> boolean}
+   fixnum --> fixnum --> fixnum --> scope --> boolean}
   F S Local B I N Frag Prev Now Scope ->
     (let Cursor (ipv6-state.headers S)
          Next (net-ipv6-headers.after-fragment Cursor B I N)
@@ -602,7 +620,7 @@
 
 (define fragment6
   {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum --> fixnum -->
-   fixnum --> symbol --> boolean}
+   fixnum --> scope --> boolean}
   F S Local B I N Now Scope ->
     (let Cursor (ipv6-state.headers S)
          Frag (net-ipv6-headers.cursor.at Cursor)
@@ -630,7 +648,7 @@
 
 (define packet6
   {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum --> fixnum -->
-   fixnum --> symbol --> boolean}
+   fixnum --> scope --> boolean}
   F S Local B I N Now Scope ->
     (let Kind (net-ipv6-headers.parse (ipv6-state.headers S) B I N)
       (cases (= Kind net-ipv6-headers.upper) (dispatch6 F S Local B I N Now Scope false)

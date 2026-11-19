@@ -89,7 +89,7 @@
   F -> (net-link.packet-recv-into (fixture.remote F) (fixture.response F)))
 
 (define recv
-  {fixture --> symbol}
+  {fixture --> udp.receive-result}
   F -> (net-interface.udp-recv-into (fixture.interface F) (fixture.out F) (fixture.info F)))
 
 (define payload?

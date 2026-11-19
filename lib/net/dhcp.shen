@@ -12,7 +12,13 @@
   (externals [defgrammar u32-be <end> require skip])
   (export client make poll maintain
           client.state client.address client.mask client.gateway client.dns
-          client.deadline client.expires selecting requesting bound renewing rebinding expired)
+          client.deadline client.expires selecting requesting bound renewing rebinding expired state)
+
+\\ RFC 2131 4.4: a client's states, and the one its lease ends in.
+(datatype states
+  if (element? State [selecting requesting bound renewing rebinding expired])
+  ___________________________________________________________________________
+  State : state;)
 
 (defstruct options
   (mutable kind : fixnum)
@@ -32,7 +38,7 @@
   (info : udp.recv-info)
   (options : options)
   (mutable id : fixnum)
-  (mutable state : symbol)
+  (mutable state : state)
   (mutable address : fixnum)
   (mutable mask : fixnum)
   (mutable gateway : fixnum)
@@ -82,7 +88,7 @@
         (error "net/dhcp: invalid hardware address, transaction ID, or MTU below 576")))
 
 (define begin
-  {client --> symbol --> fixnum --> boolean}
+  {client --> state --> fixnum --> boolean}
   C Phase Now ->
     (do (client.state-> C Phase)
         (client.deadline-> C Now)
@@ -280,7 +286,7 @@
               true))))
 
 (define drive
-  {client --> fixnum --> symbol}
+  {client --> fixnum --> state}
   C Now ->
     (let State (client.state C)
       (cases (or (= State expired) (fx< Now (client.deadline C))) State
@@ -294,7 +300,7 @@
              true (do (transmit C Now) State))))
 
 (define poll
-  {client --> fixnum --> symbol}
+  {client --> fixnum --> state}
   C Budget ->
     (let D (client.device C)
          Now (net-link.now D)
@@ -304,7 +310,7 @@
           State)))
 
 (define maintain
-  {client --> udp.inbox --> fixnum --> symbol}
+  {client --> udp.inbox --> fixnum --> state}
   C Inbox Budget ->
     (let Now (net-link.now (client.device C))
          State (client.state C)
