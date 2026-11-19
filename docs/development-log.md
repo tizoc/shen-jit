@@ -3226,6 +3226,29 @@ stale images, every-allocation GC, native pipelines and controlled shutdown. The
 streaming reference, server references and runnable examples were rendered and checked. Cross-platform
 execution remains CI's responsibility; no new platform ABI or instruction was introduced.
 
+### JSON literal inference (2026-11-19, Apple M3 Max, macOS arm64)
+
+Bare Booleans and null gained a second type while their bindings were open, multiplying the combinations a later
+JSON object had to check. Booleans widen to `json.value` only where it is expected. Null literals and patterns
+also use the expected type. `json.from-null` supplies a JSON type for early bindings.
+
+With the same executable, resetting the count after loading `json`:
+
+| Workload | Before | After |
+| --- | ---: | ---: |
+| 4 Boolean fields | 46,980 | 3,361 |
+| 6 Boolean fields | 265,592 | 5,661 |
+| 8 Boolean fields | Limit | 8,561 |
+| 12 Boolean fields | Limit | 16,161 |
+| 2 null fields | 7,488 | 1,163 |
+| 4 null fields | 54,214 | 1,941 |
+| 8 null fields | Limit | 4,025 |
+| 16 null fields | Limit | 10,305 |
+| Rejected chain with 12 bare nulls | Limit | 33,019 |
+
+The after counts for successful null objects use `json.from-null`. The JSON tests round-trip both eight-field
+objects and cover direct null literals and patterns. The growth test checks the rejected chain.
+
 ### JSON values and chunked HTTP bodies (2026-11-07, M3 Max, macOS arm64)
 
 - Promoted the complete-input JSON decoder to `lib/json.shen` and made the earlier example delegate to

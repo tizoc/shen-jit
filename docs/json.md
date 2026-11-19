@@ -34,10 +34,11 @@ offset counted in the stream, or `"input ended"` when the input stops inside a v
 the reader's capacity, which takes the place of `byte-limit`; `depth-limit` applies. In typed code its
 type is `io.reader --> (list json.option) --> (io.result (option.t json.value))`.
 
-In typed code, `json.from-string`, `json.from-number`, and `json.from-array` construct
-`json.value` values directly. String, number, and array literals also work where the expected
-type is already `json.value`. For example, use
-`[(json.from-string "count") (json.from-number 7)]` when the element type of a mixed list is open.
+In typed code, `json.from-string`, `json.from-number`, `json.from-array`, and `(json.from-null)`
+construct `json.value` values directly. String, number, and array literals and `null` also work
+where the expected type is already `json.value`, as in `(json.stringify null [])`. Use
+`(json.from-null)` when binding a null before its consumer supplies the expected type.
+Use `[(json.from-string "count") (json.from-number 7)]` when the element type of a mixed list is open.
 
 ## Values and numbers
 
