@@ -41,6 +41,10 @@
   (mutable rtt-blocked-bytes : fixnum)
   (mutable tx-duplicate-acks : fixnum)
   (mutable tx-fast-retransmit : boolean)
+  (mutable cwnd : fixnum)
+  (mutable ssthresh : fixnum)
+  (mutable ca-acked : fixnum)
+  (mutable recovery-bytes : fixnum)
   (mutable remote-window : fixnum)
   (mutable remote-window-seq : fixnum)
   (mutable remote-window-ack : fixnum)
@@ -103,6 +107,10 @@
         rtt-blocked-bytes <- 0
         tx-duplicate-acks <- 0
         tx-fast-retransmit <- false
+        cwnd <- 0
+        ssthresh <- Capacity
+        ca-acked <- 0
+        recovery-bytes <- 0
         remote-window <- 0
         remote-window-seq <- 0
         remote-window-ack <- 0
@@ -179,6 +187,10 @@
               (peer.rtt-sample-at-> P -1)
               (peer.rtt-blocked-bytes-> P 0)
               (clear-duplicate-acks P)
+              (peer.cwnd-> P 0)
+              (peer.ssthresh-> P (peer.capacity P))
+              (peer.ca-acked-> P 0)
+              (peer.recovery-bytes-> P 0)
               (peer.remote-window-> P 0)
               (peer.send-mss-> P (peer.mss P))
               (peer.recv-next-> P 0)
@@ -374,13 +386,40 @@
         (peer.rtt-blocked-bytes-> P (peer.tx-flight P))
         (emit-data P R Now Offset Count)))
 
+(define loss-threshold
+  {peer --> fixnum --> fixnum}
+  P Flight -> (larger (fx* (peer.send-mss P) 2) (fxquotient Flight 2)))
+
+(define congestion-timeout
+  {peer --> fixnum --> boolean}
+  P Flight ->
+    (do (if (= (peer.tx-retries P) 0) (peer.ssthresh-> P (loss-threshold P Flight)) P)
+        (peer.cwnd-> P (peer.send-mss P))
+        (peer.ca-acked-> P 0)
+        (peer.recovery-bytes-> P 0)
+        true))
+
+(define congestion-fast-loss
+  {peer --> fixnum --> boolean}
+  P Flight ->
+    (if (= (peer.recovery-bytes P) 0)
+        (let Threshold (loss-threshold P Flight)
+          (do (peer.ssthresh-> P Threshold)
+              (peer.cwnd-> P (smaller (peer.cwnd P) Threshold))
+              (peer.ca-acked-> P 0)
+              (peer.recovery-bytes-> P Flight)
+              true))
+        true))
+
 (define replay-data
   {peer --> net-link.ring --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
   P R Now Offset End Retry ->
-    (let N (smaller (peer.send-mss P) (fx- End Offset))
+    \\ The replay cursor tracks the retransmitted prefix still awaiting an ACK.
+    (let Limit (smaller End (peer.cwnd P))
+         N (smaller (peer.send-mss P) (fx- Limit Offset))
          Next (fx+ Offset N)
       (do (retransmit-data P R Now Offset N)
-          (peer.tx-replay-> P (if (fx< Next End) Next -1))
+          (peer.tx-replay-> P (if (fx< Next (peer.tx-flight P)) Next -1))
           (if Retry
               (do (peer.tx-fast-retransmit-> P false)
                   (peer.tx-duplicate-acks-> P 3)
@@ -405,12 +444,17 @@
          Replay (peer.tx-replay P)
          Window (peer.remote-window P)
          End (smaller Flight (if (= Window 0) 1 Window))
-         Available (if (and (= Window 0) (= Flight 0)) (type 1 fixnum) (fx- Window Flight))
+         Available (if (and (= Window 0) (= Flight 0)) (type 1 fixnum)
+                       (fx- (smaller Window (peer.cwnd P)) Flight))
          N (smaller (fx- (peer.tx-length P) Flight) (smaller (peer.send-mss P) Available))
-      (cases (and (fx>= Replay 0) (fx< Replay End)) (replay-data P R Now Replay End false)
-             (and Expired (fx> End 0)) (replay-data P R Now 0 End true)
+      (cases (and Expired (fx> End 0))
+               (do (if (fx> Window 0) (congestion-timeout P Flight) true)
+                   (replay-data P R Now 0 End true))
+             (and (fx>= Replay 0) (fx< Replay (smaller End (peer.cwnd P))))
+               (replay-data P R Now Replay End false)
              (and (peer.tx-fast-retransmit P) (fx> End 0) (fx> Window 0))
-               (do (retransmit-data P R Now 0 (smaller (peer.send-mss P) End))
+               (do (congestion-fast-loss P Flight)
+                   (retransmit-data P R Now 0 (smaller (peer.send-mss P) End))
                    (peer.tx-fast-retransmit-> P false)
                    true)
              (and (fx> (peer.rx-duplicate-acks P) 0) (not (peer.ack-needed P))) (emit-ack P R Now)
@@ -523,10 +567,10 @@
 (define finish-syn
   {peer --> fixnum --> boolean}
   P Now ->
-    (do (if (fx> (peer.tx-retries P) 0)
-            (do (peer.tx-rto-> P 3000) true)
-            (take-rtt-sample P Now))
-        (restart-timer P 0 Now)))
+    (let Retried (fx> (peer.tx-retries P) 0)
+      (do (peer.cwnd-> P (fx* (peer.send-mss P) (if Retried 1 4)))
+          (if Retried (do (peer.tx-rto-> P 3000) true) (take-rtt-sample P Now))
+          (restart-timer P 0 Now))))
 
 (define remember-window
   {peer --> fixnum --> fixnum --> fixnum --> boolean}
@@ -561,6 +605,27 @@
                      true true)))
         false))
 
+(define congestion-ack
+  {peer --> fixnum --> boolean}
+  P N ->
+    (let Cwnd (peer.cwnd P)
+         Threshold (peer.ssthresh P)
+         Capacity (peer.capacity P)
+         Mss (peer.send-mss P)
+         Recovery (peer.recovery-bytes P)
+      (cases (fx> Recovery 0)
+               (do (peer.recovery-bytes-> P (larger 0 (fx- Recovery N))) true)
+             (= Cwnd Capacity) true
+             (fx< Cwnd Threshold)
+               (do (peer.cwnd-> P (smaller Threshold (fx+ Cwnd (smaller N Mss)))) true)
+             true
+               (let Credit (fx+ (peer.ca-acked P) N)
+                 (if (fx>= Credit Cwnd)
+                     (do (peer.cwnd-> P (smaller Capacity (fx+ Cwnd Mss)))
+                         (peer.ca-acked-> P (fx- Credit Cwnd))
+                         true)
+                     (do (peer.ca-acked-> P Credit) true))))))
+
 (define advance-ack
   {peer --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
   P Ack N Flight Now ->
@@ -575,6 +640,7 @@
           (peer.tx-length-> P (fx- (peer.tx-length P) N))
           (peer.tx-flight-> P Left)
           (peer.tx-replay-> P (cases (or (= Left 0) (fx< Replay 0)) -1 (fx< At 0) 0 true At))
+          (congestion-ack P N)
           (clear-duplicate-acks P)
           (restart-timer P Left Now))))
 

@@ -3803,6 +3803,23 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   check has passed. On the `net-dsl` branch, TCP's lossy run 170.8–171.2 against 162.0–162.8 ms, its UDP echo
   22.4–22.5 against 21.6–21.7.
 
+### TCP congestion control (2026-11-19, Apple M3 Max and Linux in Docker Desktop)
+
+- The congestion window bounds new data and timeout replay. It starts at four MSS and
+  grows by up to one MSS per advancing ACK during slow start. Congestion avoidance counts
+  acknowledged bytes and grows by one MSS per window. Loss sets the threshold from the
+  outstanding flight. Timeout restarts at one MSS, and fast retransmit caps the window at
+  the threshold while the affected flight is acknowledged.
+- Wire tests grew the flight from four to five and then six segments. Timeout reduced a
+  six-segment flight to one retransmission, then ACKs permitted two and three segments.
+  Three separate ACKs at that threshold allowed one additional segment in total.
+  Fast retransmit halved a four-segment outstanding flight.
+- Starting at four MSS added one RTT to the 128 KiB lossless benchmark. The transfer took
+  63, 630 and 3,150 ms at 2, 20 and 100 ms RTT, up from 61, 610 and 3,050 ms.
+- The direct Linux probe recorded zero Shen heap words through 16 congestion-control runs,
+  the other simulated recovery cases, and the mixed TUN workload. The allocating control
+  used five words. The 7,000-connection stress run added zero collections.
+
 ### Adaptive TCP retransmission timeout (2026-11-19, Apple M3 Max and Linux in Docker Desktop)
 
 - TCP tracks a single pending RTT sample per connection. The smoothed RTT and its variation

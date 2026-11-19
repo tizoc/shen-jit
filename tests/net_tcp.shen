@@ -23,7 +23,10 @@
   (payload : buffer.view)
   (suffix : buffer.view)
   (output : buffer.view)
-  (fast-output : buffer.view))
+  (fast-output : buffer.view)
+  (congestion-payload : buffer.view)
+  (congestion-output : buffer.view)
+  (congestion-ack : buffer.view))
 
 (define clock
   {fixnum --> (vector fixnum)}
@@ -356,9 +359,9 @@
           (expect (= (net-link.packet-send Right Ack 40) net-link.sent) "deliver the third duplicate ACK")
           (if DropFast
               (expect (= (tcp.poll C 1) 1) "process the third duplicate with space available")
-              (do (queue-padding Left Retry 4)
+              (do (queue-padding Left Retry 8)
                   (expect (= (tcp.poll C 1) 1) "process the third duplicate while egress is full")
-                  (drain-padding Right Retry 4)
+                  (drain-padding Right Retry 8)
                   (tcp.poll C 0)
                   true))
           (expect (= (net-link.packet-recv-into Right Retry) 43) "fast retransmission before timeout")
@@ -388,14 +391,6 @@
           (expect (= (net-link.packet-recv-into Right Ack) -1) "no suffix is replayed")
           (tcp.poll S 0)
           (expect (= (tcp.poll C 4) 1) "advertise the full window after reading"))))
-
-(define fast-loss
-  {pair --> buffer.view --> buffer.view --> boolean}
-  F Payload Out ->
-    (do (open-pair (pair.client F) (pair.server F))
-        (fast-flight F Payload Out 2 false)
-        (fast-flight F Payload Out 17 true)
-        (close-pair F false)))
 
 (define open-with-rtt
   {pair --> fixnum --> boolean}
@@ -441,6 +436,103 @@
     (do (send-timed-data F)
         (receive-timed-data F Rtt)
         (train-rtt F Rtt (fx- N 1))))
+
+(define poll-burst
+  {tcp.peer --> fixnum --> boolean}
+  _ 0 -> true
+  P N -> (do (tcp.poll P 0) (poll-burst P (fx- N 1))))
+
+(define read-flight
+  {pair --> buffer.view --> fixnum --> boolean}
+  F Out Packets ->
+    (let C (pair.client F) S (pair.server F)
+      (do (poll-burst C 8)
+          (expect (= (tcp.poll S 8) Packets) "congestion window bounds the flight")
+          (expect (= (tcp.recv-into S Out (buffer.length Out)) (fx* Packets 3)) "receive each flight once"))))
+
+(define receive-flight
+  {pair --> buffer.view --> fixnum --> boolean}
+  F Out Packets ->
+    (do (read-flight F Out Packets)
+        (tcp.poll (pair.server F) 0)
+        (expect (= (tcp.poll (pair.client F) 8) 2) "read the cumulative ACK and window update")))
+
+(define fast-loss
+  {pair --> buffer.view --> buffer.view --> boolean}
+  F Payload Out ->
+    (let C (pair.client F)
+      (do (open-pair C (pair.server F))
+          (train-rtt F 0 1) \\ Grow the initial window to five segments.
+          (fast-flight F Payload Out 5 false)
+          (expect (= (tcp.send C Payload 12) 12) "queue data after fast recovery")
+          (receive-flight F Out 2) \\ Four unacknowledged segments halved on fast loss.
+          (receive-flight F Out 2)
+          (train-rtt F 0 5) \\ Grow additively until the next loss can elicit three duplicate ACKs.
+          (fast-flight F Payload Out 47 true)
+          (close-pair F false))))
+
+(define timeout-congestion-flight
+  {pair --> buffer.view --> boolean}
+  F Out ->
+    (let C (pair.client F) S (pair.server F)
+         Left (pair.left F) Right (pair.right F) Wire (pair.wire F)
+      (do (poll-burst C 8)
+          (expect (= (net-link.packet-recv-into Right Wire) 43) "lose the first segment of a six-segment flight")
+          (expect (= (tcp.poll S 8) 5) "buffer the five later segments")
+          (expect (= (net-link.packet-recv-into Left Wire) 40) "discard the first duplicate ACK")
+          (advance F 999)
+          (tcp.poll C 0)
+          (expect (= (net-link.packet-recv-into Right Wire) -1) "the retransmission timer has not expired")
+          (advance F 1)
+          (poll-burst C 8)
+          (expect (= (net-link.packet-recv-into Right Wire) 43) "timeout retransmits the missing segment")
+          (expect (= (net-link.packet-recv-into Right Wire) -1) "timeout permits only one MSS before an ACK")
+          (expect (= (net-link.packet-send Left Wire 43) net-link.sent) "deliver the missing segment")
+          (expect (= (tcp.poll S 8) 1) "fill the gap with one retransmission")
+          (expect (= (tcp.recv-into S Out 24) 18) "the entire original flight becomes readable")
+          (tcp.poll S 0)
+          (expect (= (tcp.poll C 8) 2) "the recovery ACK frees the flight"))))
+
+(define send-partial-ack
+  {pair --> buffer.view --> fixnum --> boolean}
+  F Ack Sequence ->
+    (do (buffer.u32-be-> Ack 28 Sequence)
+        (checksum-segment Ack 20)
+        (expect (= (net-link.packet-send (pair.right F) Ack 40) net-link.sent) "send a partial cumulative ACK")
+        (expect (= (tcp.poll (pair.client F) 1) 1) "process the partial cumulative ACK")))
+
+(define avoidance-flight
+  {pair --> buffer.view --> buffer.view --> boolean}
+  F Out Ack ->
+    (let Left (pair.left F) Wire (pair.wire F)
+         _ (read-flight F Out 3)
+         _ (expect (= (net-link.packet-recv-into Left Ack) 40) "hold the ACK for all three segments")
+         End (buffer.u32-be Ack 28)
+      (do (send-partial-ack F Ack (fx- End 6))
+          (read-flight F Out 1)
+          (expect (= (net-link.packet-recv-into Left Wire) 40) "hold the receiver's newer ACK")
+          (send-partial-ack F Ack (fx- End 3))
+          (read-flight F Out 1)
+          (expect (= (net-link.packet-recv-into Left Wire) 40) "hold the receiver's newer ACK again")
+          (send-partial-ack F Ack End)
+          (receive-flight F Out 2))))
+
+(define congestion-growth
+  {pair --> buffer.view --> buffer.view --> buffer.view --> boolean}
+  F Payload Out Ack ->
+    (let C (pair.client F)
+      (do (open-pair C (pair.server F))
+          (expect (= (tcp.send C Payload 24) 24) "queue a full send ring")
+          (receive-flight F Out 4) \\ Initial congestion window.
+          (expect (= (tcp.send C Payload 12) 12) "replenish the send ring")
+          (receive-flight F Out 5) \\ A cumulative ACK adds one MSS in slow start.
+          (expect (= (tcp.send C Payload 15) 15) "replenish after the next flight")
+          (timeout-congestion-flight F Out)
+          (expect (= (tcp.send C Payload 18) 18) "replenish after timeout")
+          (receive-flight F Out 2) \\ Slow start resumes from one MSS.
+          (expect (= (tcp.send C Payload 3) 3) "queue enough to test additive growth")
+          (avoidance-flight F Out Ack) \\ After halving six MSS, grow once per three MSS acknowledged.
+          (close-pair F false))))
 
 (define drop-timed-data
   {pair --> boolean}
@@ -521,11 +613,14 @@
   {fixnum --> window-case}
   Mtu ->
     (:window-case
-      peers <- (setup-link Mtu 4)
+      peers <- (setup-link Mtu 8)
       payload <- (buffer.from-string "abcdefghijklmno")
       suffix <- (buffer.from-string "defghi")
       output <- (buffer.new 6)
-      fast-output <- (buffer.new 15)))
+      fast-output <- (buffer.new 15)
+      congestion-payload <- (buffer.new 24)
+      congestion-output <- (buffer.new 24)
+      congestion-ack <- (buffer.new 40)))
 
 (define exercise-window
   {window-case --> fixnum --> boolean}
@@ -535,6 +630,8 @@
          (reorder-window (window-case.peers W) (window-case.payload W) (window-case.suffix W) (window-case.output W))
          (fast-loss (window-case.peers W) (window-case.payload W) (window-case.fast-output W))
          (adaptive-rto (window-case.peers W))
+         (congestion-growth (window-case.peers W) (window-case.congestion-payload W)
+                            (window-case.congestion-output W) (window-case.congestion-ack W))
          (exercise-window W (fx- N 1))))
 
 (define verify
@@ -655,14 +752,15 @@
               (expect (= (tcp.poll S 2) 1) "retain the final segment above the gap")
               (advance F 1000)
               (tcp.poll C 0)
-              (tcp.poll C 0)
               (expect (= (net-link.packet-recv-into Right Wire) 43) "capture the first replay")
+              (expect (= (net-link.packet-send Left Wire 43) net-link.sent) "send first replay")
+              (expect (= (tcp.poll S 2) 1) "receive the first retransmission")
+              (expect (= (tcp.poll C 2) 2) "ACK progress permits the next replay")
               (expect (= (net-link.packet-recv-into Right (pair.original F)) 43) "capture the second replay")
               (buffer.u16-be-> (pair.original F) 41 22616) \\ Two conflicting duplicate bytes, both X.
               (checksum-segment (pair.original F) 23)
-              (expect (= (net-link.packet-send Left Wire 43) net-link.sent) "send first replay")
               (expect (= (net-link.packet-send Left (pair.original F) 43) net-link.sent) "send overlapping replay")
-              (expect (= (tcp.poll S 2) 2) "receive replay with different segment boundaries")
+              (expect (= (tcp.poll S 2) 1) "receive replay with different segment boundaries")
               (expect (= (tcp.recv-into S Out 6) 6) "trim the replay's duplicate prefix")
               (expect (= (buffer.string Out) "abcdef") "deliver only new bytes from the overlap")
               (expect (= (tcp.recv-into S Out 6) 0) "all bytes delivered exactly once")
