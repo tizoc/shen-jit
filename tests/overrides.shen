@@ -43,7 +43,7 @@
            (/. File (o.for-each
                       (/. Form (shen.dict-> (value o.*kernel*) (hd (tl Form)) Form))
                       (o.defuns (cn Dir (cn "/klambda/" (cn File ".kl"))))))
-           ["core" "dict" "prolog" "macros" "reader" "sys" "writer" "yacc" "toplevel" "extension-launcher" "extension-namespaces"]))
+           ["core" "dict" "prolog" "macros" "reader" "t-star" "sys" "writer" "yacc" "toplevel" "sequent" "extension-launcher" "extension-namespaces"]))
 
 (define o.for-each
   _ [] -> done
@@ -81,7 +81,7 @@
 \\ Showing a result exactly. A Prolog variable shows the same whichever way it is represented, and so
 \\ does a dictionary. Depth only guards against a mistake: no term here holds itself.
 
-(define o.real-bits
+(define o.float-bits
   R -> (let B (shen-jit.f64! (shen-jit.bytes 8) 0 R)
          (cn "r" (cn (str (shen-jit.u32 B 4)) (cn ":" (str (shen-jit.u32 B 0)))))))
 
@@ -97,7 +97,7 @@
 (define o.show-to
   V 0 -> "..."
   V _ -> (cn "i" (str V)) where (o.fixnum? V)
-  V _ -> (o.real-bits V) where (number? V)
+  V _ -> (o.float-bits V) where (number? V)
   V _ -> (cn "s" (make-string "~S" V)) where (string? V)
   V D -> (cn "(" (cn (o.show-to (hd V) (- D 1)) (cn " . " (cn (o.show-to (tl V) (- D 1)) ")")))) where (cons? V)
   V _ -> (cn "?" (str (shen-jit.pvar-offset V))) where (shen-jit.pvar? V)
@@ -150,21 +150,21 @@
   shen.misc? [r35h] "= false" "= true" -> "shen.misc?: takes bytes; the port's ranges also hold what lies between two bytes"
   read-file [_] _ _ -> "read-file: the port's skips a first line that starts with #!, so that a script can run"
     where (o.shebang-file? (hd (value o.*case-values*)))
-  hash [X Bound] _ "!" -> "hash: the port's takes a fixnum for a bound, as every caller gives; the kernel's works with reals too"
+  hash [X Bound] _ "!" -> "hash: the port's takes a fixnum for a bound, as every caller gives; the kernel's works with floats too"
     where (element? Bound [half one-half r1 r8])
   hash [tag-only _] "!" "in range" -> "hash: the kernel's hashes what prints, and a tuple with no elements cannot print"
   shen.dict [N] "!" "= #dict" -> "shen.dict: the port's starts with 8 buckets, whatever size is asked for, where the kernel's makes them all"
     where (element? N [n2147483647 n2147483648 n4294967296 n9007199254740992 n9007199254740993 n1152921504606846976 n2305843009213693951
                        one-half r1 r2 r8 r33 r35h r48 r53 r61 r62 big inf nan])
-  shen.compute-integer _ "!" _ -> "shen.compute-integer: past the fixnum range a literal becomes the nearest real, where the kernel's overflows"
-    where (o.literal? (value o.*port-value*) (o.real-digits (hd (value o.*case-values*)) (- 0.5 0.5)))
+  shen.compute-integer _ "!" _ -> "shen.compute-integer: past the fixnum range a literal becomes the nearest float, where the kernel's overflows"
+    where (o.literal? (value o.*port-value*) (o.float-digits (hd (value o.*case-values*)) (- 0.5 0.5)))
   shen.compute-integer _ "!" "= r0:0" -> "shen.compute-integer: the reader gives only digits, and what the port's cannot add reads as the decimal 0"
-    where (= none (o.real-digits (hd (value o.*case-values*)) 0))
+    where (= none (o.float-digits (hd (value o.*case-values*)) 0))
   shen.compute-fraction-h _ _ _ -> "shen.compute-fraction-h: a zero digit adds an exact 0, so that 8.0 reads as the integer 8"
-    where (o.exact-for-real?)
-  shen.compute-E [_ _] "!" _ -> "shen.compute-E: past the fixnum range a literal becomes the nearest real, where the kernel's overflows"
+    where (o.exact-for-float?)
+  shen.compute-E [_ _] "!" _ -> "shen.compute-E: past the fixnum range a literal becomes the nearest float, where the kernel's overflows"
     where (let Args (value o.*case-values*)
-            (o.literal? (value o.*port-value*) (o.real-power (hd Args) (hd (tl Args)))))
+            (o.literal? (value o.*port-value*) (o.float-power (hd Args) (hd (tl Args)))))
   shen.compute-E _ "!" "= r0:0" -> "shen.compute-E: the reader gives only numbers, and what the port's cannot multiply reads as the decimal 0"
     where (not (number? (hd (value o.*case-values*))))
   shen.make-prolog-variable [N] _ "!" -> "shen.make-prolog-variable: the port's holds an offset, which is what the kernel always gives it, and the kernel's holds anything"
@@ -181,8 +181,8 @@
 (define o.offset?
   N -> (and (o.fixnum? N) (>= N 0) (< N 72057594037927936)))
 
-\\ The same number, one exact and the other a real.
-(define o.exact-for-real?
+\\ The same number, one exact and the other a float.
+(define o.exact-for-float?
   -> (let K (value o.*kernel-value*)
           P (value o.*port-value*)
        (and (number? K) (number? P) (= K P) (o.fixnum? P) (not (o.fixnum? K)))))
@@ -195,20 +195,20 @@
 (define o.abs
   X -> (if (< X 0) (- 0 X) X))
 
-(define o.real-digits
+(define o.float-digits
   [] N -> N
-  [D | Ds] N -> (o.real-digits Ds (+ (* N 10) D)) where (and (integer? D) (>= D 0) (<= D 9))
+  [D | Ds] N -> (o.float-digits Ds (+ (* N 10) D)) where (and (integer? D) (>= D 0) (<= D 9))
   _ _ -> none)
 
-(define o.real-power
+(define o.float-power
   M E -> none where (not (and (number? M) (integer? E)))
   0 _ -> 0
-  M E -> (* M (o.real-expt E)))
+  M E -> (* M (o.float-expt E)))
 
-(define o.real-expt
+(define o.float-expt
   0 -> (+ 0.5 0.5)
-  E -> (* 10 (o.real-expt (- E 1))) where (> E 0)
-  E -> (/ (o.real-expt (+ E 1)) 10))
+  E -> (* 10 (o.float-expt (- E 1))) where (> E 0)
+  E -> (/ (o.float-expt (+ E 1)) 10))
 
 (define o.note-known
   Reason -> (let Entry (assoc Reason (value o.*known*))
@@ -297,7 +297,7 @@
   F [X | Xs] -> (append (F X) (o.flatmap F Xs)))
 
 \\ ---------------------------------------------------------------------------
-\\ Values, from tests/differential.shen. The readers turn 8.0 into the integer 8, so reals are computed.
+\\ Values, from tests/differential.shen. The readers turn 8.0 into the integer 8, so floats are computed.
 
 (define o.pow
   _ 0 -> 1
@@ -311,7 +311,7 @@
         2147483647 2147483648 -2147483649 4294967296
         P53 (+ P53 1) (- 0 P53) (o.pow 2 60) Max Min]))
 
-(define o.real-forms
+(define o.float-forms
   -> (let One [+ 0.5 0.5]
           Big [* One 1.0e200]
        [[half 0.5] [-half -0.5] [one-half 1.5] [tenth 0.1]
@@ -323,18 +323,18 @@
 (define o.value-forms
   -> (append
        (map (/. N [(intern (make-string "n~A" N)) N]) (o.integers))
-       (o.real-forms)
+       (o.float-forms)
        [[empty ""] [a "a"] [abc "abc"] [abc2 [cn "ab" "c"]] [acute "é"] [kanji "日本語"]
         [nul [n->string 0]] [nul-a [cn [n->string 0] "a"]] [s9 "abcdefghi"] [digit "7"]
         [nil []] [true true] [false false] [sym foo] [sym2 [intern "foo"]] [var [intern "Foo"]] [fail [fail]]
-        [one-list [cons 1 []]] [real-list [cons [+ 0.5 0.5] []]] [pair [cons 1 2]] [pair3 [cons 1 [cons 2 3]]]
+        [one-list [cons 1 []]] [float-list [cons [+ 0.5 0.5] []]] [pair [cons 1 2]] [pair3 [cons 1 [cons 2 3]]]
         [two-list [cons 1 [cons 2 []]]] [three-list [cons 1 [cons 2 [cons 3 []]]]]
         [nested [cons [cons 1 []] []]] [str-list [cons "abc" [cons foo []]]] [vec-list [cons [absvector 1] []]]
         [v0 [absvector 0]] [v1 [absvector 1]] [v3 [absvector 3]] [nv0 [vector 0]] [nv2 [vector 2]]
         [nv2b [address-> [address-> [vector 2] 1 a] 2 b]] [nv3p [address-> [vector 3] 2 x]]
         [tuple [@p 1 2]] [tag-only [address-> [absvector 1] 0 shen.tuple]]
-        [zero-long [address-> [absvector 4] 0 0]] [neg [address-> [absvector 2] 0 -1]] [real-tag [address-> [absvector 2] 0 1.5]]
-        [real-zero [address-> [absvector 2] 0 [- 0.5 0.5]]] [real-zero1 [address-> [absvector 1] 0 [- 0.5 0.5]]] [str-tag [address-> [absvector 2] 0 "x"]]
+        [zero-long [address-> [absvector 4] 0 0]] [neg [address-> [absvector 2] 0 -1]] [float-tag [address-> [absvector 2] 0 1.5]]
+        [float-zero [address-> [absvector 2] 0 [- 0.5 0.5]]] [float-zero1 [address-> [absvector 1] 0 [- 0.5 0.5]]] [str-tag [address-> [absvector 2] 0 "x"]]
         [nan-tag [address-> [absvector 2] 0 [let b [* [+ 0.5 0.5] 1.0e200] [- [* b b] [* b b]]]]]
         [closure [lambda x x]] [frozen [freeze 1]] [fn [function +]] [err [trap-error [simple-error "e"] [lambda e e]]]
         [stream [stoutput]] [b0 [shen-jit.bytes 0]] [b8 [shen-jit.bytes 8]] [bs [shen-jit.string->bytes "abc"]]
@@ -681,7 +681,7 @@ b" (n->string 0) (n->string 255)] (o.strings)))
 \\ A key's value is made once and used by both, as a closure or a NaN is equal only to itself.
 (define o.dict-keys
   All -> (map (/. V (o.make V))
-              (o.named [n0 n1 n8 r8 r1 half r0 r-0 nan inf a abc abc2 empty nil sym sym2 true false one-list real-list two-list pair nested
+              (o.named [n0 n1 n8 r8 r1 half r0 r-0 nan inf a abc abc2 empty nil sym sym2 true false one-list float-list two-list pair nested
                         v0 v3 nv2 nv2b tuple closure fn b8 bs] All)))
 
 \\ Not of size 1: the kernel's has one bucket, at index 0, and looks in bucket 1, as hash never gives 0.
@@ -1092,9 +1092,15 @@ b" (n->string 0) (n->string 255)] (o.strings)))
 \\ what reaches the top and end the process.
 (define o.left-out
   -> [shen.read-evaluate-print shen.toplevel-display-exception shen.x.launcher.main
+      shen.x.launcher.eval-command-h shen.x.launcher.help-text shen.x.launcher.script-command
+      shen.x.launcher.launch-shen
+      \\ Compiles datatypes and records module ownership, covered by tests/modules.shen.
+      shen.rules->prolog
       \\ They change the program, which a check must not: arities and eval.
       eval shen.execute-store-arity update-lambda-table
-      shen.update-lambda-table/precompiled])
+      shen.update-lambda-table/precompiled
+      \\ It typechecks and evaluates, which tests/typed.shen and the kernel's tests run.
+      shen.work-through])
 
 (define o.tested
   -> (append (o.single-names) (append (o.dict-group) (append (o.prolog-group) [integer?]))))

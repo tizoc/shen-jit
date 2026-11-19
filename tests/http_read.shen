@@ -1,5 +1,7 @@
+(load "tests/result_helpers.shen")
+
 \\ Heads read in place as they arrive, against http.parse-request of the same head framed.
-\\ Load buffer.shen, io.shen, deadline.shen, grammar.shen, http-head.shen and http-request.shen.
+\\ Load the module http/request.
 (set read-test.passed 0)
 (set read-test.failed 0)
 
@@ -16,20 +18,20 @@
                  (io.endpoint "chunks" read 65536
                    (/. Out (let At (<-address State 0)
                                 N (io.min Step (io.min (shen-jit.bytes-length Out) (- (buffer.length Wire) At)))
-                             (if (= N 0) [eof]
+                             (if (= N 0) (:result.ok [])
                                  (do (shen-jit.copy-bytes Out 0 (buffer.owner Wire) (+ (buffer.offset Wire) At) N)
-                                     (address-> State 0 (+ At N)) [read N]))))
-                   (function io.no-write) (freeze [ok]))))
+                                     (address-> State 0 (+ At N)) (:result.ok [N])))))
+                   (function io.no-write) (freeze (:result.ok [])))))
 (define read-test.summary
-  [ok Q] -> [0 (http.method Q) (http.target Q) (http.headers Q)]
-  [error E] -> [(io.error-code E)]
-  [eof] -> [eof])
-(define read-test.old Text -> (read-test.summary (http.parse-request (buffer.from-string Text) 1024)))
+  (:result.ok [Q]) -> [0 (http.method Q) (http.target Q) (http.headers Q)]
+  (:result.err E) -> [(io.error-code E)])
+(define read-test.old Text ->
+  (read-test.summary (result.let-ok Q (http.parse-request (buffer.from-string Text) 1024) (:result.ok [Q]))))
 (define read-test.new Text Step ->
   (let R (io.reader (read-test.feed (buffer.from-string (cn Text "NEXT")) Step) [])
        S (read-test.summary (http.read-request R 16384 1024))
        Rest (io.read-all R 100)
-    (if (= (hd S) 0) [S (buffer.string (hd (tl Rest)))] [S])))
+    (if (= (hd S) 0) [S (buffer.string (fixture.success Rest))] [S])))
 (define read-test.letters
   N -> (let B (shen-jit.bytes N) _ (read-test.fill B 0 N) (shen-jit.bytes->string B 0 N)))
 
@@ -65,14 +67,14 @@
                    [1 3 1000]))
      (value read-test.cases))
 
-(read-test.check "nothing at all is eof" [eof]
-  (freeze (read-test.summary (http.read-request (io.reader (read-test.feed (buffer.from-string "") 1) []) 16384 0))))
+(read-test.check "nothing at all is eof" (:result.ok [])
+  (freeze (http.read-request (io.reader (read-test.feed (buffer.from-string "") 1) []) 16384 0)))
 (read-test.check "a head the input cut is incomplete" [400 "incomplete head"]
   (freeze (let Got (http.read-request (io.reader (read-test.feed (buffer.from-string "GET / HTTP/1.1c#13;c#10;Host: x") 2) []) 16384 0)
-            [(io.error-code (hd (tl Got))) (io.error-message (hd (tl Got)))])))
+            [(io.error-code (fixture.failure Got)) (io.error-message (fixture.failure Got))])))
 (read-test.check "a head past its limit" [431 "head exceeds byte limit"]
   (freeze (let Got (http.read-request (io.reader (read-test.feed (buffer.from-string (read-test.head "X-Long: 0123456789012345678901234567890123456789c#13;c#10;")) 7) []) 64 0)
-            [(io.error-code (hd (tl Got))) (io.error-message (hd (tl Got)))])))
+            [(io.error-code (fixture.failure Got)) (io.error-message (fixture.failure Got))])))
 (read-test.check "a request line past 8192 bytes" [414]
   (freeze (read-test.summary (http.read-request (io.reader (read-test.feed (buffer.from-string
             (cn "GET /" (cn (read-test.letters 8200) " HTTP/1.1c#13;c#10;Host: xc#13;c#10;c#13;c#10;"))) 4096) []) 16384 0))))

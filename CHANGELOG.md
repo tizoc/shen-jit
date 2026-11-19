@@ -5,22 +5,192 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- The module `option` types an absent value, `[]`, and a present one, `[X]`, as `(option.t A)`; `(option.none)` and
+  `(option.some X)` give one where no type is expected yet, as in a `let`.
+- A C library none of whose file names opens as written is looked for again from the executable's directory, so a
+  program built with `shen-jit build` finds an adapter or library shipped beside it, or in its `lib/`, wherever it
+  runs.
+- Modules: a file `NAME.shenmod` describes a part of a program, the modules it requires and its sources, each
+  loaded with type checking on or off. `(module.use Names)` and `eval -m NAME` load modules, those they require
+  first and each once, looked for in the directories of `SHEN_JIT_PATH` and then in the installation's `lib/`;
+  `-m FILE.shenmod` loads one by its path, as does `(module.load File)`, and `script FILE.shenmod` runs one as a
+  script. `(module.loaded)` lists the modules loaded, `(module.path)` gives the directories looked in, and
+  `(module.set-path Directories)` replaces them. A build that loads C libraries has the feature
+  `shen-jit/ffi`, which a module can require.
+- `shen-jit build FILE.shenmod [-o OUTPUT] [--open]` writes an executable from a module whose descriptor names its
+  entry point, `(main FUNCTION)`: the module and what it requires, sealed unless `--open` is given. It refuses a
+  module that the starting image has already loaded, whose code would escape the build's compilation mode.
+- Typed programs. A descriptor's `(typed)` makes `shen-jit build` load the program under `(optimise +)`, where each
+  definition that typechecks is compiled with the kernel's type annotations, and always sealed, refusing `--open`;
+  a library's `(typed)` compiles its own sources so, sealed, wherever it loads, and loads what it requires sealed;
+  `(optimise +)` at the REPL or in `load` compiles definitions that typecheck there the same way. In them:
+  - a definition that calls no other function, once small ones are inlined, but on its way out, as an error's
+    message is made, keeps its floats and fixnums in registers and its own tail calls as a loop, and typed
+    functions that keep their values in registers, loops among them, are inlined into the loops that call them,
+    loops two levels deep and the others at any depth;
+  - an `if` whose other branch raises keeps its value in a register;
+  - a typechecked call of a struct's reader reads the field with no check, a `fixnum` or `float` field into a
+    register;
+  - a loop over a buffer view keeps the view's offsets and the bytes it reads in registers, as `buffer`'s checks
+    and accessors are typed;
+  - a C function of one to three doubles giving a double, as most of libm is, is called with its arguments and
+    result in registers, and does not save `errno`.
+
+  The program is trusted to be what its types say, so untyped code passing something else can read the wrong
+  memory instead of raising; the guide's page on modules lists what differs.
+- The module `numbers` gives typed code the types `fixnum` and `float`, neither of them a `number`, with their own
+  operators, `fl+ fl- fl* fl/ fl< fl> fl<= fl>= flsqrt`, `fx+ fx- fx* fx= fx< fx> fx<= fx>=` and `fxquotient` and
+  `fxremainder`, truncating, and conversions: `float` and `fixnum` from a number, `fx->fl`, `fl->fx`, truncating,
+  and `fl->number` and `fx->number`, which change nothing at run time. A float with no fraction is `(float 2)`, as
+  the reader turns a literal `2.0` into the integer 2. A literal is a `fixnum` or a `float` where one is expected,
+  and a `number` otherwise, so a `let` that binds one before its use says which with `(fixnum 1)` or `(float 1.5)`.
+  It adds `fx<-vector`, `fxvector->` and `fxlimit`, vectors at fixnum indices, and types the byte primitives,
+  `shen-jit.u8` to `shen-jit.f64!`, over `buffer.storage` with fixnum offsets; `memory.alloc` gives
+  `buffer.storage`. A typed program over memory needs no declarations.
+- The module `floats` gives arrays of doubles, unboxed and indexed by element, in a namespace of its own:
+  `floats.new`, `floats.get`, `floats.set`, `floats.length` and conversions to lists and to bytes. Typed code reads
+  and writes them in registers, with one check of the index against the length in doubles, and so is a read of
+  `(shen-jit.f64 B (fx* I 8))`.
+- The module `word` gives 64-bit words, whose arithmetic wraps, in a namespace of its own: `word.+`, `word.*`, the
+  bit operations, shifts and rotations, signed and unsigned comparisons, conversions from and to fixnums, and
+  `word.get` and `word.set` of 8 bytes. Typed code keeps them in registers, each operation an instruction, and
+  boxes one, as 8 bytes, only where it leaves them.
+- The module `words` gives arrays of 64-bit words, unboxed and indexed by element, in a namespace of its own:
+  `words.new`, `words.get`, `words.set`, `words.length` and conversions to lists and to bytes. Typed code reads and
+  writes them in registers, with one check of the index against the length in words.
+- `shen-jit.float`, a primitive giving a number as a float, `shen-jit.sqrt`, its square root,
+  `shen-jit.truncate`, a number truncated towards zero to a fixnum, `shen-jit.quotient` and
+  `shen-jit.remainder`, of fixnums, `shen-jit.word-op`, an operation on 64-bit words, which the module `word`
+  is written over, and `shen-jit.struct-ref`, a struct's field, which a struct's reader is.
+- A module's sources typecheck against the image's rules, those of the modules it requires, directly or not, and
+  their own, not those of other modules or of code outside modules, which sees every rule the modules loaded
+  publish. A module publishes its own datatypes that are active after its last source, so one that a source
+  `preclude`s stays private, and a module that fails publishes none. The 12 typed programs of the kernel's tests,
+  loaded as modules in one process, take a third of the inferences they take loaded as files.
+- Each source of a module typechecks within an inference limit of its own, the default unless the descriptor sets
+  another with `(extension shen-jit (maxinferences N))`, and the count and limit of the code that loaded it come
+  back after. A module's typed sources load without printing the types, times and inference counts that a checked
+  `load` prints; warnings, and what the sources print, still show.
+- A typed struct may take type variables as parameters, `(defstruct (cell A) (mutable value : A))`, whose type is
+  then `(cell A)`, and so may a union of structs. Two parameters are written as one product,
+  `(defstruct (pair (A * B)) ...)` and `(struct.union (either (A * B)) (left A) (right B))`, as a type of three
+  elements, such as `(either A B)`, can match a function's, `(A --> B)`.
+- `defstruct` accepts immutable anonymous fields, `_` or `(_ : Type)`, constructed and matched by position,
+  `(:point X Y)`; a positional construction or pattern of an unknown struct is refused as the definition is read.
+  An incompatible redeclaration's error shows the fields declared.
+- The module `result` gives results as structs of one field, `(:result.ok V)` and `(:result.err E)`, of the type
+  `(result.t (E * A))`, written `[result.t [E * A]]` in a `declare`. `(result.ok V)` and `(result.err E)` make them
+  with the union as their type, and a function giving either declares the union; in typed code a member, such as
+  `(result.ok number)`, is also a `(result.t (string * number))` where one is expected. `result.bind` and
+  `result.let-ok`, which chains them as `let` binds values, pass an error on as it is, and `result.bind` raises
+  given anything but a result; a namespace imports `let-ok` to write it as it is. In typed code, a chain gives a
+  value of another type than the results it reads.
+
 ### Changed
 
 - A closure can capture up to 4096 values, up from 256, with the same bytecode and native instructions for existing closures.
-
-- Each library's rules for typed clients are one datatype named for its namespace: `io.t`, `json.t`, `http.t`,
-  `process.t` and so on, and `isolate.t` and `channel.t` in the image. The old names, such as `json-values`,
+- Each library in `lib/` is a module, with a `.shenmod` descriptor beside it, so `-m http/server` loads the HTTP
+  server and everything it needs. Libraries of several files moved into directories: `lib/io/` (`io`, `io/file`,
+  `io/socket`), `lib/http/` (`http`, the head parser, `http/request`, `http/response`, `http/server`,
+  `http/listener`) and `lib/process/` (`process`, `process/io`), so their old paths, such as `lib/io-file.shen`,
+  are gone. The tools that use libraries have descriptors too, and run as `shen-jit script tools/fs-copy.shenmod`;
+  they no longer load libraries themselves. The example applications load their libraries as modules.
+- Libraries load as modules, with `-m NAME` or `module.use`, not with `-l lib/X.shen` as in 0.8: `lib/buffer.shen`
+  alone no longer loads `buffer`, which is several files now and requires `numbers` and `option`, and `grammar` and
+  `json` require `io`.
+- Each library's rules for typed clients are datatypes named for the module that loads them: `io.t`, `json.t`,
+  `http.request.t`, `process.t`, `process.io.t` and so on, and `isolate.t` and `channel.t` in the image, while
+  `result.t` and `option.t` type the outcomes the libraries share. The old names, such as `json-values`,
   `process-options` and `isolate.types`, are gone, so `preclude` and `include` take the new ones.
+- A library's options, such as `[timeout N]`, are typed by introduction rules alone: typed code builds them as
+  before, but a pattern over one no longer gives the type of its value.
 - The example applications and the examples in `tools/` use namespaces, as the libraries do; their names are
   unchanged.
+- A non-integer number is a float everywhere, as the type `float` and the reader call it, where some names said
+  real: in the C API, `shen_is_float` and `shen_make_float` replace `shen_is_real` and `shen_make_real`; in native
+  code, `(float X E)`, `float-box` and `return-float` replace `real`, `real-box` and `return-real`, and the
+  instructions `real-number` and the rest are `float-number` and the rest; and the out-of-memory message names
+  `floats`. The old names are gone.
+- Native code has 64 float registers, where it had 48, so a typed loop that inlines a large one keeps them too.
+- For typed clients, byte quantities such as indices, offsets, lengths and limits use `fixnum` across
+  `buffer`, `cursor`, `memory`, `frame`, `socket`, `io`, `fs`, `process`, `curl`, `http`, `json`, `tree-sitter`
+  and typed grammars. The maximum passed to an `http.source` callback uses `number`, as do the
+  wire-byte counts returned by `http.send-response`, `http.serve-one` and `http.serve-connection`. Durations,
+  ports, status codes, descriptors and counts of other things stay `number`. `buffer`, `memory` and
+  `socket` require `numbers`. Use `fx+`, `fx>` and the other fixnum operators for fixnum values, or convert
+  with `fixnum` and `fx->number`. A literal is a fixnum where one is expected. Untyped code is unaffected.
 - `parallel.map` sends each isolate a run at a time, up to four runs for each, the next as it finishes one, rather
   than one run each, so that slow elements hold up only the isolate that has them. No run starts after one has
   failed.
 - A small predicate the program defines, a struct's among them, tested by `if` or `cond` branches on its own tests
   rather than making a Boolean to test again: one of two tests, in a loop, takes 20-30% less time.
+- A small definition with a float literal can be inlined where it is called sealed, as one without could.
+- A function whose body is primitives alone over its parameters and constants, as a struct's reader or
+  constructor is, is inlined up to 48 nodes, where the limit was 32, so a constructor of about ten fields is too.
+- A lambda passed to a small function called sealed, which only applies it, runs where it is applied, with no
+  closure: a chain of three such calls takes about 40% less time.
+- `shen-jit.pointer?` is inline, a test of the object's type, as `string?` is.
 - Reading or writing a struct's field, or a vector's element at a constant index, tests that it is a vector and long
   enough at once: reading a struct's fields in a loop takes about 9% less time, and `buffer.u8` about 3.5%.
+- A struct's reader tests that its value is a vector at least as long as its struct, so one shorter raises at any
+  field, `struct: X is shorter than its struct` where it holds the field read, and a sealed function's later reads
+  of the same struct are one load each: reading four fields of each struct in a loop takes about 20% less time, and
+  building a buffer about 7%.
+- A struct's constructor is typed once, by its signature, and widened to its union, so a list of constructors of
+  different members of a union typechecks within the default inference limit, where backtracking over it repeated
+  the same proofs.
+- In typed code, `isolate.spawn` and `isolate.spawn-each` take a worker's name, of the type `(isolate.worker A)`,
+  whose function is checked against the payload, where their arrow types refused a name; a lambda or `(fn F)` is
+  refused, as the runtime refuses them.
+- In typed code, a receiver or a sender is a `channel.endpoint`, and a string an `isolate.reason`, only where one is
+  expected, so a list of both takes `(list (channel.endpoint A))` from its context; `channel.close` takes either.
+- Libraries give results as `result`'s structs where 0.8 gave lists: `(:result.ok V)` for `[ok V]`,
+  `(:result.ok [])` for `[ok]` and `(:result.err E)` for `[error E]`, which code makes with `(result.ok V)` and
+  `(result.err E)`. A failure after `N` bytes, `[error E N]`, is `(:result.err (io.progress E N))`, whose count
+  `io.error-progress` reads. Code that matched the lists matches the structs, on both ends of a callback, and saved
+  executables and images are made again.
+- An endpoint's read callback gives `(:result.ok [N])`, or `(:result.ok [])` at the end, where it gave `[read N]` and
+  `[eof]`, and a write callback `(:result.ok N)` for `[written N]`. An exact read gives
+  `(:result.ok (:io.transfer Complete Count))`, with the count read when the input ends first. A framed value and a
+  reader's reads come as `(:result.ok [X])` too.
+- `grammar.read` and the other streaming reads of `grammar`, `json` and `http/request` give `(:result.ok [V])` for a
+  value, `(:result.ok [])` at a clean end and `(:result.err E)`, of the type `(io.result (option.t A))`, where they
+  gave `[ok V]`, `[eof]` and `[error E]` of the type `(grammar.read-result A)`; a parsed empty list is
+  `(:result.ok [[]])`. A typed grammar read's failure function gives that type too, or raises.
+- An HTTP response's source gives `(:result.ok [View])` for a chunk and `(:result.ok [])` at its end, where it gave
+  `[chunk View]` and `[eof]`, and `http.read-head` gives a head and a clean end the same way, of the type
+  `(io.result (option.t buffer.view))`, where it gave `[head View]` and `[eof]` of the type `http.head-result`.
+  Typed code names a listener's handler as `F` or `[F State]`, with what it takes in one state value.
+- A process's status is one of three structs, `(:running)`, `(:exited Code)` and `(:signalled Signal)`, where it was
+  a list, and a namespace imports `running`, `exited` and `signalled` from `process` to match them. `process.wait`
+  gives `(:result.ok [Status])`, or `(:result.ok [])` at its deadline, where it gave `[ok Status]` or `[pending]` of
+  the type `process.wait-result`.
+- `treesitter.error?` tests whether a value is a Tree-sitter error, a struct typed code matches as
+  `(:treesitter.error operation <- Op ...)`; whether a node is an error, which it told in 0.8, is
+  `(treesitter.node-error? Snapshot ID)`.
+- `io.let-ok` is now `result.let-ok`, and the old name is gone. `(io.result A)` is `(result.t (io.error * A))` and
+  `(treesitter.result A)` `(result.t (treesitter.error * A))`, which types print; clients may still write the short
+  forms.
+- A failure of `process.run`, `process.communicate`, a pipeline or their `-to` forms is
+  `(:result.err (@p Error Reports))`, where it was `[error Error]` before anything started and `[error Error Partial]`
+  after: `Reports` lists the reports of what had started, one for `process.run`, and `[]` if nothing had;
+  `process.spawn` gives `(:result.err Error)`. `(process.result A)` is
+  `(result.t ((io.error * (list process.report)) * A))`, so `result.let-ok` chains it in typed code too.
+
+### Fixed
+
+- A callback of an I/O, file, filesystem or curl scope that fails after a transfer,
+  `(:result.err (io.progress Error N))`, keeps its error and count, where 0.8 made `[error Error N]` a callback error
+  with no count; a failure to close after it is kept as secondary.
+- A struct's predicate defined with type checking on, and so a pattern of a union of such structs, called
+  `shen-jit.tagged?` through `fn`, one argument at a time; it is the test inline, and matching a list of a union's
+  structs takes about a tenth of the time.
+- A grammar loaded while sealing is on, as in a program that `shen-jit build` makes, matches: each of its loops
+  was defined first as a stub that replaces itself at its first call, which sealing refused.
+- `example-apps/sqlite-http`'s `run.shen` serves again: it started its database's isolate before the HTTP grammars
+  were compiled, and the program cannot change once isolates run.
 
 ## [0.8] - 2026-11-14
 

@@ -133,6 +133,13 @@ const Primitive primitive_table[] = {
     {"shen-jit.function", 1, NULL},
     {"shen-jit.apply", 2, NULL},
     {"shen-jit.isolate", 3, NULL},
+    {"shen-jit.float", 1, NULL},
+    {"shen-jit.sqrt", 1, NULL},
+    {"shen-jit.quotient", 2, NULL},
+    {"shen-jit.remainder", 2, NULL},
+    {"shen-jit.word-op", 3, NULL},
+    {"shen-jit.truncate", 1, NULL},
+    {"shen-jit.struct-ref", 3, NULL},
 };
 
 const size_t primitive_count = sizeof primitive_table / sizeof primitive_table[0];
@@ -267,9 +274,9 @@ V sj_raise_text_value(VM *vm, const char *text, V value)
 
 V sj_raise_text(VM *vm, const char *text) { return sj_raise_text_value(vm, text, V_CLEARED); }
 
-static bool is_real(V v) { return is_object(v) && obj_type(v) == T_REAL; }
-static bool is_number(V v) { return is_fix(v) || is_real(v); }
-static double number(V v) { return is_fix(v) ? (double)fixval(v) : real_value(v); }
+static bool is_float(V v) { return is_object(v) && obj_type(v) == T_FLOAT; }
+static bool is_number(V v) { return is_fix(v) || is_float(v); }
+static double number(V v) { return is_fix(v) ? (double)fixval(v) : float_value(v); }
 static bool is_type(V v, unsigned type) { return is_object(v) && obj_type(v) == type; }
 
 static void pointer_text(V v, char *text, size_t size)
@@ -280,17 +287,17 @@ static void pointer_text(V v, char *text, size_t size)
 }
 
 /* Two values that are not identical, each a fixnum, a symbol or another
-   immediate, are not equal: only a real can equal a fixnum it is not. */
+   immediate, are not equal: only a float can equal a fixnum it is not. */
 static bool distinct_atoms(V a, V b)
 {
     return (!is_ptr(a) || is_symbol(a)) && (!is_ptr(b) || is_symbol(b));
 }
 
-/* Where fixnum i lies against real d, exactly: a double cannot hold every
+/* Where fixnum i lies against float d, exactly: a double cannot hold every
    fixnum from 2^53 up, so converting i would round it. -1, 0 or 1, as i is
    below, equal to or above d, and 2 if d is NaN. The truncated part of a d in
    range is exact, and what it drops, if anything, says which way a tie goes. */
-static int compare_fix_real(int64_t i, double d)
+static int compare_fix_float(int64_t i, double d)
 {
     if (d != d)
         return 2;
@@ -307,7 +314,7 @@ static int compare_fix_real(int64_t i, double d)
 
 /* Equality needs no ordering result. Truncate only inside int64_t range,
    then require both an exact integer match and no fractional remainder. */
-static bool equal_fix_real(int64_t i, double d)
+static bool equal_fix_float(int64_t i, double d)
 {
     return d >= -0x1p63 && d < 0x1p63 && (int64_t)d == i && (double)(int64_t)d == d;
 }
@@ -356,9 +363,9 @@ bool sj_equal_at(V a, V b, unsigned depth)
     if (is_pair(a))
         return is_pair(b) && equal_pairs(a, b, depth);
     if (is_number(a) && is_number(b))
-        return is_fix(a) ? is_real(b) && equal_fix_real(fixval(a), real_value(b))
-               : is_fix(b) ? equal_fix_real(fixval(b), real_value(a))
-                           : real_value(a) == real_value(b);
+        return is_fix(a) ? is_float(b) && equal_fix_float(fixval(a), float_value(b))
+               : is_fix(b) ? equal_fix_float(fixval(b), float_value(a))
+                           : float_value(a) == float_value(b);
     if ((is_type(a, T_STRING) && is_type(b, T_STRING)) || (is_type(a, T_BYTES) && is_type(b, T_BYTES))) {
         if ((ptr(a)[0] ^ ptr(b)[0]) & ~SHARED_BIT)
             return false;
@@ -452,7 +459,7 @@ static V arithmetic(VM *vm, unsigned prim, V a, V b)
         return sj_raise_value(vm, "~S is not a number", a);
     if (!is_number(b))
         return sj_raise_value(vm, "~S is not a number", b);
-    if (prim == P_DIV && (is_fix(b) ? fixval(b) == 0 : real_value(b) == 0.0))
+    if (prim == P_DIV && (is_fix(b) ? fixval(b) == 0 : float_value(b) == 0.0))
         return sj_raise(vm, "division by zero");
     if (is_fix(a) && is_fix(b)) {
         int64_t x = fixval(a), y = fixval(b), r = 0;
@@ -463,7 +470,7 @@ static V arithmetic(VM *vm, unsigned prim, V a, V b)
         case P_MUL: overflow = __builtin_mul_overflow(x, y, &r); break;
         default: /* P_DIV */
             if (x % y != 0)
-                return made(vm, make_real(vm, (double)x / (double)y));
+                return made(vm, make_float(vm, (double)x / (double)y));
             r = x / y;
         }
         if (overflow || !fix_fits(r))
@@ -472,10 +479,10 @@ static V arithmetic(VM *vm, unsigned prim, V a, V b)
     }
     double x = number(a), y = number(b);
     switch (prim) {
-    case P_ADD: return made(vm, make_real(vm, x + y));
-    case P_SUB: return made(vm, make_real(vm, x - y));
-    case P_MUL: return made(vm, make_real(vm, x * y));
-    default: return made(vm, make_real(vm, x / y));
+    case P_ADD: return made(vm, make_float(vm, x + y));
+    case P_SUB: return made(vm, make_float(vm, x - y));
+    case P_MUL: return made(vm, make_float(vm, x * y));
+    default: return made(vm, make_float(vm, x / y));
     }
 }
 
@@ -490,14 +497,14 @@ static V comparison(VM *vm, unsigned prim, V a, V b)
     if (is_fix(a) && is_fix(b)) {
         x = (double)((fixval(a) > fixval(b)) - (fixval(a) < fixval(b)));
     } else if (is_fix(a)) {
-        int order = compare_fix_real(fixval(a), real_value(b));
+        int order = compare_fix_float(fixval(a), float_value(b));
         x = order == 2 ? NAN : order;
     } else if (is_fix(b)) {
-        int order = compare_fix_real(fixval(b), real_value(a));
+        int order = compare_fix_float(fixval(b), float_value(a));
         x = order == 2 ? NAN : -order;
     } else {
-        x = real_value(a);
-        y = real_value(b);
+        x = float_value(a);
+        y = float_value(b);
     }
     switch (prim) {
     case P_LT: return boolean(x < y);
@@ -538,8 +545,8 @@ static uint64_t hash_value(V v, int *budget)
         return 0;
     if (is_fix(v))
         return mix((uint64_t)fixval(v));
-    if (is_real(v)) {
-        double d = real_value(v);
+    if (is_float(v)) {
+        double d = float_value(v);
         if (d == trunc(d) && fabs(d) < 9.2e18)
             return mix((uint64_t)(int64_t)d); /* 8.0 like 8, -0.0 like 0 */
         uint64_t bits;
@@ -643,9 +650,9 @@ static V concatenate(VM *vm)
     return s;
 }
 
-/* Reals print with the shortest digits that read back exactly, always with a
+/* Floats print with the shortest digits that read back exactly, always with a
    decimal point or an exponent, and exponents as Chez prints them. */
-static void format_real(double d, char *out, size_t cap)
+static void format_float(double d, char *out, size_t cap)
 {
     if (isnan(d)) {
         snprintf(out, cap, "+nan.0");
@@ -762,9 +769,9 @@ static void show(VM *vm, Show *s, V v)
         put(s, string_bytes(ptr(v)[SYM_NAME]), string_length(ptr(v)[SYM_NAME]));
     } else if (is_fix(v)) {
         put_int(s, fixval(v));
-    } else if (is_real(v)) {
+    } else if (is_float(v)) {
         char small[48];
-        format_real(real_value(v), small, sizeof small);
+        format_float(float_value(v), small, sizeof small);
         put_text(s, small);
     } else if (is_pvar(v)) {
         put_text(s, "Var");
@@ -852,8 +859,8 @@ static V to_string(VM *vm, V v)
             string_bytes(s)[n + 1] = '"';
         }
         return s;
-    } else if (is_real(v))
-        format_real(real_value(v), small, sizeof small);
+    } else if (is_float(v))
+        format_float(float_value(v), small, sizeof small);
     else if (is_pair(v))
         text = "#<pair>";
     else if (is_proc(v))
@@ -1294,16 +1301,16 @@ static V get_time(VM *vm)
     V kind = vm->args[0];
 #ifdef _WIN32
     if (symbol_named(kind, "run"))
-        return made(vm, make_real(vm, win_run_seconds()));
+        return made(vm, make_float(vm, win_run_seconds()));
     if (symbol_named(kind, "unix"))
-        return made(vm, make_real(vm, win_unix_seconds()));
+        return made(vm, make_float(vm, win_unix_seconds()));
 #else
     if (symbol_named(kind, "run"))
-        return made(vm, make_real(vm, (double)clock() / CLOCKS_PER_SEC));
+        return made(vm, make_float(vm, (double)clock() / CLOCKS_PER_SEC));
     if (symbol_named(kind, "unix")) {
         struct timeval tv;
         gettimeofday(&tv, NULL);
-        return made(vm, make_real(vm, (double)tv.tv_sec + tv.tv_usec * 1e-6));
+        return made(vm, make_float(vm, (double)tv.tv_sec + tv.tv_usec * 1e-6));
     }
 #endif
     return sj_raise_value(vm, "get-time: ~S is not run or unix", vm->args[0]);
@@ -1464,12 +1471,12 @@ static V wide_access(VM *vm, unsigned prim)
     case P_F32: {
         float f;
         memcpy(&f, at, sizeof f);
-        return made(vm, make_real(vm, f));
+        return made(vm, make_float(vm, f));
     }
     case P_F64: {
         double d;
         memcpy(&d, at, sizeof d);
-        return made(vm, make_real(vm, d));
+        return made(vm, make_float(vm, d));
     }
     case P_SET_S32: {
         if (!is_fix(x) || fixval(x) < INT32_MIN || fixval(x) > INT32_MAX)
@@ -1511,7 +1518,7 @@ static bool bytes_range(size_t length, V start, V n)
 
 /* The double nearest to the decimal number in s, times 10^e, for a literal past the
    fixnum range: arithmetic on doubles would only land near it. s may have an exponent
-   of its own, as str prints a large real. */
+   of its own, as str prints a large float. */
 static V decimal(VM *vm, V s, V e)
 {
     if (!is_type(s, T_STRING) || !is_fix(e))
@@ -1531,7 +1538,7 @@ static V decimal(VM *vm, V s, V e)
     snprintf(text + strlen(text), 32, "e%lld", exponent);
     double d = strtod(text, NULL);
     free(text);
-    return made(vm, make_real(vm, d));
+    return made(vm, make_float(vm, d));
 }
 
 static V bytes_primitive(VM *vm, unsigned prim)
@@ -1659,6 +1666,78 @@ void sj_report(VM *vm, const char *what)
     } else {
         fprintf(stderr, "shen-jit: %s failed\n", what);
     }
+}
+
+/* 64-bit words, which wrap (lib/word.shen): (shen-jit.word-op Op A B), Op naming the operation. Typed
+   code keeps a word in a word register, where the lowerer makes each operation an instruction; a word
+   that leaves them is boxed as a byte buffer of its 8 bytes, little-endian, which this takes and makes.
+   A shift or rotate counts modulo 64, as the instructions do. */
+static bool word_of(V v, uint64_t *w)
+{
+    if (!is_type(v, T_BYTES) || string_length(v) != 8)
+        return false;
+    memcpy(w, string_bytes(v), sizeof *w);
+    return true;
+}
+
+static V word_made(VM *vm, uint64_t w) { return made(vm, make_bytes(vm, &w, sizeof w)); }
+
+static bool op_named(V op, const char *name)
+{
+    V s = ptr(op)[SYM_NAME];
+    return string_length(s) == strlen(name) && memcmp(string_bytes(s), name, string_length(s)) == 0;
+}
+
+static V word_op(VM *vm, V op, V a, V b)
+{
+    uint64_t x, y;
+    if (!is_symbol(op))
+        return sj_raise_value(vm, "shen-jit.word-op: ~S is not an operation", op);
+    if (op_named(op, "wof"))
+        return is_fix(a) ? word_made(vm, (uint64_t)fixval(a)) : sj_raise_value(vm, "~S is not an integer", a);
+    if (op_named(op, "wget")) {
+        char *base;
+        size_t length;
+        if (!memory_of(a, &base, &length))
+            return sj_raise_value(vm, "bytes: ~S is not a byte buffer", a);
+        if (!is_fix(b) || fixval(b) < 0 || (uint64_t)fixval(b) + 8 > length)
+            return sj_raise_value(vm, "bytes: ~S is not a valid index", b);
+        memcpy(&x, base + fixval(b), sizeof x);
+        return word_made(vm, x);
+    }
+    if (!word_of(a, &x))
+        return sj_raise_value(vm, "~S is not a word", a);
+    if (op_named(op, "wfixnum"))
+        return fix_fits((int64_t)x) ? fix((int64_t)x) : sj_raise(vm, "integer overflow");
+    if (op_named(op, "wfloat"))
+        return made(vm, make_float(vm, (double)(int64_t)x));
+    static const char *const counted[] = {"wshl", "wshr", "wsar", "wrotl", "wrotr"};
+    for (unsigned k = 0; k < 5; k++)
+        if (op_named(op, counted[k])) {
+            if (!is_fix(b))
+                return sj_raise_value(vm, "~S is not an integer", b);
+            unsigned n = (unsigned)((uint64_t)fixval(b) & 63);
+            switch (k) {
+            case 0: return word_made(vm, x << n);
+            case 1: return word_made(vm, x >> n);
+            case 2: return word_made(vm, (uint64_t)((int64_t)x >> n));
+            case 3: return word_made(vm, n ? x << n | x >> (64 - n) : x);
+            default: return word_made(vm, n ? x >> n | x << (64 - n) : x);
+            }
+        }
+    if (!word_of(b, &y))
+        return sj_raise_value(vm, "~S is not a word", b);
+    if (op_named(op, "w+")) return word_made(vm, x + y);
+    if (op_named(op, "w-")) return word_made(vm, x - y);
+    if (op_named(op, "w*")) return word_made(vm, x * y);
+    if (op_named(op, "wand")) return word_made(vm, x & y);
+    if (op_named(op, "wor")) return word_made(vm, x | y);
+    if (op_named(op, "wxor")) return word_made(vm, x ^ y);
+    if (op_named(op, "w<")) return boolean((int64_t)x < (int64_t)y);
+    if (op_named(op, "w<=")) return boolean((int64_t)x <= (int64_t)y);
+    if (op_named(op, "wu<")) return boolean(x < y);
+    if (op_named(op, "wu<=")) return boolean(x <= y);
+    return sj_raise_value(vm, "shen-jit.word-op: ~S is not an operation", op);
 }
 
 V sj_primitive(VM *vm, size_t index)
@@ -1805,12 +1884,25 @@ V sj_primitive(VM *vm, size_t index)
         }
         return V_NIL;
     case P_SEALING:
+        /* A name: what a module whose load failed defined, which the next try redefines
+           (src/port/module.shen); callers bound to it meanwhile keep what they found. */
+        if (is_symbol(a)) {
+            symbol_unseal(a);
+            return a;
+        }
         if (!is_boolean(a))
             return sj_raise_value(vm, "~S is not a boolean", a);
         vm->seal_user = a == V_TRUE;
         return a;
     case P_TAGGEDP:
         return boolean(is_type(a, T_VECTOR) && hdr_size(ptr(a)[0]) > 0 && ptr(a)[1] == b);
+    case P_STRUCT_REF: /* element b of a struct of vm->args[2] elements, as <-address reads it */
+        if (!vector_index(a, b))
+            return is_type(a, T_VECTOR) ? sj_raise_value(vm, "<-address: ~S is not a valid index", b)
+                                        : sj_raise_value(vm, "<-address: ~S is not an absvector", a);
+        if (!is_fix(vm->args[2]) || (int64_t)hdr_size(ptr(a)[0]) < fixval(vm->args[2]))
+            return sj_raise_value(vm, "struct: ~S is shorter than its struct", a);
+        return ptr(a)[1 + fixval(b)];
     case P_VECTORP: /* an absvector whose element 0 is a number, at least 0 */
         return boolean(is_type(a, T_VECTOR) && hdr_size(ptr(a)[0]) > 0 && is_number(ptr(a)[1]) &&
                        number(ptr(a)[1]) >= 0);
@@ -1838,8 +1930,8 @@ V sj_primitive(VM *vm, size_t index)
         return boolean(is_proc(f) && hdr_type(ptr(f)[0]) == T_CLOSURE &&
                        (ptr(ptr(f)[CLO_CODE])[CODE_ARITY] & UINT32_MAX) == (uint64_t)fixval(b));
     }
-    case P_INTEGERP: /* a fixnum, or a finite real without a fraction */
-        return is_fix(a) || (is_type(a, T_REAL) && isfinite(real_value(a)) && real_value(a) == floor(real_value(a)))
+    case P_INTEGERP: /* a fixnum, or a finite float without a fraction */
+        return is_fix(a) || (is_type(a, T_FLOAT) && isfinite(float_value(a)) && float_value(a) == floor(float_value(a)))
                    ? V_TRUE
                    : V_FALSE;
     case P_ABSVECTOR3: {
@@ -1908,6 +2000,39 @@ V sj_primitive(VM *vm, size_t index)
         ptr(a)[2] = fix(fixval(ptr(a)[2]) - 1);
         return V_FALSE;
     case P_ISOLATE: return sj_isolate(vm);
+    case P_FLOAT:
+        if (is_fix(a))
+            return made(vm, make_float(vm, (double)fixval(a)));
+        return is_type(a, T_FLOAT) ? a : sj_raise_value(vm, "~S is not a number", a);
+    case P_WORD_OP: return word_op(vm, a, b, vm->args[2]);
+    case P_TRUNCATE: {
+        /* A number truncated towards zero, as a fixnum: a fixnum is itself, and a float outside the
+           fixnums, a NaN or an infinity among them, raises "integer overflow". */
+        if (is_fix(a))
+            return a;
+        if (!is_type(a, T_FLOAT))
+            return sj_raise_value(vm, "~S is not a number", a);
+        double d = float_value(a);
+        return d >= -0x1p61 && d < 0x1p61 ? fix((int64_t)d) : sj_raise(vm, "integer overflow");
+    }
+    case P_QUOTIENT: case P_REMAINDER: {
+        /* Truncating towards zero, as C does, the remainder having the dividend's sign. */
+        if (!is_fix(a))
+            return sj_raise_value(vm, "~S is not an integer", a);
+        if (!is_fix(b))
+            return sj_raise_value(vm, "~S is not an integer", b);
+        if (fixval(b) == 0)
+            return sj_raise(vm, "division by zero");
+        int64_t q = fixval(a) / fixval(b);
+        if (index == P_REMAINDER)
+            return fix(fixval(a) % fixval(b));
+        return fix_fits(q) ? fix(q) : sj_raise(vm, "integer overflow");
+    }
+    case P_SQRT:
+        if (is_fix(a))
+            return made(vm, make_float(vm, sqrt((double)fixval(a))));
+        return is_type(a, T_FLOAT) ? made(vm, make_float(vm, sqrt(float_value(a))))
+                                  : sj_raise_value(vm, "~S is not a number", a);
     case P_FOREIGN: case P_POINTERP: case P_POINTER_KIND: case P_POINTER_ADDRESS: case P_BYTES_POINTER:
     case P_POINTER_STRING: case P_POINTER_BYTES: case P_ERRNO: case P_C_ERRNO: case P_POINTER_KILL:
     case P_POINTER_SIZED: case P_SET_POINTER: case P_POINTER_GUARD: case P_POINTER_OWNER: case P_POINTERS_DEAD:
@@ -1958,6 +2083,7 @@ V sj_primitive(VM *vm, size_t index)
         return is_pvar(a) ? fix((int64_t)pvar_offset(a))
                           : sj_raise_value(vm, "shen-jit.pvar-offset: ~S is not a Prolog variable", a);
     case P_EVAL_KL: return sj_raise(vm, "eval-kl is lowered as a call to shen-jit.eval-kl");
+    case PRIM_FIELD: return sj_primitive(vm, P_GET_ADDRESS);
     default:
         if (index == PRIM_RAISE_COND)
             return sj_raise(vm, "cond: no clause applies");

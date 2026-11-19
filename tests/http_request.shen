@@ -1,3 +1,7 @@
+(define fixture.head (:result.ok [V]) -> V)
+
+(load "tests/result_helpers.shen")
+
 \\ Complete request syntax, framing decisions, owned bounded bodies and response bytes.
 (set request-test.passed 0)
 (set request-test.failed 0)
@@ -14,11 +18,11 @@
   Name F -> (request-test.check Name true (freeze (trap-error (do (thaw F) false) (/. X true)))))
 
 (define request-test.code
-  [ok _] -> 0
-  [error E] -> (io.error-code E))
+  (:result.ok _) -> 0
+  (:result.err E) -> (io.error-code E))
 
 (define request-test.ok
-  [ok Value] -> Value)
+  (:result.ok Value) -> Value)
 
 (define request-test.head
   Extra -> (cn "GET / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;" (cn Extra "c#13;c#10;")))
@@ -160,7 +164,7 @@
      R (io.reader E [])
      B (http.body-reader R Q)
      Result (http.read-body B)
-     Error (hd (tl Result))
+     Error (fixture.failure Result)
   (do (request-test.check "truncated body" [400 3]
         (freeze [(io.error-code Error) (io.error-progress Error)]))
       (request-test.check "truncated body failure is terminal" Result (freeze (http.read-body B)))
@@ -219,7 +223,7 @@
   (freeze (http.encode-response (value request-test.get) (http.response 200 [] (buffer.new 0)) 4 0)))
 (request-test.raises "informational response is not a final response" (freeze (http.response 100 [] (buffer.new 0))))
 (request-test.raises "invalid status" (freeze (http.response 600 [] (buffer.new 0))))
-(request-test.raises "real status" (freeze (http.response (+ 199.5 0.5) [] (buffer.new 0))))
+(request-test.raises "float status" (freeze (http.response (+ 199.5 0.5) [] (buffer.new 0))))
 
 (define request-test.feed
   Wire State ->
@@ -228,11 +232,11 @@
                    Step (if (= At 0) (<-address State 1) 128)
                    N (io.min Step (io.min (shen-jit.bytes-length Out) (- (buffer.length Wire) At)))
                 (if (= N 0)
-                    [eof]
+                    (:result.ok [])
                     (do (shen-jit.copy-bytes Out 0 (buffer.owner Wire) At N)
                         (address-> State 0 (+ At N))
-                        [read N]))))
-      (function io.no-write) (freeze [ok])))
+                        (:result.ok [N])))))
+      (function io.no-write) (freeze (:result.ok []))))
 
 (set request-test.wire (buffer.from-string
   "POST /echo HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Content-Length: 3c#13;c#10;c#13;c#10;abcNEXT"))
@@ -244,7 +248,7 @@
          E (request-test.feed (value request-test.wire) State)
          R (io.reader E [])
          F (http.head-reader R 128)
-         Head (hd (tl (http.read-head F)))
+         Head (fixture.head (http.read-head F))
          Parsed (request-test.ok (http.parse-request Head 3))
          Full (request-test.ok (http.read-body (http.body-reader R Parsed)))
          Tail (request-test.ok (io.read-all R 4))
@@ -261,13 +265,13 @@
          Sent (io.record [false])
          E (io.endpoint "interrupted body" read 1
              (/. Out (if (<-address Sent 0) (error "read interrupted")
-                         (do (address-> Sent 0 true) (shen-jit.u8! Out 0 97) [read 1])))
-             (function io.no-write) (freeze [ok]))
+                         (do (address-> Sent 0 true) (shen-jit.u8! Out 0 97) (:result.ok [1]))))
+             (function io.no-write) (freeze (:result.ok [])))
          R (io.reader E [])
          B (http.body-reader R Q)
          Raised (trap-error (do (http.read-body B) false) (/. X true))
          Again (http.read-body B)
-         Got [Raised (io.error-progress (hd (tl Again))) (io.position R)]
+         Got [Raised (io.error-progress (fixture.failure Again)) (io.position R)]
          _ (io.close E)
       Got)))
 

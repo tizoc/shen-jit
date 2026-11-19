@@ -87,12 +87,34 @@ a struct that untyped code declared. Labelled construction typechecks as the cal
 a pattern as the record it matches: in `{point --> number}`, `(:point x <- X ...) -> X` checks, and
 a pattern of another struct, or a field pattern of the wrong type, is a type error.
 
-A field's type is any closed type, such as `(list number)` or another struct, and resolves in a namespace
-as a signature's does. Type variables are refused, and so is a declaration that types some fields and not
-others. Under `(tc +)`, a struct whose fields have no types is refused: give them types or load it under
-`(tc -)`. The types are part of the layout: reloading with another type is an incompatible redefinition.
+A field's type is any type, such as `(list number)` or another struct, and resolves in a namespace as a
+signature's does; its variables are the struct's parameters, below. A declaration that types some fields
+and not others is refused. Under `(tc +)`, a struct whose fields have no types is refused: give them types
+or load it under `(tc -)`. The types are part of the layout: reloading with another type is an
+incompatible redefinition.
 
-Typed and untyped structs make the same code, and cost the same.
+A struct may take type variables as parameters, written after its name:
+
+```shen
+(defstruct (cell A) (mutable value : A))
+(defstruct (pair (A * B)) (first : A) (second : B))
+```
+
+Its type is then its name applied to them: `cell.make` is `A --> (cell A)`, `cell.value` is
+`(cell A) --> A` and `cell.value->` is `(cell A) --> A --> (cell A)`, so a `(cell number)` holds a number
+and is set only to one. The parameters are distinct variables, a field's type uses no others, and every
+field has a type. They are part of the layout, as the fields' types are.
+Write two parameters as one product argument. The pair above has type `(pair (A * B))`.
+This keeps its type distinct from Shen's three-element function arrow.
+
+A reader tests that its value is a vector at least as long as its struct, and raises otherwise: `<-address: 5 is
+not an absvector`; `<-address: 1 is not a valid index`, for a vector too short to hold the field read, as
+`(cell.value (vector 0))`; or `struct: ... is shorter than its struct`, for one that holds the field but not the
+rest. It does not test which struct it is, so a struct of another kind at least as long reads as this one. Where
+a sealed function reads several fields of one struct, it tests it once. Typed and untyped structs make the same
+code, and cost the same. In a
+[typed program](modules.md#typed-programs), a typechecked call of a reader reads the field with no check, as the
+typechecker has shown what the value is.
 
 ## Labelled construction and matching
 
@@ -107,7 +129,7 @@ follow one another, on one line or several. Unknown, duplicate and missing field
 raise while reading. Each value is evaluated once, in the order written, before the record is made with
 the values in declaration order. The declaration must precede its use in source order. `struct.make`
 is a longer name for the same thing: `(struct.make entry value <- 42 key <- "answer")`. The reader
-reads `:entry` as `:` and `entry`, so `(: entry ...)` is the same form.
+reads `:entry` as `:` and `entry`, so `(: entry ...)` is the same form. An unknown struct name in a constructor or pattern raises while the definition is read.
 
 The same form is a pattern in `define`:
 
@@ -133,6 +155,23 @@ when the definition is compiled.
 Both expand to a call of `entry.%make`, an internal constructor that is never written by hand: as a
 construction it makes the record, and as a pattern a handler of the kernel's pattern-matching extension
 compiles it.
+
+## Anonymous fields
+
+Use one `_` per field, or `(_ : Type)` for each typed field. Construct or match all
+of them in declaration order. In a pattern, `_` ignores that position.
+
+```shen
+(defstruct (coords A) (_ : A) (_ : A))
+(define second-coordinate {(coords A) --> A}
+  (:coords _ Y) -> Y)
+(second-coordinate (:coords 3 4))    \\ 4
+```
+
+Each declaration has either all named or all anonymous fields. Anonymous fields are
+immutable and have no public field readers. Both `(:coords X Y)` and
+`(struct.make coords X Y)` require exactly two arguments. The printer shows
+`#<coords 3 4>`. Namespaces, typed unions, and image reloads work as for named structs.
 
 ## Several structs as one type
 
@@ -173,6 +212,38 @@ stays open as well: a later declaration, in this file or another, adds to it.
 (defstruct square (side : number))
 (struct.union shape square)
 ```
+
+A union can take type parameters and names each member with the types it takes.
+Write two parameters as one product argument `(either (A * B))`. Shen represents
+an arrow type with three elements, and a type term of the form `(either A B)`
+can unify with one when its middle element is a variable.
+
+```shen
+(defstruct (left A) (value : A))
+(defstruct (right B) (value : B))
+(struct.union (either (A * B)) (left A) (right B))
+
+(define either-bind
+  {(either (A * B)) --> (B --> (either (A * C))) --> (either (A * C))}
+  (:left value <- V) _ -> (left.make V)
+  (:right value <- V) F -> (F V))
+```
+
+A `(left A)` is then an `(either (A * B))` for any `B`, and a `(right B)` one for any `A`. A member's types use
+only the union's parameters, and a member with parameters is given as many as it has.
+Use the product form for a two-parameter member as well, such as
+`(struct.union (paired (A * B)) (pair (A * B)))`.
+
+The typechecker uses the constructor signature to type a new struct, then the membership rule to
+widen it to a union. Matching a member pattern against the union gives its fields their declared
+types. With `(enable-type-theory -)`, or if the generated constructor signature is missing or has
+been replaced, the datatype rules can prove construction directly from the fields. A user-defined
+field rule with side effects can therefore see fewer calls during ordinary typechecking.
+
+A constructor function with the union as its declared return type lets a client produce that
+type directly after matching several members. For example, `(result.ok V)` returns a
+`(result.t (E * A))`, and `(:result.ok X)` matches its payload.
+See [Common types in typed clients](modules.md#common-types-in-typed-clients).
 
 In a namespace, `struct.union` is the `struct` namespace's `union`, used through its prefix or imported.
 
@@ -236,8 +307,8 @@ have effects only when they are not already in declaration order, to keep their 
 rest straight to the constructor: it compiles to
 what the positional call does, and builds no runtime field list.
 
-Readers, setters, the predicate and a constructor of up to nine fields are inlined, and then cost what
-the `<-address`, `address->` and `absvector` they replace do. Two things differ from a vector written by
+Readers, setters, the predicate and a constructor of up to ten fields are inlined, and then cost what
+the `shen-jit.struct-ref`, `address->` and `absvector` they become do. Two things differ from a vector written by
 hand:
 
 - Code compiled before a declaration calls its operations instead of inlining them, since they did not

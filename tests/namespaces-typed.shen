@@ -5,7 +5,7 @@
   (import buffer view => bytes-view)
   (export first-byte preserve)
 
-  (define first-byte {string --> number}
+  (define first-byte {string --> fixnum}
     Text -> (c.read (c.new (b.from-string Text))))
 
   (define preserve {bytes-view --> bytes-view}

@@ -3,11 +3,12 @@
 (shen.x.namespace source-deps
   (use buffer)
   (use io)
+  (import result let-ok ok err)
   (use json)
   (use shen-jit)
   (use source-deps)
   (shadow boolean get read)
-  (externals [at byte-limit chunk configured depth-limit done eof format legacy missing object ok preprocessed raw
+  (externals [at byte-limit configured depth-limit done format legacy missing object preprocessed raw
     read-facts source-call source-context source-declaration source-definition source-diagnostic source-file
     source-format source-parse unknown])
 
@@ -77,25 +78,25 @@
 
 (define read-error
   State Name Domain Message ->
-    [error (io.progress (io.native-error read-facts Domain 0 Name
-                          (make-string "line ~A: ~A" (<-address State 6) Message)) (<-address State 4))])
+    (:err (io.progress (io.native-error read-facts Domain 0 Name
+                          (make-string "line ~A: ~A" (<-address State 6) Message)) (<-address State 4))))
 
 (define read-more
   Reader Name Limits State ->
     (read-chunk Reader Name Limits State (io.read-chunk Reader)))
 
 (define read-chunk
-  _ _ _ _ [error Error] -> [error Error]
-  _ Name Limits State [eof] ->
-    (io.let-ok _ (line Name Limits State)
-      [ok (io.record [data (reverse (<-address State 0)) (<-address State 5)
-                      (<-address State 4)])])
-  Reader Name Limits State [chunk View] ->
+  _ _ _ _ (:err Error) -> (:err Error)
+  _ Name Limits State (:ok []) ->
+    (let-ok _ (line Name Limits State)
+      (:ok (io.record [data (reverse (<-address State 0)) (<-address State 5)
+                      (<-address State 4)])))
+  Reader Name Limits State (:ok [View]) ->
     (let N (buffer.length View)
       (if (> N (- (<-address Limits 0) (<-address State 4)))
           (read-error State Name limit "input byte limit exceeded")
           (do (address-> State 4 (+ (<-address State 4) N))
-              (io.let-ok _ (lines Name Limits State View 0 N)
+              (let-ok _ (lines Name Limits State View 0 N)
                 (read-more Reader Name Limits State))))))
 
 (define find-lf
@@ -103,19 +104,19 @@
   Data At End -> (if (= (shen-jit.u8 Data At) 10) At (find-lf Data (+ At 1) End)))
 
 (define lines
-  _ _ _ _ End End -> [ok done]
+  _ _ _ _ End End -> (:ok done)
   Name Limits State View At End ->
     (let Data (buffer.owner View)
          Offset (buffer.offset View)
          LF (- (find-lf Data (+ Offset At) (+ Offset End)) Offset)
          Part (buffer.slice View At (- LF At))
          Appended (trap-error
-                    (do (buffer.append! (<-address State 7) Part) [ok done])
+                    (do (buffer.append! (<-address State 7) Part) (:ok done))
                     (/. E (read-error State Name limit "line byte limit exceeded")))
-      (io.let-ok _ Appended
+      (let-ok _ Appended
         (if (= LF End)
-            [ok done]
-            (io.let-ok _ (line Name Limits State)
+            (:ok done)
+            (let-ok _ (line Name Limits State)
               (do (address-> State 6 (+ (<-address State 6) 1))
                   (address-> State 7 (buffer.builder (<-address Limits 2)))
                   (lines Name Limits State View (+ LF 1) End)))))))
@@ -128,7 +129,7 @@
 (define line
   Name Limits State ->
     (let View (buffer.finish (<-address State 7))
-      (cond ((blank? View 0 (buffer.length View)) [ok done])
+      (cond ((blank? View 0 (buffer.length View)) (:ok done))
             ((>= (<-address State 5) (<-address Limits 1))
               (read-error State Name limit "record limit exceeded"))
             (true
@@ -136,7 +137,7 @@
                 (do (record State Limits
                       (json.decode View [[byte-limit (<-address Limits 2)] [depth-limit 16]]))
                     (address-> State 5 (+ (<-address State 5) 1))
-                    [ok done])
+                    (:ok done))
                 (/. E (read-error State Name
                         (if (= (error-to-string E) "file count limit exceeded") limit format)
                         (error-to-string E))))))))

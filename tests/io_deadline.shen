@@ -22,11 +22,10 @@
       [(io.socket C "timed client") (io.socket S "timed server")]))
 
 (define timed-test.error
-  [error E] -> E
-  [error E _] -> E)
+  (:result.err E) -> E)
 
 (define timed-test.progress
-  [error E N] -> [(io.error-domain E) N (io.error-progress E)])
+  (:result.err E) -> [(io.error-domain E) (io.error-progress E) (io.error-progress E)])
 
 (define timed-test.advancing
   ->
@@ -69,7 +68,7 @@
       (io.socket-deadline C (clock.deadline 500))
       (io.write-all S (buffer.from-string "bcde") [])
       (let V (buffer.new 4)
-        (do (timed-test.check "reader retries after timeout" [ok 4] (freeze (io.reader-exact R V)))
+        (do (timed-test.check "reader retries after timeout" (:result.ok (:io.transfer true 4)) (freeze (io.reader-exact R V)))
             (timed-test.check "retry delivers only the suffix" "bcde" (freeze (buffer.string V)))))
       (io.close C)
       (io.close S)))
@@ -88,7 +87,7 @@
       (timed-test.check "read keeps acknowledged prefix" "abcd"
         (freeze (buffer.string (buffer.slice V 0 4))))
       (io.socket-unlimited C)
-      (timed-test.check "direct read resumes from known progress" [ok 2]
+      (timed-test.check "direct read resumes from known progress" (:result.ok (:io.transfer true 2))
         (freeze (io.read-exact C (buffer.slice V 4 2) [])))
       (timed-test.check "whole resumed input" "abcdef" (freeze (buffer.string V)))
       (io.close C)
@@ -106,7 +105,7 @@
   (do (timed-test.check "write budget spans successful short writes" [timeout 4 4]
         (freeze (timed-test.progress Result)))
       (io.socket-unlimited C)
-      (timed-test.check "write resumes without replay" [ok 2]
+      (timed-test.check "write resumes without replay" (:result.ok 2)
         (freeze (io.write-all C (buffer.slice Source 4 2) [])))
       (io.read-exact S (buffer.slice V 4 2) [])
       (timed-test.check "wire output appears exactly once" "abcdef" (freeze (buffer.string V)))
@@ -122,7 +121,7 @@
   (do (timed-test.check "flush timeout" [timeout 0 0] (freeze (timed-test.progress (io.flush W))))
       (timed-test.check "timeout preserves pending output" 7 (freeze (io.pending W)))
       (io.socket-unlimited C)
-      (timed-test.check "explicit flush retry" [ok 7] (freeze (io.flush W)))
+      (timed-test.check "explicit flush retry" (:result.ok 7) (freeze (io.flush W)))
       (let V (buffer.new 7) _ (io.read-exact S V [])
         (timed-test.check "retry sends retained bytes" "pending" (freeze (buffer.string V))))
       (io.close C)
@@ -138,7 +137,7 @@
   (do (timed-test.check "close reports timeout but closes anyway" timeout
         (freeze (io.error-domain (timed-test.error Closed))))
       (timed-test.check "timed close is one shot" Closed (freeze (io.close C)))
-      (timed-test.check "peer observes close despite expired budget" [eof]
+      (timed-test.check "peer observes close despite expired budget" (:result.ok [])
         (freeze (io.read-some S (buffer.new 1) [])))
       (io.close S)))
 
@@ -146,14 +145,14 @@
      C (hd Pair)
      S (hd (tl Pair))
      _ (io.socket-deadline C (clock.deadline 0))
-  (do (timed-test.check "empty read does not probe the transport" [read 0]
+  (do (timed-test.check "empty read does not probe the transport" (:result.ok [0])
         (freeze (io.read-some C (buffer.new 0) [])))
-      (timed-test.check "empty write does not probe the transport" [written 0]
+      (timed-test.check "empty write does not probe the transport" (:result.ok 0)
         (freeze (io.write-some C (buffer.new 0) [])))
       (timed-test.check "expired shutdown does not send FIN" timeout
         (freeze (io.error-domain (timed-test.error (io.shutdown-write C)))))
       (io.socket-unlimited C)
-      (timed-test.check "write direction survives timed shutdown" [ok 1]
+      (timed-test.check "write direction survives timed shutdown" (:result.ok 1)
         (freeze (io.write-all C (buffer.from-string "x") [])))
       (io.close C)
       (io.close S)))

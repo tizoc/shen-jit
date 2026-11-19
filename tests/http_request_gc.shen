@@ -1,11 +1,11 @@
 \\ Libraries are already in the image; every allocation here collects.
 (let Head (buffer.from-string "POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Content-Length: 3c#13;c#10;c#13;c#10;")
-     Parsed (hd (tl (http.parse-request Head 3)))
+     Parsed (fixture.success (http.parse-request Head 3))
      E (io.input-buffer (buffer.from-string "abcNEXT"))
      R (io.reader E [[chunk-size 1]])
-     Full (hd (tl (http.read-body (http.body-reader R Parsed))))
+     Full (fixture.success (http.read-body (http.body-reader R Parsed)))
      Wire (http.encode-response Full (http.response 200 [] (http.body Full)) 1024 3)
-     Tail (hd (tl (io.read-all R 4)))
+     Tail (fixture.success (io.read-all R 4))
      _ (io.close E)
      _ (shen-jit.collect)
   (if (and (= (http.method Full) "POST")
@@ -16,12 +16,12 @@
       (output "request gc ok~%")
       (error "HTTP request/response ownership failed under GC stress")))
 
-(let Q (hd (tl (http.parse-request
-                (buffer.from-string "POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Transfer-Encoding: chunkedc#13;c#10;c#13;c#10;") 3)))
+(let Q (fixture.success (http.parse-request
+                (buffer.from-string "POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Transfer-Encoding: chunkedc#13;c#10;c#13;c#10;") 3))
      E (io.input-buffer (buffer.from-string "1c#13;c#10;ac#13;c#10;2c#13;c#10;bcc#13;c#10;0c#13;c#10;X: yesc#13;c#10;c#13;c#10;NEXT"))
      R (io.reader E [[chunk-size 1]])
-     Full (hd (tl (http.read-body (http.body-reader R Q))))
-     Tail (hd (tl (io.read-all R 4)))
+     Full (fixture.success (http.read-body (http.body-reader R Q)))
+     Tail (fixture.success (io.read-all R 4))
      _ (io.close E)
      _ (shen-jit.collect)
   (if (and (= (buffer.string (http.body Full)) "abc")

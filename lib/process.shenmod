@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name process)
+  (requires ffi buffer io io/file deadline clock result)
+  (sources tc- "process/process.shen" tc+ "process/process-typed.shen"))

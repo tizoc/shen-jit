@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name cursor)
+  (requires buffer)
+  (sources tc- "cursor.shen" tc+ "cursor-typed.shen"))

@@ -1,7 +1,7 @@
 \\ Files as memory, over the FFI and with no C of their own. It stays out of the image until asked
-\\ for; load it after lib/ffi.shen, under (tc -), before the code using it:
+\\ for; load its module before the code using it:
 \\
-\\   shen-jit eval -l lib/ffi.shen -l lib/mmap.shen -l program.shen
+\\   shen-jit eval -m mmap -l program.shen
 \\
 \\ (let M (mmap.read "data.bin")
 \\   (do (output "~A bytes, starting ~A~%" (shen-jit.bytes-length M) (shen-jit.u8 M 0))

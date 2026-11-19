@@ -43,9 +43,7 @@ def checks(result):
 
 def command(executable, adapter):
     return [
-        str(executable), "eval", "-l", "lib/ffi.shen", "-l", "lib/buffer.shen",
-        "-l", "lib/io.shen", "-l", "lib/io-file.shen",
-        "-s", "fs.*adapter-files*", "[" + string(adapter) + "]", "-l", "lib/fs.shen",
+        str(executable), "eval", "-s", "fs.*adapter-files*", "[" + string(adapter) + "]", "-m", "fs", "-l", "tests/result_helpers.shen",
     ]
 
 
@@ -96,10 +94,10 @@ def saved_image(executable, base, root):
     save = [str(executable), "--save", str(image)] + base[1:] + [
         "-l", "tests/fs_gc_helpers.shen",
         "-s", "fs-image.root", string(root),
-        "-e", '(set fs-image.info (hd (tl (fs.stat (fs.join (value fs-image.root) "data")))))',
-        "-e", '(set fs-image.names (hd (tl (fs.list (fs.join (value fs-image.root) "listing") []))))',
+        "-e", '(set fs-image.info (fixture.success (fs.stat (fs.join (value fs-image.root) "data"))))',
+        "-e", '(set fs-image.names (fixture.success (fs.list (fs.join (value fs-image.root) "listing") [])))',
         "-e", '(do (set fs-image.endpoint '
-              '(snd (hd (tl (fs.temp-file (value fs-image.root) "image-"))))) true)',
+              '(snd (fixture.success (fs.temp-file (value fs-image.root) "image-")))) true)',
     ]
     run(save)
     env = {**os.environ, "SHEN_JIT_IMAGE": str(image)}
@@ -123,7 +121,7 @@ def copy_application(base, root):
     target = root / "application-copy.bin"
     argv = "[" + " ".join(map(string, ["tools/fs-copy.shen", root / "large.bin", target])) + "]"
     result = run(
-        base + ["-s", "*argv*", argv, "-l", "tools/fs-copy.shen"],
+        base + ["-s", "*argv*", argv, "-m", "tools/fs-copy.shenmod"],
         env={**os.environ, "SHEN_JIT_SEMISPACE": "4M", "SHEN_JIT_MAX_HEAP": "16M"},
     )
     assert "Copied 20971520 bytes" in result.stdout, result.stdout[-1000:]
@@ -143,7 +141,7 @@ def documentation(base, root):
     expression = '(let Size (project.file-size ' + string(root / "data") + ') '
     expression += 'Count (project.count ' + string(root / "tree") + ') '
     expression += 'Saved (project.save ' + string(root / "example-output") + ' "document") '
-    expression += '(if (and (= Size [ok 6]) (> (fst (hd (tl Count))) 0) (= Saved [ok 8])) '
+    expression += '(if (and (= Size (:result.ok 6)) (> (fst (fixture.success Count)) 0) (= Saved (:result.ok 8))) '
     expression += '(do (output "3 passed, 0 failed~%") true) (error "filesystem examples failed")))'
     checks(run(base + ["-l", str(source), "-e", expression]))
 
@@ -180,7 +178,7 @@ def main():
             print("3 passed, 0 failed", flush=True)
 
             typed = '(do (output "~A~%" (if (fs-typed.run ' + string(root)
-            typed += ') "4 passed, 0 failed" "0 passed, 1 failed")) true)'
+            typed += ') "6 passed, 0 failed" "0 passed, 1 failed")) true)'
             checks(run(base + ["-e", "(tc +)", "-l", "tests/fs_typed.shen", "-e", typed]))
             copy_application(base, root)
             saved_image(executable, base, root)

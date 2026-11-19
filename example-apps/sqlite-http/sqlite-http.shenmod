@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name sqlite-http)
+  (requires sqlite json http/listener)
+  (sources tc- "main.shen"))

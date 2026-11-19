@@ -1,7 +1,7 @@
-\\ Calling C from Shen. It stays out of the image until asked for; load this file under
-\\ (tc -), before the code using it:
+\\ Calling C from Shen. It stays out of the image until asked for; load its module before
+\\ the code using it:
 \\
-\\   shen-jit eval -l lib/ffi.shen -l program.shen
+\\   shen-jit eval -m ffi -l program.shen
 \\
 \\ A library is named once, with the file names to try in order. [] means the executable
 \\ and what it links, which on Windows reaches nothing, as the executable is static.
@@ -15,7 +15,7 @@
 \\
 \\   int64           a fixnum; a result must fit one
 \\   int32, uint32   a fixnum in range; C's int is int32
-\\   double          a number; a new real
+\\   double          a number; a new float
 \\   string          copied for the call, and a NUL in it raises; copied, and NULL is []
 \\   pointer         a pointer of any kind, or [] for NULL; a pointer of kind pointer, or []
 \\   bytes           the address of a byte buffer; no result
@@ -126,7 +126,21 @@
        (do (foreign Name Desc)
            (shen.store-arity Name N)
            (ffi.declare Name Types Result)
+           (put Name shen-jit.foreign-floats [(shen-jit.function Name) | (ffi.floats Types Result Blocking Varargs)])
            Name)))
+
+\\ How many doubles a function of doubles giving a double takes, which typed code calls with its
+\\ floats in registers (docs/bytecode.md), or 0: from one to three, neither blocking nor variadic.
+\\ The property pairs this count with the installed procedure, so replacements cannot inherit it.
+(define ffi.floats
+  Types double false 0 -> (length Types) where (and (> (length Types) 0) (< (length Types) 4)
+                                                   (ffi.all-double? Types))
+  _ _ _ _ -> 0)
+
+(define ffi.all-double?
+  [] -> true
+  [double | Types] -> (ffi.all-double? Types)
+  _ -> false)
 
 \\ A procedure has one type of its own, in place of every other.
 (define ffi.define-procedure

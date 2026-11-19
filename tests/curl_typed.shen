@@ -1,11 +1,11 @@
 (define curl-typed.status
   {(io.result curl.response) --> number}
-  [ok R] -> (let B (curl.body R)
+  (:result.ok R) -> (let B (curl.body R)
                 Fields (curl.headers R)
                 Trailers (curl.trailers R)
                 _ (buffer.length (curl.raw-headers R))
              (curl.status R))
-  [error E] -> (io.error-code E))
+  (:result.err E) -> (io.error-code E))
 
 (define curl-typed.request
   {curl.client --> string --> (io.result curl.response)}
@@ -25,12 +25,16 @@
 (define curl-typed.owned-stream
   {curl.client --> string --> (io.result curl.response)}
   C URL -> (curl.request-with-sink C "GET" URL [] (buffer.new 0)
-             (/. Head [ok (io.output-buffer (buffer.new 1024))]) [[proxy ""]]))
+             (/. Head (result.ok (io.output-buffer (buffer.new 1024)))) [[proxy ""]]))
 
 (define curl-typed.stream-result
-  {(io.result curl.response) --> number}
-  [ok R] -> (if (curl.streamed? R) (curl.body-length R) (buffer.length (curl.body R)))
-  [error E] -> (io.error-progress E))
+  {(io.result curl.response) --> fixnum}
+  (:result.ok R) -> (if (curl.streamed? R) (curl.body-length R) (buffer.length (curl.body R)))
+  (:result.err E) -> (io.error-progress E))
+
+(define curl-typed.scoped-progress
+  {(curl.client --> (io.result string)) --> (io.result string)}
+  F -> (curl.with-client F))
 
 (define curl-typed.run
   {string --> boolean}

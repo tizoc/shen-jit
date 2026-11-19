@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name io)
+  (requires buffer result option)
+  (sources tc- "io/io.shen" tc+ "io/io-typed.shen" tc+ "io/io-reader.shen" tc+ "io/io-writer.shen" tc+ "io/io-transfer.shen"))

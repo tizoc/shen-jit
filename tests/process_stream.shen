@@ -8,16 +8,16 @@
       (if (>= Count Limit)
           (if (= (<-address State 3) throw)
               (error "sink threw after acknowledged writes")
-              [error (io.native-error write fixture 37 "sink" "sink failed")])
+              (:result.err (io.native-error write fixture 37 "sink" "sink failed")))
           (let N (io.min 3 (io.min (- Limit Count) (shen-jit.bytes-length Bytes)))
                _ (address-> State 0 (+ Count N))
-            [written N]))))
+            (:result.ok N)))))
 
 (define process-stream.sink
   State ->
     (io.endpoint "fixture sink" write 65536 (function io.no-read)
       (/. B (process-stream.write State B))
-      (freeze (do (address-> State 1 (+ 1 (<-address State 1))) [ok]))))
+      (freeze (do (address-> State 1 (+ 1 (<-address State 1))) (:result.ok [])))))
 
 (map (/. Mode
        (let State (io.record [0 0 (if (= Mode throw) 5 7) Mode])
@@ -57,8 +57,8 @@
 
 (let Result (process-test.run ["exit" "0"] (buffer.new 1048576) [[terminate-grace 0]])
      Partial (process-test.partial Result)
-  (do (process-test.check "early stdin closure reports an error instead of killing parent" error
-        (freeze (hd Result)))
+  (do (process-test.check "early stdin closure reports an error instead of killing parent" true
+        (freeze (result.err? Result)))
       (process-test.check "early stdin closure keeps partial progress" true
         (freeze (< (process.input-count Partial) 1048576)))
       (process-test.check "prefetched input is retained separately" true
@@ -72,24 +72,24 @@
             Source (io.input-buffer (buffer.new 0))
             Out (io.output-buffer (buffer.new 0))
             Err (io.endpoint "readiness" write 65536 (function io.no-read)
-                  (/. B (do (address-> Ready 0 true) [written (shen-jit.bytes-length B)]))
-                  (freeze [ok]))
+                  (/. B (do (address-> Ready 0 true) (:result.ok (shen-jit.bytes-length B))))
+                  (freeze (:result.ok [])))
             Result (process.run-to (value process-test.helper) ["ready-ignore-term" "10000"] Source Out Err
                        [[cancel (freeze (<-address Ready 0))] [timeout 5000]
                         [cleanup-timeout Cleanup] [terminate-grace (if (= Cleanup 1) 60000 30)]])
             Partial (process-test.partial Result)
             Child (process.child Partial)
-            Wait (if (process-test.closed? Child) [ok (process.status Partial)] (process.wait Child 1000))
-            _ (if (= Wait [pending])
+            Wait (if (process-test.closed? Child) (:result.ok [(process.status Partial)]) (process.wait Child 1000))
+            _ (if (= Wait (:result.ok []))
                   (do (process.kill Child) (process.wait Child 1000)) true)
             _ (process.close Child)
             _ (io.close Source)
             _ (io.close Out)
             _ (io.close Err)
          (do (process-test.check "cleanup sends force even when its budget expires" false
-               (freeze (= Wait [pending])))
+               (freeze (= Wait (:result.ok []))))
              (if (io.file-windows?) skip
-                 (process-test.check "ignored SIGTERM is followed by SIGKILL" [ok [signalled 9]]
+                 (process-test.check "ignored SIGTERM is followed by SIGKILL" (:result.ok [(:process.signalled 9)])
                    (freeze Wait))))))
   [1000 1])
 
@@ -100,12 +100,12 @@
             Clock (freeze (let N (<-address Reads 0) (do (address-> Reads 0 (+ N 1)) N)))
             Child (process-test.ok (process.spawn (value process-test.helper) ["hold" "10000"] []))
             _ (process.cleanup-wait (process.session.make false [] [Child] [] [] [])
-                (deadline.after Clock Budget) (deadline.after (freeze 0) 1) false [ok])
+                (deadline.after Clock Budget) (deadline.after (freeze 0) 1) false (:result.ok []))
             Wait (process.wait Child 1000)
-            _ (if (= Wait [pending]) (do (process.kill Child) (process.wait Child 1000)) true)
+            _ (if (= Wait (:result.ok [])) (do (process.kill Child) (process.wait Child 1000)) true)
             _ (process.close Child)
          (process-test.check "cleanup forces before its budget expires between readings" false
-           (freeze (= Wait [pending])))))
+           (freeze (= Wait (:result.ok []))))))
   [1 2 3 4 5 6])
 
 \\ The thunk turns true only after the child has started, so the wait must keep polling it.

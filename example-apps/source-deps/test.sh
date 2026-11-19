@@ -5,9 +5,12 @@ SHEN=$1
 dir=$(mktemp -d)
 trap 'status=$?; if [ "$status" -ne 0 ]; then cat "$dir"/*.out 2>/dev/null; fi; rm -rf "$dir"' EXIT
 if command -v cygpath > /dev/null; then dir=$(cygpath -m "$dir"); fi
-"$SHEN" eval -l example-apps/source-deps/load.shen -l tests/source_deps.shen > "$dir/pure.out" 2>&1
+"$SHEN" eval -m example-apps/source-deps/source-deps.shenmod -l tests/source_deps.shen > "$dir/pure.out" 2>&1
 grep -a '^FAIL\|^[0-9]* passed' "$dir/pure.out" | awk '{ print } END { exit !/ 0 failed/ }'
-"$SHEN" eval -l lib/ffi.shen \
+"$SHEN" eval -m example-apps/source-facts/source-facts.shenmod \
+    -m example-apps/source-deps/source-deps.shenmod -l tests/source_output_errors.shen > "$dir/write-errors.out" 2>&1
+grep -qx '2 passed, 0 failed (report write errors)' "$dir/write-errors.out"
+"$SHEN" eval -m ffi \
     -e '(shen-jit.library sd-probe ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])' \
     -e '(define-foreign sd-probe.abs sd-probe "abs" (int32) --> int32)' \
     -e '(output "source-deps shared: ~A~%"

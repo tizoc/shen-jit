@@ -20,13 +20,12 @@ time. From a binary installation use `./shen-jit` and build the adapter with
 Build one standalone executable, without loading Shen source files on each invocation:
 
 ```sh
-build/shen-jit eval -q -l example-apps/source-deps/load.shen \
-  -e '(shen-jit.save-executable "source-deps" source-deps.entry)'
+build/shen-jit build example-apps/source-deps/source-deps.shenmod -o source-deps
 ./source-deps facts.ndjson report.ndjson
 ```
 
-The saved executable still needs the filesystem adapter at its configured paths. Set absolute
-`fs.*adapter-files*` entries before loading if it must launch from other directories.
+The executable needs the filesystem adapter: it finds `shen-fs.so` (`.dll` on Windows) beside it, or in a `lib/`
+beside it, from any directory, as well as in `build/`, `lib/` and the current directory.
 
 ## Questions and matching
 

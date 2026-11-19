@@ -1,0 +1,3 @@
+(shen.module (version 1) (name budget)
+  (extension shen-jit (maxinferences 1300000))
+  (sources tc- "budget.shen"))

@@ -4,10 +4,10 @@ SHEN=$1
 dir=$(mktemp -d)
 trap 'fs_test_status=$?; if [ "$fs_test_status" -ne 0 ]; then cat "$dir"/*.out 2>/dev/null; fi; rm -rf "$dir"' EXIT
 if command -v cygpath > /dev/null; then dir=$(cygpath -m "$dir"); fi
-"$SHEN" eval -l lib/ffi.shen -l lib/buffer.shen -l lib/io.shen -l lib/io-file.shen -l lib/fs.shen \
+"$SHEN" eval -m fs \
   -l tests/fs_pure.shen > "$dir/pure.out" 2>&1
 grep -a '^[0-9]* passed\|^FAIL' "$dir/pure.out" | awk '{ print } END { exit !/ 0 failed/ }'
-"$SHEN" eval -l lib/ffi.shen \
+"$SHEN" eval -m ffi \
   -e '(shen-jit.library fs-probe ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])' \
   -e '(define-foreign fs-probe.abs fs-probe "abs" (int32) --> int32)' \
   -e '(output "fs shared: ~A~%"

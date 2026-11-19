@@ -10,9 +10,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LIBRARIES = ["lib/ffi.shen", "lib/socket.shen", "lib/buffer.shen", "lib/io.shen",
-             "lib/deadline.shen", "lib/clock.shen", "lib/io-socket.shen", "lib/grammar.shen", "lib/http-head.shen",
-             "lib/http-request.shen", "lib/http-response.shen", "lib/http-server.shen"]
+LIBRARIES = ["http/server"]
 
 HANDLER = '''(define wire.handler
   Q -> (cond ((= (http.target Q) "/fixed")
@@ -41,7 +39,7 @@ def exchange(executable, request, expected_status, expected_body=b"", method="GE
                     (http.serve-one (io.socket Peer "wire peer") (function wire.handler) {options}))'''
     command = [str(executable), "eval"]
     for library in LIBRARIES:
-        command += ["-l", library]
+        command += ["-m", library]
     command += ["-e", HANDLER, "-e", program]
     with tempfile.TemporaryFile() as output_log, tempfile.TemporaryFile() as error_log:
         process = subprocess.Popen(command, cwd=ROOT, stdout=output_log, stderr=error_log)
@@ -98,9 +96,9 @@ def exchange(executable, request, expected_status, expected_body=b"", method="GE
             output, errors = output_log.read(), error_log.read()
             assert process.returncode == 0, errors.decode(errors="replace")
             if expected_status < 400:
-                assert b"[ok " in output, output[-1000:]
+                assert b"#<result.ok " in output, output[-1000:]
             else:
-                assert b"[error " in output, output[-1000:]
+                assert b"#<result.err " in output, output[-1000:]
         finally:
             if process.poll() is None:
                 process.kill()

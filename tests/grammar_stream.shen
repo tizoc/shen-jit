@@ -1,4 +1,6 @@
-\\ Grammars read from an I/O reader as input arrives. Load buffer.shen, io.shen and grammar.shen first.
+(load "tests/result_helpers.shen")
+
+\\ Grammars read from an I/O reader as input arrives. Load the grammar module first.
 (set stream-test.passed 0)
 (set stream-test.failed 0)
 
@@ -10,7 +12,7 @@
           (do (set stream-test.failed (+ 1 (value stream-test.failed)))
               (output "FAIL ~A: wanted ~S, got ~S~%" Name Expected Actual)))))
 
-\\ An endpoint that gives Step bytes a read, then Last: [eof], or an error.
+\\ An endpoint that gives Step bytes a read, then Last: (:result.ok []), or an error.
 (define stream-test.feed
   Wire Step Last ->
     (let State (io.record [0])
@@ -21,11 +23,11 @@
                       Last
                       (do (shen-jit.copy-bytes Out 0 (buffer.owner Wire) (+ (buffer.offset Wire) At) N)
                           (address-> State 0 (+ At N))
-                          [read N]))))
-        (function io.no-write) (freeze [ok]))))
+                          (:result.ok [N])))))
+        (function io.no-write) (freeze (:result.ok [])))))
 
 (define stream-test.reader
-  Text Step -> (io.reader (stream-test.feed (buffer.from-string Text) Step [eof]) []))
+  Text Step -> (io.reader (stream-test.feed (buffer.from-string Text) Step (:result.ok [])) []))
 
 (define stream-test.fail
   At Message -> [fail At Message])
@@ -42,8 +44,11 @@
 (defgrammar <s.changing> "a" := one;)
 
 (define stream-test.words
-  R Acc -> (let Got (grammar.read <s.word> R (function stream-test.fail))
-             (if (= (hd Got) ok) (stream-test.words R [(hd (tl Got)) | Acc]) [(reverse Acc) Got])))
+  R Acc -> (stream-test.next-word (grammar.read <s.word> R (function stream-test.fail)) R Acc))
+
+(define stream-test.next-word
+  (:result.ok [Word]) R Acc -> (stream-test.words R [Word | Acc])
+  Terminal _ Acc -> [(reverse Acc) Terminal])
 
 (map (/. Step (stream-test.check (make-string "words in chunks of ~A" Step)
                 [["12" "345" "6789" "0"] [fail 16 "input ended"]]
@@ -52,53 +57,59 @@
 
 (let R (stream-test.reader "12;345;rest of it" 2)
      _ (grammar.read <s.word> R (function stream-test.fail))
-  (do (stream-test.check "what follows the value stays in the reader" [ok "345"]
+  (do (stream-test.check "what follows the value stays in the reader" (:result.ok ["345"])
         (freeze (grammar.read <s.word> R (function stream-test.fail))))
       (stream-test.check "and is read as it is" "rest of it"
-        (freeze (buffer.string (hd (tl (io.read-all R 100))))))))
+        (freeze (buffer.string (fixture.success (io.read-all R 100)))))))
 
-(stream-test.check "nothing at all is eof" [eof]
+(stream-test.check "nothing at all is eof" (:result.ok [])
   (freeze (grammar.read <s.word> (stream-test.reader "" 1) (function stream-test.fail))))
-(stream-test.check "a syntax error, at its place in the stream" [[ok "12"] [fail 3 "no match"]]
+(stream-test.check "a syntax error, at its place in the stream" [(:result.ok ["12"]) [fail 3 "no match"]]
   (freeze (let R (stream-test.reader "12;x4;" 1)
             [(grammar.read <s.word> R (function stream-test.fail)) (grammar.read <s.word> R (function stream-test.fail))])))
 (stream-test.check "lookahead that reached the end" [fail 3 "input ended"]
   (freeze (grammar.read <s.literal> (stream-test.reader "tre" 1) (function stream-test.fail))))
-(stream-test.check "lookahead that backtracked" [ok tree]
+(stream-test.check "lookahead that backtracked" (:result.ok [tree])
   (freeze (grammar.read <s.literal> (stream-test.reader "tree" 1) (function stream-test.fail))))
 (stream-test.check "a value larger than the reader's buffer" [fail 8 "input exceeds the limit"]
-  (freeze (grammar.read <s.word> (io.reader (stream-test.feed (buffer.from-string "1234567890;") 3 [eof]) [[chunk-size 8]])
+  (freeze (grammar.read <s.word> (io.reader (stream-test.feed (buffer.from-string "1234567890;") 3 (:result.ok [])) [[chunk-size 8]])
                         (function stream-test.fail))))
-(stream-test.check "the reader's error, with nothing consumed" [error "broken" 0]
-  (freeze (let E (stream-test.feed (buffer.from-string "12") 1 [error (io.error read "chunks" "broken")])
+(stream-test.check "the reader's error, with nothing consumed" ["broken" 0]
+  (freeze (let E (stream-test.feed (buffer.from-string "12") 1 (:result.err (io.error read "chunks" "broken")))
                R (io.reader E [])
                Got (grammar.read <s.word> R (function stream-test.fail))
-            [(hd Got) (io.error-message (hd (tl Got))) (io.position R)])))
-(stream-test.check "arguments from the entry point" [ok 4 ok 7]
+            [(io.error-message (fixture.failure Got)) (io.position R)])))
+(stream-test.check "a pending reader timeout wins over incomplete input" [timeout 0]
+  (freeze (let Timeout (io.native-error read timeout 0 "chunks" "deadline expired")
+               E (stream-test.feed (buffer.from-string "12") 1 (:result.err Timeout))
+               R (io.reader E [])
+               Got (grammar.read <s.word> R (function stream-test.fail))
+            [(io.error-domain (fixture.failure Got)) (io.position R)])))
+(stream-test.check "arguments from the entry point" [true 4 true 7]
   (freeze (let R (stream-test.reader "aaa;bb;" 1)
-               First (hd (grammar.read (<s.repeat> 97) R (function stream-test.fail)))
+               First (result.ok? (grammar.read (<s.repeat> 97) R (function stream-test.fail)))
                After (io.position R)
-               Second (hd (grammar.read (<s.repeat> 98) R (function stream-test.fail)))
+               Second (result.ok? (grammar.read (<s.repeat> 98) R (function stream-test.fail)))
             [First After Second (io.position R)])))
 (stream-test.check "a span owns its bytes when the reader's buffer is reused" ["abc" "xyz"]
-  (freeze (let R (io.reader (stream-test.feed (buffer.from-string "<abc><xyz>") 2 [eof]) [[chunk-size 8]])
-               First (hd (tl (grammar.read <s.spanned> R (function stream-test.fail))))
-               Second (hd (tl (grammar.read <s.spanned> R (function stream-test.fail))))
-            [(buffer.string First) (buffer.string Second)])))
-(stream-test.check "a rule defined again is read as defined" [[ok one] [ok two]]
+  (freeze (let R (io.reader (stream-test.feed (buffer.from-string "<abc><xyz>") 2 (:result.ok [])) [[chunk-size 8]])
+               First (fixture.success (grammar.read <s.spanned> R (function stream-test.fail)))
+               Second (fixture.success (grammar.read <s.spanned> R (function stream-test.fail)))
+            [(buffer.string (hd First)) (buffer.string (hd Second))])))
+(stream-test.check "a rule defined again is read as defined" [(:result.ok [one]) (:result.ok [two])]
   (freeze (let Before (grammar.read <s.changing> (stream-test.reader "a" 1) (function stream-test.fail))
                _ (eval (hd (read-from-string "(defgrammar <s.changing> c#34;ac#34; := two;)")))
             [Before (grammar.read <s.changing> (stream-test.reader "a" 1) (function stream-test.fail))])))
 
 (defgrammar <s.number> (text <s.digits>) := <s.digits>;)
 
-(stream-test.check "lookahead errors cannot terminate a token" [error 0]
+(stream-test.check "lookahead errors cannot terminate a token" [true 0]
   (freeze
     (let E (stream-test.feed (buffer.from-string "12") 1
-              [error (io.error read "chunks" "broken")])
+              (:result.err (io.error read "chunks" "broken")))
          R (io.reader E [])
          Got (grammar.read <s.number> R (function stream-test.fail))
-      [(hd Got) (io.position R)])))
+      [(result.err? Got) (io.position R)])))
 
 (stream-test.check "a full window cannot terminate a token"
   [[fail 2 "input exceeds the limit"] 0]
@@ -113,7 +124,7 @@
 (defgrammar <s.parent> <s.callee> := <s.callee>;)
 
 (stream-test.check "streaming refreshes a redefined callee"
-  [[ok one] [ok two] two]
+  [(:result.ok [one]) (:result.ok [two]) two]
   (freeze
     (let Before
            (grammar.read <s.parent>

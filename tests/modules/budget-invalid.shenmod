@@ -1,0 +1,3 @@
+(shen.module (version 1) (name budget-invalid)
+  (extension shen-jit (maxinferences -1))
+  (sources tc- "budget.shen"))

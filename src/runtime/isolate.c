@@ -128,6 +128,7 @@ typedef struct Isolates {
     size_t nconstants;
     size_t stress, max_words; /* the builder's settings, for every isolate, read here rather than in
                                  the builder's record, which it changes for a moment as it receives */
+    const char *self;         /* the executable, beside which libraries are looked for too */
 } Isolates;
 
 /* The compile lock, recursive, as the builder may collect while it holds it. */
@@ -258,7 +259,7 @@ static V out_value(Out *o, V v)
     uint32_t generation;
     switch (obj_type(v)) {
     case T_STRING:
-    case T_REAL:
+    case T_FLOAT:
     case T_BYTES:
     case T_EXCEPTION: return out_copy(o, v, obj_words(ptr(v)[0]));
     case T_VECTOR:
@@ -448,6 +449,7 @@ static Isolates *isolates_start(VM *vm)
         goto fail;
     ps->stress = vm->stress;
     ps->max_words = vm->max_words;
+    ps->self = vm->self;
     struct timespec now;
     clock_gettime(CLOCK_REALTIME, &now);
     ps->seed = (uint32_t)now.tv_nsec ^ (uint32_t)now.tv_sec * 2654435761u ^ (uint32_t)((uintptr_t)ps >> 4);
@@ -787,6 +789,7 @@ static void *isolate_main(void *argument)
         vm->isolate = p;
         vm->stress = ps->stress;
         vm->max_words = ps->max_words;
+        vm->self = ps->self;
         vm_note_thread_stack(vm);
     }
     /* Its slots catch up with globals numbered since its context was made, under the lock under

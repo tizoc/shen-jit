@@ -1,0 +1,1 @@
+(shen.module (version 1) (name typed-bad) (typed yes) (sources tc- "one.shen"))

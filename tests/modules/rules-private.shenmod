@@ -1,0 +1,2 @@
+(shen.module (version 1) (name rules-private)
+  (sources tc- "rules-private-a.shen" "rules-private-b.shen"))

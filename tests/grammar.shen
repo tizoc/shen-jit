@@ -247,4 +247,24 @@
     (grammar.parse <g.cut-short> (buffer.from-string "ab")
       (function grammar-test.fail))))
 
+\\ A grammar loaded while sealing is on, as a sealed build loads one: each loop's stub stays
+\\ unsealed, as the loop replaces it at its first call, and the loop is sealed if sealing is on when
+\\ it is made.
+(shen-jit.seal +)
+(load "tests/grammar_sealed.shen")
+(shen-jit.seal -)
+
+(grammar-test.check "a grammar loaded sealed matches at its first call" [true false true]
+  (freeze [(gs.digits? "2026") (gs.digits? "x") (gs.digits? "7")]))
+(grammar-test.check "a stub is not sealed" false (freeze (shen-jit.sealed? <gs.word>/1)))
+
+(shen-jit.seal +)
+(grammar.finish)
+(shen-jit.seal -)
+
+(grammar-test.check "a loop made while sealing is on is sealed" true
+  (freeze (shen-jit.sealed? <gs.word>/1)))
+(grammar-test.check "a sealed loop matches" true
+  (freeze (grammar.match? <gs.word> (buffer.from-string "abc"))))
+
 (output "~A passed, ~A failed~%" (value grammar-test.passed) (value grammar-test.failed))

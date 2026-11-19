@@ -34,12 +34,12 @@ The script uses `pkg-config libcurl`, then `curl-config`, then the compiler's de
 invokes a compiler. Run from the installation or checkout root:
 
 ```sh
-build/shen-jit eval -l lib/ffi.shen -l lib/buffer.shen -l lib/io.shen -l lib/curl.shen \
+build/shen-jit eval -m curl \
   -e '(curl.version)'
 ```
 
 The facade searches `./build/`, `./lib/` and the current directory for `shen-curl.so` and
-`shen-curl.dll`. For another location, set `curl.*adapter-files*` to a list of absolute file names
+`shen-curl.dll`, then the same from the executable's directory. For another location, set `curl.*adapter-files*` to a list of absolute file names
 before loading `lib/curl.shen`. Saved executables retain that declaration and need the adapter and
 libcurl at runtime too. The adapter checks its own ABI and uses only the public `include/shen.h` API.
 It refuses an adapter built for another ABI: rebuild it with `make curl` after updating Shen/JIT.
@@ -59,16 +59,21 @@ connections, TLS state and DNS information. Request options, headers and body ar
         (curl.request Client "GET" URL [["Accept" "application/json"]] (buffer.new 0)
           [[body-limit 65536] [header-limit 16384] [timeout 5000] [connect-timeout 1000]]))))
 
-(define web.status
-  [ok Response] -> (curl.status Response)
-  [error Error] -> (error "HTTP transfer: ~A" (io.error-message Error)))
+(shen.x.namespace web
+  (use curl)
+  (use io)
+  (import result ok err)
+  (export status)
+
+  (define status
+    (:ok Response) -> (curl.status Response)
+    (:err Error) -> (error "HTTP transfer: ~A" (io.error-message Error))))
 ```
 
 Load these libraries before an application. JSON is optional:
 
 ```sh
-build/shen-jit eval -l lib/ffi.shen -l lib/buffer.shen -l lib/io.shen -l lib/curl.shen \
-  -l lib/grammar.shen -l lib/json.shen -l client.shen
+build/shen-jit eval -m curl -m json -l client.shen
 ```
 
 Methods are case-sensitive ASCII tokens of at most 32 bytes. GET and HEAD require an empty body.
@@ -79,7 +84,7 @@ empty field. CR, LF, other control bytes and invalid names are rejected. libcurl
 framing: caller-supplied Content-Length and Transfer-Encoding are rejected.
 
 Non-GET/HEAD requests get `Content-Type: application/octet-stream` unless a Content-Type is supplied.
-For JSON, load `lib/grammar.shen` and `lib/json.shen`, and encode explicitly:
+For JSON, load the module `json`, and encode explicitly:
 
 ```shen
 (define web.post-json
@@ -87,13 +92,20 @@ For JSON, load `lib/grammar.shen` and `lib/json.shen`, and encode explicitly:
     (curl.fetch "POST" URL [["Content-Type" "application/json"]] (json.encode Value [])
       [[request-limit 65536] [body-limit 65536] [timeout 5000]]))
 
-(define web.decode-json
-  [ok Response] -> (json.decode (curl.body Response) [])
-  [error Error] -> (error "HTTP transfer: ~A" (io.error-message Error)))
+(shen.x.namespace web
+  (use curl)
+  (use io)
+  (use json)
+  (import result ok err)
+  (export decode-json)
+
+  (define decode-json
+    (:ok Response) -> (json.decode (curl.body Response) [])
+    (:err Error) -> (error "HTTP transfer: ~A" (io.error-message Error))))
 ```
 
-HTTP statuses such as 404 and 500 return `[ok Response]`. Check `curl.status` for application policy.
-DNS, connection, TLS, timeout and incomplete-body failures return `[error Error]`. Invalid arguments,
+HTTP statuses such as 404 and 500 return `(:result.ok Response)`. Check `curl.status` for application policy.
+DNS, connection, TLS, timeout and incomplete-body failures return `(:result.err Error)`. Invalid arguments,
 closed-client misuse, a missing adapter or failure to create a client raise. JSON decoding has its
 own validation and limits; it is not implied by the Content-Type.
 
@@ -116,11 +128,11 @@ directly. The request body is still a bounded complete view, rather than a strea
 | `(curl.get-to URL Sink Options)` | Scopes a client and borrows the sink |
 | `(curl.request-with-sink Client Method URL Fields Body OpenSink Options)` | Borrows client; opens and closes a sink for the transfer |
 
-All return `[ok Response]` or `[error Error]`. A streamed response retains status, fields, trailers
+All return `(:result.ok Response)` or `(:result.err Error)`. A streamed response retains status, fields, trailers
 and transfer metadata. `curl.streamed?` is true and `curl.body-length` is the number of bytes
 accepted by the sink. `curl.body` raises because the response has no collected body.
 
-`OpenSink` receives the final response head and must return `[ok Endpoint]` or `[error Error]`.
+`OpenSink` receives the final response head and must return `(:result.ok Endpoint)` or `(:result.err Error)`.
 It runs once, before the first payload write, or after a successful transfer with no body. This
 allows checking status or fields before opening a destination. Its head has no trailers yet,
 `curl.streamed?` is true and `curl.body-length` is zero; use response fields for an advertised length.
@@ -128,14 +140,21 @@ The completed response contains the final trailers and actual written count. The
 an opened sink after success, transport failure, a sink error or an exception. Transport failures
 before body delivery leave the opener uncalled.
 
-For example, load `lib/io-file.shen` and accept only 2xx before opening a file:
+For example, load the module `io/file` and accept only 2xx before opening a file:
 
 ```shen
-(define web.open-download
-  Path Head ->
-    (if (and (>= (curl.status Head) 200) (< (curl.status Head) 300))
-        (io.open-file Path write)
-        [error (io.native-error download http (curl.status Head) (curl.url Head) "expected a 2xx response")]))
+(shen.x.namespace web
+  (use curl)
+  (use io)
+  (import result err)
+  (externals [download http write])
+  (export open-download)
+
+  (define open-download
+    Path Head ->
+      (if (and (>= (curl.status Head) 200) (< (curl.status Head) 300))
+          (io.open-file Path write)
+          (:err (io.native-error download http (curl.status Head) (curl.url Head) "expected a 2xx response")))))
 
 (define web.save
   URL Path ->
@@ -250,9 +269,10 @@ appropriate header policy. See [libcurl's header forwarding rules](https://curl.
 
 ## Ownership
 
-`curl.open` returns a `curl.client`. `curl.close` returns `[ok]` or `[error Error]` and remembers its
+`curl.open` returns a `curl.client`. `curl.close` returns `(:result.ok [])` or `(:result.err Error)` and remembers its
 completed result, making repeated closure safe. `curl.with-client` requires a callback returning
-`[ok Value]` or `[error Error]`, closes after completion or an exception, and combines cleanup failures
+`(:result.ok Value)` or `(:result.err Error)`. A transfer failure keeps its
+original error with N bytes of progress. The scope closes after completion or an exception and combines cleanup failures
 using the I/O library's error convention. A manually opened client must be explicitly closed;
 discarding it does not install a GC finalizer. Saved clients are stale and must be reopened on startup.
 
@@ -269,7 +289,7 @@ applies to other native threads in an embedding host too.
 ## Downloader and tests
 
 ```sh
-build/shen-jit script tools/curl-fetch.shen https://example.com/ page.html
+build/shen-jit script tools/curl-fetch.shenmod https://example.com/ page.html
 make test-curl
 ```
 

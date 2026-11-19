@@ -1,0 +1,1 @@
+(shen.module (version 1) (name typed-dep) (sources tc- "typed-dep.shen"))

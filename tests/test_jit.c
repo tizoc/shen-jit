@@ -83,8 +83,8 @@ static void correctness(const char *label)
     CHECK(call("alloc-loop", 2, fix(2000), V_NIL) == fix(2));
     CHECK(raised(call("wrong-arity", 0), "fib: expected 1 argument, got 2"));
     CHECK(raised(call("not-boolean", 0), NULL));
-    V half = call("add-real", 0);
-    CHECK(is_object(half) && obj_type(half) == T_REAL && real_value(half) == 1.5);
+    V half = call("add-float", 0);
+    CHECK(is_object(half) && obj_type(half) == T_FLOAT && float_value(half) == 1.5);
     CHECK(raised(call("overflow", 0), "integer overflow"));
     CHECK(raised(call("deep-raise", 1, fix(10)), "bottom"));
     CHECK(vm->nhandlers == 0);

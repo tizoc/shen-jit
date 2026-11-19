@@ -124,7 +124,7 @@ static V read_atom(Reader *r)
             if (r->kl && dot && !strpbrk(token, "eE") && strspn(dot + 1, "0") == strlen(dot + 1) &&
                 d == (double)(long long)d && fix_fits((long long)d))
                 return fix((long long)d);
-            return make_real(r->vm, d);
+            return make_float(r->vm, d);
         }
         if (strcmp(token, "true") == 0)
             return V_TRUE;

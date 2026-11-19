@@ -38,13 +38,13 @@ BASES = [
     "(code fuzz.f 2 8 (0 1 2) ((prim 4 = 2 (const 0)) (jump-if-false 4 0) (return 3) (label 0)"
     " (prim 5 absvector (const 2)) (prim 5 address-> 5 (const 0) 2) (prim 6 str 2) (prim 5 address-> 5 (const 1) 6)"
     " (prim 3 cons 5 3) (prim 2 - 2 (const 1)) (tail-call 0 fuzz.f 2)) ())",
-    # Real registers: a loop, what it keeps round it, and each kind of instruction.
-    "(code fuzz.f 2 8 (0 1.5) ((real-number 0 (const 1)) (real-number 1 (const 0)) (loop 1) (prim 4 cons? 2)"
-    " (jump-if-false 4 0) (prim 5 hd 2) (real-number 2 5) (real+ 1 1 2) (real* 2 1 0) (real-sqrt 2 2) (prim 2 tl 2)"
-    " (again 1) (label 0) (real-box 6 1) (return 6)) ())",
-    # Real registers on memory: a store, a load, a comparison.
-    "(code fuzz.f 2 8 (8 1.5 16) ((prim 4 shen-jit.bytes (const 2)) (real-number 0 (const 1)) (real-store 4 (const 0) 0)"
-    " (real-load 1 4 (const 0)) (real-unless< 0 1 0) (real-box 5 1) (return 5) (label 0) (real-neg 2 0) (real-box 5 2)"
+    # Float registers: a loop, what it keeps round it, and each kind of instruction.
+    "(code fuzz.f 2 8 (0 1.5) ((float-number 0 (const 1)) (float-number 1 (const 0)) (loop 1) (prim 4 cons? 2)"
+    " (jump-if-false 4 0) (prim 5 hd 2) (float-number 2 5) (float+ 1 1 2) (float* 2 1 0) (float-sqrt 2 2) (prim 2 tl 2)"
+    " (again 1) (label 0) (float-box 6 1) (return 6)) ())",
+    # Float registers on memory: a store, a load, a comparison.
+    "(code fuzz.f 2 8 (8 1.5 16) ((prim 4 shen-jit.bytes (const 2)) (float-number 0 (const 1)) (float-store 4 (const 0) 0)"
+    " (float-load 1 4 (const 0)) (float-unless< 0 1 0) (float-box 5 1) (return 5) (label 0) (float-neg 2 0) (float-box 5 2)"
     " (return 5)) ())",
     # Word registers: a hash over memory in a loop, every kind of access, and what comes back.
     "(code fuzz.f 2 8 (0 8 1099511628211) ((prim 4 shen-jit.bytes (const 1)) (word-number 0 (const 0))"
@@ -55,9 +55,9 @@ BASES = [
     "(code fuzz.f 2 9 (0 3) ((prim 4 + 2 (const 1)) (loop 1) (prim 5 >= 4 (const 1)) (jump-if-false 5 0) (return 4)"
     " (label 0) (word-move 0 (const 0)) (loop 2) (word-unless< 0 (const 1) 3) (word+ 0 0 (const 1)) (prim 3 + 3 4)"
     " (again 2) (label 3) (prim 4 + 4 (const 1)) (again 1)) ())",
-    # Words as indices of reals, and each way between the two kinds.
-    "(code fuzz.f 2 8 (16 1.5 8) ((prim 4 shen-jit.bytes (const 0)) (real-number 0 (const 1)) (word-number 0 (const 2))"
-    " (real-store-at 4 0 0) (real-load-at 1 4 0) (word-from-real 1 1) (real-from-word 2 1) (word-box 5 1) (real-box 6 2)"
+    # Words as indices of floats, and each way between the two kinds.
+    "(code fuzz.f 2 8 (16 1.5 8) ((prim 4 shen-jit.bytes (const 0)) (float-number 0 (const 1)) (word-number 0 (const 2))"
+    " (float-store-at 4 0 0) (float-load-at 1 4 0) (word-from-float 1 1) (float-from-word 2 1) (word-box 5 1) (float-box 6 2)"
     " (prim 7 cons 5 6) (return 7)) ())",
 ]
 ATOMS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, -1] + ['foo', 'fuzz.g', 'fuzz.f', 'reverse', 'hd', 'tl', 'cons', 'cons?', '+', '=', 'str']
@@ -65,12 +65,12 @@ INSNS = ["(move 4 2)", "(const 4 0)", "(prim 4 cons? 2)", "(jump-if-false 4 0)",
          "(pop-handler)", "(push-handler 0)", "(exception 4)", "(capture 4 0)", "(return 2)", "(return (const 0))",
          "(call 4 4 fuzz.g 1)", "(call-value 4 4 0)", "(tail-call 0 fuzz.f 2)", "(tail-call 4 fuzz.g 1)", "(closure 4 0 2)",
          "(prim 4 hd 2)", "(prim 2 tl 2)", "(move 2 4)", "(prim 4 cons (const 0) 2)", "(jump-unless-entry 2 2 0)",
-         "(real-number 0 2)", "(real-number 1 (const 0))", "(real+ 0 0 1)", "(real-move 1 0)", "(real-box 4 0)",
-         "(real-load 0 2 3)", "(real-store 2 3 0)", "(real-unless< 0 1 0)", "(loop 7)", "(again 7)", "(again 1)", "(word-number 0 2)",
+         "(float-number 0 2)", "(float-number 1 (const 0))", "(float+ 0 0 1)", "(float-move 1 0)", "(float-box 4 0)",
+         "(float-load 0 2 3)", "(float-store 2 3 0)", "(float-unless< 0 1 0)", "(loop 7)", "(again 7)", "(again 1)", "(word-number 0 2)",
          "(word-move 1 (const 0))", "(word+ 0 0 1)", "(word-shl 0 0 1)", "(word-box 4 0)", "(word-load8 0 2 1)",
-         "(word-load64 0 2 1)", "(word-store8 2 1 0)", "(word-store64 2 1 0)", "(real-load-at 0 2 1)",
-         "(real-store-at 2 1 0)", "(word-unless< 0 1 0)", "(word-unless-u>= 0 (const 0) 0)", "(word-from-real 0 0)",
-         "(real-from-word 0 0)"]
+         "(word-load64 0 2 1)", "(word-store8 2 1 0)", "(word-store64 2 1 0)", "(float-load-at 0 2 1)",
+         "(float-store-at 2 1 0)", "(word-unless< 0 1 0)", "(word-unless-u>= 0 (const 0) 0)", "(word-from-float 0 0)",
+         "(float-from-word 0 0)"]
 
 
 def parse(text):
@@ -179,7 +179,7 @@ def main():
         binary = os.path.join(d, 'fuzz')
         with open(os.path.join(d, 'prelude.shen'), 'w') as f:
             f.write(PRELUDE + f'(shen-jit.save-executable "{binary}" [])\n')
-        subprocess.run([BIN, 'eval', '-l', 'lib/native.shen', '-l', os.path.join(d, 'prelude.shen')],
+        subprocess.run([BIN, 'eval', '-m', 'native', '-l', os.path.join(d, 'prelude.shen')],
                        check=True, capture_output=True)
         for start in range(0, total, BATCH):
             cases = [mutate(parse(r.choice(BASES)), r) for _ in range(min(BATCH, total - start))]

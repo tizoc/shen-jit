@@ -1,6 +1,6 @@
 \* Tests of lib/datalog.shen. Fixtures whose answers are written by hand, errors, and the engine
    against the plain definition over generated programs, under fixed and adaptive plans.
-   Usage: shen-jit eval -l lib/datalog.shen -l tests/datalog.shen *\
+   Usage: shen-jit eval -m datalog -l tests/datalog.shen *\
 
 (set dt.*checks* 0)
 (set dt.*failures* 0)
@@ -1359,7 +1359,7 @@
 (dt.raises "declared twice" "declared twice"
   (freeze (datalog.define dt.bad [[relation a [symbol]] [relation a [symbol]]])))
 (dt.raises "an unknown column type" "not a list of"
-  (freeze (datalog.define dt.bad [[relation a [real]]])))
+  (freeze (datalog.define dt.bad [[relation a [float]]])))
 (dt.raises "an operator as a name" "cannot name"
   (freeze (datalog.define dt.bad [[relation < [symbol]]])))
 (dt.raises "not an item" "neither"
@@ -1370,7 +1370,7 @@
   (freeze (datalog.run dt.dep [[imports a]])))
 (dt.raises "a fact's type" "in a column of type symbol"
   (freeze (datalog.run dt.dep [[imports a 1]])))
-(dt.raises "a fact's real" "in a column of type integer"
+(dt.raises "a fact's float" "in a column of type integer"
   (freeze (datalog.run dt.reach [[edge 1 (+ 0.5 0.5)]])))
 (dt.raises "no such program" "no program"
   (freeze (datalog.run dt.nope [])))
@@ -1398,7 +1398,7 @@
 (dt.raises "a base type redeclared" "cannot name a type"
   (freeze (datalog.define dt.bad [[type integer [k integer]]])))
 (dt.raises "an unknown field type" "not a list of"
-  (freeze (datalog.define dt.bad [[type t [k real]]])))
+  (freeze (datalog.define dt.bad [[type t [k float]]])))
 (dt.raises "ordering records" "orders integers"
   (freeze (datalog.define dt.bad [[type t [k integer]] [relation a [t]] [rule [a [var "X"]] [[a [var "X"]] [< [var "X"] [k 1]]]]])))
 (dt.raises "a fact's record" "in a column of type t"

@@ -1,14 +1,17 @@
-\\ Bounded synchronous HTTP(S) over the optional libcurl adapter. Load ffi, buffer and io first.
+\\ Bounded synchronous HTTP(S) over the optional libcurl adapter. Module curl.
 \\ A client is single-owner; the adapter rejects concurrent request/close on the same handle.
 
 (shen.x.namespace curl
   (use buffer)
   (use io)
+  (use option)
+  (use result)
+  (import result ok err)
   (use shen-jit)
   (import struct defstruct)
   (externals [body-limit ca-file callback chunk-size connect-timeout curl define-foreign
-    define-foreign-procedure header-limit int32 ok proxy redirect-limit request request-limit
-    timeout write written])
+    define-foreign-procedure header-limit int32 proxy redirect-limit request request-limit
+    timeout write])
   (shadow get input open trim-left trim-right version)
   (export *adapter-files* body body-length client curl.close => close elapsed fetch get get-to
     header-values headers open option raw-headers raw-trailers redirects curl.request => request
@@ -63,21 +66,21 @@
          Saved (client.closed Client)
       (if (not (empty? Saved))
           Saved
-          (let Result (trap-error (do (c-close P (function invalidate)) [ok])
-                         (/. X [error (io.error close "curl client" (error-to-string X))]))
+          (let Result (trap-error (do (c-close P (function invalidate)) (:ok []))
+                         (/. X (:err (io.error close "curl client" (error-to-string X)))))
             (do (if (= (shen-jit.pointer-address P) 0) (client.closed-> Client Result) true)
                 Result)))))
 
 (define scope-result
-  [ok Value] -> [ok Value]
-  [error Error] -> (if (io.error? Error) [error Error] (error "curl: invalid callback error"))
-  _ -> (error "curl: callback must return [ok Value] or [error Error]"))
+  (:ok Value) -> (:ok Value)
+  (:err Error) -> (:err (io.scope-error Error "curl: invalid callback error"))
+  _ -> (error "curl: callback must return (:ok Value) or (:err Error)"))
 
 (define with-client
   F ->
     (let Client (open)
          Result (trap-error (scope-result (F Client))
-                  (/. X [error (io.error callback "curl client" (error-to-string X))]))
+                  (/. X (:err (io.error callback "curl client" (error-to-string X)))))
       (io.finish Result (curl.close Client))))
 
 (define option-index
@@ -134,20 +137,6 @@
          N (shen-jit.bytes-length B)
          _ (if (<= N Maximum) true (error "curl: text exceeds limit"))
       (do (no-nul B 0 N) Text)))
-
-(define lower-byte
-  B -> (if (and (>= B 65) (<= B 90)) (+ B 32) B))
-
-(define lower
-  Text ->
-    (let B (shen-jit.string->bytes Text)
-         _ (lower-bytes B 0 (shen-jit.bytes-length B))
-      (shen-jit.bytes->string B 0 (shen-jit.bytes-length B))))
-
-(define lower-bytes
-  _ At At -> true
-  B At End -> (do (shen-jit.u8! B At (lower-byte (shen-jit.u8 B At)))
-                  (lower-bytes B (+ At 1) End)))
 
 (define url-check
   URL ->
@@ -227,13 +216,13 @@
          URL (<-address Input 1)
       (trap-error (completed URL (c-request P (<-address Input 0) URL
                                        (<-address Input 2) (<-address Input 3) (<-address Input 4)))
-        (/. X [error (io.error request URL (error-to-string X))]))))
+        (/. X (:err (io.error request URL (error-to-string X)))))))
 
 \\ A transfer whose fields do not parse still counts the body bytes it accepted.
 (define completed
   URL Native ->
     (trap-error (result URL Native)
-      (/. X [error (io.progress (io.error request URL (error-to-string X)) (<-address Native 3))])))
+      (/. X (:err (io.progress (io.error request URL (error-to-string X)) (<-address Native 3))))))
 
 (define curl.request
   Client Method URL Fields Body Options ->
@@ -246,46 +235,45 @@
 
 (defstruct response
   (printer show-response)
-  status
-  url
-  (mutable body)
-  headers
-  trailers
-  raw-headers
-  raw-trailers
-  elapsed
-  redirects
-  (mutable body-length))
+  (status : number)
+  (url : string)
+  (mutable body : (option.t buffer.view))
+  (headers : (list (list string)))
+  (trailers : (list (list string)))
+  (raw-headers : buffer.view)
+  (raw-trailers : buffer.view)
+  (elapsed : number)
+  (redirects : number)
+  (mutable body-length : fixnum))
+
+(preclude [response.%match])
 
 (define result
   URL Native ->
     (if (= (<-address Native 0) 0)
         (let Head (buffer.wrap (<-address Native 7))
              Trailers (buffer.wrap (<-address Native 8))
-          [ok (:response
+          (:ok (:response
                 status <- (<-address Native 4)
                 url <- (<-address Native 5)
-                body <- (buffer.wrap (<-address Native 6))
+                body <- [(buffer.wrap (<-address Native 6))]
                 headers <- (parse-fields Head true)
                 trailers <- (parse-fields Trailers false)
                 raw-headers <- Head
                 raw-trailers <- Trailers
                 elapsed <- (<-address Native 9)
                 redirects <- (<-address Native 10)
-                body-length <- (shen-jit.bytes-length (<-address Native 6)))])
-        [error (io.progress (io.native-error request
+                body-length <- (shen-jit.bytes-length (<-address Native 6)))))
+        (:err (io.progress (io.native-error request
                              (cond ((element? (<-address Native 1) [2 3]) limit)
                                    ((= (<-address Native 0) 28) timeout)
                                    (true curl))
-                             (<-address Native 0) URL (<-address Native 2)) (<-address Native 3))]))
+                             (<-address Native 0) URL (<-address Native 2)) (<-address Native 3)))))
 
 (define fetch
   Method URL Fields Body Options ->
     (let Input (request-input Method URL Fields Body Options)
       (with-client (/. Client (perform Client Input)))))
-
-(define get
-  URL Options -> (fetch "GET" URL [] (buffer.new 0) Options))
 
 \\ Streaming state: current sink, bytes accepted by it, first error. Only one chunk is live here.
 (define show-sink-state
@@ -301,14 +289,14 @@
   R Count -> (do (response.body-> R []) (response.body-length-> R Count) R))
 
 (define sink-result
-  [ok Sink] -> [ok (io.endpoint-check Sink)]
-  [error Error] -> (if (io.error? Error) [error Error] (error "curl: invalid sink error"))
-  _ -> (error "curl: sink opener must return [ok Endpoint] or [error Error]"))
+  (:ok Sink) -> (:ok (io.endpoint-check Sink))
+  (:err Error) -> (if (io.error? Error) (:err Error) (error "curl: invalid sink error"))
+  _ -> (error "curl: sink opener must return (:ok Endpoint) or (:err Error)"))
 
 (define stream-opened
-  State [ok Sink] ->
+  State (:ok Sink) ->
     (do (sink-state.sink-> State Sink) (io.check Sink write []) true)
-  State [error Error] -> (do (sink-state.failure-> State Error) false))
+  State (:err Error) -> (do (sink-state.failure-> State Error) false))
 
 (define stream-write
   State Bytes ->
@@ -319,14 +307,14 @@
   State View At End ->
     (let Sink (sink-state.sink State)
          Result (trap-error (io.write-some Sink (buffer.slice View At (- End At)) [])
-                  (/. X [error (io.error write (io.endpoint.name Sink) (error-to-string X))]))
+                  (/. X (:err (io.error write (io.endpoint.name Sink) (error-to-string X)))))
       (stream-written State View At End Result)))
 
 (define stream-written
-  State View At End [written N] ->
+  State View At End (:ok N) ->
     (do (sink-state.written-> State (+ (sink-state.written State) N))
         (stream-write-loop State View (+ At N) End))
-  State _ _ _ [error Error] -> (do (sink-state.failure-> State Error) false))
+  State _ _ _ (:err Error) -> (do (sink-state.failure-> State Error) false))
 
 (define stream-event
   State _ _ [] Bytes -> (stream-write State Bytes)
@@ -335,7 +323,7 @@
       (sink-result (Open (stream-mark (stream-head (result URL Native)) 0)))))
 
 (define stream-head
-  [ok R] -> R)
+  (:ok R) -> R)
 
 (define stream-deliver
   State Open URL Native Bytes ->
@@ -343,8 +331,8 @@
       (/. X (do (sink-state.failure-> State (io.error callback URL (error-to-string X))) false))))
 
 (define stream-completed
-  State [ok R] -> [ok (stream-mark R (sink-state.written State))]
-  State [error Error] -> [error (io.progress Error (sink-state.written State))])
+  State (:ok R) -> (:ok (stream-mark R (sink-state.written State)))
+  State (:err Error) -> (:err (io.progress Error (sink-state.written State))))
 
 (define stream-perform
   Client Input Open State ->
@@ -352,20 +340,20 @@
          URL (<-address Input 1)
          Native (trap-error
                   (result URL (c-stream P Input (/. Head Bytes (stream-deliver State Open URL Head Bytes))))
-                  (/. X [error (io.error request URL (error-to-string X))]))
+                  (/. X (:err (io.error request URL (error-to-string X)))))
          Error (sink-state.failure State)
-      (stream-completed State (if (empty? Error) Native [error Error]))))
+      (stream-completed State (if (empty? Error) Native (:err Error)))))
 
 (define request-to
   Client Method URL Fields Body Sink Options ->
     (do (live Client) (io.check Sink write [])
         (stream-perform Client (input Method URL Fields Body (stream-options Options))
-          (/. Head [ok Sink]) (sink-state.make [] 0 []))))
+          (/. Head (:ok Sink)) (sink-state.make [] 0 []))))
 
 (define stream-close
-  [] -> [ok]
+  [] -> (:ok [])
   Sink -> (trap-error (io.close Sink)
-            (/. X [error (io.error close "curl sink" (error-to-string X))])))
+            (/. X (:err (io.error close "curl sink" (error-to-string X))))))
 
 (define request-with-sink
   Client Method URL Fields Body Open Options ->
@@ -380,7 +368,7 @@
     (let _ (io.check Sink write [])
          Input (input "GET" URL [] (buffer.new 0) (stream-options Options))
       (with-client
-        (/. Client (stream-perform Client Input (/. Head [ok Sink]) (sink-state.make [] 0 []))))))
+        (/. Client (stream-perform Client Input (/. Head (:ok Sink)) (sink-state.make [] 0 []))))))
 
 \\ Parse only the final status block; native callbacks retain trailers separately.
 (define find-byte
@@ -433,98 +421,50 @@
   [[Name Value] | Rest] Text -> [[Name (cn Value (cn " " Text))] | Rest]
   _ _ -> (error "curl: response continuation without a field"))
 
-(define response-check
-  R -> (if (response? R) R (error "curl: not a response")))
-
-(define status
-  R -> (response.status (response-check R)))
-(define url
-  R -> (response.url (response-check R)))
-(define body
-  R -> (let Body (response.body (response-check R))
-         (if (empty? Body) (error "curl: response body was streamed") Body)))
-(define streamed?
-  R -> (empty? (response.body (response-check R))))
-(define body-length
-  R -> (response.body-length (response-check R)))
-(define headers
-  R -> (response.headers (response-check R)))
-(define trailers
-  R -> (response.trailers (response-check R)))
-(define raw-headers
-  R -> (response.raw-headers (response-check R)))
-(define raw-trailers
-  R -> (response.raw-trailers (response-check R)))
-(define elapsed
-  R -> (response.elapsed (response-check R)))
-(define redirects
-  R -> (response.redirects (response-check R)))
-
-(define field-values
-  [] _ -> []
-  [[Name Value] | Rest] Name -> [Value | (field-values Rest Name)]
-  [_ | Rest] Name -> (field-values Rest Name))
-
-(define header-values
-  R Name -> (field-values (headers R) (lower Name)))
-
 (datatype t
-  N : number;
-  =============================
+  N : fixnum;
+  _____________________________
   [request-limit N] : option;
-  N : number;
-  =============================
+  N : fixnum;
+  _____________________________
   [body-limit N] : option;
-  N : number;
-  =============================
+  N : fixnum;
+  _____________________________
   [header-limit N] : option;
   N : number;
-  =============================
+  _____________________________
   [timeout N] : option;
   N : number;
-  =============================
+  _____________________________
   [connect-timeout N] : option;
   N : number;
-  =============================
+  _____________________________
   [redirect-limit N] : option;
   S : string;
-  =============================
+  _____________________________
   [ca-file S] : option;
   S : string;
-  =============================
+  _____________________________
   [proxy S] : option;
-  N : number;
-  =============================
+  N : fixnum;
+  _____________________________
   [chunk-size N] : option;)
 
 (declare version [--> string])
 (declare open [--> client])
-(declare curl.close [client --> io.close-result])
-(declare with-client [[client --> [io.result A]] --> [io.result A]])
+(declare curl.close [client --> [result.t [io.error * result.empty]]])
+(declare with-client [[client --> [result.t [io.error * A]]] --> [result.t [io.error * A]]])
 (declare curl.request
   [client --> [string --> [string --> [[list [list string]] -->
-    [buffer.view --> [[list option] --> [io.result response]]]]]]])
+    [buffer.view --> [[list option] --> [result.t [io.error * response]]]]]]]])
 (declare fetch
-  [string --> [string --> [[list [list string]] --> [buffer.view --> [[list option] --> [io.result response]]]]]])
-(declare get [string --> [[list option] --> [io.result response]]])
+  [string --> [string --> [[list [list string]] --> [buffer.view --> [[list option] --> [result.t [io.error * response]]]]]]])
 (declare request-to
   [client --> [string --> [string --> [[list [list string]] --> [buffer.view -->
-    [io.endpoint --> [[list option] --> [io.result response]]]]]]]])
+    [io.endpoint --> [[list option] --> [result.t [io.error * response]]]]]]]]])
 (declare request-with-sink
   [client --> [string --> [string --> [[list [list string]] --> [buffer.view -->
-    [[response --> [io.result io.endpoint]] --> [[list option] --> [io.result response]]]]]]]])
-(declare get-to [string --> [io.endpoint --> [[list option] --> [io.result response]]]])
-(declare status [response --> number])
-(declare url [response --> string])
-(declare body [response --> buffer.view])
-(declare streamed? [response --> boolean])
-(declare body-length [response --> number])
-(declare headers [response --> [list [list string]]])
-(declare trailers [response --> [list [list string]]])
-(declare raw-headers [response --> buffer.view])
-(declare raw-trailers [response --> buffer.view])
-(declare elapsed [response --> number])
-(declare redirects [response --> number])
-(declare header-values [response --> [string --> [list string]]])
+    [[response --> [result.t [io.error * io.endpoint]]] --> [[list option] --> [result.t [io.error * response]]]]]]]]])
+(declare get-to [string --> [io.endpoint --> [[list option] --> [result.t [io.error * response]]]]])
 
 )

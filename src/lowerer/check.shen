@@ -28,9 +28,9 @@
 
 (set *hush* true)
 (load "src/lowerer/host.shen")
-(load "build/tools/lower.shen")
 (load "build/tools/namespaces.shen")
 (stage0.namespaces.initialise)
+(load "build/tools/lower.shen")
 (load "build/tools/native.shen")
 (set *hush* false)
 (set *maximum-print-sequence-size* 100000)
@@ -56,8 +56,8 @@
   Forms -> (mapcan (/. X (if (and (cons? X) (= (hd X) defun)) [X] [])) Forms))
 
 \\ ---------------------------------------------------------------------------
-\\ A reader for the stage 0 syntax (see stage0.shen), on bytes. Reals stay as
-\\ [shen-jit.check.real Text] and are compared by their printed form.
+\\ A reader for the stage 0 syntax (see stage0.shen), on bytes. Floats stay as
+\\ [shen-jit.check.float Text] and are compared by their printed form.
 
 (define shen-jit.check.read-sbc
   Path -> (shen-jit.check.read-all (read-file-as-bytelist Path)))
@@ -108,7 +108,7 @@
                    ((= Text "false") false)
                    ((not (shen-jit.check.numeric? Bytes)) (intern Text))
                    ((shen-jit.check.integer-text? Bytes) (shen-jit.check.integer Bytes))
-                   (true [shen-jit.check.real Text]))))
+                   (true [shen-jit.check.float Text]))))
 
 (define shen-jit.check.digit?
   B -> (and (>= B 48) (<= B 57)))
@@ -135,8 +135,8 @@
   [B | Bs] N -> (shen-jit.check.digits Bs (+ (* 10 N) (- B 48))))
 
 (define shen-jit.check.same?
-  [shen-jit.check.real T] X -> (and (number? X) (= (str X) T))
-  X [shen-jit.check.real T] -> (and (number? X) (= (str X) T))
+  [shen-jit.check.float T] X -> (and (number? X) (= (str X) T))
+  X [shen-jit.check.float T] -> (and (number? X) (= (str X) T))
   [X | Xs] [Y | Ys] -> (and (shen-jit.check.same? X Y) (shen-jit.check.same? Xs Ys))
   X Y -> (and (number? Y) (= (str X) (str Y))) where (number? X)
   X Y -> (= X Y))
@@ -146,7 +146,7 @@
 \\ and a parameter it has overwritten is read only as a tail call's argument.
 
 (define shen-jit.check.literal?
-  [shen-jit.check.real _] -> true
+  [shen-jit.check.float _] -> true
   [X | Xs] -> (and (shen-jit.check.literal? X) (shen-jit.check.literal? Xs))
   X -> (stage0.lower.literal? X))
 
@@ -379,20 +379,27 @@
 \\ Inlining: a call to a sealed g with an inline body becomes the body. The
 \\ argument goes to a fresh variable, then to g's parameter, both sharing its
 \\ slot, as any let of one variable to another does. Recursive bodies,
-\\ closures and real literals are never inlined.
+\\ closures and float literals are never inlined.
 (define shen-jit.check.inline-units
-  -> (do (set shen-jit.host.sealed [g])
-         (set shen-jit.host.inline [[g [y] [cons y y]]])
+  -> (do (set shen-jit.host.sealed [g k p])
+         (set shen-jit.host.inline [[g [y] [cons y y]] [k [x h] [h x]] [p [h] [cons h h]]])
          (shen-jit.check.unit ["(defun f (X) (g (hd X)))" [[g | 1]]
                                  "(code f 1 5 () ((prim 3 hd 2) (prim 4 cons 3 3) (return 4)) ())"])
+         \\ A lambda argument the body only applies is applied where it is written: no closure.
+         (shen-jit.check.unit ["(defun f (X) (k (hd X) (lambda Y (cons Y X))))" [[k | 2]]
+                                 "(code f 1 5 () ((prim 3 hd 2) (prim 4 cons 3 2) (return 4)) ())"])
+         \\ One the body uses as a value stays a closure.
+         (shen-jit.check.unit ["(defun f (X) (p (lambda Y (cons Y X))))" [[p | 1]]
+                                 "(code f 1 5 () ((closure 3 0 2) (prim 4 cons 3 3) (return 4))
+                                    ((code lambda 1 5 () ((capture 4 0) (prim 3 cons 2 4) (return 3)) ())))"])
          (shen-jit.check.unit ["(defun f (X) (let Y X (let Z Y (cons Z Y))))" []
                                  "(code f 1 4 () ((prim 3 cons 2 2) (return 3)) ())"])
          (shen-jit.host.set-tables [])
          (shen-jit.check.assert (= [[] [[y] [lambda z y]] [] [[y] [cons y 2]]]
-                                     [(stage0.lower.inline-form g [y] [g y])
-                                      (stage0.lower.inline-form g [y] [lambda z y])
-                                      (stage0.lower.inline-form g [y] [cons y 1.5])
-                                      (stage0.lower.inline-form g [y] [cons y 2])])
+                                     [(stage0.lower.inline-form g [y] [g y] true)
+                                      (stage0.lower.inline-form g [y] [lambda z y] true)
+                                      (stage0.lower.inline-form g [y] [cons y 1.5] true)
+                                      (stage0.lower.inline-form g [y] [cons y 2] true)])
                                   "unit" "inline bodies" g)))
 
 \\ A defun's code ends with its inline body; the units compare the rest.
@@ -417,12 +424,11 @@
 
 (define shen-jit.check.all
   In Out
-  -> (let Read (map (/. F [(hd F) | (shen-jit.check.defuns (read-from-string-unprocessed
-                                                                  (read-file-as-string (hd (tl F)))))])
+  -> (let Read (map (/. F [(hd F) | (shen-jit.check.defuns (shen-jit.host.read-kl (hd (tl F))))])
                       (append (map (/. F [F (cn In (cn F ".kl"))]) (shen-jit.check.files))
                               [["shen-jit" "build/port/shen-jit.kl"]
                                ["lower" "build/port/lower.kl"]]))
-          Inputs (shen-jit.check.select-overrides Read)
+          Inputs (shen-jit.host.select-overrides Read)
           Defuns (mapcan (/. I (tl I)) Inputs)
           Sealed (map (/. D (hd (tl D))) Defuns)
           Arities (map (/. D (put (hd (tl D)) shen-jit.check.arity (length (hd (tl (tl D))))))
@@ -432,15 +438,6 @@
           Units (shen-jit.host.set-tables [])
        (do (shen-jit.check.run-units)
            (output "~A failures~%" (value shen-jit.check.*failures*)))))
-
-\\ As stage 0: a port defun replaces the kernel defun of the same name.
-(define shen-jit.check.select-overrides
-  Inputs -> (let Port (mapcan (/. I (if (= (hd I) "shen-jit") (tl I) [])) Inputs)
-                 Names (map (/. D (hd (tl D))) Port)
-              (map (/. I (if (= (hd I) "shen-jit")
-                             I
-                             [(hd I) | (stage0.filter (/. D (not (element? (hd (tl D)) Names))) (tl I))]))
-                   Inputs)))
 
 (define shen-jit.check.compare-file
   [File | Defuns] Out Sealed

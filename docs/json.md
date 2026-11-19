@@ -1,8 +1,8 @@
 # JSON
 
 [lib/json.shen](../lib/json.shen) decodes and encodes complete UTF-8 JSON values over
-[buffers](buffers.md). Load `buffer.shen`, `grammar.shen` and `json.shen` under `(tc -)` before checking clients
-with `(tc +)`. They work in static builds and have no FFI, kernel-stream or I/O dependency. The decoder is a
+[buffers](buffers.md). Load the module `json` before checking clients
+with `(tc +)`. They work in static builds and need no FFI or kernel streams. The decoder is a
 [grammar](grammar.md) of RFC 8259. An application
 can obtain its bounded input view from our [I/O readers](io.md) or [HTTP bodies](http.md).
 
@@ -18,7 +18,7 @@ value with optional JSON whitespace before/after it. They reject trailing values
 syntax. Text syntax follows [RFC 8259](https://www.rfc-editor.org/rfc/rfc8259.html), with strict UTF-8,
 paired surrogate escapes and duplicate-key rejection. A BOM is rejected.
 
-`json.read Reader Options` reads one value from an [I/O reader](io.md) as it arrives, with `io.shen` loaded:
+`json.read Reader Options` reads one value from an [I/O reader](io.md) as it arrives:
 the whitespace before it and the value, leaving what follows unread, so concatenated or newline-delimited
 values need no framing.
 
@@ -27,12 +27,17 @@ values need no framing.
   [(json.read R []) (json.read R []) (json.read R []) (json.read R [])])
 ```
 
-This returns `[ok [object ["n" [number "1"]]]]`, `[ok [[number "2"]]]`, `[ok [number "3"]]` and `[eof]`.
-It gives `[error Error]` when the reader fails, and raises for a syntax error as `json.decode` does, with an
+This returns `(:result.ok [[object ["n" [number "1"]]]])`, `(:result.ok [[[number "2"]]])`,
+`(:result.ok [[number "3"]])` and `(:result.ok [])`. An empty JSON array gives `(:result.ok [[]])`.
+It gives `(:result.err Error)` when the reader fails, and raises for a syntax error as `json.decode` does, with an
 offset counted in the stream, or `"input ended"` when the input stops inside a value. The value must fit
 the reader's capacity, which takes the place of `byte-limit`; `depth-limit` applies. In typed code its
-type is `io.reader --> (list json.option) --> (grammar.read-result json.value)`, as [grammar](grammar.md#types)
-gives it.
+type is `io.reader --> (list json.option) --> (io.result (option.t json.value))`.
+
+In typed code, `json.from-string`, `json.from-number`, and `json.from-array` construct
+`json.value` values directly. String, number, and array literals also work where the expected
+type is already `json.value`. For example, use
+`[(json.from-string "count") (json.from-number 7)]` when the element type of a mixed list is open.
 
 ## Values and numbers
 
@@ -57,7 +62,7 @@ exponents, negative zero and trailing fractional zeros remain lossless tokens. `
 validates a complete number token and constructs that value. `json.integer Value` explicitly converts
 an ordinary decimal integer token to an exact fixnum, including its smallest negative value. Fractional
 or exponent forms and out-of-range integers raise; `-0` converts to integer zero. It also accepts an
-existing native fixnum. Approximate real conversion is a separate application choice.
+existing native fixnum. Approximate float conversion is a separate application choice.
 
 ```shen
 (let Exact (json.number "123456789012345678901234567890.00e+99")
@@ -67,7 +72,7 @@ existing native fixnum. Approximate real conversion is a separate application ch
 
 This returns the original number spelling and integer 42. The encoder also accepts native Shen numbers
 for convenient application construction. It validates their printed number syntax and rejects NaN and
-infinities. A native real already has the precision of its stored value; use a token when its original
+infinities. A native float already has the precision of its stored value; use a token when its original
 text matters.
 
 ## Encoding and limits

@@ -1,0 +1,1 @@
+(shen.module (version 1) (name rules-own) (sources tc- "rules-own-a.shen" tc+ "rules-own-b.shen"))

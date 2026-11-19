@@ -1,6 +1,6 @@
 # Shen/JIT instructions and frames
 
-The lowerer ([src/lowerer/lower.shen](../src/lowerer/lower.shen)), written in Shen, turns
+The lowerer ([src/lowerer/](../src/lowerer/README.md)), written in Shen, turns
 KLambda into the symbolic instructions
 below. They are plain Shen lists, so the same form serves as the stage 0 file
 (printed as text) and as the value `eval-kl` passes to the `shen-jit.install` primitive
@@ -63,7 +63,7 @@ such as an unchanged parameter, costs nothing.
 
 A stage 0 file is a sequence of `(defun Name Code)` forms, one per line, in
 ASCII. Lists use parentheses; strings escape `"` and `\` with a backslash and
-every byte outside 32–126 as `\xHH`; reals always contain `.` or `e`; and no
+every byte outside 32–126 as `\xHH`; floats always contain `.` or `e`; and no
 symbol is printed in a form that reads as a number. A non-`defun` expression
 lowered for `eval-kl` is a code object of arity 0 named `eval-kl`.
 
@@ -104,6 +104,15 @@ Primitive names are the 39 KLambda primitives, except `eval-kl` (see below),
 plus:
 
 - `raise-cond`: arity 0, raises the "no clause applies" error for `cond`;
+- `shen-jit.field`: arity 2, `(prim D shen-jit.field O (const K))`, element K of the vector in O, read
+  with no check, for a typechecked call of a struct's reader (see the lowering rules). Only the
+  lowerer makes it, and it is no function; the checker of code written by hand refuses it. With an
+  index that is not a small constant, it reads as `<-address`;
+- `shen-jit.struct-ref`: arity 3, `(shen-jit.struct-ref R K N)`, element K of R, a struct of N elements, its
+  tag among them, which a struct's reader is: read as `<-address` reads it, but testing that R is a vector of
+  at least N elements, so that one shorter raises `struct: R is shorter than its struct` though K is in it. The
+  JIT then knows the slot holds every field, as it knows a pair after `cons?`, and the struct's next reads of
+  it, with constant K and N, are one load each;
 - `shen-jit.install`: arity 1, the port primitive behind `eval-kl`. It takes
   `(defun F Code)`, publishes F and returns it, or a code object, and returns a
   closure of it. Nothing is published unless the whole definition was built.
@@ -147,10 +156,11 @@ plus:
   handle the pointers such functions pass around, and `shen-jit.errno`, `shen-jit.c-errno` (arity 0) what
   the last one left. `shen-jit.pointer-sized` (arity 2) states a length, `shen-jit.pointer!` (arity 3) stores an address, and `shen-jit.pointer-read-only` (arity 1) marks one against stores. `shen-jit.pointer-guard` (arity 2), `shen-jit.pointer-owner` (arity 1) and `shen-jit.pointers-dead` (arity 0)
   tell Shen when a pointer has died, and `shen-jit.collect` (arity 0) collects. [ffi.md](ffi.md) has their use.
-- `shen-jit.fixnum?`: arity 1, true exactly for immediate integers, excluding boxed reals even when
+  `shen-jit.pointer?` is inline, a test of the object's type, and fuses with a branch like the other type tests.
+- `shen-jit.fixnum?`: arity 1, true exactly for immediate integers, excluding boxed floats even when
   integral. The value codec uses this representation test; the JIT emits a tag check.
 - `shen-jit.integer?`: arity 1, the kernel's `integer?` as a primitive: true of a fixnum and of a
-  real with no fraction.
+  float with no fraction.
 - `shen-jit.vector?`: arity 1, the kernel's `vector?` without its
   `trap-error`: true for an absvector with at least one element whose element
   0 is a number at least 0. The port's `vector?` and `shen.+vector?` use it.
@@ -200,8 +210,30 @@ plus:
   `shen-jit.shift-right`, `shen-jit.rotate32` (2), `shen-jit.bit-not`,
   `shen-jit.bswap32`, `shen-jit.popcount`, `shen-jit.clz` and `shen-jit.ctz` (1): bit
   operations, below.
+- `shen-jit.float`: arity 1, a number as a float: an integer converted, a float as it is, and anything
+  else raising "X is not a number". Compiled code passes a float on at once, and of a number literal
+  the lowerer makes the float a constant. The module `numbers`
+  defines `float`, `fx->fl` and its float operators with it, which unboxed code reads into a float
+  register (see the lowering rules).
+- `shen-jit.truncate`: arity 1, a number truncated towards zero, as a fixnum: a fixnum is itself, and a float
+  outside the fixnums, a NaN or an infinity among them, raises "integer overflow". The module `numbers`
+  defines `fl->fx` as it; unboxed code computes it with `fix-from-float` (see the lowering rules).
+- `shen-jit.quotient` and `shen-jit.remainder`: arity 2, of two fixnums, truncating towards zero, the
+  remainder having the dividend's sign; zero as divisor raises "division by zero", and the least fixnum
+  by -1 "integer overflow". The module `numbers` defines `fxquotient` and `fxremainder` as them.
+- `shen-jit.sqrt`: arity 1, a number's square root, a float, raising as `shen-jit.float` does. The
+  module `numbers` defines `flsqrt` as it; unboxed code computes it with `float-sqrt`.
+- `shen-jit.word-op`: arity 3, a symbol naming an operation on 64-bit words, which wraps, and its two
+  operands, the second ignored by those of one. A word is a byte buffer of 8 bytes, little-endian, and the
+  result a new one: `wof` of a fixnum, `wfixnum` and `wfloat` of a word, the fixnum, raising "integer
+  overflow" for a word that is no fixnum, and the float, `wget` of bytes and a byte index, `w+`, `w-`, `w*`,
+  `wand`, `wor` and `wxor` of two words, `wshl`, `wshr`, `wsar`, `wrotl` and `wrotr` of a word and a count
+  taken modulo 64, and `w<`, `w<=`, `wu<` and `wu<=`, a Boolean. An operand of another kind raises "X is
+  not a word" or "X is not an integer", or, for `wget`, as the byte primitives do, and another symbol
+  "shen-jit.word-op: X is not an operation". The module `word` defines its functions with it; unboxed code computes it
+  in word registers (see the lowering rules).
 - `shen-jit.decimal`: arity 2, a string holding a decimal number, which may have an
-  exponent, and a power of ten to scale it by. It gives the nearest real, for the reader's
+  exponent, and a power of ten to scale it by. It gives the nearest float, for the reader's
   literals past the fixnum range.
 
 `input+` is not a primitive; the port defines it.
@@ -220,8 +252,8 @@ does not scan. It lives in the heap like a string, so:
 A pointer with a length is memory outside the heap ([ffi.md](ffi.md)), and all of these except
 `bytes?` and `string->bytes` take one in place of a buffer, with the same checks against its
 length. `u8`, `u16`, `u32`, `s32`, `f64`, `bytes-length` and the stores `u8!`, `u16!`, `u32!` and `f64!` compile
-inline for both; the others call C for both. `f64` allocates where it reads, and its real holds the word as it
-is in memory, so it takes no floating point. `f64!` takes a real inline, and leaves an integer to C. A read-only
+inline for both; the others call C for both. `f64` allocates where it reads, and its float holds the word as it
+is in memory, so it takes no floating point. `f64!` takes a float inline, and leaves an integer to C. A read-only
 pointer differs in its header, which a store tests whole, so no other access pays for it. So does a shared buffer
 or vector (`isolate.share`), by a bit of its header's type field: a store tests the whole byte and sends one to C,
 which refuses it, and a read masks the bit out, as it masks a string's type, with no more instructions. Only
@@ -245,7 +277,7 @@ where they are few, as on x86-64. They hold until C runs, as only C can collect 
 | `(shen-jit.bytes? X)`, `(shen-jit.bytes-length B)` | Whether X is a buffer; B's length. |
 | `(shen-jit.u8 B I)`, `u16`, `u32` | The unsigned value at byte offset I, little-endian, at any alignment. |
 | `(shen-jit.s32 B I)`, `s64` | The signed value there. An `s64` that does not fit a fixnum raises. |
-| `(shen-jit.f32 B I)`, `f64` | The floating-point value there, as a new real. |
+| `(shen-jit.f32 B I)`, `f64` | The floating-point value there, as a new float. |
 | `(shen-jit.u8! B I X)`, `u16!`, `u32!` | Stores X at I and returns B. X must fit: 0 to 255 for `u8!`. |
 | `(shen-jit.s32! B I X)`, `s64!` | The same, signed. |
 | `(shen-jit.f32! B I X)`, `f64!` | The same for a number, rounded to fit. |
@@ -256,7 +288,7 @@ where they are few, as on x86-64. They hold until C runs, as only C can collect 
 
 `=` compares buffers by contents, as it does strings, and `shen-jit.hash` agrees.
 
-Bit operations work on a fixnum's 62 bits in two's complement. A real raises, even
+Bit operations work on a fixnum's 62 bits in two's complement. A float raises, even
 one with no fraction.
 
 | Form | Result |
@@ -327,7 +359,112 @@ the shifts. The others are calls to C.
   values. Every use but one copies the lambda, so the copies may add 1,500
   nodes of normalised code at most; normalisation works from the inside out,
   so an outer lambda is measured with its inner ones already copied.
-- `(type X T)` is X; T is not evaluated.
+- A call to a sealed function inlined with an argument `(lambda P1 ... (lambda Pn E))` whose parameter the
+  body only applies to n arguments, as `(define then X F -> (F X))` does, is the same: each application
+  becomes `(let P1 A1 ... (let Pn An E))`, under the same conditions, and no parameter of the function may name
+  a free variable of the lambda. Making a closure has no effects, so the lambda moves past the arguments
+  after it. A call to an open function binds each argument first, for the call it makes if the function was
+  redefined, so a lambda passed to one is still a closure.
+- `(type X T)` is X; T is not evaluated. They are taken out before anything else, unless `type` names a
+  variable there, so a definition the kernel's type annotator went through, as typed code is under
+  `(optimise +)`, lowers to the code it would without them, inline form included, but for floats below. The
+  port marks such a definition's body `(shen-jit.annotated Body)`; only there do the types count, and
+  elsewhere a type form is only taken out.
+- A definition with type annotations whose parameters include one annotated `(type P float)`, or that
+  has a float literal, `shen-jit.f64`, `shen-jit.float` or `shen-jit.sqrt`, or a parameter annotated
+  `(type P fixnum)` or `(type P word.t)`, or that has `float`, `fixnum` or `word.t` anywhere among its
+  annotations, keeps floats in float registers and fixnums and 64-bit words in word registers, unboxed:
+  - Each `float` parameter is read from its slot into a register on entry with `float-number`, checked
+    and converted as arithmetic would, so an integer becomes a float and anything else raises. Each
+    `fixnum` parameter is read with `word-number`, which raises for anything but a fixnum, and each
+    `word.t` parameter, a word of `lib/word.shen`, with `word-load64` from its 8 bytes.
+  - An expression gives a fixnum in a word register when it is a fixnum literal, a fixnum variable, or
+    `+`, `-`, `*`, `shen-jit.bit-and`, `shen-jit.bit-or` or
+    `shen-jit.bit-xor` over two of them, `shen-jit.shift-left` of one by a constant count up to 61 or
+    `shen-jit.shift-right` by one up to 63, a read of `shen-jit.u8`, `u16`, `u32` or `s32`, which is
+    `word-load8` and the others at a fixnum index, `shen-jit.truncate` of a float, which is
+    `fix-from-float`, or a `let`, `do` or `if` whose value does. Arithmetic is `fix+`, `fix-` and `fix*`, which raise "integer
+    overflow" as `+` does, and comparisons of two are `word-unless` jumps. `shen-jit.quotient` and
+    `shen-jit.remainder` are boxed, as any other primitive there. A shift right is `word-sar`; a shift left is `word-shl` by the count and 2 more, then `word-sar`
+    by 2, which drops what leaves the 62 bits, as the primitive does. Two sums of a fixnum variable `P`, as a loop's
+    steps, are `word+`, with no check: in the branch of an `if` where its test says that `P` is less
+    than another fixnum, `(< P E)` or `(> E P)` true, or `(>= P E)` or `(<= E P)` false, `P` plus a
+    constant that is not negative; and in the arguments of a loop's own call that read or write bytes
+    at `P` itself wherever they run, not under an `if`, `and`, `or` or closure, `P` plus another fixnum, as
+    the access succeeds only for `P` from 0 to the length. `E`, and the fixnum added to such a `P`, must
+    be exact, not possibly such a sum: a constant, a call's result, a checked primitive's, which is a
+    fixnum whatever it reads, a variable in a slot, or one in a register that no such sum, nor a bit
+    operation or shift of one, may have reached; a loop's parameter may be reached by what its own calls
+    pass it, or for an inlined loop what it starts with, unless they pass it on as it is. Either sum is exact in 64 bits, and cannot be
+    stepped so again without the test or the access finding it a fixnum; past the greatest fixnum it
+    raises where it is boxed, as `word-box` checks, or at the access, and comparisons see its value. The last sum or difference of
+    an index into bytes is `word+` or `word-`: of two fixnums it cannot leave 64 bits, and one that is no
+    fixnum is past the end of any bytes, so the access raises for it, where `+` would have raised
+    "integer overflow". A float computed from a fixnum takes it with `float-from-word`, and a read or a
+    store of a float at a fixnum index is `float-load-at` or `float-store-at`; at a fixnum X times 8, as `(fx* X 8)`
+    and `floats.get` give it, through the lets that inlining leaves, it is `float-load-index` or
+    `float-store-index` at X, which the access scales, so no product is computed or checked, and an X past the
+    doubles raises as an index past the end.
+  - An expression gives a 64-bit word in a word register when it is a `word.t` variable, a `let`, `do` or
+    `if` whose value does, or `(shen-jit.word-op Op X Y)`, with Op a constant, of words in registers
+    where the operation takes words, and of a fixnum in one where it takes a fixnum: `wof` of a fixnum,
+    which is its register, `wget` of bytes and a fixnum index, which is `word-load64`, or
+    `word-load-index` at X where the index is X times 8, as `words.get` gives it, `w+`, `w-` and
+    `w*`, which are `word+`, `word-` and `word*`, and `wand`, `wor`, `wxor`, `wshl`, `wshr`, `wsar`,
+    `wrotl` and `wrotr`, which are `word-and` and the others, a count taken modulo 64. `wfixnum` of a
+    word is a fixnum, `fix+` of it and 0, which raises "integer overflow" for a word that is no fixnum,
+    and `wfloat` a float, `float-from-word`. `w<`, `w<=`, `wu<` and `wu<=` of two words are `word-unless`
+    jumps, `-u` for the unsigned two, also as values, and `(shen-jit.copy-bytes B I W 0 8)`, W a word, is
+    `word-store64`, or `word-store-index` at X times 8. A word goes into a slot as 8 new bytes, `shen-jit.bytes` and then `word-store64`, as
+    the library boxes one.
+  - An expression gives a float when it is a float literal, a float variable, `+`, `-`, `*` or `/` of two
+    floats, `shen-jit.f64`, `shen-jit.float`, `shen-jit.sqrt`, or a `let`, `do` or `if` whose value
+    does. It is computed with the instructions on registers: arithmetic, `float-sqrt`, `float-load` for
+    `shen-jit.f64`. Division is `float-divide`, whose divisor of zero raises as `/` does. A `let` of one
+    binds a register. Arithmetic mixing a float with an integer is boxed, as `+` does it, so an integer
+    operand that is itself a sum of fixnums keeps its exact value and its overflow check; where a float is
+    needed, its result is then read with `float-number`.
+  - `<`, `>`, `<=`, `>=` and `=` of two floats are `float-unless` jumps, also as
+    values. Mixed comparisons stay boxed, preserving exact ordering when a fixnum cannot be represented
+    as a double. `(shen-jit.f64! M I V)`, V a float, is `float-store`;
+    `(shen-jit.u8! M I V)` and the other stores of a fixnum V at a fixnum I are `fix-store8` and the others, and
+    `shen-jit.s64!` is `word-store64`, or `word-store-index` at X times 8. A store for its value, the bytes, is the store, then them, so a store of a
+    store stays in registers too.
+  - A value is boxed, with `float-box` or `word-box`, only where it goes into a slot: returned, passed,
+    captured, or an operand of anything else. Registers are counted as a stack: those an expression
+    took for its own temporaries go back once it is done, and those a statement took, once it is. A
+    value that is a `let`, as an inlined body is, is computed into the first register free, and what its
+    variables took goes back once it is.
+  - A sealed call of a C function of one to three doubles giving a double, which `lib/ffi.shen` marks with
+    the property `shen-jit.foreign-floats` paired with that installed procedure, gives a float:
+    `(float-call1 R F A)`, `float-call2` or `float-call3`,
+    a call of the C function itself with the argument registers, which the JIT finds at the first call
+    as the stub does. C keeps nothing of the registers, which the JIT saves around it, and such a call
+    is no call of a function in the sense below.
+  - A tail call of the definition itself, sealed, goes back to a `loop` after the entry reads, with
+    `again`. An argument for a register is computed straight into its parameter's register when no
+    later argument reads that register, through the parameter or a variable bound to it, as a loop's
+    counters and sums are; otherwise into a new one, moved to its parameter's last. The others go to
+    their slots as for any named tail call. An argument that cannot raise or write, a variable, a
+    constant, a sum, difference or product of floats, or a sum of fixnums left unchecked, waits until
+    no other argument reads its register: a dot product's indices step in place after the sum that
+    reads them. The others keep their order, left to right.
+  - A loop inlined (below) is a `loop` of its own inside the caller's code. A parameter that its calls of
+    itself pass on as it is, given `true` or `false` there, is that constant in its body, so that a test of it
+    goes, in loops inlined into it too; `(if true X Y)` is X. Its parameters go to
+    registers of their kinds, or slots, of their own where its calls of itself change them; then come
+    the head and the body, whose tail calls of the loop's function go back to that head with `again`, as
+    above. Its other tail positions are the caller's tail positions when the loop is in one, and
+    otherwise exits: the value goes into a register, a slot, or nowhere, for its effect, and the code
+    jumps past the loop. An exit that calls `shen.f-error`, which raises, stays a tail call. What the loop
+    gives, a float, a fixnum or neither, is what its exits give.
+  - Registers keep nothing across a call of a function or into a handler, so if some way on from a
+    `call`, `call-sealed` or `call-value` reads or writes a register or goes back to a loop before it
+    leaves the definition, by a return, a tail call or `simple-error`, as the calls that make an error's
+    message do not, or the code has a `push-handler`, or computes nothing in a register, which would only
+    box what it read again, the definition is lowered as usual instead, its body normalised again with
+    no typed body or loop inlined, as those would only box their values. So is one needing more than 64
+    float or 16 word registers.
 - `(and A B)` and `(or A B)` short-circuit and must produce a Boolean. In value
   position they lower as `(if (and A B) true false)` and
   `(if (or A B) true false)`, whose tests become jumps; this also checks that B
@@ -382,15 +519,25 @@ the shifts. The others are calls to C.
     holds the symbol until the first call binds it.
 - A sealed call with as many arguments as the callee's parameters is inlined
   when the callee's code carries an `Inline` body. A body qualifies when it
-  is at most 15 nodes, has no handlers and no `eval-kl`, does not call its own
-  name and has no real literals. A closure it makes becomes one of the caller's own
-  lambdas, capturing the parameter's variable. An integer argument replaces its parameter
+  is at most 15 nodes, or 48 when it calls only primitives and such bodies, which it may then be at any
+  depth, has no handlers and no `eval-kl`, does not call its own name and, at stage 0, has no float
+  literals, as the host may print one with other last bits. A closure it makes becomes one of the caller's own
+  lambdas, capturing the parameter's variable. A number argument replaces its parameter
   in the body, unless a parameter is named `let` or `lambda`, so that `(vector 1)` lowers to `(absvector 2)` and a constant
-  length. The other arguments are bound to fresh variables, then the
+  length, and a float stays a constant of the code computing with it. A body that is then a constant,
+  with no parameter left, is that constant, which its caller takes as an operand. A definition with
+  type annotations whose code keeps values in registers carries `(Params Body typed)` instead when it
+  is not small, up to 800 nodes, or `(Params Body calling)` when that code calls on its way out,
+  inlined only into a definition that keeps values in registers: a typed body at any depth where the
+  callee is sealed, as its own code inlined all it calls and it cannot be redefined, and two levels
+  deep otherwise, and a calling body two levels deep, as its calls could reach it again. One whose code is a loop, its own tail calls,
+  carries `(Params Body loop Kinds)`, Kinds saying where each parameter goes, and such a definition
+  inlines it where the callee is sealed, two levels deep at most, as a loop of its own (above): its arguments stay arguments, and
+  its calls of itself stay calls, which the loop makes jumps. The other arguments are bound to fresh variables, then the
   parameters to those, and the body follows, normalised in its own scope. A
   fresh variable bound to a variable, and each parameter, share a slot with
   what they are bound to, so inlining adds no moves. Inlining nests two
-  levels at most. Stage 0 inlines too, so the kernel's calls to its own
+  levels at most, but for the bodies above that inline at any depth. Stage 0 inlines too, so the kernel's calls to its own
   small functions are inlined. Outside stage 0 the body's code is marked
   `(inline F N)`, so that backtraces still show F.
 - A call to an open F with such a body is inlined too, behind `(if
@@ -414,6 +561,12 @@ the shifts. The others are calls to C.
   `defun` that is not at top level) raise an error. So does a `defun` of a
   fixed name, except that stage 0 lowers the kernel's own definitions of `do`,
   `thaw` and `protect`.
+- In a definition with type annotations, and in what is inlined there from definitions that had them,
+  a call of a sealed struct reader is `(prim D shen-jit.field O (const K))`, K being the field's place,
+  which `defstruct` records after installing the reader, paired with that procedure in `shen-jit.struct.field`:
+  the typechecker has shown that the value is that struct, and the lowerer checks that it is still that reader.
+  A write keeps its check, which also refuses a vector shared between
+  isolates, and so does a read in an untyped body inlined into typed code.
 - `(eval-kl X)` is a sealed call to the port's `shen-jit.eval-kl`
   (`src/port/shen-jit.kl`), which lowers X in guest code, installs it with
   `shen-jit.install` and, for an expression, runs it. It cannot be a C
@@ -428,7 +581,7 @@ the shifts. The others are calls to C.
 - `(cons (const A) (cons ...))` computed into a slot that is not a parameter's
   computes its tail into that same slot, so a long chain with constant heads
   takes one slot.
-- `(+ A B)` and `(- A B)` of two integer constants below 10^9 in magnitude
+- `(+ A B)`, `(- A B)` and `(* A B)` of two integer constants below 10^9 in magnitude
   are their result, as a constant.
 - A definition whose body (or a branch of it in tail position) is `(if C X
   Y)`, with C a chain of `and`s and `let`s, as factorised pattern matching
@@ -449,7 +602,9 @@ the shifts. The others are calls to C.
 The lowerer's output also satisfies the following, which `src/lowerer/check.shen`
 verifies and the JIT may rely on:
 
-- Jumps only go forward; lowered code has no loops other than calls.
+- Jumps only go forward; lowered code has no loops other than calls, but for a definition with
+  unboxed floats, whose own tail calls go back to its `loop` with `again`, as do those of the loops it
+  inlines, each a `loop` of its own, which stage 0 never makes.
 - There is no unreachable code, and code never falls off the end.
 - Slots 0 and 1 are never written. A parameter slot is written only by a
   named tail call's arguments, and is not read afterwards except by that tail
@@ -536,8 +691,8 @@ what they make is checked like any other code and runs the same:
 
 A test is a comparison of two operands, `(< A B)`, with `>`, `<=`, `>=`, `=`, `!=`, and unsigned `u<`, `u>`, `u<=`
 and `u>=` for words; `(and T1 ... Tn)`, `(or T1 ... Tn)` and `(not T)`; `true` and `false`; or a slot holding a boolean.
-A comparison is of reals if either side is a real register or something only reals give, as `f64`, `sqrt`, `/` or a number
-with a fraction, and of words otherwise. NaN makes a comparison of reals false.
+A comparison is of floats if either side is a float register or something only floats give, as `f64`, `sqrt`, `/` or a number
+with a fraction, and of words otherwise. NaN makes a comparison of floats false.
 
 ```shen
 (define-native count-byte (Data Start End Byte)
@@ -574,9 +729,9 @@ accepted something the JIT cannot compile.
 
 What is in a slot stays tagged, also with byte buffers and bit operations.
 
-### Real and word registers
+### Float and word registers
 
-Doubles can live unboxed in 48 real registers, and 64-bit integers, which wrap, in 16 word registers, each a namespace of
+Doubles can live unboxed in 64 float registers, and 64-bit integers, which wrap, in 16 word registers, each a namespace of
 its own. The JIT gives machine registers to what is used most, each loop counting 8 times what is around it, so the numbers and
 the order of the names make no difference: 27 float registers on arm64 and 12 on x86-64, and the integer registers a target has to spare,
 11 on arm64, 2 on x86-64 and none on Windows, which the base and limits of kept memory compete for too, where registers are many at half
@@ -591,11 +746,11 @@ be: the collector reads every slot as a value.
 
 | Form | Meaning |
 | --- | --- |
-| `(real X E)` | Register X := the value of E. X is then a register wherever it is named. |
+| `(float X E)` | Register X := the value of E. X is then a register wherever it is named. |
 | `(f64! M I E)` | Store E at byte offset I of M, checked as `shen-jit.f64!` is. |
 | `(jump-unless (Op E1 E2) L)` | Jump to L unless E1 Op E2, with Op one of `<`, `>`, `<=`, `>=` and `=`. NaN compares false. |
-| `(real-box D E)` | Slot D := a new real holding E. |
-| `(return-real E)` | Return a new real holding E. |
+| `(float-box D E)` | Slot D := a new float holding E. |
+| `(return-float E)` | Return a new float holding E. |
 | `(word X W)` | Word register X := the value of W. |
 | `(u8! M I W)`, `u16!`, `u32!`, `u64!` | Store the low bits of W at byte offset I of M. |
 | `(jump-unless-word (Op W1 W2) L)` | Jump to L unless W1 Op W2, with Op one of `<`, `>`, `<=`, `>=`, `=`, and unsigned `u<`, `u>`, `u<=`, `u>=`. |
@@ -603,16 +758,16 @@ be: the collector reads every slot as a value.
 | `(loop L)` | The head of a loop named L. Code only falls into it, and comes back to it with `again`. Loops nest, and a function may have many. |
 | `(again L)` | Jump back to the head of loop L, which must come before this. |
 
-A real expression E is a real register; a word register, converted; a number, a slot or `(const K)`, whose number is read with a check, an integer
+A float expression E is a float register; a word register, converted; a number, a slot or `(const K)`, whose number is read with a check, an integer
 converted, and anything else raising; `(+ E1 E2)`, `(- E1 E2)`, `(* E1 E2)`, `(/ E1 E2)`; `(neg E)`, `(abs E)`, `(sqrt E)`;
 `(f64 M I)`, read and checked as `shen-jit.f64` is; or any word expression below that only words can be, converted. `(+ A B C)` is `(+ A (+ B C))`, as Shen's macro makes it.
 
 A word expression W is a word register; an integer, or `(const K)` holding one; a slot, which must hold an integer; `(+ W1 W2)`, `(- W1 W2)`, `(* W1 W2)`, `(neg W)`;
 `(bit-and W1 W2)`, `(bit-or W1 W2)`, `(bit-xor W1 W2)`, `(bit-not W)`; `(shift-left W N)`, `(shift-right W N)`, which fills with zeroes, `(shift-right-signed W N)`, `(rotate-left W N)`,
-`(rotate-right W N)`, whose counts are taken modulo 64; `(u8 M I)`, `(u16 M I)`, `(u32 M I)`, `(s32 M I)`, `(u64 M I)`; or `(truncate E)`, toward zero, of a real expression, which is the machine's own beyond 64 bits.
+`(rotate-right W N)`, whose counts are taken modulo 64; `(u8 M I)`, `(u16 M I)`, `(u32 M I)`, `(s32 M I)`, `(u64 M I)`; or `(truncate E)`, toward zero, of a float expression, which is the machine's own beyond 64 bits.
 Arithmetic wraps and raises nothing. A literal has to fit a fixnum, so a wider constant is built, once, before the loop.
 
-The index of `u8` to `u64` and their stores is a word expression. So is that of `f64` and `f64!` when it is an integer or mentions a word register, with no tag to check and only the bound; any other is integer arithmetic through `prim`, as `(+ I 8)` on slots. A word index is checked as an unsigned number, so a negative one fails the bound. Intermediate values take registers too, named `Real.0`, `Word.0` and on, so a register written by hand may not take
+The index of `u8` to `u64` and their stores is a word expression. So is that of `f64` and `f64!` when it is an integer or mentions a word register, with no tag to check and only the bound; any other is integer arithmetic through `prim`, as `(+ I 8)` on slots. A word index is checked as an unsigned number, so a negative one fails the bound. Intermediate values take registers too, named `Float.0`, `Word.0` and on, so a register written by hand may not take
 such a name, and more than the registers there are is refused. A test that is `true` or `false` keeps only the branch
 that runs.
 
@@ -623,6 +778,18 @@ that runs.
 - **A loop checks for an interrupt each time it goes back,** at the REPL, as a self tail call does.
 - **Every access is checked,** and those checks are what is left between these loops and C.
 
-The builder turns these into instructions that `shen-jit.install-code` takes too, with registers numbered from 0: `(real-number F O)`, `(real-box D F)`, `(real-move D F)`, `(real-neg D F)`, `(real-abs D F)`,
-`(real-sqrt D F)`, `(real+ D A B)`, `(real- D A B)`, `(real* D A B)`, `(real/ D A B)`, `(real-unless< A B L)`, with `>`, `<=`, `>=` and `=`, `(real-load F M I)`, `(real-store M I F)`, `(real-load-at F M W)`, `(real-store-at M W F)`, `(real-from-word F W)`, `(word-from-real W F)`,
+The builder turns these into instructions that `shen-jit.install-code` takes too, with registers numbered from 0: `(float-number F O)`, `(float-box D F)`, `(float-move D F)`, `(float-neg D F)`, `(float-abs D F)`,
+`(float-sqrt D F)`, `(float+ D A B)`, `(float- D A B)`, `(float* D A B)`, `(float/ D A B)`, `(float-unless< A B L)`, with `>`, `<=`, `>=` and `=`, `(float-load F M I)`, `(float-store M I F)`, `(float-load-at F M W)`, `(float-store-at M W F)`, `(float-from-word F W)`, `(word-from-float W F)`,
 `(word-number W O)`, `(word-box D W)`, `(word-move W V)`, `(word+ D A B)`, with `-`, `*`, `word-and`, `word-or`, `word-xor`, `word-shl`, `word-shr`, `word-sar`, `word-rotl` and `word-rotr`, `(word-unless< A B L)`, with `>`, `<=`, `>=`, `=`, `-u<`, `-u>`, `-u<=` and `-u>=`, `(word-load8 D M W)`, with `16`, `32`, `-s32` and `64`, `(word-store8 M W V)`, with `16`, `32` and `64`, `(loop L)` and `(again L)`. An operand of a word instruction that it only reads may be `(const K)`.
+The lowerer also uses `(fix+ D A B)`, `(fix- D A B)` and `(fix* D A B)`, as `word+` and the others but raising
+"integer overflow" for a result that is no fixnum, for typed code's fixnums, `(fix-store8 M W V)`, with `16`, `32`
+and `-s32`, as `word-store8` and the others but raising "bytes: V does not fit" for a value the width does not hold,
+after the buffer and the index are checked, as `shen-jit.u8!` and the others do, `(fix-from-float W F)`, as
+`word-from-float` but raising "integer overflow" out of line for a float outside the fixnums, a NaN or an infinity
+among them, as `shen-jit.truncate` does, `(float-divide D A B)`, as `float/` but
+raising "division by zero" for a divisor of zero, out of line, `(float-load-index F M W)` and
+`(float-store-index M W F)`, as `float-load-at` and `float-store-at` but at W times 8, W an index of doubles checked
+against the length in doubles, `(word-load-index D M W)` and `(word-store-index M W V)`, the same for 64-bit words, as
+`word-load64` and `word-store64` but at W times 8, and `(float-call1 R F A)`, `float-call2` and
+`float-call3`, a direct call of the C function of doubles defined as F (see the lowering rules); the checker of code
+written by hand has no form for them.

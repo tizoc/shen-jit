@@ -1,3 +1,5 @@
+(load "tests/result_helpers.shen")
+
 \\ One-request connection behavior over loopback, including failure before and after output.
 (set server-test.passed 0)
 (set server-test.failed 0)
@@ -29,7 +31,7 @@
   R Total Chunks -> (server-test.chunk R Total Chunks (io.read-chunk R)))
 
 (define server-test.chunk
-  R Total Chunks [chunk V] -> (server-test.collect R (+ Total (buffer.length V)) [V | Chunks])
+  R Total Chunks (:result.ok [V]) -> (server-test.collect R (+ Total (buffer.length V)) [V | Chunks])
   _ Total Chunks _ -> (io.join Total (reverse Chunks)))
 
 (define server-test.exchange
@@ -58,7 +60,7 @@
          Result (hd Exchange)
       (do (server-test.check "rejection status" Status (freeze (server-test.status Exchange)))
           (server-test.check "rejected request never reaches handler" 0 (freeze (hd (tl (tl Exchange)))))
-          (server-test.check "rejection remains a failure result" error (freeze (hd Result)))
+          (server-test.check "rejection remains a failure result" true (freeze (result.err? Result)))
           (server-test.rejected Rest))))
 
 (if (trap-error (do (socket.close (socket.listen "127.0.0.1" 0)) false)
@@ -72,7 +74,7 @@
      Reply (hd (tl Exchange))
   (do (server-test.check "valid request completes before client EOF" 200 (freeze (server-test.status Exchange)))
       (server-test.check "handler runs once" 1 (freeze (hd (tl (tl Exchange)))))
-      (server-test.check "wire count" [ok (buffer.length Reply)] (freeze Result))
+      (server-test.check "wire count" (:result.ok (buffer.length Reply)) (freeze Result))
       (server-test.check "body and repeated response fields"
         "HTTP/1.1 200 OKc#13;c#10;Set-Cookie: a=1c#13;c#10;Set-Cookie: b=2c#13;c#10;Date: Sun, 06 Nov 1994 08:49:37 GMTc#13;c#10;Content-Length: 3c#13;c#10;Connection: closec#13;c#10;c#13;c#10;abc"
         (freeze (buffer.string Reply)))))
@@ -110,13 +112,13 @@
 (let Exchange (server-test.exchange
        "POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Content-Length: 5c#13;c#10;c#13;c#10;abc"
        [] (function server-test.handler) true)
-     Error (hd (tl (hd Exchange)))
+     Error (fixture.failure (hd Exchange))
   (do (server-test.check "truncated body sends 400" 400 (freeze (server-test.status Exchange)))
       (server-test.check "truncation keeps consumed progress" 3 (freeze (io.error-progress Error)))))
 
 (let Exchange (server-test.exchange "GET / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;"
                  [] (/. Request (error "handler failure")) false)
-     Error (hd (tl (hd Exchange)))
+     Error (fixture.failure (hd Exchange))
   (do (server-test.check "handler exception becomes a single 500" 500 (freeze (server-test.status Exchange)))
       (server-test.check "application details stay in local error" application (freeze (io.error-domain Error)))))
 
@@ -139,10 +141,10 @@
          (/. B (let Count (+ 1 (<-address Calls 0)) _ (address-> Calls 0 Count)
                  (if (= Count 1)
                      (Original (shen-jit.copy-bytes (shen-jit.bytes 1) 0 B 0 1))
-                     [error (io.native-error write timeout 0 "HTTP server" "forced partial timeout")]))))
+                     (:result.err (io.native-error write timeout 0 "HTTP server" "forced partial timeout"))))))
      _ (io.write-all C (buffer.from-string "GET / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;") [])
      Result (http.serve-one S (/. Request (http.response 200 [] (buffer.from-string "ok"))) [])
-     Error (hd (tl Result))
+     Error (fixture.failure Result)
      Reply (server-test.collect (io.reader C []) 0 [])
      _ (io.close C)
   (do (server-test.check "partial response failure retains wire progress" [timeout 1]
@@ -163,7 +165,7 @@
      N (shen-jit.bytes-length Bytes)
      M (memory.alloc N)
      _ (shen-jit.copy-bytes M 0 Bytes 0 N)
-     Parsed (hd (tl (http.parse-request (buffer.wrap M) 0)))
+     Parsed (fixture.success (http.parse-request (buffer.wrap M) 0))
      _ (memory.free M)
   (server-test.check "parsed metadata survives foreign input release" ["GET" ["localhost"]]
     (freeze [(http.method Parsed) (http.header-values Parsed "host")])))
@@ -171,8 +173,8 @@
 (let M (memory.alloc 3)
      _ (shen-jit.copy-bytes M 0 (shen-jit.string->bytes "abc") 0 3)
      RO (shen-jit.pointer-read-only M)
-     Q (hd (tl (http.parse-request
-          (buffer.from-string "GET / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;") 0)))
+     Q (fixture.success (http.parse-request
+          (buffer.from-string "GET / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;") 0))
      Wire (http.encode-response Q (http.response 200 [] (buffer.wrap RO)) 1024 3)
      _ (shen-jit.pointer-kill RO)
      _ (memory.free M)
@@ -194,7 +196,7 @@
       (server-test.check "binary body larger than the reader is preserved" true
         (freeze (buffer.equal? Body (buffer.slice Reply (- (buffer.length Reply) 32768) 32768))))))
 
-(server-test.check "queued head honors expired budget" [error 0 408]
+(server-test.check "queued head honors expired budget" [true 0 408]
   (freeze
     (let Pair (server-test.pair)
          C (hd Pair) E (hd (tl Pair))
@@ -213,6 +215,6 @@
          _ (io.close E)
          Reply (server-test.collect (io.reader C []) 0 [])
          _ (io.close C)
-      [(hd Result) (<-address Calls 0) (server-test.status [Result Reply 0])])))
+      [(result.err? Result) (<-address Calls 0) (server-test.status [Result Reply 0])])))
 
 (output "~A passed, ~A failed~%" (value server-test.passed) (value server-test.failed))

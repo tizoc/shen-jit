@@ -6,6 +6,7 @@
   (use deadline)
   (use fs)
   (use io)
+  (import result let-ok ok err)
   (use json)
   (use process)
   (use shen-jit)
@@ -13,7 +14,7 @@
   (use source-facts)
   (use source-syntax)
   (use treesitter)
-  (externals [byte-limit child chunk-size cwd depth-limit done fs.checked node-limit object ok preprocess result-limit
+  (externals [byte-limit child chunk-size cwd depth-limit done fs.checked node-limit object preprocess result-limit
     stderr-limit stdout-limit timeout])
 
 (define member
@@ -101,20 +102,19 @@
       (map (/. Record (command Base Seen Record)) Records)))
 
 (define process-result
-  [ok Report] ->
-    (if (process.success? Report) [ok (process.output-bytes Report)]
-        [error (io.native-error preprocess child 0 "compiler"
+  (:ok Report) ->
+    (if (process.success? Report) (:ok (process.output-bytes Report))
+        (:err (io.native-error preprocess child 0 "compiler"
                  (make-string "preprocessor failed (~A): ~A" (process.status Report)
-                   (buffer.string (process.error-bytes Report))))])
-  [error Error] -> [error Error]
-  [error Error _] -> [error Error])
+                   (buffer.string (process.error-bytes Report))))))
+  (:err (@p Error _)) -> (:err Error))
 
 (define units
-  _ _ _ _ [] -> [ok done]
+  _ _ _ _ [] -> (:ok done)
   Language Writer State Budget [[File Directory [Compiler | Args]] | Rest] ->
     (let Left (deadline.slice Budget 30000)
          _ (if (> Left 0) true (error "source-facts: total preprocessing budget expired"))
-      (io.let-ok Input (process-result
+      (let-ok Input (process-result
                         (process.run Compiler Args (buffer.new 0)
                           [[cwd Directory] [timeout Left] [stdout-limit 8388608] [stderr-limit 65536]]))
         (do (address-> State 4 Directory)
@@ -122,7 +122,7 @@
             (address-> State 6 Input)
             (let Profile (source-syntax.profile Input)
                  _ (address-> State 7 Profile)
-              (io.let-ok _ (source-facts.parsed Writer State File
+              (let-ok _ (source-facts.parsed Writer State File
                             (treesitter.query Language (buffer.wrap (<-address Profile 0))
                               (value source-facts.configured-query)
                               [[node-limit 1048576] [result-limit 134217728]]))
@@ -132,22 +132,22 @@
   Language Commands Configuration Out ->
     (let State (io.record [0 0 0 Configuration "" [] [] []])
          Writer (io.writer Out [[chunk-size 4096]])
-      (io.let-ok _ (units Language Writer State (clock.deadline 300000) Commands)
-        [ok (@p (<-address State 2) (<-address State 0))])))
+      (let-ok _ (units Language Writer State (clock.deadline 300000) Commands)
+        (:ok (@p (<-address State 2) (<-address State 0))))))
 
 (define start
   Grammar Database Configuration Output ->
     (let Configuration (fs.checked (text Configuration))
-      (io.let-ok Path (fs.resolve Database)
+      (let-ok Path (fs.resolve Database)
                  Bytes (io.read-file Path 8388608)
         (let Commands (commands Path (json.decode Bytes [[byte-limit 8388608] [depth-limit 16]]))
           (source-build.language Commands Configuration Output
             (treesitter.load-language "C" [Grammar] "tree_sitter_c"))))))
 
 (define source-build.language
-  Commands Configuration Output [ok Language] ->
+  Commands Configuration Output (:ok Language) ->
     (fs.with-replacement Output (/. Out (extract Language Commands Configuration Out)))
-  _ _ _ [error E] ->
-    [error (io.native-error language (treesitter.error-domain E) 0 "C" (treesitter.error-message E))])
+  _ _ _ (:err E) ->
+    (:err (io.native-error language (treesitter.error-domain E) 0 "C" (treesitter.error-message E))))
 
 )

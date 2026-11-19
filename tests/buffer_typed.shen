@@ -1,6 +1,6 @@
 \\ Load after buffer.shen/cursor.shen with (tc +).
 (define buffer-typed.take
-  {string --> number --> string}
+  {string --> fixnum --> string}
   Text N -> (cursor.string (cursor.new (buffer.from-string Text)) N))
 
 (define buffer-typed.copy

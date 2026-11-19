@@ -7,7 +7,7 @@ Shen is a functional language with pattern matching, optional static types, macr
 built on a small core called KLambda. Shen/JIT lowers KLambda to a register bytecode, and a baseline JIT turns
 each function into native code the first time it is called. Its lowerer is written in Shen, and compiles
 itself. Programs start in a few milliseconds from a heap image carried inside the executable, which is a single
-file of about 1 MB.
+file of about 1.7 MB.
 
 ## Start
 
@@ -30,7 +30,8 @@ executables, the optional libraries, this guide, the example applications and th
 On Linux, take a dynamic build unless your system is too old for it or has a different C library: those are
 built against an old glibc so that they run on newer ones. A static build runs anywhere, but cannot
 [call C](#calling-c). The executable is the whole installation, so copy it anywhere, such as a directory on your
-`PATH`, unless you use the libraries in `lib/`, which you then name by their path in the archive or source tree.
+`PATH`, unless you use the libraries in `lib/`: keep that directory beside the executable, or name it in
+`SHEN_JIT_PATH` ([Modules](modules.md)).
 
 ```sh
 tar xzf shen-jit-VERSION-linux-x86_64.tar.gz
@@ -55,7 +56,8 @@ make stlib                        # build/shen-jit-stlib
 make install PREFIX=/usr/local    # copies build/shen-jit to PREFIX/bin
 ```
 
-`make install` copies only `shen-jit`, under `DESTDIR` if that is set. It leaves out `shen-jit-stlib` and the libraries in `lib/`.
+`make install` copies only `shen-jit`, under `DESTDIR` if that is set. It leaves out `shen-jit-stlib` and the libraries in `lib/`,
+which an installed executable finds through `SHEN_JIT_PATH`.
 
 `make release` makes the same executable without the runtime's symbols and debug information, which take about 5% of
 it on macOS, and over half on Linux, with gcc's. `make STATIC=1`
@@ -133,13 +135,14 @@ shen-jit eval -l prog.shen -e '(main)' # load a file, evaluate an expression
 On Windows, the wide command line is converted to UTF-8 before arguments enter Shen, including
 programs made with `shen-jit.save-executable`.
 
-The commands come from the kernel's launcher (`shen-jit --help`):
+The commands come from the kernel's launcher (`shen-jit --help`), with `-m` and `build` from Shen/JIT:
 
 | Command | What it does |
 | --- | --- |
 | `repl` | The interactive REPL, and the default |
-| `script FILE [ARGS]` | Runs FILE, with `*argv*` set to `[FILE \| ARGS]` |
-| `eval ARGS` | Evaluates, from left to right: `-e EXPR`, `-l FILE`, `-s KEY VALUE`. `-q` silences output, and `-r` starts the REPL afterwards. `*argv*` has no value here |
+| `script FILE [ARGS]` | Runs FILE, with `*argv*` set to `[FILE \| ARGS]`. FILE can be a module's `.shenmod` |
+| `eval ARGS` | Evaluates, from left to right: `-e EXPR`, `-l FILE`, `-m MODULE`, `-s KEY VALUE`. `-q` silences output, and `-r` starts the REPL afterwards. `*argv*` has no value here |
+| `build FILE.shenmod [-o OUTPUT] [--open]` | Writes an executable of the module FILE describes, which runs the function its `main` names: see [Modules](#modules) |
 
 An error that nothing catches, or an unknown argument, ends the process with status 1.
 
@@ -193,6 +196,12 @@ true
 type error
 ```
 
+The module `numbers` adds two kinds of number for typed code, `fixnum` and `float`, each with its own operators,
+`fx+` and `fl+` and the rest, and conversions to and from `number` ([Numbers by kind](numbers.md)). The module
+`floats` adds arrays of doubles, unboxed, which typed code reads and writes in registers by element
+([Arrays of doubles](floats.md)), `word` 64-bit words, whose arithmetic wraps, which typed code keeps in
+registers too ([64-bit words](word.md)), and `words` arrays of them, read by element ([Arrays of words](words.md)).
+
 Prolog and a compiler-compiler are built in:
 
 ```shen
@@ -235,8 +244,13 @@ It is available at startup. In a source file:
 one, with `...` leaving out the fields it does not name. One function can match records of several
 structs, a clause each, and `(struct.union shape circle rect)` makes such a set a type for typed code.
 
+Use `_` for an anonymous field. For example, `(defstruct (box A) (_ : A))` declares a struct that
+can be constructed as `(:box 42)` and matched as `(:box Value)`. An anonymous struct takes every
+field in declaration order, and all its fields are immutable.
+
 Fields are read-only by default; mutable fields get `->` setters that return the record. Fields may have
-types, `(x : number)`, which typed code then checks. A record prints
+types, `(x : number)`, which typed code then checks, and a struct may take type variables as parameters,
+`(defstruct (cell A) (value : A))`. A record prints
 as `#<entry key: "answer" value: 43>`, or through a function of its own, `(printer F)`. Construction
 allocates one managed vector and can trigger GC; field reads and writes allocate nothing on success.
 The [struct reference](https://github.com/tizoc/shen-jit/blob/main/docs/structs.md) covers positional
@@ -276,9 +290,9 @@ inlined too, and patched when a function is redefined.
 - **No stlib in the default image.** Only the kernel and its extensions for features, programmable pattern matching, namespaces and the launcher are in use: see
   [The standard library](#the-standard-library).
 - **Integers are 62-bit, without bignums.** An integer result outside that range raises `integer overflow`, where
-  Shen/Scheme goes on in bignums. Reals are IEEE doubles, as there.
+  Shen/Scheme goes on in bignums. Floats are IEEE doubles, as there.
 - **Sealing.** Internal kernel functions cannot be redefined, where Shen/Scheme accepts such definitions.
-- **Numbers hash by value.** A real and an integer that are `=` have the same `hash`, where Shen/Scheme's tells them apart.
+- **Numbers hash by value.** A float and an integer that are `=` have the same `hash`, where Shen/Scheme's tells them apart.
 - **No `thread`.** Shen/Scheme's `(thread Frozen)` is not provided. [Isolates](#isolates) run in parallel, each
   with a heap of its own.
 - **Definitions are factorised,** as with `(factorise +)`: a guard that consecutive clauses share runs once, so
@@ -319,8 +333,10 @@ are other programs.
   most `Ms` milliseconds, a whole number up to a day, or `[timeout]` if none has by then, and receives nothing.
 - **Closing:** a sender's `(channel.close S)` ends the stream: the receiver gets what was queued, and then a receive
   raises "channel closed". `(channel.next R)` reads a stream instead, giving `[ok Message]` for each message and
-  `[closed]` at its end. The receiver's close drops what is queued. Sending on a closed channel raises "channel
-  closed". A channel is freed when its receiver closes it, reads its end, or ends, and not before.
+  `[closed]` at its end. Inside a namespace, write the patterns as `(with-externals [ok] [ok Message])`
+  and `(with-externals [closed] [closed])` to keep both tags literal. The receiver's close drops what is queued.
+  Sending on a closed channel raises "channel closed". A channel is freed when its receiver closes it,
+  reads its end, or ends, and not before.
 - **What crosses:** an argument or a message is copied, with its sharing and cycles. Symbols are the same in every
   isolate, so a function goes by its name, and the isolate that gets it calls `(fn F)`. Closures made as the program runs, `fn`'s
   among them, streams and pointers are refused. A receive endpoint moves to a new isolate only in its argument,
@@ -370,15 +386,32 @@ shared dictionary cannot change. It is never freed. What cannot be sent cannot b
 
 ### Types, namespaces and saving
 
-- **Types and namespaces:** an isolate has type `isolate`, and endpoints have types `(receiver A)` and `(sender A)`,
-  `A` being what crosses them. A typed function crosses by its name, which typechecks as the function: `(isolate.spawn
-  f X)` with `f : (A --> B)` and `X : A`. A lambda typechecks too, but cannot cross. Results have datatypes:
+- **Worker names.** Both `isolate.spawn` and `isolate.spawn-each` take an `(isolate.worker A)`.
+  The name of a one-argument function with signature `A --> B` has this type. For example,
+  if `double` takes a number, write `(isolate.spawn double 21)` or
+  `(isolate.spawn-each double [1 2 3] G)`. Shen checks the payload or each list element
+  against `A`. Passing `(fn double)` or a lambda gives a type error. A helper that forwards
+  a worker can declare its parameter as `(isolate.worker A)`.
+- **Types and namespaces.** An isolate has type `isolate`, and endpoints have types `(receiver A)` and `(sender A)`,
+  where `A` is the message type. Results have datatypes including
   `isolate.down` for a monitor's message, whose reason is an `isolate.reason`, `isolate.started` for what
   `spawn-each` gives, and `(channel.next A)`, `(channel.got A)` and `(channel.ready A)` for what `channel.next`,
   `channel.receive-any` and `channel.wait-any` give. `isolate` and `channel` are namespaces: their functions are
   system functions, which any namespace names as they are, and a client can also write `(use channel => c)` and
   `(c.send S X)`. In a namespace, keep the types `isolate`, `receiver` and `sender`, and the tags `ok`, `closed`,
   `ready`, `timeout`, `down`, `normal`, `killed` and `ended`, with `externals`.
+- **Endpoint and reason types.** `channel.close` expects a `(channel.endpoint A)`, so it accepts
+  either a receiver or a sender carrying `A`. A mixed list `[R S]` typechecks when a function
+  expects or returns `(list (channel.endpoint A))`. Given a receiver `R` and a sender `S`,
+  `(length [R S])` alone leaves the element type open. Use `(length (endpoints R S))`
+  with the helper below. In `[down I Reason]`, the expected `isolate.reason` type accepts a string.
+
+  ```shen
+  (define endpoints
+    {(receiver A) --> (sender A) --> (list (channel.endpoint A))}
+    R S -> [R S])
+  ```
+
 - **Saving:** `shen-jit.save-executable` refuses while other isolates run, and in any isolate but the builder.
   `--save` writes the builder's image even so, as the program ends then: what isolates hold is not saved, and what
   they add to the program meanwhile waits until the image is written. An endpoint or isolate saved in an image
@@ -408,10 +441,46 @@ save itself, which is all `make stlib` does. To add a library or a program of yo
 shen-jit script tools/stlib.shen stlib.kl shen-jit-stlib
 ```
 
+### Modules
+
+A program can say how it is put together: a file `NAME.shenmod` names the modules it needs loaded first and its
+own sources, and `eval -m` loads it, those first, each once ([Modules](modules.md)):
+
+```shen
+(shen.module
+  (version 1)
+  (name app)
+  (requires json)
+  (sources tc+ "app.shen"))
+```
+
+```sh
+shen-jit eval -m app/app.shenmod -e '(app.main)'
+```
+
+A name such as `json` or `report/format` is looked for in the directories of `SHEN_JIT_PATH`, then in the
+installation's `lib/`.
+
+A descriptor that names an entry point, `(main app.main)`, builds into an executable: `shen-jit build
+app/app.shenmod -o hello` writes `hello`, which runs `app.main` with its arguments in `*argv*`, as a [saved
+program](#saving-a-program) does. Its definitions are sealed, so calls between them are direct and none can be
+redefined, unless `--open` is given. `-o` names the file, by default the last part of the module's name, `app`,
+or `app.exe` on Windows; here `app` is the module's own directory, so the file needs another name. A module's
+typed sources see the rules of the modules it requires, not those of others, so it typechecks the same way whatever
+else is loaded. A program whose descriptor says `(typed)` is built with its types, keeping floats in registers in
+numeric loops, and always sealed, and a library whose descriptor says it is compiled so wherever it loads ([Typed
+programs](modules.md#typed-programs)).
+
+Typed clients can construct a result with `(result.ok V)` or `(result.err E)` and match it with
+`(:result.ok X)` or `(:result.err E)`. When building similar tuple rows from values of
+different member types, `map` can establish their common type once.
+See [Common types in typed clients](modules.md#common-types-in-typed-clients).
+
 ### Saving a program
 
-A program can write its own binary, with nothing but the `shen-jit` it runs on. The result is about 1 MB; 2 on
-Linux unless the one running comes from `make release`, as gcc's debug information comes along.
+A program can write its own binary, with nothing but the `shen-jit` it runs on. The result is about 1.7 MB, and
+more with the libraries it loads; on Linux, more again unless the one running comes from `make release`, as gcc's
+debug information comes along.
 
 ```shen
 (define main -> (output "hello ~A~%" (hd (tl (value *argv*)))))
@@ -452,13 +521,19 @@ cat build/runtime app.img > app && chmod +x app
 
 ## Libraries
 
-The libraries in `lib/` are not in the image. A program loads those it uses by their paths in the archive or source
-tree, each after the ones it builds on, and a [saved program](#saving-a-program) keeps them. Each library's page
-begins with the line that loads it, such as:
+The libraries in `lib/` are not in the image. Each is a [module](#modules), which loads the ones it builds on
+first, and a [saved program](#saving-a-program) keeps them. Each library's page begins with the line that loads it,
+such as:
 
 ```sh
-shen-jit eval -l lib/ffi.shen -l lib/buffer.shen -l lib/io.shen -l lib/io-file.shen -l program.shen
+shen-jit eval -m io/file -l program.shen
 ```
+
+A library of several parts is a directory: `io`, then `io/file` and `io/socket`; `http`, the head parser, then
+`http/request`, `http/response`, `http/server` and `http/listener`; and `process`, then `process/io`. The others are
+a file each, named as their modules are: `numbers`, `floats`, `word`, `words`, `option`, `result`, `ffi`, `native`, `buffer`, `cursor`, `grammar`, `json`, `frame`, `deadline`,
+`clock`, `socket`, `memory`, `mmap`, `handle`, `sqlite`, `datalog`, `parallel`, `fs`, `tree-sitter` and `curl`, but for
+`buffer`, which is three: `buffer-view.shen`, `buffer-typed.shen` and `buffer.shen`.
 
 The libraries use namespaces. Their existing qualified names work directly, and a namespace client can
 use prefixes or import their exported names:
@@ -476,9 +551,17 @@ use prefixes or import their exported names:
 
 Exports include the public operations and types, and the support operations shared by libraries, such as
 `buffer.check` and `io.record`. HTTP, I/O and subprocess libraries contribute to their respective namespaces
-across several files. `lib/native.shen` and `lib/ffi.shen` extend the runtime's `shen-jit` namespace, which stays open.
-A library's rules for typed clients are one datatype named for its namespace, such as `io.t`, `json.t` and `http.t`,
-which `preclude` and `include` take; the image's isolates and channels have `isolate.t` and `channel.t`.
+across several modules. `native` and `ffi` extend the runtime's `shen-jit` namespace, which stays open.
+Use `preclude` and `include` with the name of the datatype whose rules you want to control.
+Handwritten rules include `io.t`, `option.t`, `json.t` and `http.request.t`, plus `isolate.t` and
+`channel.t` in the image. For example, `(preclude [io.t])` removes I/O setting rules while
+leaving the shared `result.t` and `option.t` rules active.
+What counts bytes is a `fixnum` for typed clients, from [`numbers`](numbers.md), which the byte libraries require:
+indices, offsets, positions, lengths, sizes, counts and limits of bytes, and bytes themselves. Durations,
+ports, status codes, descriptors and counts of other things stay `number`. A `fixnum` is not a `number`, so
+typed code compares and computes these with `fx<`, `fx+` and the rest, or converts with `fx->number` and
+`fixnum`. An integer literal can supply an expected `fixnum`. Use `(fixnum N)` when a binding needs that type
+before its consumer sees it.
 
 Namespace qualification applies to symbols in data too. Preserve a DSL's keywords with `with-externals`
 around its form, while its definition names and references still resolve normally:
@@ -494,8 +577,8 @@ around its form, while its definition names and references still resolve normall
       (return-word Acc))))
 ```
 
-Load `lib/native.shen` before reading that example. Result tags and options keep their original symbols,
-such as `[ok Value]`, `io-error` and `chunk-size`. A namespace client must preserve such vocabulary with
+Load the module `native` before reading that example. Result constructors can be imported from `result`. Symbols such as
+`read-write` and `chunk-size` keep their original spelling. A namespace client must preserve such vocabulary with
 `externals` or import it when the library exports it. `shadow` makes a system name local to a namespace;
 the libraries use it where a local operation would otherwise resolve to a kernel or stlib function.
 
@@ -506,8 +589,9 @@ Four have a small C adapter of their own as well, which a C compiler builds once
 Tree-sitter, which also needs Tree-sitter 0.25 or later and a grammar compiled for it, and curl, which needs libcurl.
 `make fs`, `make process`, `make tree-sitter` and `make curl` build them in a checkout, and in a binary archive
 `sh lib/build-NAME.sh lib/shen-NAME.so` does, with `.dll` in place of `.so` on Windows. Loading the library never
-compiles its adapter: it looks for it in `build/`, `lib/` and the current directory, or where its `*adapter-files*`
-says, if that is set before loading.
+compiles its adapter: it looks for it in `build/`, `lib/` and the current directory, then in those from the
+executable's directory, or where its `*adapter-files*` says, if that is set before loading. A built program finds an
+adapter shipped beside it, or in its `lib/`.
 
 ### Bytes and parsing
 
@@ -531,8 +615,16 @@ within limits on nodes, captures and time.
 
 ### Input and output
 
-[Chunk I/O](https://github.com/tizoc/shen-jit/blob/main/docs/io.md): `lib/io.shen` gives readers and writers with
-buffers of a size they are given, over memory, and `lib/io-file.shen` over files, apart from Shen's streams. Each
+[Results](https://github.com/tizoc/shen-jit/blob/main/docs/result.md): `lib/result.shen` gives what the libraries
+below return. In a namespace, `(import result ok err let-ok)` brings in `(:ok V)`, `(:err E)` and the
+`let-ok` macro for chaining values of type `(result.t (E * A))`.
+
+The [option module](https://github.com/tizoc/shen-jit/blob/main/docs/option.md) provides
+`(option.t A)`. Streaming grammar, JSON, and HTTP request reads return `(io.result (option.t A))`.
+Match `(:result.ok [X])` for a value and `(:result.ok [])` for clean EOF.
+
+[Chunk I/O](https://github.com/tizoc/shen-jit/blob/main/docs/io.md): the module `io` gives readers and writers with
+buffers of a size they are given, over memory, and `io/file` over files, apart from Shen's streams. Each
 operation gives its result or its error as a value, a short transfer keeps what it moved, and a writer flushes as it
 closes.
 
@@ -546,8 +638,8 @@ of a bounded size through those readers, across chunks.
 sorted directory listings and traversal within limits, exclusive temporary files and directories, renaming that
 never overwrites, replacing a file whole, and copying through the I/O library, which `tools/fs-copy.shen` does.
 
-[Subprocesses and pipelines](https://github.com/tizoc/shen-jit/blob/main/docs/processes.md): `lib/process.shen` and
-`lib/process-io.shen` start programs with explicit arguments, environment and working directory, talk to them over
+[Subprocesses and pipelines](https://github.com/tizoc/shen-jit/blob/main/docs/processes.md): the modules `process` and
+`process/io` start programs with explicit arguments, environment and working directory, talk to them over
 pipes through the I/O library, within limits on waits and output, join them into pipelines, and clean up after them,
 with their process groups or jobs. `tools/process-filter.shen` writes a command's output to a file only once the
 command has exited with 0.
@@ -564,7 +656,7 @@ command has exited with 0.
 ```
 
 ```sh
-shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l program.shen
+shen-jit eval -m socket -l program.shen
 ```
 
 A server and a client, taking turns: on loopback a connection is made before the server accepts it, and a short
@@ -598,12 +690,12 @@ to a closed connection raises instead of ending the process. The comments at the
 Typed code can call those above but `socket.recv` and `socket.recv-into`, whose buffers have no Shen type, and sends
 strings: bytes go through a socket endpoint.
 
-[Socket I/O endpoints](https://github.com/tizoc/shen-jit/blob/main/docs/io-sockets.md), `lib/io-socket.shen`, put a
+[Socket I/O endpoints](https://github.com/tizoc/shen-jit/blob/main/docs/io-sockets.md), the module `io/socket`, put a
 connection behind the I/O library's readers and writers, with deadlines.
 
 ### HTTP
 
-`lib/http-*.shen` are HTTP/1.1 over the I/O library and sockets.
+The `http` modules, in `lib/http/`, are HTTP/1.1 over the I/O library and sockets.
 [HTTP head framing](https://github.com/tizoc/shen-jit/blob/main/docs/http-head.md) reads a head within a size limit,
 keeping the bytes of the body that came with it.
 [HTTP requests and responses](https://github.com/tizoc/shen-jit/blob/main/docs/http.md) parses requests, reads bodies
@@ -642,7 +734,7 @@ Windows 10 have, and most Linux systems do.
 ```
 
 ```sh
-shen-jit eval -l lib/ffi.shen -l lib/sqlite.shen -l people.shen
+shen-jit eval -m sqlite -l people.shen
 ```
 
 | Function | What it does |
@@ -703,7 +795,7 @@ them.
 | `(shen-jit.bytes? X)`, `(shen-jit.bytes-length B)` | Whether X is a buffer, and B's length |
 | `(shen-jit.u8 B I)`, `u16`, `u32` | The unsigned value at byte offset I, little-endian, at any alignment |
 | `(shen-jit.s32 B I)`, `s64` | The signed value there. An `s64` that does not fit a fixnum raises |
-| `(shen-jit.f32 B I)`, `f64` | The floating-point value there, as a new real |
+| `(shen-jit.f32 B I)`, `f64` | The floating-point value there, as a new float |
 | `(shen-jit.u8! B I X)`, `u16!`, `u32!`, `s32!`, `s64!` | Stores X at I and returns B. X must fit |
 | `(shen-jit.f32! B I X)`, `f64!` | Stores a number at I, rounded to fit, and returns B |
 | `(shen-jit.string->bytes S)` | A new buffer with S's bytes |
@@ -712,8 +804,8 @@ them.
 | `(shen-jit.write-bytes B I N S)` | Writes the N bytes from I to the output stream S at once, and returns N |
 
 On a fixnum's 62 bits: `shen-jit.bit-and`, `bit-or`, `bit-xor`, `bit-not`, `shift-left`, `shift-right`, `rotate32`,
-`bswap32`, `popcount`, `clz` and `ctz`, which raise for a real. `(shen-jit.fixnum? X)` says whether X is a fixnum: false
-for a real, even `1.0`, which `integer?` accepts.
+`bswap32`, `popcount`, `clz` and `ctz`, which raise for a float. `(shen-jit.fixnum? X)` says whether X is a fixnum: false
+for a float, even `(shen-jit.float 1)`, which `integer?` accepts. The literal `1.0` reads as the integer 1.
 
 [docs/bytecode.md](https://github.com/tizoc/shen-jit/blob/main/docs/bytecode.md), "Byte buffers and bit operations",
 has the details.
@@ -731,7 +823,7 @@ loaded before the code that uses it, as a macro applies only to files read after
 ```
 
 ```sh
-shen-jit eval -l lib/ffi.shen -l cos.shen
+shen-jit eval -m ffi -l cos.shen
 ```
 
 A library is a symbol and the file names to try, in order. `[]` means the executable and what it links, which on
@@ -741,7 +833,7 @@ Windows reaches nothing, as the executable is static. A static Linux build canno
 | --- | --- | --- |
 | `int64` | A fixnum | Raises if it does not fit 62 bits |
 | `int32`, `uint32` | A fixnum in range | The low 32 bits, sign- or zero-extended |
-| `double` | A real or a fixnum | A new real |
+| `double` | A float or a fixnum | A new float |
 | `string` | Copied for the call, and a NUL inside raises | Copied into a new string, and NULL is `[]` |
 | `pointer` | A pointer of any kind, or `[]` for NULL | A pointer of kind `pointer`, and NULL is `[]` |
 | `bytes` | The address of a byte buffer, for the call | Not allowed |
@@ -826,7 +918,7 @@ Then it works with what works on a byte buffer, in place, each access checked ag
 ```
 
 ```sh
-shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l program.shen
+shen-jit eval -m memory -l program.shen
 ```
 
 - **Nothing frees it for you,** unless you ask for that below. `memory.free` frees and kills it, and forgetting to leaks,
@@ -849,7 +941,7 @@ shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l program.shen
 ```
 
 ```sh
-shen-jit eval -l lib/ffi.shen -l lib/mmap.shen -l program.shen
+shen-jit eval -m mmap -l program.shen
 ```
 
 | Function | What it does |
@@ -876,7 +968,7 @@ reaches the handle:
 ```
 
 ```sh
-shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l lib/mmap.shen -l lib/handle.shen -l program.shen
+shen-jit eval -m memory -m mmap -m handle -l program.shen
 ```
 
 - **It is released some time later:** in the next `handle.wrap` or `(handle.sweep)` after a collection finds it dead, or
@@ -930,8 +1022,8 @@ cc -shared -fPIC -I include -o libmine.so mine.c
 - **Limits:** up to 8 arguments, and a thread the runtime did not start cannot call in.
 
 > Test with `SHEN_JIT_GC_STRESS=1`, which collects at every allocation and finds most mistakes with values. `shen.h`
-> opens with the rules. **This API is not stable until 1.0:** it may change before then, and `SHEN_API_VERSION` says
-> when it has.
+> opens with the rules. **This API is not stable until 1.0:** it may change before then. `SHEN_API_VERSION` numbers
+> the layout of the table of functions it calls through, which a function renamed in its slot keeps.
 
 ### Native code by hand
 
@@ -954,7 +1046,7 @@ it, under `(tc -)`.
 ```
 
 ```sh
-shen-jit eval -l lib/native.shen -l sum.shen
+shen-jit eval -m native -l sum.shen
 ```
 
 A variable is a slot, a symbol is itself, and `[1 2]` is a list. The code is checked first, by the rules the lowerer's
@@ -962,25 +1054,25 @@ own output is held to, so wrong code is refused instead of crashing. A program g
 lists to `shen-jit.assemble` and `shen-jit.install-code`. Slots hold tagged values, as in all Shen code, and
 [bytes and bits](#bytes-and-bits) and [memory outside the heap](#memory-outside-the-heap) are primitives here as anywhere.
 
-For numeric work, `real` keeps doubles unboxed in registers, in code that calls nothing. It reads an expression. `word`
+For numeric work, `float` keeps doubles unboxed in registers, in code that calls nothing. It reads an expression. `word`
 does the same for 64-bit integers, which wrap, for hashes and random numbers, and as an index, which then has no tag to
 check. `(loop L)` marks the head of a loop and `(again L)` goes back to it, and loops can nest:
 
 ```shen
 (define-native dot (A B End)
-  (real Acc 0)
+  (float Acc 0)
   (word I 0)
   (loop terms)
   (jump-unless-word (< I End) done)
-  (real Acc (+ Acc (* (f64 A I) (f64 B I))))
+  (float Acc (+ Acc (* (f64 A I) (f64 B I))))
   (word I (+ I 8))
   (again terms)
   (label done)
-  (return-real Acc))
+  (return-float Acc))
 ```
 
 Every read and store is still checked against its memory's length, and nothing in these loops allocates until
-`return-real` boxes the result. Machine registers go to what the deepest loops use most, whatever the order of the names.
+`return-float` boxes the result. Machine registers go to what the deepest loops use most, whatever the order of the names.
 Nothing is moved out of a loop for you, nor is a repeated expression noticed, so a literal or a conversion that a loop
 uses each time round is worth a name before it, and a value a statement uses twice is worth a name too. An FNV-1a hash, say, is a loop of wrapping multiplications:
 
@@ -1048,6 +1140,7 @@ flat profile at exit, and `SHEN_JIT_STATS=1` prints the collector's work and the
 | Variable | What it does |
 | --- | --- |
 | `SHEN_JIT_IMAGE` | An image to load instead of the executable's own |
+| `SHEN_JIT_PATH=DIRS` | Directories to look for modules in, before the installation's `lib/`, separated by `:`, or `;` on Windows ([Modules](modules.md)) |
 | `SHEN_JIT_SEAL=1` | The same as `--seal` |
 | `SHEN_JIT_SEMISPACE=SIZE` | Starts the heap at SIZE bytes (with K, M or G; anything that is not a size is refused) instead of 32 MB, or at what the image needs if that is more: what a collection keeps and the room for new objects add up to this. It still grows with live data, up to 64 GiB, or stays at SIZE if that is more. Less collects more often and uses less memory |
 | `SHEN_JIT_MAX_HEAP=SIZE` | Limits the heap to SIZE bytes (with K, M or G; at least the initial semispace; anything that is not a size is refused). What the heap holds stays below SIZE, and an allocation past that raises `out of memory`. The collector copies, so the process can use two to three times SIZE: vectors and strings of 256 KB or more stay apart, uncopied, and count once |
@@ -1114,12 +1207,14 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 
 | Target | What it does |
 | --- | --- |
-| `make test-core` | `test`, `test-jit`, `test-ops`, `test-kl`, `check-lowerer`, `check-generated`, `test-kernel`, `test-stlib`, `test-thorn`, `test-native`, `test-ffi`, `test-overrides`, `test-structs` and `test-isolates` |
+| `make test-core` | `test`, `test-jit`, `test-ops`, `test-kl`, `check-lowerer`, `check-generated`, `test-kernel`, `test-stlib`, `test-thorn`, `test-native`, `test-ffi`, `test-overrides`, `test-structs`, `test-isolates`, `test-modules` and `test-typed` |
 | `make test-libs` | `test-buffer`, `test-json`, `test-io`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl`, `test-namespaces` and `test-parallel` |
 | `make test` | The runtime's unit tests |
 | `make test-jit`, `make test-ops` | The JIT and the instructions, on small programs |
 | `make test-kl` | The `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
 | `make test-isolates` | Isolates: what one starts with, spawning, channels, monitors, kill, sharing, what crosses, types and namespace clients, and the same with a collection at every allocation in `make test-isolates-stress` |
+| `make test-modules` | Modules: names, the path, requirements in order and loaded once, type checking per source, features, sources that raise, refused descriptors and typed modules; `-m` and `build` are in `tests/cli.sh`, which `make test-kernel` runs |
+| `make test-typed` | Typed programs: `numbers`, `floats`, `word` and `words`, and typed definitions compiled with their types, values in registers among them |
 | `make test-parallel` | `parallel.map` over isolates: order, balance, errors, what crosses and shared arguments |
 | `make test-kernel` | The kernel's test suite, the extension tests, the contract examples and `tests/cli.sh` |
 | `make test-stlib` | The executable with the standard library |
@@ -1151,7 +1246,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-linux` | Every suite on Linux arm64 and x86-64, in Docker, from a source tarball. Needs pandoc, as `make dist` does |
 | `make deps` | Fetches the kernel and the earlier release of Shen/JIT that makes the generated files |
 | `make bench` | The kernel's benchmarks and Shen/Scheme's realistic ones, under Shen/JIT and Shen/Scheme, compared. `make bench SEAL=1` runs Shen/JIT sealed |
-| `make bench-numeric` | Numeric programs and a path tracer, in C and in Shen with raw registers, and those programs with boxed reals too |
+| `make bench-numeric` | Numeric programs and a path tracer, in C and in Shen with raw registers, and the same as typed programs, the numeric ones with boxed floats too |
 | `make bench-independent` | Workloads never used for tuning (the kernel's test suite, installing the standard library, a prover), to check that gains are not fitted to the benchmarks |
 | `make clean` | Removes what `make` builds in `build/`, but for the generated files and `shen-jit-stlib` |
 | `make guide` | Renders this guide and its documents' pages to `build/guide/`, with [pandoc](https://pandoc.org) |

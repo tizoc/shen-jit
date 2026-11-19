@@ -92,6 +92,8 @@ $(PROCESS_ADAPTER): lib/process.c lib/process-posix.h lib/process-win.h lib/buil
 	CC="$(CC)" CFLAGS="$(CFLAGS)" sh lib/build-process.sh $@
 
 test-process: $(BUILD)/shen-jit
+	$(BUILD)/shen-jit eval -l tests/process_rule_scope.shen | $(FFI_RESULT)
+	sh tests/refused.sh $(SHEN_JIT) tests/process_env_refused.shen -m process
 	CC="$(CC)" sh tests/process.sh $(SHEN_JIT)
 
 .PHONY: tree-sitter test-tree-sitter deps-tree-sitter
@@ -104,6 +106,7 @@ deps-tree-sitter:
 	sh tools/tree-sitter-deps.sh .deps
 
 test-tree-sitter: $(BUILD)/shen-jit
+	sh tests/refused.sh $(SHEN_JIT) tests/tree_sitter_options_refused.shen -m tree-sitter
 	CC="$(CC)" sh tests/tree_sitter.sh $(SHEN_JIT)
 
 # The runtime alone, and the image stage 1 writes with it from the stage 0
@@ -170,7 +173,7 @@ $(BUILD)/test_runtime: tests/test_runtime.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(RUNTIM
 BOOTSTRAP ?= .deps/shen-jit/shen-jit$(EXE)
 KERNEL_KL ?= .deps/kernel/klambda
 KERNEL_NAMESPACES := $(dir $(patsubst %/,%,$(KERNEL_KL)))extensions/namespaces.shen
-GENERATED := stage0/*.sbc stage0/*.forms port/lower.kl port/struct.kl port/shen-jit.kl bench/programs.sbc kl/ops.sbc stlib/stlib.kl
+GENERATED := stage0/*.sbc stage0/*.forms port/lower.kl port/struct.kl port/module.kl port/shen-jit.kl bench/programs.sbc kl/ops.sbc stlib/stlib.kl
 
 ifneq ($(wildcard generated/stage0),)
 $(BUILD)/generated.done:
@@ -178,7 +181,7 @@ $(BUILD)/generated.done:
 	cp -R generated/. $(BUILD)/
 	touch $(BUILD)/stage0/.done $@
 
-$(BUILD)/stage0/.done $(BUILD)/port/lower.kl $(BUILD)/port/struct.kl $(BUILD)/port/shen-jit.kl $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stlib/stlib.kl: $(BUILD)/generated.done
+$(BUILD)/stage0/.done $(BUILD)/port/lower.kl $(BUILD)/port/struct.kl $(BUILD)/port/module.kl $(BUILD)/port/shen-jit.kl $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stlib/stlib.kl: $(BUILD)/generated.done
 	@:
 else
 # The kernel's precompiled standard library, for make stlib.
@@ -186,13 +189,25 @@ $(BUILD)/stlib/stlib.kl: $(KERNEL_KL)/stlib.kl | host
 	mkdir -p $(BUILD)/stlib
 	cp $< $@
 
-# What the tools run under the host, with the lowerer's names changed, as a host
-# that is Shen/JIT has its own lowerer sealed under them (src/lowerer/host.shen).
-STAGE0_TOOLS := src/lowerer/host.shen src/lowerer/stage0.shen $(BUILD)/tools/lower.shen
-$(BUILD)/tools/%.shen: src/lowerer/%.shen
+# The lowerer's files, which src/lowerer/lower.shen describes.
+LOWERER := $(addprefix src/lowerer/,lower.shen inline.shen normalise.shen builders.shen emit.shen \
+  registers.shen)
+
+# The lowerer as one source, which tokl.shen compiles and the tools load: read as one
+# file, a call in one of its files knows the arity of a function that another defines.
+$(BUILD)/port/lower.shen: $(LOWERER)
+	mkdir -p $(BUILD)/port
+	cat $(LOWERER) > $@
+
+# What the tools run under the host, with the lowerer's names and namespace changed, as a
+# host that is Shen/JIT has its own lowerer sealed under them (src/lowerer/host.shen).
+STAGE0_TOOLS := src/lowerer/host.shen src/lowerer/stage0.shen $(BUILD)/tools/lower.shen \
+  $(BUILD)/tools/namespaces.shen
+$(BUILD)/tools/lower.shen: $(BUILD)/port/lower.shen
 	mkdir -p $(BUILD)/tools
-	sed -e 's/shen-jit\.lower\./stage0.lower./g' -e 's/(shen-jit\.sealed? /(stage0.sealed? /g' \
-	  -e 's/(shen-jit\.inline-body /(stage0.inline-body /g' $< > $@
+	sed -e 's/shen-jit\.lower\./stage0.lower./g' -e 's/^(shen\.x\.namespace shen-jit\.lower$$/(shen.x.namespace stage0.lower/' \
+	  -e 's/^  (use shen-jit)$$/  (use shen-jit) (use stage0)/' \
+	  -e 's/(shen-jit\.sealed? /(stage0.sealed? /g' -e 's/(shen-jit\.inline-body /(stage0.inline-body /g' $< > $@
 $(BUILD)/tools/%.shen: lib/%.shen
 	mkdir -p $(BUILD)/tools
 	sed -e 's/shen-jit\.lower\./stage0.lower./g' \
@@ -209,15 +224,19 @@ $(BUILD)/kl/ops.sbc: tests/kl/ops.kl $(STAGE0_TOOLS) | host
 
 # Stage 0: the lowerer compiled to KLambda, then the kernel, the port and the
 # lowerer lowered under the host.
-$(BUILD)/port/lower.kl: src/lowerer/lower.shen src/lowerer/tokl.shen | host
+$(BUILD)/port/lower.kl: $(BUILD)/port/lower.shen src/lowerer/tokl.shen $(BUILD)/tools/namespaces.shen | host
 	mkdir -p $(BUILD)/port
-	$(BOOTSTRAP) script src/lowerer/tokl.shen $@ > /dev/null
+	$(BOOTSTRAP) script src/lowerer/tokl.shen $@ $< > /dev/null
 
-$(BUILD)/port/struct.kl: src/port/struct.shen src/lowerer/tokl.shen | host
+$(BUILD)/port/struct.kl: src/port/struct.shen src/lowerer/tokl.shen $(BUILD)/tools/namespaces.shen | host
 	mkdir -p $(BUILD)/port
 	$(BOOTSTRAP) script src/lowerer/tokl.shen $@ src/port/struct.shen > /dev/null
 
-$(BUILD)/port/shen-jit.kl: src/port/shen-jit.kl $(BUILD)/port/struct.kl
+$(BUILD)/port/module.kl: src/port/module.shen src/lowerer/tokl.shen $(BUILD)/tools/namespaces.shen | host
+	mkdir -p $(BUILD)/port
+	$(BOOTSTRAP) script src/lowerer/tokl.shen $@ src/port/module.shen > /dev/null
+
+$(BUILD)/port/shen-jit.kl: src/port/shen-jit.kl $(BUILD)/port/struct.kl $(BUILD)/port/module.kl
 	cat $^ > $@
 
 $(BUILD)/stage0/.done: $(BUILD)/port/lower.kl $(BUILD)/port/shen-jit.kl $(STAGE0_TOOLS) $(wildcard $(KERNEL_KL)/*.kl) | host
@@ -251,7 +270,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi structs buffers grammar io fs processes parallel tree-sitter framing io-sockets deadlines http-head http http-streaming http-listener json datalog curl
+GUIDE_PAGES := design semantics bytecode ffi structs modules numbers floats word words option result buffers grammar io fs processes parallel tree-sitter framing io-sockets deadlines http-head http http-streaming http-listener json datalog curl
 GUIDE_PANDOC := pandoc -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
 guide:
@@ -330,17 +349,34 @@ test-kernel-stress: test-isolates-stress
 	$(MAKE) test-stlib GC_STRESS=1000
 	$(MAKE) test-native GC_STRESS=1000
 	$(MAKE) test-ffi GC_STRESS=1000
-	cd $(BUILD) && SHEN_JIT_GC_STRESS=1 ./shen-jit eval -l ../lib/ffi.shen -l ../tests/ffi_c.shen | $(FFI_RESULT)
+	cd $(BUILD) && SHEN_JIT_GC_STRESS=1 ./shen-jit eval -m ffi -l ../tests/ffi_c.shen | $(FFI_RESULT)
 
 # What a change to the runtime, the JIT, the lowerer or the port must pass (about 20 s).
 test-core: test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn \
-  test-native test-ffi test-overrides test-structs test-isolates
+  test-native test-ffi test-overrides test-structs test-isolates test-modules test-typed
+
+# Modules (src/port/module.shen), over the descriptors in tests/modules/.
+test-modules: $(BUILD)/shen-jit
+	$(BUILD)/shen-jit eval -l tests/modules.shen | $(FFI_RESULT)
+
+.PHONY: test-modules
+
+# Numbers by kind (lib/numbers.shen), a datatype rule concluding a difference, and typed definitions
+# compiled with their types (docs/modules.md, Typed programs).
+test-typed: $(BUILD)/shen-jit
+	sh tests/declarations.sh $(SHEN_JIT)
+	$(BUILD)/shen-jit eval -l tests/typed.shen | $(FFI_RESULT)
+
+.PHONY: test-typed
 
 # Isolates (src/runtime/isolate.c), and the same with a collection at every allocation.
 test-isolates: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -l tests/isolates.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l tests/isolate-start.shen -e '(start-test.run)' | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l tests/isolates_typed.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -e '(tc +)' -l tests/isolates_typed.shen -e '(tc -)' -l tests/isolates_typed_checks.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -e '(tc +)' -l tests/isolate_widening.shen | $(FFI_RESULT)
+	sh tests/refused.sh $(SHEN_JIT) tests/isolate_widening_refused.shen
+	sh tests/refused.sh $(SHEN_JIT) tests/isolate_worker_refused.shen
 
 test-isolates-stress: $(BUILD)/shen-jit
 	SHEN_JIT_GC_STRESS=1 $(BUILD)/shen-jit eval -l tests/isolates.shen | $(FFI_RESULT)
@@ -353,7 +389,7 @@ test-libs: test-buffer test-json test-io test-fs test-process test-tree-sitter t
 
 # lib/parallel.shen: a map over isolates.
 test-parallel: $(BUILD)/shen-jit
-	$(BUILD)/shen-jit eval -l lib/parallel.shen -l tests/parallel.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m parallel -l tests/parallel.shen | $(FFI_RESULT)
 
 .PHONY: test-namespaces
 test-namespaces: $(BUILD)/shen-jit-stlib
@@ -362,6 +398,7 @@ test-namespaces: $(BUILD)/shen-jit-stlib
 .PHONY: test-structs
 test-structs: $(BUILD)/shen-jit-stlib
 	sh tests/structs.sh $(SHEN_JIT) $(abspath $(BUILD)/shen-jit-stlib)
+	sh tests/refused.sh $(SHEN_JIT) tests/structs_refused.shen
 
 # The libraries' saved images reloaded with a collection at every allocation, which their own suites
 # leave out for speed.
@@ -391,85 +428,73 @@ test-thorn: $(BUILD)/shen-jit-stlib
 # Native code written by hand (docs/bytecode.md, "Native code written by hand"). A macro
 # applies only to files read after it, so the tests load as a file of their own.
 test-native: $(BUILD)/shen-jit
-	SHEN_JIT_GC_STRESS=$(GC_STRESS) $(BUILD)/shen-jit eval -l lib/native.shen -l tests/native.shen | \
+	SHEN_JIT_GC_STRESS=$(GC_STRESS) $(BUILD)/shen-jit eval -m native -l tests/native.shen | \
 	  grep '^[0-9]* passed' | awk '{ print } END { exit !/ 0 failed/ }'
 
 # Byte views and cursors, and grammars over them, independent of native assembly or kernel streams.
 # A macro applies only to files read after it, so the grammar tests load as a file of their own.
 test-buffer: $(BUILD)/shen-jit
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen -l tests/buffer.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/grammar.shen -l tests/grammar.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -l tests/grammar_stream.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -l tests/grammar_isolates.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -e '(tc +)' -l tests/grammar_typed.shen | $(FFI_RESULT)
+	sh tests/refused.sh $(SHEN_JIT) tests/option_refused.shen -m option
+	$(BUILD)/shen-jit eval -m cursor -l tests/buffer.shen | $(FFI_RESULT)
+	SHEN_JIT_SEAL=1 $(BUILD)/shen-jit eval -e '(optimise +)' -m buffer -l tests/buffer_registers.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m grammar -l tests/grammar.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m grammar -l tests/grammar_stream.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m grammar -l tests/grammar_isolates.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m grammar -e '(tc +)' -l tests/grammar_typed.shen | $(FFI_RESULT)
 	sh tests/grammar_typed.sh $(SHEN_JIT)
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen \
-	  -l lib/grammar.shen -l lib/json.shen -l tools/buffer-parsers.shen -l tests/buffer_examples.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen -e '(tc +)' -l tests/buffer_typed.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l lib/handle.shen \
-	  -l lib/buffer.shen -l lib/cursor.shen -l tests/buffer_memory.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m tools/buffer-parsers.shenmod -l tests/buffer_examples.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m cursor -e '(tc +)' -l tests/buffer_typed.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m memory -m handle -m cursor -l tests/buffer_memory.shen | $(FFI_RESULT)
 	sh tests/buffer_image.sh $(SHEN_JIT)
 
 # Complete UTF-8 JSON and bounded output, without FFI or kernel streams.
 test-json: $(BUILD)/shen-jit
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/grammar.shen -l lib/json.shen -l tests/json.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -l lib/json.shen -l tests/json_stream.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -l lib/json.shen -e '(tc +)' -l tests/json_typed.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l lib/buffer.shen -l lib/grammar.shen -l lib/json.shen \
+	$(BUILD)/shen-jit eval -m json -l tests/json.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m json -l tests/json_stream.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m json -e '(tc +)' -l tests/json_typed.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m memory -m json \
 	  -l tests/json_memory.shen | $(FFI_RESULT)
 	sh tests/json_image.sh $(SHEN_JIT)
-	sh tests/refused.sh $(SHEN_JIT) tests/json_refused.shen -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen \
-	  -l lib/json.shen
+	sh tests/refused.sh $(SHEN_JIT) tests/json_refused.shen -m json
 
 # Independent chunk I/O, native file descriptors, typed results and image/GC safety.
 test-io: $(BUILD)/shen-jit
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l tests/io.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/buffer.shen -l lib/io.shen -l lib/io-file.shen \
+	$(BUILD)/shen-jit eval -m io -l tests/io.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m io/file \
 	  -e '(tc +)' -l tests/io_typed.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m result -l tests/result.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m io/file -e '(tc +)' -l tests/result_typed.shen | $(FFI_RESULT)
+	sh tests/refused.sh $(SHEN_JIT) tests/result_refused.shen -m result
 	sh tests/io_file.sh $(SHEN_JIT)
 	sh tests/io_image.sh $(SHEN_JIT)
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/frame.shen -l tests/frame.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
-	  -l lib/io-socket.shen -l lib/frame.shen -e '(tc +)' -l tests/frame_typed.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
-	  -l lib/io-socket.shen -l lib/frame.shen -l tools/frame-echo.shen -l tests/io_socket.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m frame -l tests/frame.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m io/socket -m frame -e '(tc +)' -l tests/frame_typed.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m tools/frame-echo.shenmod -l tests/io_socket.shen | $(FFI_RESULT)
 	sh tests/frame_image.sh $(SHEN_JIT)
 	sh tests/io_socket_image.sh $(SHEN_JIT)
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/deadline.shen -l tests/deadline.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/deadline.shen \
-	  -l lib/http-head.shen -l tests/http_head.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
-	  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l tests/io_deadline.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
-	  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/http-head.shen \
+	$(BUILD)/shen-jit eval -m deadline -l tests/deadline.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m http -l tests/http_head.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m clock -m io/socket -l tests/io_deadline.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m clock -m io/socket -m http \
 	  -e '(tc +)' -l tests/http_typed.shen | $(FFI_RESULT)
 	sh tests/http_image.sh $(SHEN_JIT)
 
 # Complete request parsing, bounded bodies, response streams and persistent connections.
 test-http: $(BUILD)/shen-jit
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/deadline.shen -l lib/grammar.shen -l lib/http-head.shen \
-	  -l lib/http-request.shen -l lib/http-response.shen -l tests/http_stream.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/deadline.shen -l lib/grammar.shen -l lib/http-head.shen \
-	  -l lib/http-request.shen -l lib/http-response.shen -l tests/http_chunked.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -l lib/http-head.shen \
-	  -l lib/http-request.shen -l lib/http-response.shen -l tests/http_request.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/deadline.shen -l lib/grammar.shen -l lib/http-head.shen \
-	  -l lib/http-request.shen -l tests/http_read.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
-	  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/grammar.shen -l lib/http-head.shen \
-	  -l lib/http-request.shen -l lib/http-response.shen -l lib/http-server.shen \
+	sh tests/typing_growth.sh $(SHEN_JIT)
+	$(BUILD)/shen-jit eval -l tests/http_rule_scope.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m http/response -l tests/http_stream.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m http/response -l tests/http_chunked.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m http/response -l tests/http_request.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m http/request -l tests/http_read.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m http/server \
 	  -e '(tc +)' -l tests/http_request_typed.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
-	  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/grammar.shen -l lib/http-head.shen \
-	  -l lib/http-request.shen -l lib/http-response.shen -l lib/http-server.shen \
+	$(BUILD)/shen-jit eval -m http/request \
+	  -e '(tc +)' -l tests/http_request_metadata_typed.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m http/server \
 	  -e '(tc +)' -l tests/http_stream_typed.shen | $(FFI_RESULT)
-	sh tests/refused.sh $(SHEN_JIT) tests/http_refused.shen -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen \
-	  -l lib/io.shen -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/grammar.shen -l lib/http-head.shen \
-	  -l lib/http-request.shen -l lib/http-response.shen -l lib/http-server.shen
-	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
-	  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/grammar.shen -l lib/http-head.shen \
-	  -l lib/http-request.shen -l lib/http-response.shen -l lib/http-server.shen \
-	  -l lib/memory.shen -l tests/http_server.shen | $(FFI_RESULT)
+	sh tests/refused.sh $(SHEN_JIT) tests/http_refused.shen -m http/server
+	$(BUILD)/shen-jit eval -m http/server -m memory -l tests/http_server.shen | $(FFI_RESULT)
 	sh tests/http_request_image.sh $(SHEN_JIT)
 	sh tests/http_stream_image.sh $(SHEN_JIT)
 	sh tests/http_listener.sh $(SHEN_JIT)
@@ -494,11 +519,11 @@ test-overrides: $(BUILD)/shen-jit
 # Datalog (lib/datalog.shen): fixtures by hand, its kernels, and generated programs against its reference. A macro
 # applies only to files read after it, so the tests load as a file of their own.
 test-datalog: $(BUILD)/shen-jit
-	SHEN_JIT_GC_STRESS=$(GC_STRESS) $(BUILD)/shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/datalog-generate.shen -l tests/datalog.shen < /dev/null | \
+	SHEN_JIT_GC_STRESS=$(GC_STRESS) $(BUILD)/shen-jit eval -m datalog -l tests/datalog-generate.shen -l tests/datalog.shen < /dev/null | \
 	  grep -a 'FAIL\|uncaught\| checks, ' | awk '{ print } END { exit !/ 0 failed$$/ }'
-	$(BUILD)/shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/datalog-generate.shen \
+	$(BUILD)/shen-jit eval -m datalog -l tests/datalog-generate.shen \
 	  -l tests/datalog_isolates.shen < /dev/null | grep -a 'FAIL\|uncaught\| checks, ' | awk '{ print } END { exit !/ 0 failed$$/ }'
-	$(BUILD)/shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/datalog-generate.shen -l tests/datalog_parallel.shen < /dev/null | \
+	$(BUILD)/shen-jit eval -m datalog -l tests/datalog-generate.shen -l tests/datalog_parallel.shen < /dev/null | \
 	  grep -a 'FAIL\|uncaught\| checks, ' | awk '{ print } END { exit !/ 0 failed$$/ }'
 	sh example-apps/depends/test.sh $(BUILD)/shen-jit $(KERNEL_DIR)/klambda
 	CC="$(CC)" sh example-apps/source-deps/test.sh $(SHEN_JIT)
@@ -521,21 +546,21 @@ differential-scheme: $(BUILD)/shen-jit
 # print raw bytes, which would make grep hide the count.
 FFI_RESULT := grep -a '^FAIL \|^[0-9]* passed' | awk '{ print } END { exit !/ 0 failed/ }'
 # The tests that any kind of build runs, given how to run the executable.
-FFI_SUITES = $(1) eval -l ../lib/ffi.shen -l ../tests/ffi.shen | $(FFI_RESULT) && \
-	  $(1) eval -l ../lib/ffi.shen -l ../tests/ffi_c.shen | $(FFI_RESULT) && \
-	  $(1) eval -l ../lib/ffi.shen -l ../lib/sqlite.shen -l ../tests/sqlite.shen | $(FFI_RESULT) && \
-	  $(1) eval -l ../lib/ffi.shen -l ../lib/socket.shen -l ../tests/socket.shen | $(FFI_RESULT) && \
-	  $(1) eval -l ../lib/ffi.shen -l ../lib/native.shen -l ../lib/memory.shen -l ../tests/memory.shen | $(FFI_RESULT) && \
-	  $(1) eval -l ../lib/ffi.shen -l ../lib/memory.shen -l ../lib/handle.shen -l ../tests/handle.shen | $(FFI_RESULT) && \
-	  $(1) eval -l ../lib/ffi.shen -l ../lib/mmap.shen -l ../lib/handle.shen -l ../tests/mmap.shen | $(FFI_RESULT)
+FFI_SUITES = $(1) eval -m ffi -l ../tests/ffi.shen | $(FFI_RESULT) && \
+	  $(1) eval -m ffi -l ../tests/ffi_c.shen | $(FFI_RESULT) && \
+	  $(1) eval -m sqlite -l ../tests/sqlite.shen | $(FFI_RESULT) && \
+	  $(1) eval -m socket -l ../tests/socket.shen | $(FFI_RESULT) && \
+	  $(1) eval -m native -m memory -l ../tests/memory.shen | $(FFI_RESULT) && \
+	  $(1) eval -m memory -m handle -l ../tests/handle.shen | $(FFI_RESULT) && \
+	  $(1) eval -m mmap -m handle -l ../tests/mmap.shen | $(FFI_RESULT)
 
 $(FFI_TEST_LIB): tests/ffi_lib.c include/shen.h | $(BUILD)
 	$(CC) -std=c11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Iinclude -shared -fPIC -pthread -o $@ $<
 
 test-ffi: $(BUILD)/shen-jit $(FFI_TEST_LIB)
-	cd $(BUILD) && SHEN_JIT_GC_STRESS=$(GC_STRESS) ./shen-jit eval -l ../lib/ffi.shen -e '(tc +)' -l ../tests/ffi_typed.shen | $(FFI_RESULT)
+	cd $(BUILD) && SHEN_JIT_GC_STRESS=$(GC_STRESS) ./shen-jit eval -m ffi -e '(tc +)' -l ../tests/ffi_typed.shen | $(FFI_RESULT)
 	cd $(BUILD) && $(call FFI_SUITES,SHEN_JIT_GC_STRESS=$(GC_STRESS) ./shen-jit)
-	sh tests/refused.sh $(SHEN_JIT) tests/ffi_refused.shen -l lib/ffi.shen
+	sh tests/refused.sh $(SHEN_JIT) tests/ffi_refused.shen -m ffi
 
 # A real Ctrl-C to the REPL on Windows, which tests/cli.sh cannot send there.
 test-ctrlc-windows: $(BUILD)/shen-jit
@@ -577,24 +602,28 @@ bench-independent: all
 	python3 tests/bench/independent.py --rounds $(INDEPENDENT_ROUNDS) --kernel $(KERNEL_DIR) \
 	  $(if $(STLIB_DIR),--stlib $(STLIB_DIR)) --scheme $(SHEN_SCHEME) $(SHEN_JIT)
 
-# Numeric programs in C, in Shen with boxed reals, and in Shen with real registers.
+# Numeric programs in C, in Shen with boxed floats, and in Shen with float registers.
 NUMERIC_RESULT := grep -a '^[a-z]* [0-9.e-]* s check'
 # Datalog's workloads: a generated graph of each shape, and the call graph of the kernel's KL, closed and analysed.
 bench-datalog: $(BUILD)/shen-jit
-	$(BUILD)/shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/bench/datalog.shen -e '(db.main "$(KERNEL_DIR)/klambda")' < /dev/null | \
+	$(BUILD)/shen-jit eval -m datalog -l tests/bench/datalog.shen -e '(db.main "$(KERNEL_DIR)/klambda")' < /dev/null | \
 	  grep -a ' | \|^facts\|uncaught'
 	for c in chain-a chain-b small-a small-b large-a large-b; do for a in false true; do \
-	  $(BUILD)/shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/bench/datalog.shen -l tests/bench/datalog-orders.shen -e "(do.run $$c $$a)" < /dev/null | grep -a ' | ' | head -1; \
+	  $(BUILD)/shen-jit eval -m datalog -l tests/bench/datalog.shen -l tests/bench/datalog-orders.shen -e "(do.run $$c $$a)" < /dev/null | grep -a ' | ' | head -1; \
 	done; done
 
 bench-numeric: $(BUILD)/shen-jit
 	$(CC) -O2 -ffp-contract=off -o $(BUILD)/numeric-c tests/bench/numeric.c -lm
 	$(BUILD)/numeric-c
-	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l tests/bench/numeric.shen | $(NUMERIC_RESULT)
-	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/native.shen -l lib/memory.shen -l tests/bench/numeric-raw.shen | $(NUMERIC_RESULT)
+	$(BUILD)/shen-jit eval -m memory -l tests/bench/numeric.shen | $(NUMERIC_RESULT)
+	$(BUILD)/shen-jit eval -m native -m memory -l tests/bench/numeric-raw.shen | $(NUMERIC_RESULT)
+	$(BUILD)/shen-jit build tests/bench/numeric-typed.shenmod -o $(BUILD)/numeric-typed > /dev/null
+	$(BUILD)/numeric-typed | $(NUMERIC_RESULT)
 	$(CC) -O2 -ffp-contract=off -o $(BUILD)/trace-c tests/bench/trace.c -lm
 	$(BUILD)/trace-c
-	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/native.shen -l lib/memory.shen -l lib/mmap.shen -l lib/handle.shen -l tests/bench/trace.shen | $(NUMERIC_RESULT)
+	$(BUILD)/shen-jit eval -m native -m memory -m mmap -m handle -l tests/bench/trace.shen | $(NUMERIC_RESULT)
+	$(BUILD)/shen-jit build tests/bench/trace-typed.shenmod -o $(BUILD)/trace-typed > /dev/null
+	$(BUILD)/trace-typed | $(NUMERIC_RESULT)
 
 measure: $(BUILD)/test_jit $(BUILD)/bench/programs.sbc
 	cd $(BUILD) && ./test_jit bench/programs.sbc --measure
@@ -624,6 +653,8 @@ test-san: $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stage0/.done 
 	cd $(BUILD) && ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=shen-jit-san.img \
 	  ./shen-jit-san eval -l ../tests/isolates.shen | $(FFI_RESULT)
 	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=$(abspath $(BUILD)/shen-jit-san.img) \
+	  $(BUILD)/shen-jit-san eval -l tests/typed.shen | $(FFI_RESULT)
+	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=$(abspath $(BUILD)/shen-jit-san.img) \
 	  CC="$(CC)" CFLAGS="$(SAN_FLAGS)" sh tests/curl.sh $(BUILD)/shen-jit-san$(EXE)
 	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=$(abspath $(BUILD)/shen-jit-san.img) \
 	  CC="$(CC)" CFLAGS="$(SAN_FLAGS)" sh tests/fs.sh $(BUILD)/shen-jit-san$(EXE)
@@ -640,6 +671,7 @@ test-x86: $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stage0/.done 
 	$(CC) -arch x86_64 -arch arm64 -std=c11 -O1 -w -Iinclude -shared -o $(FFI_TEST_LIB) tests/ffi_lib.c
 	cd $(BUILD) && ./shen-jit-x86 --stage1 stage0 shen-jit-x86.img && \
 	  $(call FFI_SUITES,SHEN_JIT_IMAGE=shen-jit-x86.img ./shen-jit-x86)
+	SHEN_JIT_IMAGE=$(abspath $(BUILD)/shen-jit-x86.img) $(BUILD)/shen-jit-x86 eval -l tests/typed.shen | $(FFI_RESULT)
 
 clean:
 	rm -f $(BUILD)/*.o $(BUILD)/test_* $(BUILD)/load_kernel $(BUILD)/*.img $(BUILD)/runtime $(BUILD)/shen-jit

@@ -28,8 +28,11 @@
 
 (define json-typed.read
   {--> boolean}
-  -> (let R (io.reader (io.input-buffer (buffer.from-string "[1] {}")) [])
+  -> (let R (io.reader (io.input-buffer (buffer.from-string "[1] {} []")) [])
           First (json.read R [])
           Second (json.read R [])
-       (= [First Second (json.read R [])] [[ok [[number "1"]]] [ok [object]] [eof]])))
+          EmptyArray (json.read R [])
+          End (json.read R [])
+       (and (= First (:result.ok [[[number "1"]]])) (= Second (:result.ok [[object]]))
+            (= EmptyArray (:result.ok [[]])) (= End (:result.ok [])))))
 (output "~A~%" (if (json-typed.run) "1 passed, 0 failed" "0 passed, 1 failed"))

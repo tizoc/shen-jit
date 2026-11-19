@@ -1,7 +1,7 @@
 \* Datalog workloads: lib/datalog.shen over a generated graph of each shape, and an actual source
    analysis, the call graph of the kernel's KL. Each row is one run: the seconds of the first run,
    which compiles, of a later one, and what it derived.
-   Usage: shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/bench/datalog.shen -e '(db.main "KLAMBDA_DIR")' *\
+   Usage: shen-jit eval -m datalog -l tests/bench/datalog.shen -e '(db.main "KLAMBDA_DIR")' *\
 
 (set db.*seed* 2463534242)
 

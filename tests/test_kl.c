@@ -56,7 +56,7 @@ static double now(void)
     return t.tv_sec + t.tv_nsec * 1e-9;
 }
 
-/* Exact structural equality: integers and reals differ, reals compare by
+/* Exact structural equality: integers and floats differ, floats compare by
    bits. */
 static bool same(V a, V b)
 {
@@ -76,7 +76,7 @@ static bool same(V a, V b)
         case T_STRING:
             return string_length(a) == string_length(b) &&
                    memcmp(string_bytes(a), string_bytes(b), string_length(a)) == 0;
-        case T_REAL: return ptr(a)[REAL_VALUE] == ptr(b)[REAL_VALUE];
+        case T_FLOAT: return ptr(a)[FLOAT_VALUE] == ptr(b)[FLOAT_VALUE];
         default: return false;
         }
     }
@@ -136,8 +136,8 @@ static void dump(FILE *f, V v)
         fprintf(f, "%.*s", (int)string_length(ptr(v)[SYM_NAME]), string_bytes(ptr(v)[SYM_NAME]));
     else if (is_object(v) && obj_type(v) == T_STRING)
         fprintf(f, "\"%.*s\"", (int)string_length(v), string_bytes(v));
-    else if (is_object(v) && obj_type(v) == T_REAL)
-        fprintf(f, "%.17g", real_value(v));
+    else if (is_object(v) && obj_type(v) == T_FLOAT)
+        fprintf(f, "%.17g", float_value(v));
     else
         fputs("#<object>", f);
 }
@@ -246,8 +246,8 @@ static void print_value(V v, int depth)
         fputs(v == V_NIL ? ")" : " ...)", stderr);
     } else if (is_object(v) && obj_type(v) == T_STRING)
         fprintf(stderr, "\"%.*s\"", (int)string_length(v), string_bytes(v));
-    else if (is_object(v) && obj_type(v) == T_REAL)
-        fprintf(stderr, "%.17g", real_value(v));
+    else if (is_object(v) && obj_type(v) == T_FLOAT)
+        fprintf(stderr, "%.17g", float_value(v));
     else
         fputs("#<object>", stderr);
 }

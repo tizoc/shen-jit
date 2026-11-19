@@ -33,7 +33,7 @@ CASES=${*:-closure-sparse closure-dense nonlinear same-generation mutual triangl
 for c in closure-sparse closure-dense nonlinear same-generation mutual triangles skewed-join call-graph points-to-small-a points-to-small-b points-to-small-c points-to-large-a points-to-large-b points-to-large-c; do
     mkdir -p "$base/$c"
 done
-"$SHEN" eval -l lib/native.shen -l lib/datalog.shen -l tests/bench/datalog.shen -l tests/bench/datalog-orders.shen \
+"$SHEN" eval -m datalog -l tests/bench/datalog.shen -l tests/bench/datalog-orders.shen \
     -l tests/bench/datalog-souffle.shen -e "(set sf.*parallel* ${PARALLEL:-0})" -e "(sf.main \"$base\")" > "$base/ours.log" 2>&1 < /dev/null
 if ! grep -aq '^OURS points-to-large-c' "$base/ours.log"; then
     tail -8 "$base/ours.log" | cut -c1-160

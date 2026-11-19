@@ -146,8 +146,11 @@ static W call_variadic(void *f, const Call *c, unsigned fixed)
 }
 
 /* Loading. Libraries are remembered by the file names they were declared with, since trying
-   names that do not exist is slow and a library has many functions. The lock guards them. */
+   names that do not exist is slow and a library has many functions. The lock guards them.
+   The image advertises the feature shen-jit/ffi only where they load (main.c). */
 #ifdef SHEN_JIT_STATIC
+bool ffi_loads_libraries(void) { return false; }
+
 static void *resolve(VM *vm, uint64_t *f)
 {
     (void)f;
@@ -155,6 +158,8 @@ static void *resolve(VM *vm, uint64_t *f)
     return NULL;
 }
 #else
+bool ffi_loads_libraries(void) { return true; }
+
 #ifndef _WIN32
 static void *library_open(const char *file) { return dlopen(file, RTLD_NOW | RTLD_LOCAL); }
 static void *library_find(void *library, const char *name) { return dlsym(library, name); }
@@ -173,7 +178,30 @@ static Library *libraries;
 static size_t nlibraries;
 static pthread_mutex_t library_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static void *open_library_locked(V files)
+/* A file name that is not absolute, which a library not found as named is looked for again with,
+   from the executable's directory: a built program then finds a library shipped beside it, or in
+   its lib/, wherever it runs (docs/ffi.md). Names as written go first, so nothing found before
+   changes. */
+static void *open_beside(const char *self, const char *file)
+{
+#ifdef _WIN32
+    if (file[0] == '/' || file[0] == '\\' || (file[0] && file[1] == ':'))
+        return NULL;
+#else
+    if (file[0] == '/')
+        return NULL;
+#endif
+    if (!self)
+        return NULL;
+    const char *end = self + strlen(self);
+    while (end > self && end[-1] != '/' && end[-1] != '\\')
+        end--;
+    char path[4096];
+    int n = snprintf(path, sizeof path, "%.*s%s", (int)(end - self), self, file);
+    return end > self && n > 0 && (size_t)n < sizeof path ? library_open(path) : NULL;
+}
+
+static void *open_library_locked(V files, const char *self)
 {
     char key[2048];
     size_t length = 0;
@@ -191,6 +219,8 @@ static void *open_library_locked(V files)
     void *library = length ? NULL : library_open(NULL);
     for (size_t at = 0; at < length && !library; at += strlen(key + at) + 1)
         library = library_open(key + at);
+    for (size_t at = 0; at < length && !library; at += strlen(key + at) + 1)
+        library = open_beside(self, key + at);
     if (!library)
         return NULL;
     Library *more = realloc(libraries, (nlibraries + 1) * sizeof *more);
@@ -206,10 +236,10 @@ static void *open_library_locked(V files)
     return library;
 }
 
-static void *open_library(V files)
+static void *open_library(V files, const char *self)
 {
     pthread_mutex_lock(&library_lock);
-    void *library = open_library_locked(files);
+    void *library = open_library_locked(files, self);
     pthread_mutex_unlock(&library_lock);
     return library;
 }
@@ -221,7 +251,7 @@ static void *resolve(VM *vm, uint64_t *f)
     char c_name[256];
     snprintf(c_name, sizeof c_name, "%.*s", string_length(symbol) < 255 ? (int)string_length(symbol) : 255,
              string_bytes(symbol));
-    void *library = open_library(desc[DESC_FILES]);
+    void *library = open_library(desc[DESC_FILES], vm->self);
     void *address = library ? library_find(library, c_name) : NULL;
     if (!address) {
         char text[400];
@@ -282,8 +312,8 @@ static V convert(VM *vm, Converted *c, unsigned type, V v, int i)
     case F_DOUBLE:
         if (is_fix(v))
             put_double(&c->call, (D)fixval(v));
-        else if (is_object(v) && obj_type(v) == T_REAL)
-            put_double(&c->call, real_value(v));
+        else if (is_object(v) && obj_type(v) == T_FLOAT)
+            put_double(&c->call, float_value(v));
         else
             return sj_raise_value(vm, "foreign: ~S is not a number", v);
         return V_NIL;
@@ -349,6 +379,30 @@ static V result_string(VM *vm, const char *s, bool may_be_in_heap)
 
 static V call_procedure(VM *vm, void *function, size_t n);
 
+/* Whether f is a C function of n doubles giving a double, neither blocking nor variadic, which
+   typed code calls with its floats in registers (jit.c, float-call1 and the rest). */
+bool ffi_floats(V f, unsigned n)
+{
+    if (!is_proc(f) || hdr_type(ptr(f)[0]) != T_FOREIGN || ptr(f)[FOREIGN_ARITY] != n)
+        return false;
+    const uint64_t *desc = ptr(ptr(f)[FOREIGN_DESC]) + 1;
+    if (fixval(desc[DESC_RESULT]) != F_DOUBLE || fixval(desc[DESC_FLAGS]) != 0)
+        return false;
+    for (unsigned i = 0; i < n; i++)
+        if (fixval(desc[DESC_TYPES + i]) != F_DOUBLE)
+            return false;
+    return true;
+}
+
+/* The address of f, a C function, found on its first call; V_CLEARED, having raised, if not found. */
+V ffi_address(VM *vm, V f)
+{
+    void *function = (void *)(uintptr_t)__atomic_load_n(&ptr(f)[FOREIGN_ADDRESS], __ATOMIC_RELAXED);
+    if (!function && !(function = resolve(vm, ptr(f))))
+        return V_CLEARED;
+    return (V)(uintptr_t)function;
+}
+
 V h_foreign(VM *vm)
 {
     uint64_t *f = ptr(vm->fp[1]);
@@ -380,11 +434,11 @@ V h_foreign(VM *vm)
     }
 
     W word = 0;
-    D real = 0;
+    D dbl = 0;
     if (fixed)
         word = call_variadic(function, &c.call, fixed);
     else if (result == F_DOUBLE)
-        real = call_double(function, &c.call);
+        dbl = call_double(function, &c.call);
     else
         word = call_word(function, &c.call);
 #ifdef _WIN32
@@ -402,7 +456,7 @@ V h_foreign(VM *vm)
     case F_INT32: out = fix((int32_t)word); break;
     case F_UINT32: out = fix((uint32_t)word); break;
     case F_BOOL: out = (word & 0xFF) ? V_TRUE : V_FALSE; break;
-    case F_DOUBLE: out = make_real(vm, real); break;
+    case F_DOUBLE: out = make_float(vm, dbl); break;
     case F_STRING: out = result_string(vm, (const char *)(uintptr_t)word, buffers); break;
     case F_POINTER:
         out = word ? make_pointer(vm, word, ptr(ptr(vm->fp[1])[FOREIGN_DESC])[1 + DESC_KIND]) : V_NIL;
@@ -475,13 +529,7 @@ static V define_foreign(VM *vm)
     if (proc == V_CLEARED)
         return sj_raise_text_value(vm, why, vm->args[0]);
     name = vm->args[0]; /* it may have moved */
-    size_t cell = symbol_cell(name);
-    if (vm->program->redefine)
-        vm->program->redefine(vm, cell);
-    *cell_function(vm, cell) = proc;
-    if (vm->seal_user)
-        symbol_seal(name);
-    return name;
+    return program_install(vm, name, proc) ? name : sj_raise(vm, "out of memory");
 }
 
 static bool is_pointer(V v) { return is_object(v) && obj_type(v) == T_POINTER; }
@@ -656,14 +704,14 @@ static int api_is_string(shen_vm *sv, shen_value v) { READ(v, "shen_is_string wa
 static int api_is_pair(shen_vm *sv, shen_value v) { READ(v, "shen_is_pair was given"); return is_pair(v); }
 static int api_is_vector(shen_vm *sv, shen_value v) { READ(v, "shen_is_vector was given"); return has_type(v, T_VECTOR); }
 static int api_is_symbol(shen_vm *sv, shen_value v) { READ(v, "shen_is_symbol was given"); return is_symbol(v); }
-static int api_is_real(shen_vm *sv, shen_value v) { READ(v, "shen_is_real was given"); return has_type(v, T_REAL); }
+static int api_is_float(shen_vm *sv, shen_value v) { READ(v, "shen_is_float was given"); return has_type(v, T_FLOAT); }
 static int api_is_bytes(shen_vm *sv, shen_value v) { READ(v, "shen_is_bytes was given"); return has_type(v, T_BYTES); }
 static int api_is_procedure(shen_vm *sv, shen_value v) { READ(v, "shen_is_procedure was given"); return is_proc(v); }
 
 static double api_number(shen_vm *sv, shen_value v)
 {
     READ(v, "shen_number was given");
-    return is_fix(v) ? (double)fixval(v) : has_type(v, T_REAL) ? real_value(v) : __builtin_nan("");
+    return is_fix(v) ? (double)fixval(v) : has_type(v, T_FLOAT) ? float_value(v) : __builtin_nan("");
 }
 
 static shen_value api_head(shen_vm *sv, shen_value v)
@@ -761,10 +809,10 @@ static shen_value api_function(shen_vm *sv, const char *name)
 /* What the makers below come to. */
 static V made(VM *vm, V v) { return v == V_CLEARED ? sj_raise(vm, "out of memory") : v; }
 
-static shen_value api_make_real(shen_vm *sv, double d)
+static shen_value api_make_float(shen_vm *sv, double d)
 {
     VM *vm = vm_of(sv);
-    return made(vm, make_real(vm, d));
+    return made(vm, make_float(vm, d));
 }
 
 /* Bytes from a string or buffer would move in the allocation, so they are copied first. */
@@ -1005,12 +1053,12 @@ static void api_acquire(shen_vm *sv, void *token)
 static const struct shen_api api_table = {
     .version = SHEN_API_VERSION,
     .is_string = api_is_string, .is_pair = api_is_pair, .is_vector = api_is_vector, .is_symbol = api_is_symbol,
-    .is_real = api_is_real, .is_bytes = api_is_bytes, .is_procedure = api_is_procedure,
+    .is_float = api_is_float, .is_bytes = api_is_bytes, .is_procedure = api_is_procedure,
     .number = api_number, .head = api_head, .tail = api_tail,
     .vector_length = api_vector_length, .vector_ref = api_vector_ref, .symbol_name = api_symbol_name,
     .string_bytes = api_string_bytes, .string_copy = api_string_copy, .bytes_data = api_bytes_data,
     .pointer = api_pointer, .global = api_global, .function = api_function,
-    .make_real = api_make_real, .make_string = api_make_string, .make_bytes = api_make_bytes,
+    .make_float = api_make_float, .make_string = api_make_string, .make_bytes = api_make_bytes,
     .cons = api_cons, .make_vector = api_make_vector, .intern = api_intern, .make_pointer = api_make_pointer,
     .vector_set = api_vector_set,
     .root = api_root, .unroot = api_unroot,

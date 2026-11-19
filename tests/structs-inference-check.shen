@@ -1,0 +1,7 @@
+(if (and (= (proof-test.sum [(:result.ok 1) (:result.ok 2) (:result.ok 3)
+                             (:result.ok 4) (:result.ok 5) (:result.ok 6)]) (:result.ok 21))
+         (= (proof-test.sum []) (:result.err "too few readings"))
+         (= (proof-test.painted-rows (proof-test.red.make 1) (proof-test.blue.make 2)) 2)
+         (= (proof-test.rows (proof-test.red.make 1) (proof-test.blue.make 2)) 2))
+    (output "struct inference passed~%")
+    (simple-error "wrong struct inference result"))

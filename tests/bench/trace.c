@@ -33,7 +33,7 @@ static uint64_t next_word(void)
     return x * UINT64_C(2685821657736338717);
 }
 
-static double next_real(void) { return (double)(int64_t)(next_word() >> 11) * (1.0 / 9007199254740992.0); }
+static double next_float(void) { return (double)(int64_t)(next_word() >> 11) * (1.0 / 9007199254740992.0); }
 
 static void path(double dx, double dy, double dz, double *out)
 {
@@ -85,9 +85,9 @@ static void path(double dx, double dy, double dz, double *out)
         } else {
             double ux, uy, uz, len;
             for (;;) {
-                ux = 2 * next_real() - 1;
-                uy = 2 * next_real() - 1;
-                uz = 2 * next_real() - 1;
+                ux = 2 * next_float() - 1;
+                uy = 2 * next_float() - 1;
+                uz = 2 * next_float() - 1;
                 len = ux * ux + (uy * uy + uz * uz);
                 if (len < 1 && len > 0.0009765625)
                     break;
@@ -123,8 +123,8 @@ int main(int argc, char **argv)
     for (int y = 0; y < HEIGHT; y++)
         for (int x = 0; x < WIDTH; x++)
             for (int n = 0; n < SAMPLES; n++) {
-                double px = ((double)x + next_real() - (double)WIDTH * 0.5) * (2.0 / (double)HEIGHT);
-                double py = (((double)HEIGHT * 0.5) - (double)y - next_real()) * (2.0 / (double)HEIGHT);
+                double px = ((double)x + next_float() - (double)WIDTH * 0.5) * (2.0 / (double)HEIGHT);
+                double py = (((double)HEIGHT * 0.5) - (double)y - next_float()) * (2.0 / (double)HEIGHT);
                 double pz = -2;
                 double norm = sqrt(px * px + (py * py + pz * pz));
                 path(px / norm, py / norm, pz / norm, &pixels[(y * WIDTH + x) * 3]);

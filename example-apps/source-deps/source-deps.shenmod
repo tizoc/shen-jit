@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name source-deps)
+  (requires fs json datalog parallel result)
+  (main source-deps.entry)
+  (sources tc- "model.shen" "read.shen" "report.shen" "batch-graph.shen" "batch.shen" "command.shen"))

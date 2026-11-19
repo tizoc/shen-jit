@@ -103,7 +103,7 @@
 (ffi-test.check "past uint32" [error "foreign: 4294967296 is not a uint32"] (freeze (echo-u32 4294967296)))
 (ffi-test.check "below uint32" [error "foreign: -1 is not a uint32"] (freeze (echo-u32 -1)))
 (ffi-test.check "not an integer" [error "foreign: c#34;ac#34; is not an integer"] (freeze (add64 "a" 1)))
-(ffi-test.check "a real is not an integer" [error "foreign: 1.5 is not an integer"] (freeze (add64 1.5 1)))
+(ffi-test.check "a float is not an integer" [error "foreign: 1.5 is not an integer"] (freeze (add64 1.5 1)))
 (ffi-test.check "not a number" [error "foreign: a is not a number"] (freeze (half a)))
 (ffi-test.check "bool true, as an argument" 0 (freeze (negate-bool true)))
 (ffi-test.check "bool false, as an argument" 1 (freeze (negate-bool false)))
@@ -218,7 +218,7 @@
 (define ffi-test.masks
   16 -> done
   Mask -> (do (ffi-test.mask Mask "_word" int64)
-              (ffi-test.mask Mask "_real" double)
+              (ffi-test.mask Mask "_float" double)
               (ffi-test.masks (+ Mask 1))))
 (ffi-test.masks 0)
 
@@ -309,10 +309,10 @@
   0 Acc -> Acc
   N Acc -> (ffi-test.churn (- N 1) (cn (rest "abcdefgh") (rest "ijklmnop"))))
 (ffi-test.check "strings and collections" "bcdefghjklmnop" (freeze (ffi-test.churn 3000 "")))
-(define ffi-test.reals
+(define ffi-test.floats
   0 X -> X
-  N X -> (ffi-test.reals (- N 1) (half (* X 2))))
-(ffi-test.check "reals and collections" 1.5 (freeze (ffi-test.reals 3000 1.5)))
+  N X -> (ffi-test.floats (- N 1) (half (* X 2))))
+(ffi-test.check "floats and collections" 1.5 (freeze (ffi-test.floats 3000 1.5)))
 
 \\ ---------------------------------------------------------------------------
 \\ Variadic functions.

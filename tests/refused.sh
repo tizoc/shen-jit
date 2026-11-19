@@ -1,7 +1,7 @@
 #!/bin/sh
 # Typed programs that must not load: tests/refused.sh SHEN FIXTURE ARGUMENTS...
 # Each case in FIXTURE, the lines up to one that is only \\ next, is loaded alone after
-# ARGUMENTS, such as -l lib/json.shen, under (tc +). It passes only if loading stops with a
+# ARGUMENTS, such as -m json, under (tc +). It passes only if loading stops with a
 # type error; the cases call nothing, so that an error at run time cannot pass for one.
 set -eu
 SHEN=$1

@@ -1,10 +1,10 @@
-\\ Typed grammars and typed code that parses with them. Load buffer.shen, io.shen and grammar.shen,
+\\ Typed grammars and typed code that parses with them. Load the grammar module,
 \\ then (tc +), then this.
-(defgrammar <gt.digit> {==> number} B := (- B 48) where (and (>= B 48) (<= B 57));)
+(defgrammar <gt.digit> {==> fixnum} B := (fx- B 48) where (and (fx>= B 48) (fx<= B 57));)
 
-(defgrammar (<gt.number> Acc) {number ==> number}
-  <gt.digit> (<gt.number> (+ (* 10 Acc) <gt.digit>)) := <gt.number>;
-  <gt.digit> := (+ (* 10 Acc) <gt.digit>);)
+(defgrammar (<gt.number> Acc) {fixnum ==> fixnum}
+  <gt.digit> (<gt.number> (fx+ (fx* 10 Acc) <gt.digit>)) := <gt.number>;
+  <gt.digit> := (fx+ (fx* 10 Acc) <gt.digit>);)
 
 \\ Rules without a value need no type, and typed rules call them.
 (defgrammar <gt.space> B where (= B 32);)
@@ -12,20 +12,22 @@
 (defgrammar <gt.letter> B where (and (>= B 97) (<= B 122));)
 (defgrammar <gt.letters> (+ <gt.letter>);)
 
-(defgrammar <gt.numbers> {==> (list number)}
+(defgrammar <gt.numbers> {==> (list fixnum)}
   (<gt.number> 0) <gt.spaces> <gt.numbers> := [<gt.number> | <gt.numbers>];
   <e> := [];)
 
+(defgrammar <gt.empty-list> {==> (list fixnum)} ";" := [];)
+
 (defgrammar <gt.word> {==> string} (text <gt.letters>) := <gt.letters>;)
 
-(defgrammar <gt.field> {==> (string * number)}
+(defgrammar <gt.field> {==> (string * fixnum)}
   <gt.word> "=" (require (<gt.number> 0) "expected a number") := (@p <gt.word> <gt.number>);)
 
 (defgrammar <gt.bracketed> {==> buffer.view} "[" (span <gt.letters>) "]" := <gt.letters>;)
 
-(defgrammar <gt.short> {==> number} (at A) <gt.letters> (at Z) (where (< (- Z A) 5)) := (- Z A);)
+(defgrammar <gt.short> {==> fixnum} (at A) <gt.letters> (at Z) (where (fx< (fx- Z A) 5)) := (fx- Z A);)
 
-(defgrammar <gt.u16> {==> number} (u16-be N) := N;)
+(defgrammar <gt.u16> {==> fixnum} (u16-be N) := N;)
 
 (defgrammar (<gt.keyword> Word) {string ==> string} <gt.word> := <gt.word> where (= <gt.word> Word);)
 
@@ -33,7 +35,7 @@
 (defgrammar <gt.ahead> {==> string} (<gt.behind> "!") := "ahead";)
 (defgrammar (<gt.behind> Mark) {string ==> string} <gt.word> := (cn <gt.word> Mark);)
 
-(defgrammar <gt.let> {==> (string * number)} (<gt.keyword> "let") " " <gt.field> := <gt.field>;)
+(defgrammar <gt.let> {==> (string * fixnum)} (<gt.keyword> "let") " " <gt.field> := <gt.field>;)
 
 \\ A rule named in another alternative with another capture has the capture's type there.
 (defgrammar <gt.either> {==> string}
@@ -41,7 +43,7 @@
   (text <gt.word>) := <gt.word>;)
 
 (define gt.raise
-  {number --> string --> A}
+  {fixnum --> string --> A}
   At Message -> (error "~A at ~A" Message At))
 
 (define gt.error
@@ -53,7 +55,7 @@
   Text -> (buffer.from-string Text))
 
 (define gt.numbers
-  {string --> (list number)}
+  {string --> (list fixnum)}
   Text -> (grammar.parse <gt.numbers> (gt.view Text) (function gt.raise)))
 
 (define gt.reader
@@ -61,12 +63,12 @@
   Text -> (io.reader (io.input-buffer (gt.view Text)) []))
 
 (define gt.reject
-  {number --> string --> (grammar.read-result A)}
-  At Message -> [error (io.error read "grammar" (make-string "~A at ~A" Message At))])
+  {fixnum --> string --> (io.result (option.t A))}
+  At Message -> (:result.err (io.error read "grammar" (make-string "~A at ~A" Message At))))
 
 (define gt.message
-  {(grammar.read-result A) --> string}
-  [error Error] -> (io.error-message Error)
+  {(io.result (option.t A)) --> string}
+  (:result.err Error) -> (io.error-message Error)
   _ -> "no error")
 
 (define gt.checks
@@ -85,17 +87,22 @@
       (@p "an argument" (grammar.match? (<gt.keyword> "let") (gt.view "let")))
       (@p "an argument that does not match" (not (grammar.match? (<gt.keyword> "let") (gt.view "lot"))))
       (@p "rules within rules" (= (grammar.parse <gt.let> (gt.view "let x=5") (function gt.raise)) (@p "x" 5)))
-      (@p "a read" (= (grammar.read <gt.numbers> (gt.reader "1 22 333") (function gt.reject)) [ok [1 22 333]]))
+      (@p "a read" (= (grammar.read <gt.numbers> (gt.reader "1 22 333") (function gt.reject)) (:result.ok [[1 22 333]])))
       (@p "a read within a limit" (= (grammar.read-within <gt.numbers> (gt.reader "1 22 333") 9 (function gt.reject))
-                                     [ok [1 22 333]]))
+                                     (:result.ok [[1 22 333]])))
       (@p "a read that meets its limit"
           (= (gt.message (grammar.read-within <gt.numbers> (gt.reader "1 22 333") 4 (function gt.reject)))
              "input exceeds the limit at 4"))
       (@p "a read that fails" (= (gt.message (grammar.read <gt.field> (gt.reader "ab=x") (function gt.reject)))
                                  "expected a number at 3"))
-      (@p "a read at the end" (= (grammar.read <gt.field> (gt.reader "") (function gt.reject)) [eof]))
+      (@p "a read at the end" (= (grammar.read <gt.field> (gt.reader "") (function gt.reject)) (:result.ok [])))
+      (@p "a parsed empty list, then EOF on the same reader"
+          (let R (gt.reader ";")
+               Item (grammar.read <gt.empty-list> R (function gt.reject))
+               End (grammar.read <gt.empty-list> R (function gt.reject))
+            (and (= Item (:result.ok [[]])) (= End (:result.ok [])))))
       (@p "a read with an argument" (= (grammar.read (<gt.keyword> "let") (gt.reader "let") (function gt.reject))
-                                       [ok "let"]))
+                                       (:result.ok ["let"])))
       (@p "a call to a rule defined after" (= (grammar.parse <gt.ahead> (gt.view "go") (function gt.raise)) "ahead"))
       (@p "a value and a capture" (= (map (/. T (grammar.parse <gt.either> (gt.view T) (function gt.raise))) ["#ab" "cd"])
                                      ["#ab" "cd"]))])

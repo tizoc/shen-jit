@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name mmap)
+  (requires ffi)
+  (sources tc- "mmap.shen"))

@@ -1,0 +1,1 @@
+(shen.module (version 1) (name c/d) (requires b) (sources tc- "d.shen"))

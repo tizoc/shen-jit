@@ -9,7 +9,7 @@ if ! command -v swipl > /dev/null; then
 fi
 dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
-"$SHEN" eval -l lib/native.shen -l lib/datalog.shen -l tests/datalog-generate.shen -l tests/datalog-swipl.shen \
+"$SHEN" eval -m datalog -l tests/datalog-generate.shen -l tests/datalog-swipl.shen \
     -e "(swi.generated \"$dir\" $COUNT)" > "$dir/log" 2>&1 < /dev/null
 if [ ! -f "$dir/p1.out" ]; then
     tail -5 "$dir/log"

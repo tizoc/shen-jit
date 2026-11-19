@@ -21,7 +21,7 @@ image. It needs `lib/native.shen`, and a macro applies only to files read after 
 ```
 
 ```bash
-shen-jit eval -l lib/native.shen -l lib/datalog.shen -l deps.shen
+shen-jit eval -m datalog -l deps.shen
 ```
 
 [Source facts in Datalog](../example-apps/source-deps/README.md) is a complete application over
@@ -200,11 +200,12 @@ With nodes `a` and `b`, an edge from `a` to `b` and costs 3 and 5 for `a`, `degr
 (define save-imports
   Db Path -> (io.write-file Path (buffer.wrap (datalog.relation->bytes Db imports tsv))))
 
+(define imports-from-result
+  _ (:result.ok View) -> (datalog.bytes->facts dependencies imports (buffer.bytes View) tsv)
+  Path (:result.err E) -> (error "cannot read ~A: ~A" Path (io.error-message E)))
+
 (define load-imports
-  Path -> (let Read (io.read-file Path 100000000)
-            (if (= (hd Read) ok)
-                (datalog.bytes->facts dependencies imports (buffer.bytes (hd (tl Read))) tsv)
-                (error "cannot read ~A: ~A" Path (io.error-message (hd (tl Read)))))))
+  Path -> (imports-from-result Path (io.read-file Path 100000000)))
 
 (let Db (datalog.run dependencies [[imports a b] [imports b c]])
   (do (output "~R~%" (save-imports Db "imports.tsv"))
@@ -212,11 +213,10 @@ With nodes `a` and `b`, an edge from `a` to `b` and costs 3 and 5 for `a`, `degr
 ```
 
 ```bash
-shen-jit eval -l lib/native.shen -l lib/datalog.shen -l lib/ffi.shen -l lib/buffer.shen -l lib/io.shen \
-  -l lib/io-file.shen -l deps.shen -l imports.shen
+shen-jit eval -m datalog -m io/file -l deps.shen -l imports.shen
 ```
 
-  After what `deps.shen` prints, this prints `(ok 8)`, the bytes written, and the facts read back, in no particular order.
+  After what `deps.shen` prints, this prints `#<result.ok 8>`, the bytes written, and the facts read back, in no particular order.
 - **Isolates:** an [isolate](guide.md#isolates) cannot compile, and a run compiles its plans as it goes, so the builder
   prepares a program for isolates and shares it. `(datalog.share Name)` compiles the plan of every rule with no sizes to
   go by, the variants a run uses too, and what loading facts, queries, records and keyed relations call, and gives the

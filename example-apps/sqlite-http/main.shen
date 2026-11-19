@@ -1,6 +1,7 @@
 \\ A small persistent counter API. Load the public HTTP listener, grammar and SQLite libraries first.
 
 (shen.x.namespace counter-app
+  (import result ok err)
   (use buffer)
   (use counter-app)
   (use deadline)
@@ -11,8 +12,8 @@
   (use shen-jit)
   (use sqlite)
   (shadow open run)
-  (externals [body-limit byte-limit chunk chunked closed counter counters defgrammar delete done eof export health
-    increment invalid io.capacity io.close-combine object ok response-body-limit row skip text timeout])
+  (externals [body-limit byte-limit chunked closed counter counters defgrammar delete done export health
+    increment invalid io.capacity object response-body-limit row skip text timeout])
 
 \\ The database keeps a write-ahead log, so that writers do not wait for readers, such as an
 \\ export, nor readers for writers.
@@ -55,8 +56,8 @@
 
 \\ The database belongs to one isolate, which holds it open and does each request's work in turn:
 \\ SQLite takes one writer at a time and makes the others retry, sleeping a millisecond or more for a
-\\ write of tens of microseconds. A handler sends the owning isolate [Job Reply] and waits for [ok
-\\ Result] or [error Message]. Db is the path, the owning isolate's send endpoint and the owning
+\\ write of tens of microseconds. A handler sends the owning isolate [Job Reply] and waits for
+\\ (:ok Result) or (:err Message). Db is the path, the owning isolate's send endpoint and the owning
 \\ isolate, [Path Requests Owner], which crosses to each connection's isolate; or a path alone, for
 \\ which each job opens the database, as the tests do without a server. An export reads through a
 \\ connection of its own, which the log lets it hold while the owning isolate writes.
@@ -98,8 +99,8 @@
       (answer R Got)))
 
 (define answer
-  R [R [ok Result]] -> Result
-  R [R [error Message]] -> (simple-error Message)
+  R [R (:ok Result)] -> Result
+  R [R (:err Message)] -> (simple-error Message)
   _ _ -> (error "the database's owning isolate has ended"))
 
 (define owner
@@ -112,8 +113,8 @@
 \\ isolate, which the send raises if one came during the job, ends it, closing the database.
 (define serve-job
   _ _ [closed] -> done
-  Db Requests [ok [Job Reply]] ->
-    (let Result (trap-error [ok (job Db Job)] (/. X [error (error-to-string X)]))
+  Db Requests (with-externals [ok] [ok [Job Reply]]) ->
+    (let Result (trap-error (:ok (job Db Job)) (/. X (:err (error-to-string X))))
          _ (trap-error (channel.send Reply Result) (function gone))
       (serve-jobs Db Requests)))
 
@@ -160,11 +161,11 @@
 
 (define export-close
   Db Stmt ->
-    (let Finalized (trap-error (do (sqlite.finalize Stmt) [ok 0])
-                      (/. X [error (io.error close "counter export statement" (error-to-string X)) 0]))
-         Closed (trap-error (do (sqlite.close Db) [ok])
-                   (/. X [error (io.error close "counter export database" (error-to-string X))]))
-      (io.close-combine Finalized Closed)))
+    (let Finalized (trap-error (do (sqlite.finalize Stmt) (:ok []))
+                      (/. X (:err (io.error close "counter export statement" (error-to-string X)))))
+         Closed (trap-error (do (sqlite.close Db) (:ok []))
+                   (/. X (:err (io.error close "counter export database" (error-to-string X)))))
+      (io.finish Finalized Closed)))
 
 \\ State: statement, pending encoded row, next row byte, query exhausted.
 \\ A batch owns its bytes; keep only one pending row across sender callbacks.
@@ -176,11 +177,11 @@
 (define export-fill
   State Out Limit D ->
     (cond ((deadline.expired? D)
-            [error (io.native-error read timeout 0 "counter export" "write deadline expired")])
-          ((= (buffer.builder-length Out) Limit) [chunk (buffer.finish Out)])
+            (:err (io.native-error read timeout 0 "counter export" "write deadline expired")))
+          ((= (buffer.builder-length Out) Limit) (:ok [(buffer.finish Out)]))
           ((not (empty? (<-address State 1))) (export-copy State Out Limit D))
           ((<-address State 3)
-            (if (= (buffer.builder-length Out) 0) [eof] [chunk (buffer.finish Out)]))
+            (if (= (buffer.builder-length Out) 0) (:ok []) (:ok [(buffer.finish Out)])))
           (true (export-step State Out Limit D (sqlite.step (<-address State 0))))))
 
 (define export-copy
@@ -268,7 +269,7 @@
 
 (define input-value
   [object ["value" Value]] ->
-    (let N (json.integer Value) (if (and (>= N 0) (<= N 1000000000000)) [ok N] [invalid]))
+    (let N (json.integer Value) (if (and (>= N 0) (<= N 1000000000000)) (:ok N) [invalid]))
   _ -> [invalid])
 
 (define set-request
@@ -282,14 +283,16 @@
 
 (define set-input
   _ _ [invalid] -> (counter-app.error 400 "expected an object with one decimal integer value in 0..1000000000000")
-  Db Name [ok N] -> (found (counter-app.do Db [set Name N])))
+  Db Name (:ok N) -> (found (counter-app.do Db [set Name N])))
 
 \\ The owner, and a server whose handler F is called with Db and the request: [Owner Server]. Each is
 \\ kept in Cell as it is made, so that a failure after it, even making the result, stops the server,
-\\ which closes its listener, and ends the owning isolate.
+\\ which closes its listener, and ends the owning isolate. The grammars compile what is still pending
+\\ first, as the program cannot change once the owning isolate runs.
 (define start
   Path Host Port F Options ->
     (let _ (initialize Path)
+         _ (grammar.finish)
          Cell (address-> (address-> (absvector 2) 0 []) 1 [])
       (shen-jit.on-error
         (freeze (let Owner (kept Cell 0 (open Path))
@@ -311,8 +314,8 @@
   Owner S -> (await-result S (shen-jit.finally (freeze (http.run S)) (freeze (counter-app.close Owner)))))
 
 (define await-result
-  _ [ok] -> true
-  _ [error Error] -> (error "counter server: ~A" (io.error-message Error)))
+  _ (:ok []) -> true
+  _ (:err Error) -> (error "counter server: ~A" (io.error-message Error)))
 
 (define run
   Path Port ->

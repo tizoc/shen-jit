@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name vectors)
+  (requires numbers floats)
+  (sources tc+ "vectors.shen"))

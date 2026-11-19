@@ -96,8 +96,7 @@ check("a program reading input", b"interrupted" in interrupt("(read-byte (stinpu
 interrupt("(+ 1", 0.3)
 check("a half-typed expression is dropped", answer("(+ 3 4)").startswith(b"7"))
 
-answer('(load "lib/ffi.shen")')
-answer('(load "lib/socket.shen")')
+answer('(module.use [socket])')
 answer('(set l (socket.listen "127.0.0.1" 0))')
 check("a socket's accept", b"interrupted" in interrupt("(socket.accept (value l))"))
 answer('(set c (socket.connect "127.0.0.1" (socket.port (value l))))')

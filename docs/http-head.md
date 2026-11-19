@@ -1,6 +1,6 @@
 # HTTP head framing
 
-[lib/http-head.shen](../lib/http-head.shen) captures one bounded HTTP header block through its final
+[lib/http/head.shen](../lib/http/head.shen) captures one bounded HTTP header block through its final
 CRLFCRLF, using our [chunk I/O](io.md) reader. It scans each incoming span once, retains delimiter state
 across splits, and leaves body or subsequent bytes in the reader. It uses no kernel stream or C parser.
 
@@ -11,11 +11,12 @@ structure in [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112.html#section-2.1)
 requires CRLF and rejects bare LF, CR followed by another byte, NUL, DEL and controls other than HTAB.
 Bytes above ASCII are retained; text decoding is separate.
 
-Load `buffer.shen`, `io.shen` and `http-head.shen` with type checking off:
+Load the module `http`, which loads `buffer` and `io` first:
 
 ```sh
-shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/http-head.shen \
-  -e '(let E (io.input-buffer (buffer.from-string "GET / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;body")) R (io.reader E [[chunk-size 2]]) F (http.head-reader R 4096) Head (http.read-head F) Body (io.read-all R 4) _ (io.close E) [(buffer.length (hd (tl Head))) (buffer.string (hd (tl Body)))])'
+shen-jit eval -m http \
+  -e '(define head-length (:result.ok [V]) -> (buffer.length V))' \
+  -e '(let E (io.input-buffer (buffer.from-string "GET / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;body")) R (io.reader E [[chunk-size 2]]) F (http.head-reader R 4096) Head (http.read-head F) Body (io.read-all R 4) _ (io.close E) (result.let-ok B Body [(head-length Head) (buffer.string B)]))'
 ```
 
 This returns `[35 body]`. A program must match error/EOF alternatives before extracting a successful view.
@@ -26,7 +27,7 @@ Managed framing works on static builds and does not need the FFI.
 | Operation | Meaning |
 | --- | --- |
 | `http.head-reader Reader Limit` | A framer borrowing one existing I/O reader |
-| `http.read-head F` | `[head OwnedView]`, `[eof]` or `[error Error]` |
+| `http.read-head F` | `(:result.ok [OwnedView])`, `(:result.ok [])` or `(:result.err Error)` |
 | `http.read-head-until F Deadline` | The same capture, checking a total budget between spans and before completion |
 
 The explicit byte limit includes the final four delimiter bytes. It must be a fixnum from 4 through
@@ -50,7 +51,7 @@ capture is active. The framer does not close its endpoint.
 
 ## Failure and deadlines
 
-EOF before any byte returns `[eof]`; EOF within a partial head is `"incomplete head"`. Framing errors use
+EOF before any byte returns `(:result.ok [])`; EOF within a partial head is `"incomplete head"`. Framing errors use
 operation `http-head`, domain `library` and resource `"HTTP head"`. Transport errors retain native details.
 Progress counts bytes consumed by this capture; for a transport failure it includes all earlier spans.
 An invalid byte is included in that consumed count. Unprocessed suffix bytes stay in the I/O reader.
@@ -73,27 +74,34 @@ budget on the endpoint before reading:
       (http.read-head-until F D)))
 ```
 
-Load `ffi.shen`, `socket.shen`, `buffer.shen`, `io.shen`, `deadline.shen`, `clock.shen`,
-`io-socket.shen` and `http-head.shen` for that function. A new response phase can install a fresh budget;
+Load the modules `clock`, `io/socket` and `http` for that function. A new response phase can install a fresh budget;
 reads that return short prefixes do not create new header budgets. Cancellation, connect/accept/DNS
 budgets, [request parsing, bounded bodies and response encoding](http.md) are available above this layer;
 a listener loop remains separate work.
 
 ## Types and capture example
 
-The public types are opaque `http.head-reader` and the pattern-matchable `http.head-result`:
+The reader has type `http.head-reader`. Both read functions return `(io.result (option.t buffer.view))`.
 
 ```shen
-(define head-size
-  {http.head-result --> number}
-  [head V] -> (buffer.length V)
-  [eof] -> 0
-  [error Error] -> (io.error-progress Error))
+(shen.x.namespace example
+  (use option)
+  (use buffer)
+  (use http)
+  (use io)
+  (import result ok err)
+  (export head-size)
+
+  (define head-size
+    {(io.result (option.t buffer.view)) --> fixnum}
+    (:ok [V]) -> (buffer.length V)
+    (:ok []) -> 0
+    (:err Error) -> (io.error-progress Error)))
 ```
 
 [tools/http-head-capture.shen](../tools/http-head-capture.shen) combines the socket policy and framer in
-an owned connection scope. `http-head.capture Endpoint Limit Milliseconds` returns `[ok OwnedView]` or
-`[error Error]` and closes the endpoint on success or failure. This debugging example sends no HTTP
+an owned connection scope. `http-head.capture Endpoint Limit Milliseconds` returns `(:result.ok OwnedView)` or
+`(:result.err Error)` and closes the endpoint on success or failure. This debugging example sends no HTTP
 response; it is not yet an HTTP server. It demonstrates that framing can finish before peer EOF under
 one total deadline.
 

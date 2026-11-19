@@ -1,0 +1,1 @@
+(shen.module (version 1) (name rules-retry-user) (requires rules-retry) (sources tc+ "rules-retry-b.shen"))

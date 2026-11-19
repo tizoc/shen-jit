@@ -9,9 +9,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parent.parent
-LIBRARIES = ["lib/ffi.shen", "lib/socket.shen", "lib/buffer.shen", "lib/io.shen",
-             "lib/io-file.shen", "lib/deadline.shen", "lib/clock.shen", "lib/io-socket.shen",
-             "lib/http-head.shen", "tools/http-head-capture.shen"]
+LIBRARIES = ["io/file", "tools/http-head-capture.shenmod"]
 
 
 def exercise(executable, destination, limit, duration, slow=False):
@@ -22,15 +20,15 @@ def exercise(executable, destination, limit, duration, slow=False):
                        Peer (socket.closing-on-error L (freeze (socket.accept L)))
                        _ (socket.close L)
                        Result (http-head.capture (io.socket Peer "wire peer") {limit} {duration})
-                    (if (= (hd Result) ok)
-                        (io.write-file "{destination.as_posix()}" (hd (tl Result)))
-                        (let Error (hd (tl Result))
+                    (if (result.ok? Result)
+                        (io.write-file "{destination.as_posix()}" (fixture.success Result))
+                        (let Error (fixture.failure Result)
                           (output "failure: ~A ~A~%" (io.error-domain Error)
                                                     (io.error-progress Error)))))'''
     command = [str(executable), "eval"]
     for library in LIBRARIES:
-        command += ["-l", library]
-    command += ["-e", program]
+        command += ["-m", library]
+    command += ["-l", "tests/result_helpers.shen", "-e", program]
     output_log = tempfile.TemporaryFile()
     error_log = tempfile.TemporaryFile()
     process = subprocess.Popen(command, cwd=ROOT, stdout=output_log, stderr=error_log)

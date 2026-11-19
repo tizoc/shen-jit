@@ -2,10 +2,11 @@
   (use buffer)
   (use datalog)
   (use io)
+  (import result let-ok ok err)
   (use json)
   (use source-deps)
-  (externals [accepted ambiguous at byte-limit chunk-size definition-linkage done edge excluded-file file-edge
-    legacy-file object ok reached report resolved source-call source-context source-declaration source-definition
+  (externals [ambiguous at byte-limit chunk-size definition-linkage done edge excluded-file file-edge
+    legacy-file object reached report resolved source-call source-context source-declaration source-definition
     source-diagnostic source-file source-parse unowned unresolved unresolved-reason])
 
 (define function-value
@@ -69,10 +70,6 @@
             ["container" Owner] ["target" Name] ["owner_candidates" Count]
             ["reason" (if (= Owner "") "outside-function" "missing-or-ambiguous-owner")]])
 
-(define write-result
-  [accepted _] -> [ok done]
-  [error Error _] -> [error Error])
-
 \\ The graph stays in its database; only one encoded report record is buffered here.
 (define emit
   Writer Limits State Value ->
@@ -80,36 +77,36 @@
          N (+ (buffer.length Bytes) 1)
       (if (or (>= (<-address State 1) (<-address Limits 5))
               (> N (- (<-address Limits 4) (<-address State 0))))
-          [error (io.native-error report limit 0 "source dependencies" "report limit exceeded")]
-          (io.let-ok _ (write-result (io.write Writer Bytes))
-            (io.let-ok _ (write-result (io.write Writer (buffer.from-string "c#10;")))
-              (do (address-> State 0 (+ (<-address State 0) N))
-                  (address-> State 1 (+ (<-address State 1) 1))
-                  [ok done]))))))
+          (:err (io.native-error report limit 0 "source dependencies" "report limit exceeded"))
+          (let-ok _ (io.write Writer Bytes)
+                  _ (io.write Writer (buffer.from-string "c#10;"))
+            (do (address-> State 0 (+ (<-address State 0) N))
+                (address-> State 1 (+ (<-address State 1) 1))
+                (:ok done))))))
 
 (define rows
-  _ _ _ _ [] -> [ok done]
+  _ _ _ _ [] -> (:ok done)
   Writer Limits State Relation [Tuple | Rest] ->
-    (io.let-ok _ (emit Writer Limits State (row Relation Tuple))
+    (let-ok _ (emit Writer Limits State (row Relation Tuple))
       (rows Writer Limits State Relation Rest)))
 
 (define relations
-  _ _ _ _ [] -> [ok done]
+  _ _ _ _ [] -> (:ok done)
   Writer Limits State Db [Relation | Rest] ->
-    (io.let-ok _ (rows Writer Limits State Relation (datalog.sorted Db Relation))
+    (let-ok _ (rows Writer Limits State Relation (datalog.sorted Db Relation))
       (relations Writer Limits State Db Rest)))
 
 (define answers
-  _ _ _ _ [] -> [ok done]
+  _ _ _ _ [] -> (:ok done)
   Writer Limits State Mode [[Function] | Rest] ->
-    (io.let-ok _ (emit Writer Limits State
+    (let-ok _ (emit Writer Limits State
                   [object ["kind" (str Mode)] ["function" (function-value Function)]])
       (answers Writer Limits State Mode Rest)))
 
 (define query-report
-  _ _ _ _ [] -> [ok done]
+  _ _ _ _ [] -> (:ok done)
   Writer Limits State Walk [Mode Function] ->
-    (io.let-ok _ (emit Writer Limits State
+    (let-ok _ (emit Writer Limits State
                   [object ["kind" "query"] ["query" (str Mode)]
                           ["function" (function-value Function)]])
       (answers Writer Limits State Mode (datalog.sorted Walk reached))))
@@ -118,12 +115,11 @@
   Analysis Out Limits ->
     (let Writer (io.writer Out [[chunk-size 4096]])
          State (io.record [0 0])
-      (io.let-ok _ (emit Writer Limits State (summary Analysis))
-        (io.let-ok _ (relations Writer Limits State (<-address Analysis 2)
-                      [source-context source-parse source-diagnostic excluded-file definition-linkage
-                       edge file-edge resolved unresolved-reason ambiguous unowned])
-          (io.let-ok _ (query-report Writer Limits State (<-address Analysis 4)
-                        (<-address Analysis 3))
-            [ok (<-address State 1)])))))
+      (let-ok _ (emit Writer Limits State (summary Analysis))
+              _ (relations Writer Limits State (<-address Analysis 2)
+                  [source-context source-parse source-diagnostic excluded-file definition-linkage
+                   edge file-edge resolved unresolved-reason ambiguous unowned])
+              _ (query-report Writer Limits State (<-address Analysis 4) (<-address Analysis 3))
+        (:ok (<-address State 1)))))
 
 )

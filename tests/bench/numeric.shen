@@ -1,5 +1,5 @@
-\\ Numeric programs written as ordinary Shen, with boxed reals in foreign memory or in variables,
-\\ for make bench-numeric to compare with numeric-raw.shen, the same with real registers, and with
+\\ Numeric programs written as ordinary Shen, with boxed floats in foreign memory or in variables,
+\\ for make bench-numeric to compare with numeric-raw.shen, the same with float registers, and with
 \\ numeric.c. Each prints its time and a check, which all three must agree on to the last digit.
 
 (define now -> (get-time unix))
@@ -8,7 +8,7 @@
   Name Check T0 -> (output "~A ~A s check ~A~%" Name (- (now) T0) Check))
 
 \\ ---------------------------------------------------------------------------
-\\ Dense matrix multiplication: the innermost loop reads two reals and adds their product.
+\\ Dense matrix multiplication: the innermost loop reads two floats and adds their product.
 
 (define mat.at N I J -> (* 8 (+ (* I N) J)))
 
@@ -53,7 +53,7 @@
          (report "matmul" (mat.trace C 0 N 0.0) T0)))
 
 \\ ---------------------------------------------------------------------------
-\\ The Mandelbrot set: no memory at all, only reals in variables.
+\\ The Mandelbrot set: no memory at all, only floats in variables.
 
 (define mand.iter
   _ _ _ _ Limit Limit -> Limit
@@ -121,7 +121,7 @@
          (report "spectral" (/ (sn.dot U V 0 N 0.0) (sn.dot V V 0 N 0.0)) T0)))
 
 \\ ---------------------------------------------------------------------------
-\\ N bodies: an array of structs in memory, each 7 reals, updated in place: x y z vx vy vz mass.
+\\ N bodies: an array of structs in memory, each 7 floats, updated in place: x y z vx vy vz mass.
 \\ The square root is C's, through the FFI, as a Shen program would have it.
 
 (shen-jit.library numeric.libm ["libm.so.6" "libm.dylib" "ucrtbase.dll"])

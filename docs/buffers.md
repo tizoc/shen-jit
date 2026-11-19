@@ -4,7 +4,7 @@
 after it, adds a mutable position. Both are optional, outside the default image, and need no I/O library:
 
 ```sh
-shen-jit eval -l lib/buffer.shen -l lib/cursor.shen \
+shen-jit eval -m cursor \
   -e '(let C (cursor.new (buffer.from-string "tag=42")) Name (cursor.string C 3) Equals (cursor.read C) Val (cursor.string C 2) [Name Equals Val (cursor.peek C)])'
 ```
 
@@ -29,7 +29,7 @@ transport EOF declaration. Failed captures and movement leave its position uncha
 | `cursor.skip C Count`, `cursor.seek C Position` | Checked forward or absolute relative movement, returning C |
 | `cursor.view C Count`, `cursor.bytes C Count`, `cursor.string C Count` | Borrow or copy Count bytes, then advance |
 
-Indices/counts must be nonnegative fixnums; an integral boxed real is refused. Empty views are valid.
+Indices/counts must be nonnegative fixnums; an integral boxed float is refused. Empty views are valid.
 Views share mutations; captures copy. Generic `=` on view records is not logical byte equality, and mutable
 views should not be dictionary keys. Hot scanners can unpack owner/start/end once instead of using a cursor
 for each byte.
@@ -69,13 +69,29 @@ owners reload dead. Managed use also works in static builds, whose FFI allocator
 
 Load the libraries under `(tc -)`; their declarations expose opaque `buffer.view`, `buffer.cursor` and
 `buffer.storage` and `buffer.builder` types to typed clients. Normal clients can use `buffer.new` and `buffer.from-string` without
-raw storage declarations. As with other opaque FFI values, a typed foreign allocator needs an explicit
+raw storage declarations. Indices, offsets, lengths, counts and bytes are `fixnum`, from [`numbers`](numbers.md),
+which `buffer` requires: `(buffer.u8 V 0)` and `(buffer.slice V 0 (buffer.length V))` typecheck as they are, and
+arithmetic on them takes `fx+` and the other fixnum operators. As with other opaque FFI values, a typed foreign allocator needs an explicit
 compatible declaration at its boundary.
+
+The checks each access makes, and `buffer.u8`, `buffer.u8!`, `buffer.length`, `buffer.offset`, `buffer.end` and
+`buffer.owner` over them, are typed, in `lib/buffer-typed.shen`. In a [typed program](modules.md#typed-programs) a
+loop over a view inlines them and keeps the view's offsets and the bytes it reads in registers, still checking the
+view and the index as untyped code does:
+
+```shen
+(define sum-bytes {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
+  V I N Acc -> (if (fx>= I N) Acc (sum-bytes V (fx+ I 1) N (fx+ Acc (buffer.u8 V I)))))
+```
+
+Called with `(buffer.length V)` as N, each round checks the view and the index once; taking the length each
+round, as `(fx>= I (buffer.length V))` would, checks the view twice.
 
 ## Format examples
 
-For two complete-input examples, load [tools/buffer-parsers.shen](../tools/buffer-parsers.shen) after
-buffer/cursor, [grammar.shen](grammar.md) and [json.shen](json.md). `buffer-example.json` delegates to the public JSON decoder with
-a byte bound equal to the input view's size and nesting bound 128. It retains exact number tokens,
-strict UTF-8 and duplicate-key rejection. `buffer-example.packet View Limit` reads a two-byte big-endian tag, four-byte length and owned
-payload, rejecting oversized, incomplete or trailing input. Neither example reads a stream.
+For two complete-input examples, load the module [tools/buffer-parsers.shenmod](../tools/buffer-parsers.shenmod),
+which requires `cursor` and [`json`](json.md): `shen-jit eval -m tools/buffer-parsers.shenmod`.
+`buffer-example.json` delegates to the public JSON decoder with a byte bound equal to the input view's size and
+nesting bound 128. It retains exact number tokens, strict UTF-8 and duplicate-key rejection.
+`buffer-example.packet View Limit` reads a two-byte big-endian tag, four-byte length and owned payload, rejecting
+oversized, incomplete or trailing input. Neither example reads a stream.

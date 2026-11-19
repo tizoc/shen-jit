@@ -3,7 +3,7 @@
 [lib/grammar.shen](../lib/grammar.shen) adds `defgrammar`, Shen-YACC's notation for parsers that read
 [byte views](buffers.md) instead of lists. Each definition compiles to an ordinary function over a buffer, a
 position and an end, which reads bytes with the same inline primitives a scanner written by hand would use, and
-allocates nothing but the values its rules build. Load it after `buffer.shen`, under `(tc -)`, and before the
+allocates nothing but the values its rules build. Load its module, `grammar`, before the
 grammars, which must be in a file read after it, and can be [typed](#types):
 
 ```shen
@@ -18,7 +18,7 @@ grammars, which must be in a file read after it, and can be [typed](#types):
 ```
 
 ```sh
-shen-jit eval -l lib/buffer.shen -l lib/grammar.shen -l names.shen \
+shen-jit eval -m grammar -l names.shen \
   -e '(grammar.parse <list> (buffer.from-string "[ab, cd ]") (/. At Message [error At Message]))' \
   -e '(grammar.parse <list> (buffer.from-string "[ab,]") (/. At Message [error At Message]))'
 ```
@@ -137,6 +137,8 @@ cannot compile: `(grammar.finish)`, in the builder, compiles the loops of every 
 prepares the read variants of the rules that `grammar.read` names, so call it before spawning isolates that
 parse, as `http.listen` does, and before saving a program, whose image then carries them. Calling it again
 covers what was defined since. In an isolate, a loop or variant never made is refused, saying to call it.
+Sealed programs, such as those `shen-jit build` makes, make their loops the same way: until a loop is made,
+what stands for it is not sealed, and the loop is sealed if sealing is on when it is made.
 A byte class, a rule that is only `B where Guard`, is not called by the rules read after it: they test the
 byte in place, so that `(+ <tchar>)` is one loop with no call per byte, and a loop over a class is called only
 if its first byte matches. When a loop compiles, it evaluates each class's guard for all 256 bytes and tests a
@@ -147,16 +149,16 @@ earlier definition was compiled in place.
 
 ## Reading as input arrives
 
-`(grammar.read <rule> Reader Fail)` parses one value from an [I/O reader](io.md) as its bytes arrive, with
-`io.shen` loaded. It does not need the value framed first, and it never parses again from the start: a rule
+`(grammar.read <rule> Reader Fail)` parses one value from an [I/O reader](io.md) as its bytes arrive. It does
+not need the value framed first, and it never parses again from the start: a rule
 that reaches the end of what has arrived waits for the reader to fill more, under the reader's own deadline,
 and goes on where it was.
 
 | Result | When |
 | --- | --- |
-| `[ok Value]` | The rule matched; its bytes are consumed, and what follows stays in the reader |
-| `[eof]` | The input ended before a value began |
-| `[error Error]` | The reader failed or timed out, even after the rule had matched what came before; nothing is consumed, so a later read can try again |
+| `(:result.ok [Value])` | The rule matched; its bytes are consumed, and what follows stays in the reader |
+| `(:result.ok [])` | The input ended before a value began |
+| `(:result.err Error)` | The reader failed or timed out, even after the rule had matched what came before; nothing is consumed, so a later read can try again |
 | `(Fail Position Message)` | A syntax error, at its position in the stream; `"input ended"` if the input ended inside a value |
 
 The parse reads in place, in the reader's buffer, and consumes nothing until the value is complete, so a
@@ -180,25 +182,26 @@ value, and `{T1 --> T2 ==> Value}` the types of its parameters too, with spaces 
 any signature. Each alternative of a typed rule has `:=`, and names only typed rules' values. Loaded under
 `(tc +)`, each alternative is checked: its value has the rule's type, its guards are booleans, its messages
 are strings, and the arguments it gives a typed rule have the types of its parameters. In an alternative,
-a byte variable, `(at P)` and a binary field are numbers, `(text <rule>)` is a string, `(span <rule>)` a
-`buffer.view`, and a typed rule named in a value has its value's type:
+a byte variable, `(at P)` and a binary field are fixnums ([Numbers by kind](numbers.md)), compared and
+computed with `fx<`, `fx+` and the rest, `(text <rule>)` is a string, `(span <rule>)` a `buffer.view`, and a
+typed rule named in a value has its value's type:
 
 ```shen
-(defgrammar <digit> {==> number} B := (- B 48) where (and (>= B 48) (<= B 57));)
-(defgrammar (<number> Acc) {number ==> number}
-  <digit> (<number> (+ (* 10 Acc) <digit>)) := <number>;
-  <digit> := (+ (* 10 Acc) <digit>);)
-(defgrammar <numbers> {==> (list number)}
+(defgrammar <digit> {==> fixnum} B := (fx- B 48) where (and (fx>= B 48) (fx<= B 57));)
+(defgrammar (<number> Acc) {fixnum ==> fixnum}
+  <digit> (<number> (fx+ (fx* 10 Acc) <digit>)) := <number>;
+  <digit> := (fx+ (fx* 10 Acc) <digit>);)
+(defgrammar <numbers> {==> (list fixnum)}
   (<number> 0) "," <numbers> := [<number> | <numbers>];
   (<number> 0) := [<number>];)
 
 (define numbers
-  {string --> (list number)}
+  {string --> (list fixnum)}
   Text -> (grammar.parse <numbers> (buffer.from-string Text) (/. At Message (error "~A at ~A" Message At))))
 ```
 
 ```sh
-shen-jit eval -l lib/buffer.shen -l lib/grammar.shen -e '(tc +)' -l numbers.shen -e '(numbers "1,22,333")'
+shen-jit eval -m grammar -e '(tc +)' -l numbers.shen -e '(numbers "1,22,333")'
 ```
 
 This gives `[1 22 333]`. Rules without a value need no signature, and typed rules can
@@ -210,11 +213,11 @@ but its variables are checked as it is defined, as a definition's are.
 
 In typed code, `grammar.parse`, `grammar.match?`, `grammar.read` and `grammar.read-within` of a typed
 rule call functions that the signature declares: `<rule>.parse`, of type `T1 --> ... --> buffer.view -->
-(number --> string --> Value) --> Value`, `<rule>.match?`, of type `T1 --> ... --> buffer.view -->
-boolean`, and `<rule>.read`, of type `T1 --> ... --> io.reader --> number --> (number --> string -->
-(grammar.read-result Value)) --> (grammar.read-result Value)`, whose number is the limit. A
-`(grammar.read-result A)` is `[ok A]`, `[eof]` or `[error Error]`, with an `io.error`, so a read's Fail
-gives one of those, or raises. `grammar.parse-range` is not typed. The loader would not accept a rule's own function, which has no
+(fixnum --> string --> Value) --> Value`, `<rule>.match?`, of type `T1 --> ... --> buffer.view -->
+boolean`, and `<rule>.read`, of type `T1 --> ... --> io.reader --> fixnum --> (fixnum --> string -->
+(io.result (option.t Value))) --> (io.result (option.t Value))`, whose fixnum is the limit.
+The failure callback returns the same result type or raises. A rule whose value is an empty list
+produces `(:result.ok [[]])`. Clean EOF produces `(:result.ok [])`. See [optional values](option.md). `grammar.parse-range` is not typed. The loader would not accept a rule's own function, which has no
 type, so under `(tc +)` each rule is compiled as a repetition is. Under `(tc -)` a
 signature changes nothing in how a rule runs.
 

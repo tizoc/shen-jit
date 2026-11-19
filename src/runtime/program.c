@@ -180,7 +180,7 @@ bool program_publish_all(VM *vm)
 
 /* Promotion: what a definition reaches is copied into the program space, each object once,
    with a table from the old address to the copy, so that sharing is kept. Only what cannot
-   change is copied: pairs, strings, reals, code with its bytecode and constant slots, and the
+   change is copied: pairs, strings, floats, code with its bytecode and constant slots, and the
    definition's closure, which captures nothing. A definition that reaches anything else stays
    in the heap, as before. Nothing here allocates in the heap, so nothing moves meanwhile. */
 typedef struct {
@@ -369,7 +369,7 @@ static V promote(Promote *pr, V v)
         return fail_promotion(pr);
     switch (obj_type(v)) {
     case T_STRING:
-    case T_REAL: {
+    case T_FLOAT: {
         uint64_t *q = copy_object(pr, v);
         return q ? tagged(q, TAG_OBJECT) : V_CLEARED;
     }
@@ -405,7 +405,7 @@ static bool promotable(Promote *seen, V v)
             return false;
         switch (obj_type(v)) {
         case T_STRING:
-        case T_REAL: return true;
+        case T_FLOAT: return true;
         case T_CODE: {
             if (p[CODE_NATIVE] || !is_object(p[CODE_BYTECODE]) || obj_type(p[CODE_BYTECODE]) != T_BYTES ||
                 !promotable(seen, p[CODE_NAME]) || !promotable(seen, p[CODE_INLINE]))
@@ -495,6 +495,30 @@ V program_promote(VM *vm, V closure, const char **why)
         return V_CLEARED;
     }
     return copy;
+}
+
+/* Install a promoted procedure. Record a name the current module seals before
+   publishing it, so a failed load can unseal it on retry. */
+bool program_install(VM *vm, V name, V proc)
+{
+    if (vm->seal_user) {
+        static const char defined[] = "shen-jit.module.*defined*";
+        V log = symbol_find(vm, defined, sizeof defined - 1);
+        V *slot = log == V_NIL ? NULL : global_slot(vm, log);
+        if (slot && (*slot == V_NIL || is_pair(*slot))) {
+            V entry = make_pair(vm, name, *slot);
+            if (entry == V_CLEARED)
+                return false;
+            *slot = entry;
+        }
+    }
+    size_t cell = symbol_cell(name);
+    if (vm->program->redefine)
+        vm->program->redefine(vm, cell);
+    *cell_function(vm, cell) = proc;
+    if (vm->seal_user)
+        symbol_seal(name);
+    return true;
 }
 
 /* A string in the program space, for a value every isolate reads, such as *version*; or

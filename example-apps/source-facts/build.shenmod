@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name source-facts/build)
+  (requires fs json tree-sitter process/io result)
+  (sources tc- "build.shen"))

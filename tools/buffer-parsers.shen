@@ -1,5 +1,5 @@
 \\ Complete-buffer examples over buffer/cursor and the public JSON library.
-\\ Load buffer.shen, cursor.shen, grammar.shen and json.shen first.
+\\ A module, tools/buffer-parsers.shenmod: -m tools/buffer-parsers.shenmod loads it and what it requires.
 
 (shen.x.namespace buffer-example
   (use buffer)

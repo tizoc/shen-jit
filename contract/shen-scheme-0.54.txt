@@ -37,10 +37,10 @@ PASS handler-in-tail-loop
 PASS handler-returns-closure
 PASS error-non-string
 PASS error-to-string-non-exception (deviation)
-PASS eq-int-real-literal
-PASS eq-int-real-variables
+PASS eq-int-float-literal
+PASS eq-int-float-variables
 PASS eq-signed-zero
-PASS hash-int-real (deviation)
+PASS hash-int-float (deviation)
 PASS hash-bound
 PASS eq-strings
 PASS eq-lists
@@ -56,14 +56,14 @@ PASS num-divide-exact
 PASS num-divide-exact-integer
 PASS num-divide-inexact
 PASS num-divide-zero
-PASS num-divide-real-zero
-PASS num-divide-by-real-zero (deviation)
+PASS num-divide-float-zero
+PASS num-divide-by-float-zero (deviation)
 PASS num-overflow-add (deviation)
 PASS num-overflow-multiply (deviation)
 PASS num-non-number
 PASS num-compare-non-number
 PASS num-str-integer
-PASS num-str-integral-real
+PASS num-str-integral-float
 PASS str-pos
 PASS str-pos-past-end
 PASS str-pos-negative
@@ -140,7 +140,7 @@ PASS get-present
 PASS get-no-entry
 PASS get-no-attribute
 PASS get-not-a-dict
-PASS vector-real
+PASS vector-float
 PASS vector-negative
 PASS vector-empty
 PASS vector-symbol-length

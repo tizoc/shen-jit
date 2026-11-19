@@ -131,8 +131,7 @@ def shen_string(value):
 
 
 def command(executable, adapter):
-    return [str(executable), 'eval', '-l', 'lib/ffi.shen', '-l', 'lib/buffer.shen', '-l', 'lib/io.shen',
-            '-s', 'curl.*adapter-files*', '['+shen_string(adapter)+']', '-l', 'lib/curl.shen']
+    return [str(executable), 'eval', '-s', 'curl.*adapter-files*', '['+shen_string(adapter)+']', '-m', 'curl', '-l', 'tests/result_helpers.shen']
 
 
 def run(cmd, **kwargs):
@@ -225,12 +224,12 @@ def main():
                     verify += '(do (output "3 passed, 0 failed~%") true) (error "documentation examples failed"))'
                     example_file = directory/'example.bin'
                     saved = '(let Result (web.save '+shen_string(base+'/binary')+' '+shen_string(example_file)+') '
-                    saved += 'R (hd (tl Result)) (if (and (= (hd Result) ok) (= (curl.body-length R) 1024)) '
+                    saved += 'R (fixture.success Result) (if (and (result.ok? Result) (= (curl.body-length R) 1024)) '
                     saved += '(do (output "1 passed, 0 failed~%") true) (error "stream example failed")))'
                     streamed = '(let Sink (io.output-buffer (buffer.new 1024)) Result (web.stream '+shen_string(base+'/binary')+' Sink) '
-                    streamed += '_ (io.close Sink) R (hd (tl Result)) (if (and (= (hd Result) ok) (= (curl.body-length R) 1024)) '
+                    streamed += '_ (io.close Sink) R (fixture.success Result) (if (and (result.ok? Result) (= (curl.body-length R) 1024)) '
                     streamed += '(do (output "1 passed, 0 failed~%") true) (error "borrowed stream example failed")))'
-                    check_lines(run(args+['-l','lib/io-file.shen','-l','lib/grammar.shen','-l','lib/json.shen','-l',str(examples),'-e',verify,'-e',saved,'-e',streamed]),3)
+                    check_lines(run(args+['-m','io/file','-m','json','-l',str(examples),'-e',verify,'-e',saved,'-e',streamed]),3)
                     assert example_file.read_bytes()==BINARY
                 check_lines(run(args+base_args+['-l','tests/curl_stream_reentrant.shen']),1)
                 image = directory/'curl.img'
@@ -238,8 +237,8 @@ def main():
                     '-e','(set curl-image.client (curl.open))',
                     '-e','(set curl-image.streamed (let Sink (io.output-buffer (buffer.new 5)) '
                          'Result (curl.get-to (cn (value curl-test.base) "/chunked") Sink [[proxy ""]]) '
-                         '_ (io.close Sink) (hd (tl Result))))',
-                    '-e','(set curl-image.response (hd (tl (curl.get (cn (value curl-test.base) "/binary") [[proxy ""]]))))']
+                         '_ (io.close Sink) (fixture.success Result)))',
+                    '-e','(set curl-image.response (fixture.success (curl.get (cn (value curl-test.base) "/binary") [[proxy ""]])))']
                 run(save)
                 env = {**os.environ,'SHEN_JIT_IMAGE':str(image)}
                 restored = run([str(executable),'eval','-e',
@@ -257,7 +256,7 @@ def main():
                 destination = directory/'download.bin'
                 for path,success in [('/bulk/20971520',True),('/binary',True),('/error',False),('/redirect',False),('/partial',False)]:
                     argv='['+' '.join(map(shen_string,['tools/curl-fetch.shen',base+path,destination]))+']'
-                    completed=subprocess.run(args+['-s','*argv*',argv,'-l','tools/curl-fetch.shen'],
+                    completed=subprocess.run(args+['-s','*argv*',argv,'-m','tools/curl-fetch.shenmod'],
                         cwd=ROOT,capture_output=True,text=True,timeout=30,
                         env={**os.environ,'SHEN_JIT_SEMISPACE':'4M','SHEN_JIT_MAX_HEAP':'16M'})
                     assert (completed.returncode==0 and 'uncaught error' not in completed.stderr)==success,completed.stderr

@@ -1,0 +1,1 @@
+(shen.module (version 1) (name lacking) (requires-features shen-jit/nothing) (sources tc- "a.shen"))

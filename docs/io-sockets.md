@@ -1,6 +1,6 @@
 # Socket I/O endpoints
 
-[lib/io-socket.shen](../lib/io-socket.shen) adapts existing TCP connections to [chunk I/O](io.md).
+[lib/io/socket.shen](../lib/io/socket.shen), the module `io/socket`, adapts existing TCP connections to [chunk I/O](io.md).
 Connection setup remains in `lib/socket.shen`: its integer API, DNS handling, listen/connect/accept and
 nonblocking configuration stay available. The adapter owns connected sockets, supplies partial transfers
 with structured errors, and works with the same readers/writers as memory and files. It uses no kernel
@@ -9,9 +9,8 @@ streams or new runtime code.
 Load libraries with type checking off, in this order:
 
 ```sh
-shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen \
-  -l lib/io.shen -l lib/io-socket.shen -l lib/frame.shen \
-  -l tools/frame-echo.shen -l program.shen
+shen-jit eval -m io/socket -m frame \
+  -m tools/frame-echo.shenmod -l program.shen
 ```
 
 The native backend needs dynamically loadable system libraries. Fully static builds still support managed
@@ -70,11 +69,11 @@ without closing the write direction. A reset or another failed read is an error 
 
 ## Graceful write shutdown
 
-`io.shutdown-write Endpoint` returns `[ok]` or `[error Error]`. It first flushes an attached writer, then
+`io.shutdown-write Endpoint` returns `(:result.ok [])` or `(:result.err Error)`. It first flushes an attached writer, then
 sends native write shutdown. If flushing fails, pending bytes remain and shutdown is not attempted; retry
 the flush or close explicitly. Native shutdown failure also leaves the endpoint's write state unchanged.
 
-After success, repeated shutdown returns `[ok]`, reads still work, and new writes through either the
+After success, repeated shutdown returns `(:result.ok [])`, reads still work, and new writes through either the
 endpoint or its old writer raise, including empty writes. Full `io.close` remains separate and returns its
 remembered result. Close after successful shutdown does not flush the detached, already drained writer.
 This supports request EOF followed by a server response without prematurely closing the whole connection.
@@ -84,7 +83,8 @@ acknowledged progress and leaves close to the endpoint's owner. See [cancellatio
 
 ## A bounded session handler
 
-Load [tools/frame-echo.shen](../tools/frame-echo.shen) with the libraries above. A one-connection program
+Load the module [tools/frame-echo.shenmod](../tools/frame-echo.shenmod), `-m tools/frame-echo.shenmod`, which
+requires `frame` and `io/socket`. A one-connection program
 can accept a peer, close its listener, then run the [binary framing](framing.md) handler:
 
 ```shen

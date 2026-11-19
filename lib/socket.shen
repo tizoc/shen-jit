@@ -1,7 +1,7 @@
 \\ TCP sockets, over the FFI and with no C of their own. It stays out of the image until asked
-\\ for; load it after lib/ffi.shen, under (tc -), before the code using it:
+\\ for; load its module before the code using it:
 \\
-\\   shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l program.shen
+\\   shen-jit eval -m socket -l program.shen
 \\
 \\ (let S (socket.connect "example.com" 80)
 \\   (do (socket.send S "GET / HTTP/1.0c#13;c#10;c#13;c#10;")
@@ -394,7 +394,7 @@
 (declare shutdown [number --> boolean])
 (declare no-delay [number --> boolean])
 (declare readable? [number --> [number --> boolean]])
-(declare recv-string [number --> [number --> string]])
-(declare send [number --> [string --> number]])
+(declare recv-string [number --> [fixnum --> string]])
+(declare send [number --> [string --> fixnum]])
 
 )

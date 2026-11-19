@@ -1,0 +1,6 @@
+(eval-kl [defun tretry-kl [] 4])
+(define-native tretry-native () (return 5))
+(shen-jit.install [defun tretry-install [code tretry-install 0 3 [6] [[return [const 0]]] []]])
+(shen-jit.library tretry-libc ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])
+(define-foreign tretry-strlen tretry-libc "strlen" (string) --> int64)
+(define-foreign-procedure tretry-procedure tretry-libc "strlen" 1)

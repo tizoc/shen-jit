@@ -1,3 +1,8 @@
+(define fixture.frame-tag (:result.ok [(:frame.frame Tag _)]) -> Tag)
+(define fixture.frame-payload (:result.ok [(:frame.frame _ V)]) -> V)
+
+(load "tests/result_helpers.shen")
+
 \\ Real loopback endpoints and the framed echo application, without external network access.
 (set io-socket-test.passed 0)
 (set io-socket-test.failed 0)
@@ -22,9 +27,9 @@
       [(io.socket C "client") (io.socket S "server")]))
 
 (define io-socket-test.frame-value
-  [frame Tag Payload] -> [Tag (buffer.string Payload)]
-  [eof] -> [eof]
-  [error E] -> [error (io.error-operation E) (io.error-progress E)])
+  (:result.ok [(:frame.frame Tag Payload)]) -> [Tag (buffer.string Payload)]
+  (:result.ok []) -> (:result.ok [])
+  (:result.err E) -> (:result.err (@p (io.error-operation E) (io.error-progress E))))
 
 (if (trap-error (do (socket.close (socket.listen "127.0.0.1" 0)) false)
                 (/. X (= (error-to-string X) "foreign: this static build cannot load libraries")))
@@ -37,23 +42,23 @@
      W (io.writer C [[chunk-size 3]])
      R (io.reader S [[chunk-size 2]])
      F (frame.reader R 32)
-  (do (io-socket-test.check "buffer a binary frame" [accepted 11]
+  (do (io-socket-test.check "buffer a binary frame" (:result.ok 11)
         (freeze (io.write W (frame.encode 42 (buffer.from-string "hello") 32))))
-      (io-socket-test.check "shutdown flushes before FIN" [ok] (freeze (io.shutdown-write C)))
-      (io-socket-test.check "shutdown is idempotent" [ok] (freeze (io.shutdown-write C)))
+      (io-socket-test.check "shutdown flushes before FIN" (:result.ok []) (freeze (io.shutdown-write C)))
+      (io-socket-test.check "shutdown is idempotent" (:result.ok []) (freeze (io.shutdown-write C)))
       (io-socket-test.check "frame spans small network reader chunks" [42 "hello"]
         (freeze (io-socket-test.frame-value (frame.next F))))
-      (io-socket-test.check "peer EOF after frame" [eof] (freeze (frame.next F)))
-      (io-socket-test.check "read EOF leaves write direction open" [ok 3]
+      (io-socket-test.check "peer EOF after frame" (:result.ok []) (freeze (frame.next F)))
+      (io-socket-test.check "read EOF leaves write direction open" (:result.ok 3)
         (freeze (io.write-all S (buffer.from-string "ack") [])))
       (let V (buffer.new 3)
-        (do (io-socket-test.check "shutdown preserves the read direction" [ok 3]
+        (do (io-socket-test.check "shutdown preserves the read direction" (:result.ok (:io.transfer true 3))
               (freeze (io.read-exact C V [])))
             (io-socket-test.check "reply after FIN" "ack" (freeze (buffer.string V)))))
       (io-socket-test.raises "direct write after shutdown" (freeze (io.write-some C (buffer.new 0) [])))
       (io-socket-test.raises "old buffered writer after shutdown" (freeze (io.write W (buffer.new 0))))
-      (io-socket-test.check "close after shutdown" [ok] (freeze (io.close C)))
-      (io-socket-test.check "close once" [ok] (freeze (io.close C)))
+      (io-socket-test.check "close after shutdown" (:result.ok []) (freeze (io.close C)))
+      (io-socket-test.check "close once" (:result.ok []) (freeze (io.close C)))
       (io-socket-test.raises "shutdown after full close" (freeze (io.shutdown-write C)))
       (io.close S)))
 
@@ -76,21 +81,21 @@
      Payload (buffer.new 1048576)
      _ (buffer.u8! Payload 0 17)
      _ (buffer.u8! Payload 1048575 255)
-  (do (io-socket-test.check "large frame accepted" [accepted 1048582]
+  (do (io-socket-test.check "large frame accepted" (:result.ok 1048582)
         (freeze (io.write W (frame.encode 65535 Payload 1048576))))
       (io.flush W)
       (let Result (frame.next F)
-        (do (io-socket-test.check "large frame tag" 65535 (freeze (hd (tl Result))))
+        (do (io-socket-test.check "large frame tag" 65535 (freeze (fixture.frame-tag Result)))
             (io-socket-test.check "large payload survives partial transfers" true
-              (freeze (buffer.equal? Payload (hd (tl (tl Result))))))))
+              (freeze (buffer.equal? Payload (fixture.frame-payload Result))))))
       (io.write W (frame.encode 0 (buffer.new 0) 0))
       (io.flush W)
       (io-socket-test.check "empty message is echoed without peer EOF" [0 ""]
         (freeze (io-socket-test.frame-value (frame.next F))))
       (io.shutdown-write C)
-      (io-socket-test.check "echo stops after clean stream end" [ok 2]
+      (io-socket-test.check "echo stops after clean stream end" (:result.ok 2)
         (freeze (channel.receive Replies)))
-      (io-socket-test.check "echo sends EOF" [eof] (freeze (frame.next F)))
+      (io-socket-test.check "echo sends EOF" (:result.ok []) (freeze (frame.next F)))
       (io.close C)))
 
 (let Pair (io-socket-test.pair)
@@ -102,9 +107,9 @@
      _ (io.shutdown-write C)
      Result (frame-echo.serve S 8)
   (do (io-socket-test.check "echo rejects oversized frame" frame
-        (freeze (io.error-operation (hd (tl Result)))))
+        (freeze (io.error-operation (fixture.failure Result))))
       (io-socket-test.check "oversized frame consumes only its header" 6
-        (freeze (io.error-progress (hd (tl Result)))))
+        (freeze (io.error-progress (fixture.failure Result))))
       (io-socket-test.raises "echo closes on framing error" (freeze (io.read-some S (buffer.new 0) [])))
       (io.close C)))
 
@@ -115,7 +120,7 @@
      Token (io.endpoint.guard S)
      _ (socket.c-close (io.socket-id Token))
      Result (io.read-some S (buffer.new 1) [])
-     Error (hd (tl Result))
+     Error (fixture.failure Result)
      Close (io.close S)
   (do (io-socket-test.check "native receive failure is structured" read
         (freeze (io.error-operation Error)))
@@ -134,7 +139,7 @@
      _ (io.write W (buffer.from-string "pending"))
      _ (socket.c-close (io.socket-id (io.endpoint.guard S)))
      Result (io.shutdown-write S)
-     Error (hd (tl Result))
+     Error (fixture.failure Result)
   (do (io-socket-test.check "shutdown reports failed flush" write
         (freeze (io.error-operation Error)))
       (io-socket-test.check "failed shutdown retains pending bytes" 7 (freeze (io.pending W)))
@@ -147,7 +152,7 @@
   (do (io-socket-test.raises "file/memory endpoint is not a socket" (freeze (io.shutdown-write E)))
       (io.close E)))
 (io-socket-test.raises "negative socket" (freeze (io.socket -1 "bad")))
-(io-socket-test.raises "boxed real socket" (freeze (io.socket (+ 0.5 0.5) "bad")))
+(io-socket-test.raises "boxed float socket" (freeze (io.socket (+ 0.5 0.5) "bad")))
 (io-socket-test.check "64-bit identity is preserved" 4294967305
   (freeze (let Token (io.socket-token 4294967305)
                S (io.socket-id Token)

@@ -9,8 +9,7 @@ Build the optional native adapter with a C compiler:
 
 ```sh
 make fs
-build/shen-jit eval -l lib/ffi.shen -l lib/buffer.shen -l lib/io.shen \
-  -l lib/io-file.shen -l lib/fs.shen -e '(fs.list "lib" [])'
+build/shen-jit eval -m fs -e '(fs.list "lib" [])'
 ```
 
 The adapter uses the public `include/shen.h` API and platform headers for directory entries, metadata,
@@ -27,8 +26,9 @@ sh lib/build-fs.sh lib/shen-fs.so
 ```
 
 The script accepts `CC` and `CFLAGS`. Loading the Shen module never invokes a compiler. The facade
-searches `./build/`, `./lib/` and the current directory for `shen-fs.so` and `shen-fs.dll`; set
-`fs.*adapter-files*` to absolute library names before loading for another location. The adapter ABI
+searches `./build/`, `./lib/` and the current directory for `shen-fs.so` and `shen-fs.dll`, then the same from the
+executable's directory, so a built program finds an adapter beside it; set `fs.*adapter-files*` to absolute library
+names before loading for another location. The adapter ABI
 is 1. Fully static builds can use the lexical helpers but cannot load native filesystem operations.
 
 ## Paths
@@ -39,7 +39,7 @@ is 1. Fully static builds can use the lexical helpers but cannot load native fil
 | `(fs.parent Path)` | Parent, or `"."` for a single relative name; roots remain roots |
 | `(fs.name Path)` | Last component, ignoring trailing separators; empty for a root |
 | `(fs.extension Path)` | Last suffix including its dot, or `""`; `.env` and `name.` have no extension |
-| `(fs.resolve Path)` | `[ok AbsolutePath]` or `[error Error]` |
+| `(fs.resolve Path)` | `(:result.ok AbsolutePath)` or `(:result.err Error)` |
 | `(fs.resolve-at Base Path)` | Resolve a lexical join against the same home setting |
 
 Paths must be nonempty NUL-free strings of at most 1 MiB. Joining accepts an empty base. POSIX names
@@ -56,8 +56,8 @@ and lexical path manipulation does not establish confinement to a directory.
 
 ## Metadata and errors
 
-`fs.stat` follows the final link; `fs.lstat` reports the link itself. They return `[ok Info]` or
-`[error Error]`. Metadata is an owned snapshot and remains usable after GC or image saving.
+`fs.stat` follows the final link; `fs.lstat` reports the link itself. They return `(:result.ok Info)` or
+`(:result.err Error)`. Metadata is an owned snapshot and remains usable after GC or image saving.
 
 | Function | Result |
 | --- | --- |
@@ -73,13 +73,18 @@ Seconds can be negative; fractional nanoseconds are nonnegative. Windows FILETIM
 Windows `lstat` conservatively reports reparse points, including directory junctions, as `symlink`.
 
 ```shen
-(define project.file-size
-  Path ->
-    (io.let-ok Info (fs.stat Path)
-      [ok (fs.size Info)]))
+(shen.x.namespace project
+  (use fs)
+  (import result let-ok ok)
+  (export file-size)
+
+  (define file-size
+    Path ->
+      (let-ok Info (fs.stat Path)
+        (:ok (fs.size Info)))))
 ```
 
-`fs.exists?` returns `[ok true]`, `[ok false]` or `[error Error]`. Only missing paths and a non-directory
+`fs.exists?` returns `(:result.ok true)`, `(:result.ok false)` or `(:result.err Error)`. Only missing paths and a non-directory
 prefix count as absent; access and other native failures remain errors. A broken link is absent
 when followed, while `fs.lstat` can still describe it. Metadata can become stale immediately after
 the call; opening a resource is authoritative.
@@ -91,7 +96,7 @@ creates managed results after it. Directory handles close before conversion or c
 
 ## Listings and traversal
 
-`(fs.list Path Options)` returns `[ok Names]` with immediate entry names, sorted by encoded bytes.
+`(fs.list Path Options)` returns `(:result.ok Names)` with immediate entry names, sorted by encoded bytes.
 It omits `.` and `..`. Listings are bounded and complete: exceeding either budget returns an error,
 rather than a truncated success. No live directory iterator escapes the call.
 
@@ -104,8 +109,8 @@ Zero permits only an empty listing. Name bytes exclude terminators and parent pr
 must be nonnegative fixnums; duplicates, unknown names and malformed pairs raise.
 
 `(fs.walk Root Options Visit)` walks depth first, visiting the root at depth zero. The callback
-receives `Info` and `Depth` and returns `continue`, `skip`, `stop` or `[error Error]`. `skip` prunes
-a directory, and `stop` ends successfully. The result is `[ok (@p Visited Stopped)]`; errors retain
+receives `Info` and `Depth` and returns `continue`, `skip`, `stop` or `(:result.err Error)`. `skip` prunes
+a directory, and `stop` ends successfully. The result is `(:result.ok (@p Visited Stopped))`; errors retain
 the number of visited entries in `io.error-progress`.
 
 ```shen
@@ -132,7 +137,7 @@ Callbacks that retain metadata or source contents add their own storage. Travers
 
 ## Directories, removal and rename
 
-These operations return `[ok]` or `[error Error]`:
+These operations return `(:result.ok [])` or `(:result.err Error)`:
 
 | Function | Behavior |
 | --- | --- |
@@ -155,21 +160,23 @@ Replacement of existing directories is OS-dependent; Windows rejects it.
 
 ## Temporary files and replacement output
 
-`(fs.temp-file Parent Prefix)` returns `[ok (@p Path Endpoint)]`. The read/write endpoint is already
+`(fs.temp-file Parent Prefix)` returns `(:result.ok (@p Path Endpoint))`. The read/write endpoint is already
 open from exclusive creation. It is binary and non-inheritable, and the caller owns closure and
-removal. `(fs.temp-directory Parent Prefix)` returns `[ok Path]`; the caller removes it when empty.
+removal. `(fs.temp-directory Parent Prefix)` returns `(:result.ok Path)`; the caller removes it when empty.
 
 Names contain 128 bits from the OS random source and retry at most 64 collisions. Prefixes contain
 1–64 ASCII letters, digits, dots, hyphens or underscores. POSIX file/directory modes are 0600/0700
 filtered by umask. Windows inherits ACLs. Use an appropriate parent directory for the application.
 
 `(fs.with-temp-file Parent Prefix F)` calls `(F Path Endpoint)`, closes afterward, then removes the
-file. The callback returns `[ok Value]` or `[error Error]`; exceptions become errors. Cleanup failures
-are secondary to a primary error. An already removed temporary name is harmless during cleanup.
+file. An already removed temporary name is harmless during cleanup.
 
 `(fs.with-replacement Path F)` creates a temporary sibling, calls `(F Endpoint)`, closes it, and
 renames it over Path only after the callback and close both succeed. Failures clean up the temporary
 name and preserve the primary error. The callback's value is returned after successful replacement.
+
+Both scopes take a callback returning `(io.result A)`. A transfer failure carries its byte count in
+`io.error-progress`. Exceptions become errors. Cleanup failures are secondary to a primary error.
 
 ```shen
 (define project.save
@@ -177,9 +184,9 @@ name and preserve the primary error. The callback's value is returned after succ
     (fs.write-replace Path (buffer.from-string Text)))
 ```
 
-`fs.write-replace` validates a view before creating output and returns `[ok Bytes]` or `[error Error]`.
+`fs.write-replace` validates a view before creating output and returns `(:result.ok Bytes)` or `(:result.err Error)`.
 `(fs.copy-file From To ByteLimit)` copies regular-file contents in 64 KiB chunks through the same
-replacement path. It follows source file links, rejects non-regular sources, and returns `[ok Bytes]`
+replacement path. It follows source file links, rejects non-regular sources, and returns `(:result.ok Bytes)`
 or an error. A source that exceeds the quota leaves the original destination unchanged. Errors
 retain acknowledged temporary-file output in `io.error-progress`, including failures during close
 or rename. Bytes processed do not imply that the destination was replaced.
@@ -193,7 +200,7 @@ permissions. A successful content copy does not copy source metadata.
 ## Example and validation
 
 ```sh
-build/shen-jit script tools/fs-copy.shen source.bin destination.bin
+build/shen-jit script tools/fs-copy.shenmod source.bin destination.bin
 make test-fs
 ```
 

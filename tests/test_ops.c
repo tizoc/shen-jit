@@ -6,7 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-enum Kind { FIX, BOOL, SYM, REAL, ERR };
+enum Kind { FIX, BOOL, SYM, FLOAT, ERR };
 
 typedef struct {
     const char *name;
@@ -52,23 +52,23 @@ static const Case cases[] = {
     {"t-and-bad", 0, {0}, ERR, 0, "1 is not a boolean"},
     {"t-or-bad", 0, {0}, ERR, 0, "1 is not a boolean"},
     {"t-if-bad", 0, {0}, ERR, 0, "1 is not a boolean"},
-    {"t-add-real", 0, {0}, REAL, 0, NULL},
-    {"t-add-real-check", 0, {0}, FIX, 1, NULL},
+    {"t-add-float", 0, {0}, FLOAT, 0, NULL},
+    {"t-add-float-check", 0, {0}, FIX, 1, NULL},
     {"t-sub-overflow", 0, {0}, ERR, 0, "integer overflow"},
     {"t-add-overflow", 0, {0}, ERR, 0, "integer overflow"},
     {"t-mul", 0, {0}, FIX, -5535, NULL},
     {"t-mul-overflow", 0, {0}, ERR, 0, "integer overflow"},
     {"t-div-exact", 0, {0}, FIX, 42, NULL},
-    {"t-div-real", 0, {0}, FIX, 1, NULL},
+    {"t-div-float", 0, {0}, FIX, 1, NULL},
     {"t-div-zero", 0, {0}, ERR, 0, "division by zero"},
     {"t-add-non-number", 0, {0}, ERR, 0, NULL},
     {"t-less-non-number", 0, {0}, ERR, 0, NULL},
     {"t-compare", 2, {1, 2}, FIX, 101, NULL},
     {"t-compare", 2, {2, 1}, FIX, 1010, NULL},
     {"t-compare", 2, {2, 2}, FIX, 1100, NULL},
-    {"t-compare-real", 0, {0}, FIX, 101, NULL},
+    {"t-compare-float", 0, {0}, FIX, 101, NULL},
     {"t-eq-fixnums", 0, {0}, FIX, 1, NULL},
-    {"t-eq-int-real", 0, {0}, BOOL, 1, NULL},
+    {"t-eq-int-float", 0, {0}, BOOL, 1, NULL},
     {"t-eq-strings", 0, {0}, BOOL, 1, NULL},
     {"t-eq-lists", 0, {0}, BOOL, 1, NULL},
     {"t-eq-lists-differ", 0, {0}, BOOL, 0, NULL},
@@ -118,7 +118,7 @@ static const char *check(const Case *c)
     case FIX: return r == fix(c->value) ? NULL : "wrong fixnum";
     case BOOL: return r == (c->value ? V_TRUE : V_FALSE) ? NULL : "wrong boolean";
     case SYM: return is_symbol(r) && text_is(ptr(r)[SYM_NAME], c->text, false) ? NULL : "wrong symbol";
-    case REAL: return is_object(r) && obj_type(r) == T_REAL ? NULL : "not a real";
+    case FLOAT: return is_object(r) && obj_type(r) == T_FLOAT ? NULL : "not a float";
     case ERR:
         if (r != V_CLEARED)
             return "no error raised";

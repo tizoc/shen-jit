@@ -53,8 +53,9 @@
    Nothing here promises where an object is or whether it moves, and values may only be stored in
    objects by shen_vector_set and in roots by shen_root_set.
 
-   This is not stable until Shen/JIT 1.0: anything here may change before then, and
-   SHEN_API_VERSION says when it has. */
+   This is not stable until Shen/JIT 1.0: anything here may change before then. SHEN_API_VERSION
+   numbers the layout of struct shen_api, the table every function here calls through: a function
+   renamed in its slot, as shen_make_real became shen_make_float, keeps it. */
 #ifndef SHEN_H
 #define SHEN_H
 
@@ -98,7 +99,7 @@ struct shen_api {
     int (*is_pair)(shen_vm *, shen_value);
     int (*is_vector)(shen_vm *, shen_value);
     int (*is_symbol)(shen_vm *, shen_value);
-    int (*is_real)(shen_vm *, shen_value);
+    int (*is_float)(shen_vm *, shen_value);
     int (*is_bytes)(shen_vm *, shen_value);
     int (*is_procedure)(shen_vm *, shen_value);
     double (*number)(shen_vm *, shen_value);
@@ -113,7 +114,7 @@ struct shen_api {
     void *(*pointer)(shen_vm *, shen_value, const char *);
     shen_value (*global)(shen_vm *, const char *);
     shen_value (*function)(shen_vm *, const char *);
-    shen_value (*make_real)(shen_vm *, double);
+    shen_value (*make_float)(shen_vm *, double);
     shen_value (*make_string)(shen_vm *, const char *, size_t);
     shen_value (*make_bytes)(shen_vm *, const void *, size_t);
     shen_value (*cons)(shen_vm *, shen_value, shen_value);
@@ -142,10 +143,10 @@ static inline int shen_is_string(shen_vm *vm, shen_value v) { return (*vm)->is_s
 static inline int shen_is_pair(shen_vm *vm, shen_value v) { return (*vm)->is_pair(vm, v); }
 static inline int shen_is_vector(shen_vm *vm, shen_value v) { return (*vm)->is_vector(vm, v); }
 static inline int shen_is_symbol(shen_vm *vm, shen_value v) { return (*vm)->is_symbol(vm, v); }
-static inline int shen_is_real(shen_vm *vm, shen_value v) { return (*vm)->is_real(vm, v); }
+static inline int shen_is_float(shen_vm *vm, shen_value v) { return (*vm)->is_float(vm, v); }
 static inline int shen_is_bytes(shen_vm *vm, shen_value v) { return (*vm)->is_bytes(vm, v); }
 static inline int shen_is_procedure(shen_vm *vm, shen_value v) { return (*vm)->is_procedure(vm, v); }
-/* A real or an integer, as a double; NaN for anything else. */
+/* A float or an integer, as a double; NaN for anything else. */
 static inline double shen_number(shen_vm *vm, shen_value v) { return (*vm)->number(vm, v); }
 static inline shen_value shen_head(shen_vm *vm, shen_value v) { return (*vm)->head(vm, v); }
 static inline shen_value shen_tail(shen_vm *vm, shen_value v) { return (*vm)->tail(vm, v); }
@@ -178,7 +179,7 @@ static inline shen_value shen_function(shen_vm *vm, const char *name) { return (
 
 /* Making: each of these may collect, and gives SHEN_ERROR if it is out of memory. */
 
-static inline shen_value shen_make_real(shen_vm *vm, double d) { return (*vm)->make_real(vm, d); }
+static inline shen_value shen_make_float(shen_vm *vm, double d) { return (*vm)->make_float(vm, d); }
 static inline shen_value shen_make_string(shen_vm *vm, const char *bytes, size_t length)
 {
     return (*vm)->make_string(vm, bytes, length);

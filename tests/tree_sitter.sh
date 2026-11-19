@@ -4,10 +4,10 @@ SHEN=$1
 dir=$(mktemp -d)
 trap 'status=$?; if [ "$status" -ne 0 ]; then cat "$dir"/*.out 2>/dev/null; fi; rm -rf "$dir"' EXIT
 if command -v cygpath > /dev/null; then dir=$(cygpath -m "$dir"); fi
-"$SHEN" eval -l lib/ffi.shen -l lib/buffer.shen -l lib/tree-sitter.shen \
+"$SHEN" eval -m io -m tree-sitter \
     -l tests/tree_sitter_helpers.shen -l tests/tree_sitter_pure.shen > "$dir/pure.out" 2>&1
 grep -a '^FAIL\|^[0-9]* passed' "$dir/pure.out" | awk '{ print } END { exit !/ 0 failed/ }'
-"$SHEN" eval -l lib/ffi.shen \
+"$SHEN" eval -m ffi \
     -e '(shen-jit.library ts-probe ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])' \
     -e '(define-foreign ts-probe.abs ts-probe "abs" (int32) --> int32)' \
     -e '(output "treesitter shared: ~A~%"

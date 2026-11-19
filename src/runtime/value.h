@@ -69,7 +69,7 @@ enum {
     T_STRING = 1, /* size: byte length; bytes follow */
     T_BYTES,      /* size: byte length; raw bytes (bytecode, and byte buffers) */
     T_SYMBOL,     /* [name][hash raw][cell raw] */
-    T_REAL,       /* [double raw] */
+    T_FLOAT,       /* [double raw] */
     T_VECTOR,     /* size: length; values follow */
     T_CLOSURE,    /* size: capture count; [entry raw][code][captures...] */
     T_FOREIGN,    /* [entry raw][desc][address raw][arity raw]: a C function (ffi.c) */
@@ -95,7 +95,7 @@ static inline uint64_t hdr_size(uint64_t h) { return h >> 8; }
 /* Word offsets of fields after the header. */
 enum {
     SYM_NAME = 1, SYM_HASH = 2, SYM_CELL = 3, SYM_WORDS = 4,
-    REAL_VALUE = 1, REAL_WORDS = 2,
+    FLOAT_VALUE = 1, FLOAT_WORDS = 2,
     PROC_ENTRY = 1,
     CLO_CODE = 2, CLO_CAPS = 3,
     FOREIGN_DESC = 2, FOREIGN_ADDRESS = 3, FOREIGN_ARITY = 4, FOREIGN_WORDS = 5,
@@ -124,7 +124,7 @@ static inline size_t obj_words(uint64_t h)
     case T_STRING:
     case T_BYTES: return byte_object_words(n);
     case T_SYMBOL: return SYM_WORDS;
-    case T_REAL: return REAL_WORDS;
+    case T_FLOAT: return FLOAT_WORDS;
     case T_VECTOR: return at_least_two(1 + (size_t)n);
     case T_CLOSURE: return CLO_CAPS + (size_t)n;
     case T_FOREIGN: return FOREIGN_WORDS;

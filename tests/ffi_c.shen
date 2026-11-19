@@ -78,7 +78,7 @@
   [] -> []
   [X | Xs] -> [(kind-of X) | (c-test.kinds Xs)])
 
-(c-test.check "what C sees" [fixnum nil boolean string pair vector symbol real bytes procedure]
+(c-test.check "what C sees" [fixnum nil boolean string pair vector symbol float bytes procedure]
               (freeze (c-test.kinds [1 [] true "s" [1] (absvector 1) a-symbol 1.5 (shen-jit.bytes 1) (/. X X)])))
 
 \\ ---------------------------------------------------------------------------
@@ -96,7 +96,7 @@
                         (shen-jit.u8 B 2))))
 
 (set made (make-all))
-(c-test.check "a real" 1.5 (freeze (nth 1 (value made))))
+(c-test.check "a float" 1.5 (freeze (nth 1 (value made))))
 (c-test.check "a string" "abc" (freeze (nth 2 (value made))))
 (c-test.check "bytes given" 2 (freeze (shen-jit.u8 (nth 3 (value made)) 1)))
 (c-test.check "bytes of zeros" [0 9 0]

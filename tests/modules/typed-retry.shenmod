@@ -1,0 +1,3 @@
+(shen.module (version 1) (name typed-retry) (typed)
+  (requires ffi native)
+  (sources tc+ "typed-retry.shen" tc- "typed-retry-installs.shen" "typed-retry-raise.shen"))

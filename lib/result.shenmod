@@ -1,0 +1,4 @@
+(shen.module
+  (version 1)
+  (name result)
+  (sources tc- "result.shen" tc+ "result-typed.shen"))

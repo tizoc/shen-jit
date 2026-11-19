@@ -1,10 +1,10 @@
 # HTTP servers
 
-[lib/http-listener.shen](../lib/http-listener.shen) runs the [HTTP request/response handler](http.md)
+[lib/http/listener.shen](../lib/http/listener.shen) runs the [HTTP request/response handler](http.md)
 on the connections a listening socket accepts, each in an [isolate](guide.md#isolates) of its own, at most
 a configured number at once, so that one connection that waits holds no other back and handlers run in
-parallel. The program that calls `http.run` supervises them. Load it after the libraries needed by
-`http-server.shen`. Native libraries are required, so this module is unavailable in static builds.
+parallel. The program that calls `http.run` supervises them. Its module is
+`http/listener`. Native libraries are required, so this module is unavailable in static builds.
 
 ## Starting and stopping
 
@@ -32,7 +32,11 @@ what handlers parse with before it.
 A handler runs in its connection's isolate, which inherits nothing from the program that defined it, so it
 goes by name: `F`, a function of the request, or `[F | Args]`, called with `Args` and then the request,
 which are copied to each connection as a spawn argument is. A closure cannot cross, and the globals a handler
-reads start unbound: what it needs comes in `Args`. Typed code gives the name, or the name and a list.
+reads start unbound: what it needs comes in `Args`. Typed code uses a unary name with signature
+`http.request --> http.response`, or `[Handler State]` with signature
+`A --> http.request --> http.response` and state of type `A`. Write settings directly where
+`http.listen` expects a `(list http.listener-option)`. To move an existing `http.option` into
+that type, call `http.from-server-option`.
 
 `http.run S` serves connections until the server is stopped, then closes the listener and returns the
 result. It admits a connection only when fewer than `max-connections` are open; the others wait in the
@@ -53,8 +57,8 @@ connections left, and waits for them to end.
 
 | Result of `http.run` | Meaning |
 | --- | --- |
-| `[ok]` | The server was stopped, the listener is closed and every connection has ended |
-| `[error Error]` | The listener failed; it is closed, the connections were given the shutdown grace and then killed, and Error retains cleanup failures |
+| `(:result.ok [])` | The server was stopped, the listener is closed and every connection has ended |
+| `(:result.err Error)` | The listener failed; it is closed, the connections were given the shutdown grace and then killed, and Error retains cleanup failures |
 
 Running a server that has finished gives its result again. Ordinary malformed requests, handler exceptions and peer
 failures count as failed connections; they do not stop the server or make its result an error.

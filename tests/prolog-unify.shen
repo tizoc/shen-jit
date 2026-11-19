@@ -33,7 +33,7 @@
   N [_ | Xs] -> (pu.nth (- N 1) Xs))
 
 \\ Atoms that differ, and pairs that are = without being identical: the reader turns 1.0
-\\ into the integer 1, so the real is computed.
+\\ into the integer 1, so the float is computed.
 (set pu.atoms [a b [] 1 (+ 0.5 0.5) 2 "s" "s" true c])
 
 (define pu.term

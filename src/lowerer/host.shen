@@ -3,9 +3,10 @@
 \\ Shen/Scheme, and these work under both.
 \\
 \\ The tools load the lowerer as build/tools/lower.shen, which the Makefile makes
-\\ with shen-jit.lower. changed to stage0.lower., as a host that is shen-jit has
-\\ its own lowerer sealed under the real names. Its calls to shen-jit.sealed? and
-\\ shen-jit.inline-body, primitives inside shen-jit, become the two below.
+\\ from the lowerer's files with the namespace shen-jit.lower renamed stage0.lower,
+\\ as a host that is shen-jit has its own lowerer sealed under the real names. Its
+\\ calls to shen-jit.sealed? and shen-jit.inline-body, primitives inside shen-jit,
+\\ become the two below, which the copy's (use stage0) leaves as they are.
 
 \\ Whether X is a symbol object. The kernel's portable symbol? also checks the
 \\ characters of the name (it rejects :=), and ports override it differently,
@@ -32,7 +33,7 @@
   _ -> [])
 
 (define shen-jit.host.inline-entry
-  [defun F Params Body] -> (let Inline (stage0.lower.inline-form F Params Body)
+  [defun F Params Body] -> (let Inline (stage0.lower.inline-form F Params Body true)
                              (if (empty? Inline) [] [[F | Inline]]))
   _ -> [])
 
@@ -41,3 +42,35 @@
   _ [] -> []
   F [X | Xs] -> [X | (stage0.filter F Xs)] where (F X)
   F [_ | Xs] -> (stage0.filter F Xs))
+
+\\ A KLambda file's forms as read, unprocessed: read-file would macroexpand them, and the
+\\ kernel's own definitions are the raw forms. From the file's bytes, which the kernel reads with
+\\ an accumulator: read-from-string-unprocessed of read-file-as-string builds the string by
+\\ concatenation and takes it apart recursing once for each character, which ran an earlier
+\\ release out of memory on the lowerer's KLambda. The lambda is KLambda, as the host knows no
+\\ arity for shen.<s-exprs> to call it by.
+(define shen-jit.host.read-kl
+  File -> (compile (eval-kl [lambda bytes [shen.<s-exprs> bytes]]) (read-file-as-bytelist File)))
+
+\\ A port defun replaces the kernel defun of the same name, which is omitted.
+(define shen-jit.host.select-overrides
+  Inputs -> (let Port (mapcan (/. I (if (= (hd I) "shen-jit") (tl I) [])) Inputs)
+                 Overrides (mapcan (/. X (shen-jit.host.defun-signature X)) Port)
+              (map (/. I (if (= (hd I) "shen-jit")
+                             I
+                             [(hd I) | (shen-jit.host.omit Overrides (tl I))]))
+                   Inputs)))
+
+(define shen-jit.host.defun-signature
+  [defun F Params | _] -> [[F | (length Params)]]
+  _ -> [])
+
+(define shen-jit.host.omit
+  _ [] -> []
+  Overrides [[defun F Params | Body] | Forms]
+  -> (let Entry (assoc F Overrides)
+       (cond ((empty? Entry) [[defun F Params | Body] | (shen-jit.host.omit Overrides Forms)])
+             ((= (tl Entry) (length Params))
+              (shen-jit.host.omit Overrides Forms))
+             (true (simple-error (make-string "override of ~A changes its parameter count" F)))))
+  Overrides [X | Forms] -> [X | (shen-jit.host.omit Overrides Forms)])

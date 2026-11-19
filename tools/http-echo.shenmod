@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name http-echo)
+  (requires http/server)
+  (sources tc- "http-echo.shen"))

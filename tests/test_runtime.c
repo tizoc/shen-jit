@@ -73,7 +73,7 @@ static void describe(Buf *b, V v, int depth)
         put(b, "%.*s/%llx/%llu", (int)string_length(o[SYM_NAME]), string_bytes(o[SYM_NAME]),
             (unsigned long long)o[SYM_HASH], (unsigned long long)o[SYM_CELL]);
         break;
-    case T_REAL: put(b, "%.17g", real_value(v)); break;
+    case T_FLOAT: put(b, "%.17g", float_value(v)); break;
     case T_VECTOR:
         put(b, "#(");
         for (size_t i = 0; i < hdr_size(o[0]); i++) {
@@ -156,7 +156,7 @@ static V build_world(VM *vm, V *s)
 {
     s[0] = make_vector(vm, 13, V_NIL);
     s[1] = make_pair(vm, fix(1), V_NIL);
-    s[2] = make_real(vm, 3.25); /* first: argument order is unspecified, and s[1] must be read after
+    s[2] = make_float(vm, 3.25); /* first: argument order is unspecified, and s[1] must be read after
                                    the allocation that may move it (gcc on x86-64 read it before) */
     s[1] = make_pair(vm, s[2], s[1]);
     ptr(s[0])[1] = s[1];
@@ -436,7 +436,7 @@ static void test_loader(void)
     V k = ptr(*cell_function(vm, symbol_cell(intern_cstr(vm, "k"))))[CLO_CODE];
     V hi = *ra_at(&vm->program->consts, ptr(k)[CODE_CBASE]);
     CHECK(string_length(hi) == 3 && memcmp(string_bytes(hi), "\"hi", 3) == 0);
-    CHECK(real_value(*ra_at(&vm->program->consts, ptr(k)[CODE_CBASE] + 1)) == 1.5);
+    CHECK(float_value(*ra_at(&vm->program->consts, ptr(k)[CODE_CBASE] + 1)) == 1.5);
     CHECK(*ra_at(&vm->program->consts, ptr(k)[CODE_CBASE] + 3) == V_TRUE);
     CHECK(*ra_at(&vm->program->consts, ptr(k)[CODE_CBASE] + 4) == V_NIL);
     CHECK(*ra_at(&vm->program->consts, ptr(k)[CODE_CBASE] + 5) == fix(-7));

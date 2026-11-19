@@ -37,7 +37,7 @@
      _ (io.write-file (process-test.path "descendant.pid") (process.output-bytes Partial))
   (do (process-test.check "descendant-held pipes reach the deadline" timeout
         (freeze (io.error-domain (process-test.error Result))))
-      (process-test.check "leader status survives forced descendant termination" [exited 0]
+      (process-test.check "leader status survives forced descendant termination" (:process.exited 0)
         (freeze (process.status Partial)))))
 
 (let C (process-test.ok (process.spawn (value process-test.helper) ["echo"]
@@ -45,10 +45,10 @@
      Report (process-test.ok (process.communicate C (buffer.from-string "borrowed") []))
      Status (process.poll C)
      Closed (process.close C)
-  (do (process-test.check "communicate leaves child ownership with caller" [ok [exited 0]]
+  (do (process-test.check "communicate leaves child ownership with caller" (:result.ok (:process.exited 0))
         (freeze Status))
       (process-test.check "communicate returns captured output" "borrowed"
         (freeze (buffer.string (process.output-bytes Report))))
-      (process-test.check "caller closes communicated child" [ok] (freeze Closed))))
+      (process-test.check "caller closes communicated child" (:result.ok []) (freeze Closed))))
 
 (output "~A passed, ~A failed~%" (value process-test.passed) (value process-test.failed))

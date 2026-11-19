@@ -9,18 +9,19 @@
           (do (set process-test.failed (+ 1 (value process-test.failed)))
               (output "FAIL ~A: wanted ~S, got ~S~%" Name Expected Actual)))))
 
+\\ A process result's error is (@p E Reports); an io result's, as spawn gives, is E alone.
 (define process-test.ok
-  [ok Value] -> Value
-  [error E] -> (error "unexpected process failure: ~A" (io.error-message E))
-  [error E _] -> (error "unexpected process failure: ~A" (io.error-message E)))
+  (:result.ok Value) -> Value
+  (:result.err (@p E _)) -> (error "unexpected process failure: ~A" (io.error-message E))
+  (:result.err E) -> (error "unexpected process failure: ~A" (io.error-message E)))
 
 (define process-test.error
-  [error E] -> E
-  [error E _] -> E
+  (:result.err (@p E _)) -> E
+  (:result.err E) -> E
   _ -> (error "expected process error"))
 
 (define process-test.partial
-  [error _ Report] -> Report
+  (:result.err (@p _ [Report])) -> Report
   _ -> (error "expected partial process report"))
 
 (define process-test.u32
@@ -41,7 +42,7 @@
   R -> (buffer.string (process.output-bytes (process-test.ok R))))
 
 (let Report (process-test.ok (process-test.run ["exit" "17"] (buffer.new 0) []))
-  (do (process-test.check "nonzero exit is data" [exited 17] (freeze (process.status Report)))
+  (do (process-test.check "nonzero exit is data" (:process.exited 17) (freeze (process.status Report)))
       (process-test.check "nonzero exit is not success" false (freeze (process.success? Report)))
       (process-test.check "run closes its child" true
         (freeze (process-test.closed? (process.child Report))))))
@@ -56,15 +57,15 @@
      _ (process.kill C)
      Wait (process.wait C 1000)
      Closed (process.close C)
-  (do (process-test.check "poll reports running" [ok [running]] (freeze Poll))
+  (do (process-test.check "poll reports running" (:result.ok (:process.running)) (freeze Poll))
       (process-test.check "close refuses to abandon running child" library
         (freeze (io.error-domain (process-test.error Early))))
-      (process-test.check "zero-time wait is pending" [pending] (freeze Pending))
+      (process-test.check "zero-time wait is pending" (:result.ok []) (freeze Pending))
       (process-test.check "pipe read has its own deadline" timeout
         (freeze (io.error-domain (process-test.error Read))))
-      (process-test.check "kill completes and wait observes exit" ok (freeze (hd Wait)))
-      (process-test.check "child close succeeds" [ok] (freeze Closed))
-      (process-test.check "close is idempotent" [ok] (freeze (process.close C)))
+      (process-test.check "kill completes and wait observes exit" true (freeze (result.ok? Wait)))
+      (process-test.check "child close succeeds" (:result.ok []) (freeze Closed))
+      (process-test.check "close is idempotent" (:result.ok []) (freeze (process.close C)))
       (process-test.check "closed aliases cannot signal reused IDs" true
         (freeze (trap-error (do (process.kill C) false) (/. X true))))))
 
@@ -117,7 +118,7 @@
             [stdout [file "redirect.bin"]] [stderr null]]))
      Status (process.wait C 1000)
      _ (process.close C)
-  (process-test.check "file redirection exits normally" [ok [exited 0]] (freeze Status)))
+  (process-test.check "file redirection exits normally" (:result.ok [(:process.exited 0)]) (freeze Status)))
 
 (let Input (process-test.ok (io.read-file (process-test.path "large-input.bin") 2097152))
      Report (process-test.ok (process-test.run ["duplex" "262144"] Input []))
@@ -145,7 +146,7 @@
   (do (process-test.check "run deadline bounds pipe draining" timeout
         (freeze (io.error-domain (process-test.error Result))))
       (process-test.check "timeout cleanup observes exit" false
-        (freeze (= (process.status Partial) [running])))
+        (freeze (= (process.status Partial) (:process.running))))
       (process-test.check "timeout closes child after reaping" true
         (freeze (process-test.closed? (process.child Partial))))))
 
@@ -153,8 +154,8 @@
                [[cancel (freeze true)] [terminate-grace 0]])
   (do (process-test.check "cancellation is explicit" cancelled
         (freeze (io.error-domain (process-test.error Result))))
-      (process-test.check "cancellation before the start launches nothing" 2
-        (freeze (length Result)))))
+      (process-test.check "cancellation before the start launches nothing" []
+        (freeze (snd (fixture.failure Result))))))
 
 (process-test.check "invalid cancel is refused before launching a child" true
   (freeze
@@ -183,7 +184,7 @@
      Partial (process-test.partial Result)
   (do (process-test.check "leader exit does not imply pipe EOF" timeout
         (freeze (io.error-domain (process-test.error Result))))
-      (process-test.check "exited leader status is retained during descendant cleanup" [exited 0]
+      (process-test.check "exited leader status is retained during descendant cleanup" (:process.exited 0)
         (freeze (process.status Partial)))
       (process-test.check "descendant did write its PID" 4
         (freeze (buffer.length (process.output-bytes Partial))))))
@@ -193,7 +194,7 @@
                                    [(value process-test.helper) ["echo"]]]
                   (buffer.from-string "a c#0;bc#13;c#10;") []))
      Last (hd (tl Reports))
-  (do (process-test.check "pipeline records each exit" [[exited 0] [exited 0]]
+  (do (process-test.check "pipeline records each exit" [(:process.exited 0) (:process.exited 0)]
         (freeze (map (function process.status) Reports)))
       (process-test.check "pipeline preserves binary bytes" "a c#0;bc#13;c#10;"
         (freeze (buffer.string (process.output-bytes Last))))
@@ -203,8 +204,8 @@
 (let Result (process.pipeline [[(value process-test.helper) ["hold" "10000"]]
                               [(process-test.path "missing-program") []]] (buffer.new 0)
                [[terminate-grace 0]])
-     Reports (hd (tl (tl Result)))
-  (do (process-test.check "partial pipeline spawn is an error" error (freeze (hd Result)))
+     Reports (snd (fixture.failure Result))
+  (do (process-test.check "partial pipeline spawn is an error" true (freeze (result.err? Result)))
       (process-test.check "partial pipeline retains launched stage" 1 (freeze (length Reports)))
       (process-test.check "partial pipeline is terminated and reaped" true
         (freeze (process-test.closed? (process.child (hd Reports)))))))
@@ -218,7 +219,7 @@
                  [[cwd (process-test.path "missing-directory")]]))) 0)))
 
 (if (io.file-windows?)
-    (process-test.check "exit code 259 is not mistaken for running" [exited 259]
+    (process-test.check "exit code 259 is not mistaken for running" (:process.exited 259)
       (freeze (process.status (process-test.ok (process-test.run ["exit" "259"] (buffer.new 0) [])))))
     \\ The helper's own runtime may hold sockets, as a sanitizer's did on one macOS: what counts is
     \\ that a listener open here adds none.

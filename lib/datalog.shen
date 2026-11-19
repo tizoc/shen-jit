@@ -1,8 +1,8 @@
 \\ Datalog: relations, facts and recursive rules, evaluated bottom up to a fixed point. It stays
-\\ out of the image until asked for; load it after lib/native.shen, whose assembler makes its
-\\ kernels, and before the code using it:
+\\ out of the image until asked for; its module requires lib/native.shen, whose assembler makes
+\\ its kernels. Load it before the code using it:
 \\
-\\   shen-jit eval -l lib/native.shen -l lib/datalog.shen -l program.shen
+\\   shen-jit eval -m datalog -l program.shen
 \\
 \\ (defdatalog dependencies
 \\   (relation imports [symbol symbol])
@@ -3228,7 +3228,7 @@
        (place-values X Vs (+ At 1) Start End Os Oe)))
 
 \\ The size of a pair's class, on average over the pairs: the sum of the cubes over that of the
-\\ squares, as a real, since the cubes may not fit an integer. Made when a plan asks, and kept until
+\\ squares, as a float, since the cubes may not fit an integer. Made when a plan asks, and kept until
 \\ a class changes.
 (define pair-class-size
   C -> (if (< (classes.class-size C) 0)

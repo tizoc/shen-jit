@@ -27,18 +27,18 @@
       (address-> Time 0 399)
       (deadline-test.raises "non-monotonic clock" (freeze (deadline.remaining D)))
       (deadline-test.raises "zero slice" (freeze (deadline.slice D 0)))
-      (deadline-test.raises "real slice" (freeze (deadline.slice D (+ 0.5 0.5))))))
+      (deadline-test.raises "float slice" (freeze (deadline.slice D (+ 0.5 0.5))))))
 
 (deadline-test.check "zero duration is immediately expired" true
   (freeze (deadline.expired? (deadline.after (freeze 10) 0))))
 (deadline-test.raises "negative duration" (freeze (deadline.after (freeze 10) -1)))
-(deadline-test.raises "real duration" (freeze (deadline.after (freeze 10) (+ 0.5 0.5))))
+(deadline-test.raises "float duration" (freeze (deadline.after (freeze 10) (+ 0.5 0.5))))
 (deadline-test.raises "negative clock" (freeze (deadline.after (freeze -1) 10)))
-(deadline-test.raises "real clock" (freeze (deadline.after (freeze (+ 0.5 0.5)) 10)))
+(deadline-test.raises "float clock" (freeze (deadline.after (freeze (+ 0.5 0.5)) 10)))
 (deadline-test.raises "duration overflow" (freeze (deadline.after (freeze 2305843009213693951) 1)))
 (deadline-test.raises "not a budget" (freeze (deadline.remaining [])))
 (let D (deadline.after (freeze 10) 20)
-     _ (shen-jit.pointer-kill (deadline.budget.guard D))
+     _ (shen-jit.pointer-kill (deadline.guard D))
   (deadline-test.raises "saved/stale deadline" (freeze (deadline.remaining D))))
 
 (let Time (io.record [100])

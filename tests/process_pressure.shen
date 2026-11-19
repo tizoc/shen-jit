@@ -9,13 +9,13 @@
                          (error "producer ran ahead of blocked sink")))) true)
          N (shen-jit.bytes-length Bytes)
          _ (address-> State 0 (+ (<-address State 0) N))
-      [written N]))
+      (:result.ok N)))
 
 \\ The count of bytes the child has written. It rewrites the marker after each 4 KB, truncating it
 \\ first, so a read can find it missing or empty; a slow machine did, outside the pause above.
 (define process-pressure.count
   Marker Tries ->
-    (let Text (trap-error (buffer.string (hd (tl (io.read-file Marker 32)))) (/. E ""))
+    (let Text (trap-error (buffer.string (fixture.success (io.read-file Marker 32))) (/. E ""))
       (cond ((not (= Text "")) (hd (read-from-string Text)))
             ((> Tries 0) (do (process.c-pause [] 10) (process-pressure.count Marker (- Tries 1))))
             (true (error "the producer wrote no count")))))
@@ -24,13 +24,13 @@
      Source (io.input-buffer (buffer.new 0))
      Marker (cn (value process-test.root) "/producer-count")
      Sink (io.endpoint "held sink" write 16384 (function io.no-read)
-            (/. B (process-pressure.write State Marker B)) (freeze [ok]))
+            (/. B (process-pressure.write State Marker B)) (freeze (:result.ok [])))
      Err (io.output-buffer (buffer.new 0))
      Result (process.run-to (value process-test.helper) ["progress" "8388608" Marker] Source Sink Err
                 [[stdout-limit 8388608] [timeout 30000]])
      _ (io.close Source)
      _ (io.close Sink)
      _ (io.close Err)
-  (if (and (= (hd Result) ok) (= (<-address State 0) 8388608))
+  (if (and (result.ok? Result) (= (<-address State 0) 8388608))
       (output "process pressure ok ~A~%" (<-address State 1))
       (error "held process stream failed: ~S, after ~A bytes" Result (<-address State 0))))

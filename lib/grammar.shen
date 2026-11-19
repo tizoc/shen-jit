@@ -1,5 +1,5 @@
 \\ Grammars over byte views: Shen-YACC's notation, compiled to loops over a buffer, a position
-\\ and an end. Load buffer.shen first, then this, then the grammars, under (tc -). docs/grammar.md
+\\ and an end. Module grammar, which the grammars need loaded before them. docs/grammar.md
 \\ has the notation and the API.
 \\
 \\ (defgrammar <digits> (+ <digit>);)
@@ -12,13 +12,15 @@
 \\ own, Name/1 and so on, which loops by calling itself.
 
 (shen.x.namespace grammar
+  (use result)
+  (use option)
   (use buffer)
   (use io)
   (use shen-jit)
   (import struct defstruct)
-  (externals [? at defgrammar eof none ok plain require skip span text u16-be u32-be unknown])
+  (externals [? at defgrammar eof none plain ready require skip span text u16-be u32-be unknown])
   (shadow bind call compile every? inline list pos read run stream subst type value)
-  (export finish match? parse parse-range prepare read read-result read-within defgrammar)
+  (export finish match? parse parse-range prepare read read-within defgrammar)
 
 (define grammar.error
   S At Message -> (do (address-> S 1 At) (address-> S 2 Message) -2))
@@ -197,10 +199,10 @@
          Parse (client-name Name ".parse")
          Match (client-name Name ".match?")
          Read (client-name Name ".read")
-         Result [read-result Value]
-         _ (declare Parse (arrows (append Types [buffer.view (arrows [number string] Value)]) Value))
+         Result [result.t [io.error * [option.t Value]]]
+         _ (declare Parse (arrows (append Types [buffer.view (arrows [fixnum string] Value)]) Value))
          _ (declare Match (arrows (append Types [buffer.view]) boolean))
-         _ (declare Read (arrows (append Types [io.reader number (arrows [number string] Result)]) Result))
+         _ (declare Read (arrows (append Types [io.reader fixnum (arrows [fixnum string] Result)]) Result))
          _ (eval (append [define Parse | Params] [View Fail -> (parse-form [Name | Params] View Fail)]))
          _ (eval (append [define Match | Params] [View -> (match-form [Name | Params] View)]))
          _ (eval (append [define Read | Params] [R Limit Fail -> (read-form [Name | Params] R Limit Fail)]))
@@ -210,14 +212,14 @@
   Name Suffix -> (intern (cn (str Name) Suffix)))
 
 \\ The alternatives as the clauses of Name.types, a function of everything any of them names, so
-\\ that a type error says which alternative it is in: the parameters, the numbers the items bind,
+\\ that a type error says which alternative it is in: the parameters, the fixnums the items bind,
 \\ and a variable for each rule named, with the type of its value or its capture.
 (define types
   Name Params Types Value Rules ->
     (let Kinds (map (/. R (named Name R)) Rules)
          Vars (unique (mapcan (/. R (difference (scope (hd R)) Params)) Rules) [])
          Named (map (/. K [K | (gensym (protect V))]) (unique (mapcan (/. K K) Kinds) []))
-         Sig (append Types (map (/. V number) Vars) (map (/. N (value-type Name (hd N))) Named))
+         Sig (append Types (map (/. V fixnum) Vars) (map (/. N (value-type Name (hd N))) Named))
       (append [define (client-name Name ".types") (intern "{")
                | (if (empty? Sig) [(arrow) Value] (append (mapcan (/. T [T (arrow)]) Sig) [Value]))]
               [(intern "}") | (mapcan (/. RK (clause Named (append Params Vars (map (function tl) Named))
@@ -262,7 +264,7 @@
   [[require | Rest] | Items] -> (append (binders (butlast Rest)) (binders Items))
   [_ | Items] -> (binders Items))
 
-\\ The numbers an alternative's items bind: bytes, positions and fields.
+\\ The fixnums an alternative's items bind: bytes, positions and fields.
 (define scope
   [] -> []
   [X | Items] -> [X | (scope Items)] where (variable? X)
@@ -288,12 +290,20 @@
 \\ KL without running it. The macro runs as its file is read, before any of the file's forms
 \\ have, so the stub compiles the loop at its first call, by when they have run. An isolate cannot
 \\ compile, so the builder compiles what is still pending with grammar.finish before it spawns.
+\\ The stub is defined with sealing off, as it is replaced: code compiled against it calls it by
+\\ name, and so reaches the loop. The loop is defined as sealing then is.
 (define stub
   H Owner Def -> (let Params (parameters Def)
                       _ (shen.shendef->kldef H (tl (tl Def)))
                       _ (put H loop Def)
                       _ (add-pending loops [H Owner])
-                   (eval (append [define H | Params] [-> [compile H (list Params)]]))))
+                   (unsealed (freeze (eval (append [define H | Params] [-> [compile H (list Params)]]))))))
+
+\\ Work done with sealing off, and sealing as it was after, however Work ends.
+(define unsealed
+  Work -> (let Sealing (shen-jit.sealed? (gensym probe))
+               _ (shen-jit.seal -)
+            (shen-jit.finally Work (freeze (shen-jit.seal (if Sealing + -))))))
 
 \\ What is not yet made, on the builder's property list: stubs with their rules, and the rules that
 \\ reads name, whose streaming variants an isolate needs prepared.
@@ -817,26 +827,13 @@
 \\ arrived, kept in slot 0 of a stream record that the rule gets as its end, and fills the reader
 \\ when it fails; calls go to streaming variants, and views of captures copy their bytes, as the
 \\ reader's buffer is reused after the value. The parse reads in place, in the reader's buffer, and
-\\ consumes the value's bytes only when it is complete. Load io.shen to use it.
+\\ consumes the value's bytes only when it is complete. It needs the module io, which module grammar requires.
 
 (define read
   Rule Reader Fail -> (read-from Rule [] Reader (io.window-size Reader) Fail))
 
 (define read-within
   Rule Reader Limit Fail -> (read-from Rule [] Reader Limit Fail))
-
-\\ What a read of a typed rule gives typed code, Fail's result included.
-(datatype t
-  V : A;
-  ========================================
-  [ok V] : (read-result A);
-
-  ________________________________________
-  [eof] : (read-result A);
-
-  Error : io.error;
-  ========================================
-  [error Error] : (read-result A);)
 
 \\ The stream record: what has arrived, the reader, why there is no more, and the limit.
 (define read-from
@@ -846,24 +843,24 @@
          Start (io.position R)
          Bound (io.min (buffer.index Limit) (io.window-size R))
          \\ What is already in the window counts against the bound too, as later fills do.
-         E (address-> (address-> (address-> (address-> (absvector 4) 0 (io.min (io.window-fill R 0) Bound)) 1 R) 2 [])
-                      3 Bound)
+         End (io.min (io.window-fill R 0) Bound)
+         E (address-> (address-> (address-> (address-> (absvector 4) 0 End) 1 R) 2 ready) 3 Bound)
          S (state)
          P (apply (fn G) [Storage 0 E S | Args])
-      (read-result P S E Start Fail)))
+      (finish-read P S E Start Fail)))
 
 \\ A parse that read into the end of the input could have matched with more: at EOF, that is
 \\ "input ended", whichever rule failed. One that did not is the grammar's own failure. A parse
 \\ that met the limit or a reader's failure decides nothing, even if it matched: a repetition or
 \\ an option stops there as at the end, and more input could have made the match longer.
-(define read-result
+(define finish-read
   P S E Start Fail ->
     (let R (<-address E 1) Why (<-address E 2) End (<-address E 0)
       (cases (= Why limit) (Fail (+ Start End) "input exceeds the limit")
-             (and (cons? Why) (not (= Why [eof]))) (io.reader-terminal R)
-             (>= P 0) (do (io.consume R P) [ok (<-address S 0)])
-             (and (= End 0) (= Why [eof])) [eof]
-             (= Why [eof]) (Fail (+ Start End) "input ended")
+             (= Why (with-externals [failed] failed)) (io.reader-terminal R)
+             (>= P 0) (do (io.consume R P) (result.ok [(<-address S 0)]))
+             (and (= End 0) (= Why eof)) (result.ok [])
+             (= Why eof) (Fail (+ Start End) "input ended")
              (= P -2) (Fail (+ Start (<-address S 1)) (<-address S 2))
              true (Fail Start "no match"))))
 
@@ -874,7 +871,7 @@
               N (io.min (io.window-fill R (io.min (+ X 1) Limit)) Limit)
               _ (address-> E 0 N)
            (or (> N X)
-               (do (address-> E 2 (if (>= X Limit) limit (io.reader.terminal R))) false))))
+               (do (address-> E 2 (if (>= X Limit) limit (io.reader-status R))) false))))
 
 (define copy-span
   Buf At End -> (buffer.wrap (shen-jit.copy-bytes (shen-jit.bytes (- End At)) 0 Buf At (- End At))))

@@ -9,11 +9,13 @@ There are two ways to call C from Shen/JIT, kept apart:
 Both are in `lib/ffi.shen`, which stays out of the image and has to be loaded before the code that uses it, under `(tc -)`:
 
 ```sh
-shen-jit eval -l lib/ffi.shen -l program.shen
+shen-jit eval -m ffi -l program.shen
 ```
 
 `lib/sqlite.shen` and `lib/socket.shen` are written over it in Shen alone, and show what it covers. **None of this is stable until 1.0:**
-it may change before then, and `SHEN_API_VERSION` says when the C API has.
+it may change before then. `SHEN_API_VERSION` numbers the layout of the table of functions that the C API calls
+through, which an adapter can check: a function renamed in its slot, as `shen_make_real` became
+`shen_make_float`, keeps the layout and its number, and adapters built before still work.
 
 ## Plain C
 
@@ -25,14 +27,16 @@ it may change before then, and `SHEN_API_VERSION` says when the C API has.
 ```
 
 A library is named once, by a symbol, with the file names to try in order. `[]` means the executable and what it links, which on Windows
-reaches nothing, as the executable is static. A definition's C name and types are expressions, which lets one definition suit each system:
+reaches nothing, as the executable is static. The library is opened at the first call of one of its functions. When no
+name opens as written, from the current directory or the system's search, each that is not absolute is tried again from
+the executable's directory, so a built program finds a library shipped beside it, or in its `lib/`, wherever it runs. A definition's C name and types are expressions, which lets one definition suit each system:
 `lib/socket.shen` has `(socket.type)`, which is `int64` on Windows and `int32` elsewhere.
 
 | Type | As an argument | As a result |
 | --- | --- | --- |
 | `int64` | a fixnum | raises if it does not fit 62 bits |
 | `int32`, `uint32` | a fixnum in range | the low 32 bits, sign- or zero-extended |
-| `double` | a real or a fixnum | a new real |
+| `double` | a float or a fixnum | a new float |
 | `string` | copied to a NUL-terminated buffer for the call; a NUL inside raises | copied into a new string; NULL is `[]` |
 | `pointer` | a pointer of any kind, or `[]` for NULL | a pointer of kind `pointer`; NULL is `[]` |
 | `bytes` | the address of a byte buffer, for the call; C must not write into a shared one (`isolate.share`) | not allowed |
@@ -58,6 +62,12 @@ A system function cannot be redefined this way, and a library must be named with
 
 **Errors:** `(shen-jit.errno)` is what the last call declared with `define-foreign` on this thread left in `errno`, or on Windows in `GetLastError`, which is also
 `WSAGetLastError`, and there `(shen-jit.c-errno)` is the C library's. Both are saved straight after the call.
+
+**Functions of doubles:** one of one to three `double`s giving a `double`, neither `blocking` nor variadic, as most
+of libm is, is called by a [typed program](modules.md#typed-programs) with its arguments and result in the machine's
+floating-point registers, where the program keeps its floats: a direct call, with no conversion and no allocation.
+Such a call does not save `errno` for `shen-jit.errno`, and the function must not call back into Shen, as through a
+`shen_vm` kept from another call, since the program's frame is not published to it.
 
 **Pointers** have a kind, a symbol, for reading and for messages.
 

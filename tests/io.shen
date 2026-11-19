@@ -1,3 +1,5 @@
+(load "tests/result_helpers.shen")
+
 \\ Scripted endpoints exercise contracts independently of OS I/O and the FFI.
 (set io-test.passed 0)
 (set io-test.failed 0)
@@ -8,9 +10,11 @@
             (set io-test.failed (+ 1 (value io-test.failed)))))))
 (define io-test.raises
   Name F -> (io-test.check Name true (freeze (trap-error (do (thaw F) false) (/. X true)))))
-(define io-test.view [ok V] -> (buffer.string V) [chunk V] -> (buffer.string V))
-(define io-test.total [error E N] -> [N (io.error-progress E)])
-(define io-test.failure [error E] -> [(io.error-operation E) (io.error-progress E)])
+(define io-test.view
+  (:result.ok [V]) -> (buffer.string V)
+  (:result.ok V) -> (buffer.string V))
+(define io-test.total (:result.err E) -> (io.error-progress E))
+(define io-test.failure (:result.err E) -> [(io.error-operation E) (io.error-progress E)])
 (define io-test.source
   Text Step Terminal State ->
     (let Data (buffer.from-string Text)
@@ -21,8 +25,8 @@
                       (address-> State 3 Size)
                       (if (= N 0) Terminal
                           (do (shen-jit.copy-bytes Out 0 (buffer.owner Data) At N)
-                              (address-> State 0 (+ At N)) [read N])))))
-        (function io.no-write) (freeze (do (address-> State 2 (+ 1 (<-address State 2))) [ok])))))
+                              (address-> State 0 (+ At N)) (:result.ok [N]))))))
+        (function io.no-write) (freeze (do (address-> State 2 (+ 1 (<-address State 2))) (:result.ok []))))))
 (define io-test.sink
   Out Plan CloseResult State ->
     (do (address-> State 4 Plan)
@@ -32,36 +36,36 @@
                  (do (address-> State 1 (+ 1 (<-address State 1)))
                      (address-> State 3 (shen-jit.bytes-length In))
                      (if (empty? Steps) true (address-> State 4 (tl Steps)))
-                     (if (= Next fail) [error (io.error write "scripted output" "failure")]
+                     (if (= Next fail) (:result.err (io.error write "scripted output" "failure"))
                          (let N (io.min Next (shen-jit.bytes-length In))
                            (do (shen-jit.copy-bytes (buffer.owner Out) At In 0 N)
-                               (address-> State 0 (+ At N)) [written N]))))))
+                               (address-> State 0 (+ At N)) (:result.ok N)))))))
         (freeze (do (address-> State 2 (+ 1 (<-address State 2))) CloseResult)))))
 (define io-test.state -> (io.record [0 0 0 0 []]))
 
-(let S (io-test.state) E (io-test.source "abcdef" 2 [eof] S)
+(let S (io-test.state) E (io-test.source "abcdef" 2 (:result.ok []) S)
      B (buffer.from-string "!-----?") V (buffer.slice B 1 5)
-  (do (io-test.check "bounded short read" [read 2] (freeze (io.read-some E V [])))
+  (do (io-test.check "bounded short read" (:result.ok [2]) (freeze (io.read-some E V [])))
       (io-test.check "read margins" "!ab---?" (freeze (buffer.string B)))
       (io-test.check "scratch is bounded" 4 (freeze (<-address S 3)))
-      (io-test.check "exact partial EOF" [eof 4] (freeze (io.read-exact E V [])))
+      (io-test.check "exact partial EOF" (:result.ok (:io.transfer false 4)) (freeze (io.read-exact E V [])))
       (io-test.check "exact read preserves undelivered tail" "!cdef-?" (freeze (buffer.string B)))
-      (io-test.check "empty read is not EOF" [read 0] (freeze (io.read-some E (buffer.new 0) [])))
+      (io-test.check "empty read is not EOF" (:result.ok [0]) (freeze (io.read-some E (buffer.new 0) [])))
       (io-test.raises "unsupported transfer option" (freeze (io.read-some E V [[timeout 1]])))
       (io-test.raises "wrong direction" (freeze (io.write-some E (buffer.new 0) [])))
-      (io-test.check "close" [ok] (freeze (io.close E)))
-      (io-test.check "repeated close" [ok] (freeze (io.close E)))
+      (io-test.check "close" (:result.ok []) (freeze (io.close E)))
+      (io-test.check "repeated close" (:result.ok []) (freeze (io.close E)))
       (io-test.check "one native close" 1 (freeze (<-address S 2)))
       (io-test.raises "closed empty request" (freeze (io.read-some E (buffer.new 0) [])))))
 
-(let S (io-test.state) E (io-test.source "ab" 1 [error (io.error read "x" "broken")] S)
+(let S (io-test.state) E (io-test.source "ab" 1 (:result.err (io.error read "x" "broken")) S)
      V (buffer.new 5)
-  (do (io-test.check "read-exact progress on error" [2 2]
+  (do (io-test.check "read-exact progress on error" 2
         (freeze (io-test.total (io.read-exact E V []))))
       (io-test.check "delivered bytes survive error" "ab" (freeze (buffer.string (buffer.slice V 0 2))))
       (io.close E)))
 
-(let S (io-test.state) E (io-test.source "abcdef" 2 [eof] S) R (io.reader E [[chunk-size 3]])
+(let S (io-test.state) E (io-test.source "abcdef" 2 (:result.ok []) S) R (io.reader E [[chunk-size 3]])
      First (io.peek R 3)
   (do (io-test.check "peek spans short reads" "abc" (freeze (io-test.view First)))
       (io-test.check "peek leaves position" [3 0] (freeze [(io.available R) (io.position R)]))
@@ -73,9 +77,9 @@
       (io-test.check "compaction preserves unread bytes" "cde" (freeze (io-test.view (io.peek R 3))))
       (io-test.check "read chunk" "cde" (freeze (io-test.view (io.read-chunk R))))
       (io-test.check "short final chunk" "f" (freeze (io-test.view (io.read-chunk R))))
-      (io-test.check "EOF" [eof] (freeze (io.read-chunk R)))
+      (io-test.check "EOF" (:result.ok []) (freeze (io.read-chunk R)))
       (let Calls (<-address S 1)
-        (do (io-test.check "EOF latched" [eof] (freeze (io.read-chunk R)))
+        (do (io-test.check "EOF latched" (:result.ok []) (freeze (io.read-chunk R)))
             (io-test.check "no backend retry after EOF" Calls (freeze (<-address S 1)))))
       (io-test.check "zero peek after EOF" "" (freeze (io-test.view (io.peek R 0))))
       (io-test.check "consumed position" 6 (freeze (io.position R)))
@@ -83,13 +87,13 @@
       (io-test.check "peek owns stable bytes" "abc" (freeze (io-test.view First)))
       (io-test.raises "closed reader" (freeze (io.read-chunk R)))))
 
-(let S (io-test.state) Err (io.error read "x" "broken") E (io-test.source "ab" 2 [error Err] S)
+(let S (io-test.state) Err (io.error read "x" "broken") E (io-test.source "ab" 2 (:result.err Err) S)
      R (io.reader E [])
   (do (io-test.check "progress before terminal error" "ab" (freeze (io-test.view (io.peek R 4))))
       (io-test.check "reader delivers queued bytes" "ab" (freeze (io-test.view (io.read-chunk R))))
-      (io-test.check "reader error retained" [error Err] (freeze (io.read-chunk R)))
-      (io-test.check "reader zero read ignores pending terminal" [read 0] (freeze (io.read-into R (buffer.new 0))))
-      (io-test.check "reader exact terminal progress" [0 0] (freeze (io-test.total (io.reader-exact R (buffer.new 1)))))
+      (io-test.check "reader error retained" (:result.err Err) (freeze (io.read-chunk R)))
+      (io-test.check "reader zero read ignores pending terminal" (:result.ok [0]) (freeze (io.read-into R (buffer.new 0))))
+      (io-test.check "reader exact terminal progress" 0 (freeze (io-test.total (io.reader-exact R (buffer.new 1)))))
       (io.close E)))
 
 (let E (io.input-buffer (buffer.from-string "abcdef")) R (io.reader E [[chunk-size 2]])
@@ -104,80 +108,90 @@
   (do (io-test.check "zero aggregate limit with data" [read 0] (freeze (io-test.failure (io.read-all R 0))))
       (io-test.check "zero aggregate preserves first byte" "a" (freeze (io-test.view (io.read-chunk R)))) (io.close E)))
 (let E (io.input-buffer (buffer.from-string "abc")) R (io.reader E [[chunk-size 1]]) V (buffer.new 5)
-  (do (io-test.check "reader exact partial EOF" [eof 3] (freeze (io.reader-exact R V)))
+  (do (io-test.check "reader exact partial EOF" (:result.ok (:io.transfer false 3)) (freeze (io.reader-exact R V)))
       (io-test.check "reader exact bytes" "abc" (freeze (buffer.string (buffer.slice V 0 3)))) (io.close E)))
-(let S (io-test.state) E (io-test.source "abc" 2 [error (io.error read "x" "bad")] S) R (io.reader E [])
+(let S (io-test.state) E (io-test.source "abc" 2 (:result.err (io.error read "x" "bad")) S) R (io.reader E [])
   (do (io-test.check "aggregate failure has total" [read 3] (freeze (io-test.failure (io.read-all R 10)))) (io.close E)))
 
 (let V (buffer.from-string "abc") E (io.input-buffer V)
   (do (buffer.u8! V 0 88)
       (io-test.check "memory source snapshots input" "abc" (freeze (io-test.view (io.read-all (io.reader E []) 3)))) (io.close E)))
 (let Out (buffer.from-string "!---?") E (io.output-buffer (buffer.slice Out 1 3))
-  (do (io-test.check "fixed memory sink partial total" [3 3]
+  (do (io-test.check "fixed memory sink partial total" 3
         (freeze (io-test.total (io.write-all E (buffer.from-string "abcde") []))))
       (io-test.check "sink margins intact" "!abc?" (freeze (buffer.string Out))) (io.close E)))
 
-(let S (io-test.state) Out (buffer.new 12) E (io-test.sink Out [1 2 1] [ok] S)
+(let S (io-test.state) Out (buffer.new 12) E (io-test.sink Out [1 2 1] (:result.ok []) S)
      V (buffer.slice (buffer.from-string "!abcdef?") 1 6)
-  (do (io-test.check "write-all short writes" [ok 6] (freeze (io.write-all E V [])))
+  (do (io-test.check "write-all short writes" (:result.ok 6) (freeze (io.write-all E V [])))
       (io-test.check "write bytes" "abcdef" (freeze (buffer.string (buffer.slice Out 0 6))))
       (io-test.check "write preserves source" "abcdef" (freeze (buffer.string V)))
-      (io-test.check "empty write" [written 0] (freeze (io.write-some E (buffer.new 0) []))) (io.close E)))
-(let S (io-test.state) E (io-test.sink (buffer.new 12) [2 fail] [ok] S)
-  (do (io-test.check "write-all error total" [2 2]
+      (io-test.check "empty write" (:result.ok 0) (freeze (io.write-some E (buffer.new 0) []))) (io.close E)))
+(let S (io-test.state) E (io-test.sink (buffer.new 12) [2 fail] (:result.ok []) S)
+  (do (io-test.check "write-all error total" 2
         (freeze (io-test.total (io.write-all E (buffer.from-string "abcdef") [])))) (io.close E)))
-(let S (io-test.state) E (io-test.sink (buffer.new 4) [0] [ok] S)
-  (do (io-test.check "zero native write stops retry" [0 0]
+(let S (io-test.state) E (io-test.sink (buffer.new 4) [0] (:result.ok []) S)
+  (do (io-test.check "zero native write stops retry" 0
         (freeze (io-test.total (io.write-all E (buffer.from-string "a") []))))
       (io-test.check "one attempt on no progress" 1 (freeze (<-address S 1))) (io.close E)))
 
-(let S (io-test.state) Out (buffer.new 12) E (io-test.sink Out [2 fail 1] [ok] S) W (io.writer E [])
-  (do (io-test.check "buffered acceptance" [accepted 4] (freeze (io.write W (buffer.from-string "abcd"))))
+(let S (io-test.state) Out (buffer.new 12) E (io-test.sink Out [2 fail 1] (:result.ok []) S) W (io.writer E [])
+  (do (io-test.check "buffered acceptance" (:result.ok 4) (freeze (io.write W (buffer.from-string "abcd"))))
       (io-test.check "acceptance does not promise delivery" [0 4] (freeze [(<-address S 0) (io.pending W)]))
       (io-test.raises "writer lease prevents bypass" (freeze (io.write-some E (buffer.new 0) [])))
       (io-test.raises "duplicate writer refused" (freeze (io.writer E [])))
-      (io-test.check "flush retains partial suffix" [2 2] (freeze (io-test.total (io.flush W))))
+      (io-test.check "flush retains partial suffix" 2 (freeze (io-test.total (io.flush W))))
       (io-test.check "pending suffix length" 2 (freeze (io.pending W)))
-      (io-test.check "new input refused until retry" [0 0] (freeze (io-test.total (io.write W (buffer.from-string "x")))))
-      (io-test.check "retry drains suffix" [ok 2] (freeze (io.flush W)))
+      (io-test.check "new input refused until retry" 0 (freeze (io-test.total (io.write W (buffer.from-string "x")))))
+      (io-test.check "retry drains suffix" (:result.ok 2) (freeze (io.flush W)))
       (io-test.check "retry never duplicates prefix" "abcd" (freeze (buffer.string (buffer.slice Out 0 4))))
-      (io-test.check "write across buffer boundaries" [accepted 6] (freeze (io.write W (buffer.from-string "efghij"))))
+      (io-test.check "write across buffer boundaries" (:result.ok 6) (freeze (io.write W (buffer.from-string "efghij"))))
       (io-test.check "remaining tail" 2 (freeze (io.pending W)))
-      (io-test.check "close flushes tail" [ok] (freeze (io.close E)))
+      (io-test.check "close flushes tail" (:result.ok []) (freeze (io.close E)))
       (io-test.check "all output once" "abcdefghij" (freeze (buffer.string (buffer.slice Out 0 10))))
       (io-test.raises "writer after close" (freeze (io.flush W)))))
-(let S (io-test.state) E (io-test.sink (buffer.new 10) [2 fail] [ok] S) W (io.writer E [])
-  (do (io-test.check "write reports accepted input on implicit flush failure" [4 4]
+(let S (io-test.state) E (io-test.sink (buffer.new 10) [2 fail] (:result.ok []) S) W (io.writer E [])
+  (do (io-test.check "write reports accepted input on implicit flush failure" 4
         (freeze (io-test.total (io.write W (buffer.from-string "abcdef")))))
       (io-test.check "unsent bytes retained after implicit flush" 2 (freeze (io.pending W))) (io.close E)))
 (let S (io-test.state) CloseError (io.error close "x" "close failed")
-     E (io-test.sink (buffer.new 4) [fail] [error CloseError] S) W (io.writer E [])
-     _ (io.write W (buffer.from-string "ab")) Result (io.close E) Err (hd (tl Result))
+     E (io-test.sink (buffer.new 4) [fail] (:result.err CloseError) S) W (io.writer E [])
+     _ (io.write W (buffer.from-string "ab")) Result (io.close E) Err (fixture.failure Result)
   (do (io-test.check "flush error remains primary" write (freeze (io.error-operation Err)))
       (io-test.check "close error retained as secondary" [CloseError] (freeze (io.error-secondary Err)))
       (io-test.check "failed close remembered" Result (freeze (io.close E)))
       (io-test.check "failed close only once" 1 (freeze (<-address S 2)))))
 
-(let S (io-test.state) E (io-test.source "a" 1 [eof] S)
-  (do (io-test.check "scope success" [ok 42] (freeze (io.with-endpoint E (/. X [ok 42]))))
+(let S (io-test.state) E (io-test.source "a" 1 (:result.ok []) S)
+  (do (io-test.check "scope success" (:result.ok 42) (freeze (io.with-endpoint E (/. X (:result.ok 42)))))
       (io-test.check "scope closes once" 1 (freeze (<-address S 2)))))
-(let S (io-test.state) E (io-test.source "a" 1 [eof] S)
+(let S (io-test.state) E (io-test.source "a" 1 (:result.ok []) S)
      Result (io.with-endpoint E (/. X (error "callback failed")))
-  (do (io-test.check "scope translates callback exception" shen (freeze (io.error-domain (hd (tl Result)))))
+  (do (io-test.check "scope translates callback exception" shen (freeze (io.error-domain (fixture.failure Result))))
       (io-test.check "exception scope closes once" 1 (freeze (<-address S 2)))))
 (let Primary (io.error parse "x" "bad data") Secondary (io.error close "x" "close failed")
-     S (io-test.state) E (io-test.sink (buffer.new 1) [] [error Secondary] S)
-     Result (io.with-endpoint E (/. X [error Primary])) Err (hd (tl Result))
+     S (io-test.state) E (io-test.sink (buffer.new 1) [] (:result.err Secondary) S)
+     Result (io.with-endpoint E (/. X (:result.err Primary))) Err (fixture.failure Result)
   (do (io-test.check "scope preserves callback primary" parse (freeze (io.error-operation Err)))
       (io-test.check "scope preserves cleanup failure" [Secondary] (freeze (io.error-secondary Err)))))
-(let E (io.endpoint "x" read 1 (/. B [eof]) (function io.no-write) (freeze (error "close exception")))
+(let Primary (io.native-error write posix 28 "out" "disk full")
+     Close (io.error close "out" "cleanup failed")
+     S (io-test.state) E (io-test.sink (buffer.new 1) [] (:result.err Close) S)
+     R (io.with-endpoint E (/. X (:result.err (io.progress Primary 7))))
+  (io-test.check "scope keeps transfer error, total and secondary close failure"
+    (:result.err (io.secondary (io.progress Primary 7) Close)) (freeze R)))
+(let E (io.input-buffer (buffer.new 0)) Bad (io.error write "out" "disk full")
+     R (io.with-endpoint E (/. X (:result.err (@p Bad -1))))
+  (io-test.check "negative scope progress is malformed" "io: malformed scope error"
+    (freeze (io.error-message (fixture.failure R)))))
+(let E (io.endpoint "x" read 1 (/. B (:result.ok [])) (function io.no-write) (freeze (error "close exception")))
   (do (io-test.check "close callback exceptions become stable errors" close
-        (freeze (io.error-operation (hd (tl (io.close E))))))
+        (freeze (io.error-operation (fixture.failure (io.close E)))))
       (io-test.check "close exception remembered" (io.close E) (freeze (io.close E)))))
 
 (io-test.raises "zero capacity" (freeze (io.endpoint "x" read 0 [] [] [])))
 (io-test.raises "oversized capacity" (freeze (io.endpoint "x" read 1048577 [] [] [])))
-(io-test.raises "real capacity" (freeze (io.endpoint "x" read (+ 0.5 0.5) [] [] [])))
+(io-test.raises "float capacity" (freeze (io.endpoint "x" read (+ 0.5 0.5) [] [] [])))
 (io-test.raises "invalid mode" (freeze (io.endpoint "x" other 1 [] [] [])))
 (let E (io.input-buffer (buffer.new 0))
   (do (io-test.raises "oversized reader options" (freeze (io.reader E [[chunk-size 65537]])))
@@ -186,55 +200,74 @@
       (io-test.raises "bad destination even empty" (freeze (io.read-some E [] [])))
       (io.close E)))
 (let B (buffer.from-string "!--?")
-     E (io.endpoint "invalid" read 2 (/. Out (do (shen-jit.u8! Out 0 88) [read 3]))
-                    (function io.no-write) (freeze [ok]))
+     E (io.endpoint "invalid" read 2 (/. Out (do (shen-jit.u8! Out 0 88) (:result.ok [3])))
+                    (function io.no-write) (freeze (:result.ok [])))
   (do (io-test.raises "invalid backend count" (freeze (io.read-some E (buffer.slice B 1 2) [])))
       (io-test.check "invalid read never mutates caller" "!--?" (freeze (buffer.string B)))
       (io-test.raises "invalid callback releases busy state" (freeze (io.read-some E (buffer.new 1) []))) (io.close E)))
+(let E (io.endpoint "list callbacks" read-write 1 (/. Bytes [read 1]) (/. Bytes [written 1]) (freeze (:result.ok [])))
+  (do (io-test.raises "read callback must return a struct" (freeze (io.read-some E (buffer.new 1) [])))
+      (io-test.raises "write callback must return a struct" (freeze (io.write-some E (buffer.new 1) [])))
+      (io.close E)))
 (let State (io.record [[]])
      E (io.endpoint "reentrant" read 1
          (/. B (do (io-test.raises "reentrant close refused" (freeze (io.close (<-address State 0))))
-                   (io-test.raises "reentrant scope refused" (freeze (io.with-endpoint (<-address State 0) (/. X [ok 1])))) [eof]))
-         (function io.no-write) (freeze [ok]))
+                   (io-test.raises "reentrant scope refused" (freeze (io.with-endpoint (<-address State 0) (/. X (:result.ok 1))))) (:result.ok [])))
+         (function io.no-write) (freeze (:result.ok [])))
   (do (address-> State 0 E) (io.read-some E (buffer.new 1) []) (io.close E)))
-(let E (io.endpoint "throws" read 1 (/. B (error "backend threw")) (function io.no-write) (freeze [ok]))
+(let E (io.endpoint "throws" read 1 (/. B (error "backend threw")) (function io.no-write) (freeze (:result.ok [])))
   (do (io-test.raises "backend exception" (freeze (io.read-some E (buffer.new 1) [])))
-      (io-test.check "backend exception releases busy state" [ok] (freeze (io.close E)))))
+      (io-test.check "backend exception releases busy state" (:result.ok []) (freeze (io.close E)))))
 
 \\ A timeout behind queued input must be observed once before a later operation retries it.
-(let State (io-test.state)
+(let State (io.record [0])
      Error (io.native-error read timeout 0 "source" "delayed timeout")
-     E (io-test.source "ab" 2 [error Error] State)
+     E (io.endpoint "retrying input" read 4
+          (/. Out (let Call (<-address State 0)
+                       _ (address-> State 0 (+ Call 1))
+                    (cases (= Call 0) (do (shen-jit.u8! Out 0 97)
+                                           (shen-jit.u8! Out 1 98)
+                                           (:result.ok [2]))
+                           (= Call 1) (:result.err Error)
+                           (= Call 2) (do (shen-jit.u8! Out 0 99) (:result.ok [1]))
+                           true (:result.ok []))))
+          (function io.no-write)
+          (freeze (:result.ok [])))
      R (io.reader E [])
   (do (io-test.check "peek delivers queued progress before timeout" "ab"
         (freeze (io-test.view (io.peek R 4))))
+      (io-test.check "status sees the pending timeout" failed (freeze (io.reader-status R)))
+      (io.reader-check R)
       (io.consume R 2)
-      (io-test.check "consume does not discard an unreported timeout" [error Error]
+      (io-test.check "status, check and consume leave the timeout pending" (:result.err Error)
         (freeze (io.read-chunk R)))
       (io-test.check "timeout is reported before another backend call" 2
-        (freeze (<-address State 1)))
-      (io.read-chunk R)
-      (io-test.check "later operation can retry a reported timeout" 3
-        (freeze (<-address State 1)))
+        (freeze (<-address State 0)))
+      (io-test.check "retry succeeds after a reported timeout" "c"
+        (freeze (io-test.view (io.read-chunk R))))
+      (io-test.check "retry makes one backend call" 3 (freeze (<-address State 0)))
+      (io-test.check "EOF follows the retry" (:result.ok []) (freeze (io.read-chunk R)))
+      (io-test.check "EOF is cached" [eof (:result.ok []) 4]
+        (freeze [(io.reader-status R) (io.read-chunk R) (<-address State 0)]))
       (io.close E)))
 
-(io-test.check "let-ok binds each value in order" [ok 3]
-  (freeze (io.let-ok X [ok 1] Y [ok (+ X 1)] [ok (+ X Y)])))
-(io-test.check "let-ok gives the first result that is not ok" [error first]
-  (freeze (io.let-ok X [error first] Y [error second] [ok [X Y]])))
-(io-test.check "let-ok takes [ok] with _" [eof]
-  (freeze (io.let-ok _ [ok] _ [ok 2] Z [eof] [ok Z])))
+(io-test.check "let-ok binds each value in order" (:result.ok 3)
+  (freeze (result.let-ok X (:result.ok 1) Y (:result.ok (+ X 1)) (:result.ok (+ X Y)))))
+(io-test.check "let-ok gives the first result that is not ok" (:result.err first)
+  (freeze (result.let-ok X (:result.err first) Y (:result.err second) (:result.ok [X Y]))))
+(io-test.check "let-ok accepts an empty success with _" (:result.ok [])
+  (freeze (result.let-ok _ (:result.ok []) _ (:result.ok 2) Z (:result.ok []) (:result.ok Z))))
 
 (define io-test.throwing-sink
   S -> (io.endpoint "throwing sink" write 4
          (function io.no-read)
          (/. B (if (= (<-address S 0) 0)
-                   (do (address-> S 0 1) [written 1])
+                   (do (address-> S 0 1) (:result.ok 1))
                    (error "write interrupted")))
-         (freeze [ok])))
+         (freeze (:result.ok []))))
 
 (io-test.check "a flush that raises refuses new writes until one succeeds"
-  [true error 3]
+  [true true 3]
   (freeze
     (let E (io-test.throwing-sink (io.record [0]))
          W (io.writer E [])
@@ -243,7 +276,7 @@
          Result (io.write W (buffer.from-string "x"))
          Pending (io.pending W)
          _ (io.close E)
-      [Raised (hd Result) Pending])))
+      [Raised (result.err? Result) Pending])))
 
 (io-test.check "close keeps the progress of a flush that raised"
   [1 1]
@@ -253,13 +286,13 @@
          W (io.writer E [])
          _ (io.write W (buffer.from-string "abcd"))
          Result (io.close E)
-      [(<-address S 0) (io.error-progress (hd (tl Result)))])))
+      [(<-address S 0) (io.error-progress (fixture.failure Result))])))
 
 (let E (io.input-buffer (buffer.from-string "abcd"))
      R (io.reader E [[chunk-size 4]])
   (do
     (io-test.raises "window-fill refuses a negative count" (freeze (io.window-fill R -1)))
-    (io-test.raises "window-fill refuses a real count" (freeze (io.window-fill R (+ 0.5 0.5))))
+    (io-test.raises "window-fill refuses a float count" (freeze (io.window-fill R (+ 0.5 0.5))))
     (io.peek R 4)
     (io.close E)
     (io-test.raises "window-fill refuses a closed reader" (freeze (io.window-fill R 1)))))

@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name foreign)
+  (requires numbers ffi memory)
+  (requires-features shen-jit/ffi)
+  (sources tc- "foreign-c.shen" tc+ "foreign.shen"))

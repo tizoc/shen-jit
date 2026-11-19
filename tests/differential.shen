@@ -55,11 +55,11 @@
 \\ Showing a result exactly: 1 and 1.0 differ, as do 0.0 and -0.0, and every NaN
 \\ shows its bits. = is under test, so comparisons are of these strings.
 
-(define d.real-bits
+(define d.float-bits
   R -> (let B (shen-jit.f64! (shen-jit.bytes 8) 0 R)
          (cn "r" (cn (str (shen-jit.u32 B 4)) (cn ":" (str (shen-jit.u32 B 0)))))))
 
-\\ A fixnum is its own sum with 0, while a real is a new object.
+\\ A fixnum is its own sum with 0, while a float is a new object.
 (define d.fixnum?
   V -> (and (number? V) (shen-jit.same? V (+ V 0))))
 
@@ -70,7 +70,7 @@
   V 0 -> "..."
   V _ -> (str V) where (and (number? V) (value d.*portable*))
   V _ -> (cn "i" (str V)) where (d.fixnum? V)
-  V _ -> (d.real-bits V) where (number? V)
+  V _ -> (d.float-bits V) where (number? V)
   V _ -> (cn "s" (make-string "~S" V)) where (string? V)
   V D -> (cn "(" (cn (d.show-to (hd V) (- D 1)) (cn " . " (cn (d.show-to (tl V) (- D 1)) ")")))) where (cons? V)
   V D -> (cn "#" (d.show-bytes V 0)) where (and (not (value d.*portable*)) (shen-jit.bytes? V))
@@ -116,10 +116,10 @@
   _ 0 -> 1
   B N -> (* B (d.pow B (- N 1))))
 
-\\ 2^K as a real, however large.
-(define d.real-pow
+\\ 2^K as a float, however large.
+(define d.float-pow
   0 -> (+ 0.5 0.5)
-  K -> (* 2 (d.real-pow (- K 1))))
+  K -> (* 2 (d.float-pow (- K 1))))
 
 (define d.integers
   -> (let P53 (d.pow 2 53)
@@ -130,8 +130,8 @@
         (- P53 1) P53 (+ P53 1) (+ P53 2) (- 0 P53) (- -1 P53)
         (d.pow 2 60) (- 0 (d.pow 2 60)) Max (- Max 1) Min (+ Min 1)]))
 
-\\ Reals past the reader's reach are computed; the readers turn 8.0 into the integer 8.
-(define d.real-forms
+\\ Floats past the reader's reach are computed; the readers turn 8.0 into the integer 8.
+(define d.float-forms
   -> (let One [+ 0.5 0.5]
           Big [* One 1.0e200]
        [[half 0.5] [-half -0.5] [one-half 1.5] [tenth 0.1]
@@ -164,12 +164,12 @@
   -> (append
        (if (or (= (value d.*blocks*) []) (value d.*portable*)) [] (d.pointer-values))
        (map (/. N [(intern (make-string "n~A" N)) N]) (d.integers))
-       (d.real-forms)
+       (d.float-forms)
        [[empty ""] [a "a"] [abc "abc"] [abc2 [cn "ab" "c"]] [acute "é"] [kanji "日本語"]
         [nul [n->string 0]] [nul-a [cn [n->string 0] "a"]] [s7 "abcdefg"] [s8 "abcdefgh"] [s9 "abcdefghi"] [s16 "abcdefghijklmnop"]
         [s17 "abcdefghijklmnopq"] [s17b [cn "abcdefghijklmnop" "q"]] [digit "7"]
         [nil []] [true true] [false false] [sym foo] [sym2 [intern "foo"]] [fail [fail]]
-        [one-list [cons 1 []]] [one-list2 [cons 1 []]] [real-list [cons [+ 0.5 0.5] []]] [pair [cons 1 2]] [nested [cons [cons 1 []] []]]
+        [one-list [cons 1 []]] [one-list2 [cons 1 []]] [float-list [cons [+ 0.5 0.5] []]] [pair [cons 1 2]] [nested [cons [cons 1 []] []]]
         [str-list [cons "abc" [cons foo []]]] [vec-list [cons [absvector 1] []]]
         [v0 [absvector 0]] [v1 [absvector 1]] [v3 [absvector 3]] [v3b [absvector 3]] [nv0 [vector 0]] [nv2 [vector 2]]
         [nv2b [address-> [address-> [vector 2] 1 a] 2 b]] [tuple [@p 1 2]]
@@ -484,12 +484,12 @@
 \\ Numbers near each power of two, of both kinds, and what d.integers has.
 (define d.number-values
   -> (let Powers (d.powers 0)
-          Reals (map (/. K (d.real-pow K)) [0 1 2 31 32 52 53 54 60 61 62 63 64])
+          Floats (map (/. K (d.float-pow K)) [0 1 2 31 32 52 53 54 60 61 62 63 64])
        (append (d.integers)
                Powers
                (map (/. N (- 0 N)) Powers)
-               Reals
-               (map (/. R (* -1 R)) Reals)
+               Floats
+               (map (/. R (* -1 R)) Floats)
                [0.5 -0.5 0.1 1.5 (- 0.5 0.5) (* -1 (- 0.5 0.5)) 1.0e300 -1.0e300 1.0e-300 (* 1.0e200 1.0e200) (* -1.0e200 1.0e200)
                 (- (* 1.0e200 1.0e200) (* 1.0e200 1.0e200))])))
 
@@ -500,7 +500,7 @@
 
 (define d.hash-values
   -> [0 1 "" "a" "abc" (cn "ab" "c") foo [] true [1] [1 2] [[1] "a"] (cons 1 2) (+ 0.5 0.5) (- 0.5 0.5) (* -1 (- 0.5 0.5))
-      (d.real-pow 53) (d.pow 2 53) (d.real-pow 61)
+      (d.float-pow 53) (d.pow 2 53) (d.float-pow 61)
       (shen-jit.bytes 2) (shen-jit.string->bytes "abc") (shen-jit.string->bytes "abc") (vector 1) (vector 1) (@p 1 2) (@p 1 2)])
 
 \\ = is symmetric, transitive and reflexive but for NaN, and what it calls equal hashes the same.
@@ -794,13 +794,13 @@
          shen-jit.string->bytes shen-jit.bit-not shen-jit.bswap32 shen-jit.popcount shen-jit.clz shen-jit.ctz
          shen-jit.pvar shen-jit.pvar? shen-jit.pvar-offset shen-jit.pointer? simple-error
          shen-jit.pointer-kind shen-jit.pointer-address shen-jit.pointer-kill shen-jit.pointer-owner shen-jit.pointer-read-only
-         shen-jit.arity shen-jit.function]
+         shen-jit.arity shen-jit.function shen-jit.float shen-jit.sqrt shen-jit.truncate]
       [2 + - * / < > <= >= = cons cn pos <-address shen-jit.hash shen-jit.filled-vector shen-jit.tagged? shen-jit.same? shen-jit.newpv shen-jit.gc
          shen-jit.append shen-jit.bit-and shen-jit.bit-or shen-jit.bit-xor shen-jit.shift-left shen-jit.shift-right
          shen-jit.rotate32 shen-jit.decimal shen-jit.u8 shen-jit.u16 shen-jit.u32 shen-jit.s32 shen-jit.s64 shen-jit.f32 shen-jit.f64
-         shen-jit.pointer-sized shen-jit.apply]
-      [3 address-> shen-jit.deref shen-jit.u8! shen-jit.u16! shen-jit.u32! shen-jit.s32! shen-jit.s64! shen-jit.f32!
-         shen-jit.f64! shen-jit.bytes->string shen-jit.bytes->pointer shen-jit.pointer!]
+         shen-jit.pointer-sized shen-jit.apply shen-jit.quotient shen-jit.remainder]
+      [3 address-> shen-jit.struct-ref shen-jit.deref shen-jit.u8! shen-jit.u16! shen-jit.u32! shen-jit.s32! shen-jit.s64! shen-jit.f32!
+         shen-jit.f64! shen-jit.bytes->string shen-jit.bytes->pointer shen-jit.pointer! shen-jit.word-op]
       [5 shen-jit.copy-bytes]])
 
 \\ Against another implementation: the primitives and values of the language alone, called plainly, with

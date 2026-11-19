@@ -4,12 +4,13 @@
   (use buffer)
   (use fs)
   (use io)
+  (import result let-ok ok err)
   (use json)
   (use source-build)
   (use source-facts)
   (use source-syntax)
   (use treesitter)
-  (externals [accepted byte-limit chunk-size continue depth-limit directory done entry-limit name-byte-limit object ok
+  (externals [byte-limit chunk-size continue depth-limit directory done entry-limit name-byte-limit object
     skip source-facts])
 
 (set query
@@ -88,20 +89,16 @@
        ["row" (hd Point)] ["column" (hd (tl Point))] ["syntax_error" Error]]))
 
 (define declarations
-  _ _ _ _ _ _ [] -> [ok done]
+  _ _ _ _ _ _ [] -> (:ok done)
   Writer State Path T Error StaticNames [ID | Rest] ->
     (let Name (if (= (treesitter.field T ID) "declarator") (declarator-node T ID) 0)
          Result (if (and (not (= Name 0)) (function-name? T (treesitter.parent T Name)))
                     (emit Writer State
                       [object | (append (site-fields Path T "declaration" Name "" null Error)
                                   [["linkage" (linkage T (treesitter.parent T ID) Name StaticNames)]])])
-                    [ok done])
-      (io.let-ok _ Result
+                    (:ok done))
+      (let-ok _ Result
         (declarations Writer State Path T Error StaticNames Rest))))
-
-(define write-result
-  [accepted _] -> [ok done]
-  [error E _] -> [error E])
 
 \\ State counts records, encoded bytes and files; the writer never accumulates an entire repository.
 (define emit
@@ -109,15 +106,15 @@
     (let Bytes (json.encode Value [[byte-limit 65536]])
          N (+ (buffer.length Bytes) 1)
       (if (or (>= (<-address State 0) 100000) (> N (- 67108864 (<-address State 1))))
-          [error (io.native-error source-facts limit 0 "facts" "total fact output limit exceeded")]
-          (io.let-ok _ (write-result (io.write Writer Bytes))
-            (io.let-ok _ (write-result (io.write Writer (buffer.from-string "c#10;")))
-              (do (address-> State 0 (+ (<-address State 0) 1))
-                  (address-> State 1 (+ (<-address State 1) N))
-                  [ok done]))))))
+          (:err (io.native-error source-facts limit 0 "facts" "total fact output limit exceeded"))
+          (let-ok _ (io.write Writer Bytes)
+                  _ (io.write Writer (buffer.from-string "c#10;"))
+            (do (address-> State 0 (+ (<-address State 0) 1))
+                (address-> State 1 (+ (<-address State 1) N))
+                (:ok done))))))
 
 (define captures
-  _ _ _ _ _ _ At End -> [ok done] where (> At End)
+  _ _ _ _ _ _ At End -> (:ok done) where (> At End)
   Writer State Path T Error StaticNames At End ->
     (captures Writer State Path T Error StaticNames (+ At 1) End)
       where (and (= (treesitter.capture-name T At) "call")
@@ -126,8 +123,8 @@
     (let ID (treesitter.capture-node T At)
          Result (if (= (enclosing-function T ID) 0)
                     (declarations Writer State Path T Error StaticNames (treesitter.children T ID))
-                    [ok done])
-      (io.let-ok _ Result
+                    (:ok done))
+      (let-ok _ Result
         (captures Writer State Path T Error StaticNames (+ At 1) End)))
       where (= (treesitter.capture-name T At) "declaration")
   Writer State Path T Error StaticNames At End ->
@@ -146,14 +143,14 @@
          Fact [object | (if (= Kind "definition")
                            (append Fields [["linkage" (linkage T Definition ID StaticNames)]])
                            Fields)]
-      (io.let-ok _ (emit Writer State Fact)
+      (let-ok _ (emit Writer State Fact)
         (captures Writer State Path T Error StaticNames (+ At 1) End))))
 
 (define parsed
-  _ _ Path [error E] ->
-    [error (io.native-error source-facts (treesitter.error-domain E) (treesitter.error-code E)
-                           Path (treesitter.error-message E))]
-  Writer State Path [ok T] ->
+  _ _ Path (:err E) ->
+    (:err (io.native-error source-facts (treesitter.error-domain E) (treesitter.error-code E)
+                           Path (treesitter.error-message E)))
+  Writer State Path (:ok T) ->
     (let Error (treesitter.has-error? T 1)
          Fields [["path" Path] ["kind" "file"] ["syntax_error" Error] ["byte_count" (treesitter.end-byte T 1)]
                  ["parse" (parse-info T State)]]
@@ -162,21 +159,21 @@
                    [["schema_version" 3] ["configuration" Context] ["coordinates" "preprocessed"]
                     ["directory" (<-address State 4)] ["arguments" (<-address State 5)]])
          Fact [object | (append Fields Extra)]
-      (io.let-ok _ (emit Writer State Fact)
+      (let-ok _ (emit Writer State Fact)
         (do (address-> State 2 (+ (<-address State 2) 1))
             (captures Writer State Path T Error (static-names T)
               1 (treesitter.capture-count T))))))
 
 (define source-facts.file
   Language Writer State Path ->
-    (io.let-ok Input (io.read-file Path 8388608)
+    (let-ok Input (io.read-file Path 8388608)
       (do (address-> State 6 Input)
           (parsed Writer State Path
             (treesitter.query Language Input (value query) [])))))
 
 (define visit-result
-  [ok _] -> continue
-  [error E] -> [error E])
+  (:ok _) -> continue
+  (:err E) -> (:err E))
 
 (define visit
   Language Writer State Info Depth ->
@@ -191,19 +188,19 @@
   Language Root Out ->
     (let State (io.record [0 0 0 [] "" [] [] []])
          Writer (io.writer Out [[chunk-size 4096]])
-      (io.let-ok _ (fs.walk Root [[entry-limit 10000] [depth-limit 64] [name-byte-limit 16777216]]
+      (let-ok _ (fs.walk Root [[entry-limit 10000] [depth-limit 64] [name-byte-limit 16777216]]
                     (/. Info Depth (visit Language Writer State Info Depth)))
-        [ok (@p (<-address State 2) (<-address State 0))])))
+        (:ok (@p (<-address State 2) (<-address State 0))))))
 
 (define finish
-  [ok (@p Files Records)] -> (output "Extracted ~A records from ~A files~%" Records Files)
-  [error E] -> (error "source-facts: ~A: ~A" (io.error-resource E) (io.error-message E)))
+  (:ok (@p Files Records)) -> (output "Extracted ~A records from ~A files~%" Records Files)
+  (:err E) -> (error "source-facts: ~A: ~A" (io.error-resource E) (io.error-message E)))
 
 (define start
-  Root Output [ok Language] ->
+  Root Output (:ok Language) ->
     (finish
       (fs.with-replacement Output (/. Out (extract Language Root Out))))
-  _ _ [error E] -> (error "source-facts: ~A" (treesitter.error-message E)))
+  _ _ (:err E) -> (error "source-facts: ~A" (treesitter.error-message E)))
 
 (define main
   [_ Grammar "--compile-commands" Database Configuration Output] ->

@@ -1,12 +1,11 @@
 # Streaming HTTP responses
 
-[lib/http-response.shen](../lib/http-response.shen) sends bounded response chunks over our own
+[lib/http/response.shen](../lib/http/response.shen) sends bounded response chunks over our own
 [I/O endpoints](io.md). It supports explicit lengths and HTTP/1.1 chunked output, without collecting the
 whole body. The [connection driver](http.md#persistent-connections) and [listener](http-listener.md)
 accept both fixed and streaming descriptions. No runtime changes or C HTTP library are needed.
 
-Load `buffer.shen`, `io.shen`, `deadline.shen`, `grammar.shen`, `http-head.shen`, `http-request.shen`
-and `http-response.shen` in that order. Managed endpoints and injected clocks work in static builds;
+Load the module `http/response`, which loads the others first. Managed endpoints and injected clocks work in static builds;
 native socket servers also need the libraries listed in the [HTTP reference](http.md).
 
 ## Response sources
@@ -16,39 +15,45 @@ native socket servers also need the libraries listed in the [HTTP reference](htt
 
 | Result | Meaning |
 | --- | --- |
-| `[chunk View]` | 1..Maximum bytes, stable until the next callback or cleanup |
-| `[eof]` | Successful completion |
-| `[error Error]` | Producer failure, with an `io.error` |
+| `(:result.ok [View])` | 1..Maximum bytes, stable until the next callback or cleanup |
+| `(:result.ok [])` | Successful completion |
+| `(:result.err Error)` | Producer failure, with an `io.error` |
 
-The close callback takes no arguments and returns `[ok]` or `[error Error]`. It runs exactly once on
+The close callback takes no arguments and returns `(:result.ok [])` or `(:result.err Error)`. It runs exactly once on
 successful completion, HEAD/bodyless suppression, invalid metadata, producer error, timeout,
 cancellation or write failure. It must release all resources it owns, even after an expired deadline.
 Exceptions and malformed callback results become structured errors. Cleanup failures are preserved as
 secondary errors when another failure already exists.
 
 ```shen
-(define example.stream
-  -> (let State (address-> (absvector 1) 0 false)
-       (http.stream-response 200 [["Content-Type" "text/plain"]] [chunked]
-         (http.source
-           (/. Maximum D
-             (if (<-address State 0)
-                 [eof]
-                 (do (address-> State 0 true)
-                     [chunk (buffer.from-string "hello")])))
-           (freeze [ok])))))
+(shen.x.namespace example
+  (use http)
+  (use buffer)
+  (import result ok)
+  (externals [chunked])
+  (shadow stream)
+  (export stream)
 
-(let Q (hd (tl (http.parse-request
-                 (buffer.from-string "GET / HTTP/1.1c#13;c#10;Host: localc#13;c#10;c#13;c#10;") 0)))
+  (define stream
+    -> (let State (address-> (absvector 1) 0 false)
+         (http.stream-response 200 [["Content-Type" "text/plain"]] [chunked]
+           (http.source
+             (/. Maximum D
+               (if (<-address State 0)
+                   (:ok [])
+                   (do (address-> State 0 true)
+                       (:ok [(buffer.from-string "hello")]))))
+             (freeze (:ok [])))))))
+
+(let Head (buffer.from-string "GET / HTTP/1.1c#13;c#10;Host: localc#13;c#10;c#13;c#10;")
      Out (buffer.new 256)
-     E (io.output-buffer Out)
-     Result (http.send-response E Q (example.stream) (deadline.after (freeze 0) 1000)
-              [[response-chunk-size 16]])
-     _ (io.close E)
-  Result)
+  (result.let-ok Q (http.parse-request Head 0)
+    (io.with-endpoint (io.output-buffer Out)
+      (/. E (http.send-response E Q (example.stream) (deadline.after (freeze 0) 1000)
+              [[response-chunk-size 16]])))))
 ```
 
-This produces `[ok 107]`: a head, `5\r\nhello\r\n`, and the final `0\r\n\r\n`. The example's producer
+This produces `(:result.ok 107)`: a head, `5\r\nhello\r\n`, and the final `0\r\n\r\n`. The example's producer
 emits one five-byte chunk under the configured bound. General producers must split pending data when
 Maximum is smaller, and check/use D when doing their own I/O. The sender checks the deadline before and
 after each callback, but cannot interrupt arbitrary computation or a blocking foreign call.
@@ -60,7 +65,7 @@ chooses connection lifetime.
 - `[length N]`: advertise Content-Length N and require exactly N producer bytes, followed by EOF.
   Early EOF and extra bytes fail. The sender probes for EOF with Maximum 1 after reaching N.
 - `[chunked]`: emit Transfer-Encoding: chunked and a final zero chunk only after successful EOF.
-  Empty data chunks are invalid; use `[eof]` for an empty stream.
+  Empty data chunks are invalid; use `(:result.ok [])` for an empty stream.
 
 Status and field rules match [fixed responses](http.md#response-encoding). HEAD sends representation
 framing without pulling the source or emitting chunk delimiters; it still closes the source. Statuses
@@ -92,7 +97,7 @@ original details as a secondary error; application exception text is not sent to
 ## Direct sending and bounds
 
 `http.send-response Endpoint Request Response Deadline Options` borrows a writable endpoint and
-returns `[ok WireBytes]` or `[error Error]`. It sends `Connection: close`; its caller owns endpoint
+returns `(:result.ok WireBytes)` or `(:result.err Error)`. It sends `Connection: close`; its caller owns endpoint
 cleanup and socket deadline installation. The supplied absolute deadline covers preparation, every
 producer callback, short write and terminal framing. For native sockets, install that same value with
 `io.socket-deadline` so native waiting is bounded too. Managed output is checked between short writes.

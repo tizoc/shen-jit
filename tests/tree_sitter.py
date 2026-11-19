@@ -156,12 +156,12 @@ def images(executable, args, root):
 def timeout(args, root):
     source = root / 'long.c'
     source.write_bytes(b'int value;\n' * 100000)
-    expression = '(let Input (hd (tl (io.read-file ' + string(source) + ' 2097152))) '
+    expression = '(let Input (fixture.success (io.read-file ' + string(source) + ' 2097152)) '
     expression += 'R (treesitter.parse (value ts-test.language) Input '
     expression += '[[timeout 1] [node-limit 4194304] [result-limit 536870912]]) '
     expression += '(if (= (ts-test.error-domain R) timeout) '
     expression += '(output "1 passed, 0 failed~%") (error "native parse deadline failed")))'
-    checks(run(args + ['-l', 'lib/io.shen', '-l', 'lib/io-file.shen', '-e', expression]))
+    checks(run(args + ['-m', 'io/file', '-l', 'tests/result_helpers.shen', '-e', expression]))
 
 
 def source_analysis(args, grammar, fs_adapter, root):
@@ -268,9 +268,8 @@ def source_linkage(args, grammar, fs_adapter, root):
 
 def main():
     executable, adapter, grammar, fixture, native_oracle, fs_adapter = [Path(p).resolve() for p in sys.argv[1:7]]
-    args = [executable, 'eval', '-l', 'lib/ffi.shen', '-l', 'lib/buffer.shen',
-            '-s', 'treesitter.*adapter-files*', '[' + string(adapter) + ']',
-            '-l', 'lib/tree-sitter.shen', '-s', 'ts-test.grammar-files', '[' + string(grammar) + ']',
+    args = [executable, 'eval', '-s', 'treesitter.*adapter-files*', '[' + string(adapter) + ']',
+            '-m', 'tree-sitter', '-s', 'ts-test.grammar-files', '[' + string(grammar) + ']',
             '-s', 'ts-test.fixture-files', '[' + string(fixture) + ']',
             '-l', 'tests/tree_sitter_helpers.shen', '-l', 'tests/tree_sitter_setup.shen',
             '-l', 'tests/tree_sitter_dump.shen']

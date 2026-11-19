@@ -6,13 +6,14 @@
   (use datalog)
   (use fs)
   (use io)
+  (import result let-ok ok err)
   (use json)
   (use parallel)
   (use sdg)
   (use shen-jit)
   (use source-deps)
   (shadow read)
-  (externals [ambiguous chunk-size definition-linkage done edge excluded-file file-edge format impact object ok reach
+  (externals [ambiguous chunk-size definition-linkage done edge excluded-file file-edge format impact object reach
     read-queries resolved source-context source-diagnostic source-parse unowned unresolved-reason])
 
 (define ids
@@ -65,18 +66,18 @@
 
 (define source-deps.read-queries
   Input ->
-    (io.let-ok Bytes (io.with-input-file Input
+    (let-ok Bytes (io.with-input-file Input
                       (/. In (io.read-all (io.reader In [[chunk-size 16384]]) 1048576)))
-      (trap-error [ok (query-lines Bytes 0 (buffer.length Bytes) 0 [])]
-        (/. E [error (io.native-error read-queries format 0 Input (error-to-string E))]))))
+      (trap-error (:ok (query-lines Bytes 0 (buffer.length Bytes) 0 []))
+        (/. E (:err (io.native-error read-queries format 0 Input (error-to-string E)))))))
 
 (define resolve-queries
-  _ _ [] -> [ok []]
+  _ _ [] -> (:ok [])
   Db Export [Query | Rest] ->
-    (io.let-ok Selected (source-deps.select Db Query)
-      (io.let-ok More (resolve-queries Db Export Rest)
-        [ok [[(if (= (hd Selected) reach) 0 1)
-              (shen.<-dict (<-address Export 3) (hd (tl Selected)))] | More]])))
+    (let-ok Selected (source-deps.select Db Query)
+            More (resolve-queries Db Export Rest)
+      (:ok [[(if (= (hd Selected) reach) 0 1)
+            (shen.<-dict (<-address Export 3) (hd (tl Selected)))] | More])))
 
 (define answer-ids
   _ _ End End _ Reversed -> (reverse Reversed)
@@ -107,31 +108,31 @@
                        (<-address Export 2)))
 
 (define batch-answer-report
-  _ _ _ _ _ [] -> [ok done]
+  _ _ _ _ _ [] -> (:ok done)
   Writer Limits State Ordinal Mode [Fn | Rest] ->
-    (io.let-ok _ (emit Writer Limits State
+    (let-ok _ (emit Writer Limits State
                   [object ["kind" (str Mode)] ["query_index" Ordinal]
                           ["function" (function-value Fn)]])
       (batch-answer-report Writer Limits State Ordinal Mode Rest)))
 
 (define batch-query-report
-  _ _ _ _ [] -> [ok done]
+  _ _ _ _ [] -> (:ok done)
   Writer Limits State Ordinal [[Mode Root Answer] | Rest] ->
-    (io.let-ok _ (emit Writer Limits State
+    (let-ok _ (emit Writer Limits State
                   [object ["kind" "query"] ["query_index" Ordinal] ["query" (str Mode)]
                           ["function" (function-value Root)]])
-      (io.let-ok _ (batch-answer-report Writer Limits State Ordinal Mode Answer)
-        (batch-query-report Writer Limits State (+ Ordinal 1) Rest))))
+            _ (batch-answer-report Writer Limits State Ordinal Mode Answer)
+      (batch-query-report Writer Limits State (+ Ordinal 1) Rest)))
 
 (define batch-report
   Analysis Answers Out Limits ->
     (let Writer (io.writer Out [[chunk-size 4096]]) State (io.record [0 0])
-      (io.let-ok _ (emit Writer Limits State (summary Analysis))
-        (io.let-ok _ (relations Writer Limits State (<-address Analysis 2)
-                      [source-context source-parse source-diagnostic excluded-file definition-linkage
-                       edge file-edge resolved unresolved-reason ambiguous unowned])
-          (io.let-ok _ (batch-query-report Writer Limits State 0 Answers)
-            [ok (<-address State 1)])))))
+      (let-ok _ (emit Writer Limits State (summary Analysis))
+              _ (relations Writer Limits State (<-address Analysis 2)
+                  [source-context source-parse source-diagnostic excluded-file definition-linkage
+                   edge file-edge resolved unresolved-reason ambiguous unowned])
+              _ (batch-query-report Writer Limits State 0 Answers)
+        (:ok (<-address State 1)))))
 
 (define batch-options
   [] -> 0
@@ -144,14 +145,14 @@
 (define batch-run
   Input Output QueryFile Options Limits ->
     (let Workers (batch-options Options)
-      (io.let-ok Queries (source-deps.read-queries QueryFile)
-        (io.let-ok Data (io.with-input-file Input
-                         (/. In (read (io.reader In [[chunk-size 16384]]) Input Limits)))
-          (io.let-ok Analysis (source-deps.analyze Data [])
-            (let Db (<-address Analysis 2) Export (export Db)
-              (io.let-ok Selected (resolve-queries Db Export Queries)
-                (let Answers (batch-execute Export Selected Workers)
-                  (fs.with-replacement Output
-                    (/. Out (batch-report Analysis Answers Out Limits)))))))))))
+      (let-ok Queries (source-deps.read-queries QueryFile)
+              Data (io.with-input-file Input
+                     (/. In (read (io.reader In [[chunk-size 16384]]) Input Limits)))
+              Analysis (source-deps.analyze Data [])
+        (let Db (<-address Analysis 2) Export (export Db)
+          (let-ok Selected (resolve-queries Db Export Queries)
+            (let Answers (batch-execute Export Selected Workers)
+              (fs.with-replacement Output
+                (/. Out (batch-report Analysis Answers Out Limits)))))))))
 
 )

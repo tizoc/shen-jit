@@ -9,9 +9,9 @@
   F -> (trap-error (do (thaw F) false) (/. X true)))
 
 (define ts-test.error-domain
-  [error E] -> (treesitter.error-domain E)
+  (:result.err E) -> (treesitter.error-domain E)
   _ -> unexpected-success)
 
 (define ts-test.ok
-  [ok X] -> X
+  (:result.ok X) -> X
   Other -> (error "treesitter test: ~S" Other))

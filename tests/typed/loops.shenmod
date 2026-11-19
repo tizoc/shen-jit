@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name loops)
+  (requires numbers)
+  (sources tc- "loops-declared.shen" tc+ "loops.shen"))

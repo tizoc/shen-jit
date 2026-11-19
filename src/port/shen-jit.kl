@@ -86,6 +86,98 @@ argument, as Shen/Scheme does; the kernel's main only reports it."
           (shen-jit.exit 1)
           Shown))))
 
+"eval takes -m NAME, or --module NAME, which loads a module and those it
+requires (docs/modules.md), NAME being a module's name or a descriptor's path.
+The rest is the kernel's, and an unknown flag is still reported."
+
+(defun shen.x.launcher.eval-command-h (Args Acc)
+  (cond ((= () Args) (shen.x.launcher.execute-all (reverse Acc)))
+        ((and (cons? Args) (and (= "--eval" (hd Args)) (cons? (tl Args))))
+         (shen.x.launcher.eval-command-h (tl (tl Args))
+           (cons (freeze (pr (shen.app (shen.x.launcher.eval-string (hd (tl Args))) "
+" shen.a) (stoutput))) Acc)))
+        ((and (cons? Args) (and (= "--load" (hd Args)) (cons? (tl Args))))
+         (shen.x.launcher.eval-command-h (tl (tl Args)) (cons (freeze (load (hd (tl Args)))) Acc)))
+        ((and (cons? Args) (and (or (= "-m" (hd Args)) (= "--module" (hd Args))) (cons? (tl Args))))
+         (shen.x.launcher.eval-command-h (tl (tl Args))
+           (cons (freeze (shen-jit.module.command (hd (tl Args)))) Acc)))
+        ((and (cons? Args) (= "--quiet" (hd Args)))
+         (shen.x.launcher.eval-command-h (tl Args) (cons (freeze (set *hush* true)) Acc)))
+        ((and (cons? Args) (and (= "--set" (hd Args)) (and (cons? (tl Args)) (cons? (tl (tl Args))))))
+         (shen.x.launcher.eval-command-h (tl (tl (tl Args)))
+           (cons (freeze (set (shen.x.launcher.eval-string (hd (tl Args)))
+                              (shen.x.launcher.eval-string (hd (tl (tl Args)))))) Acc)))
+        ((and (cons? Args) (= "--repl" (hd Args)))
+         (do (shen.x.launcher.eval-command-h () Acc) (cons launch-repl (tl Args))))
+        ((cons? Args)
+         (let Long (shen.x.launcher.eval-flag-map (hd Args))
+           (if (= false Long)
+               (cons error (cons (cn "Invalid eval argument: " (shen.app (hd Args) "" shen.a)) ()))
+               (shen.x.launcher.eval-command-h (cons Long (tl Args)) Acc))))
+        (true (shen.f-error shen.x.launcher.eval-command-h))))
+
+(defun shen.x.launcher.help-text (Exe) (cn "Usage: " (shen.app Exe " [--version] [--help] <COMMAND> [<ARGS>]
+
+commands:
+    repl
+        Launches the interactive REPL.
+        Default action if no command is supplied.
+
+    script <FILE> [<ARGS>]
+        Runs the script in FILE, or loads the module FILE.shenmod
+        describes. *argv* is set to [FILE | ARGS].
+
+    build <FILE.shenmod> [-o <OUTPUT>] [--open]
+        Writes an executable of the module FILE.shenmod describes,
+        and those it requires, which runs the module's main. Its
+        definitions are sealed unless --open is given.
+
+    eval <ARGS>
+        Evaluates expressions and files. ARGS are evaluated from
+        left to right and can be a combination of:
+            -e, --eval <EXPR>
+                Evaluates EXPR and prints result.
+            -l, --load <FILE>
+                Reads and evaluates FILE.
+            -m, --module <NAME or FILE.shenmod>
+                Loads a module, after those it requires.
+            -q, --quiet
+                Silences interactive output.
+            -s, --set <KEY> <VALUE>
+                Evaluates KEY, VALUE and sets as global.
+            -r, --repl
+                Launches the interactive REPL after evaluating
+                all the previous expresions." shen.a)))
+
+"A build command makes an executable from a module's descriptor
+(docs/modules.md). The rest is the kernel's."
+
+(defun shen.x.launcher.launch-shen (Argv)
+  (cond ((and (cons? Argv) (= () (tl Argv))) (cons launch-repl ()))
+        ((and (cons? Argv) (and (cons? (tl Argv)) (= "--help" (hd (tl Argv)))))
+         (cons show-help (cons (shen.x.launcher.help-text (hd Argv)) ())))
+        ((and (cons? Argv) (and (cons? (tl Argv)) (= "--version" (hd (tl Argv)))))
+         (cons success (cons (shen.x.launcher.version-string) ())))
+        ((and (cons? Argv) (and (cons? (tl Argv)) (= "repl" (hd (tl Argv))))) (cons launch-repl (tl (tl Argv))))
+        ((and (cons? Argv) (and (cons? (tl Argv)) (and (= "script" (hd (tl Argv))) (cons? (tl (tl Argv))))))
+         (shen.x.launcher.script-command (hd (tl (tl Argv))) (tl (tl (tl Argv)))))
+        ((and (cons? Argv) (and (cons? (tl Argv)) (= "eval" (hd (tl Argv)))))
+         (shen.x.launcher.eval-command (tl (tl Argv))))
+        ((and (cons? Argv) (and (cons? (tl Argv)) (= "build" (hd (tl Argv)))))
+         (do (shen-jit.module.build-command (tl (tl Argv))) (cons success ())))
+        ((and (cons? Argv) (cons? (tl Argv))) (cons unknown-arguments Argv))
+        (true (shen.f-error shen.x.launcher.launch-shen))))
+
+"script takes a module's descriptor too, FILE.shenmod, which it loads as
+module.load does (docs/modules.md)."
+
+(defun shen.x.launcher.script-command (Script Args)
+  (do (set *argv* (cons Script Args))
+      (do (if (shen-jit.module.shenmod? Script)
+              (module.load Script)
+              (shen.x.launcher.quiet-load Script))
+          (cons success ()))))
+
 "Arities are program, so they are kept beside function cells, outside the
 heap and the property vector, which an isolate starts without
 (docs/design.md, The builder and isolates). These are the kernel's, with that table for the
@@ -449,14 +541,14 @@ Stage 1 registers its arity so that Shen code can call it."
 "(shen-jit.code F) is F's bytecode, from lowering its KLambda again as
 define does. Kernel functions keep no
 KLambda, so ps, and this, refuse them, as in Shen/Scheme. It shows the
-definition factorised when it was evaluated so (shen.record-and-evaluate
-below)."
+definition factorised and annotated when it was evaluated so
+(shen.record-and-evaluate below)."
 
 (defun shen-jit.code (F)
   (shen-jit.lower.toplevel
-    (if (trap-error (get F shen-jit.factorised (value *property-vector*)) (lambda E false))
-        (shen.factor (ps F))
-        (ps F))
+    (shen-jit.compiled-kl (ps F)
+                          (trap-error (get F shen-jit.factorised (value *property-vector*)) (lambda E false))
+                          (shen-jit.lower.annotated? F))
     ()))
 
 "Byte buffers and bit operations are primitives that Shen code calls by name and
@@ -642,13 +734,18 @@ only; what the datatypes define is not the program's, for shen.*userdefs*."
   (let Userdefs (value shen.*userdefs*)
     (do (map (lambda Form (eval Form)) (read-from-string "
 (datatype isolate.t
+  if (and (symbol? F) (= (arity F) 1))
+  (fn F) : (A --> B);
+  ____________________________________
+  F : (isolate.worker A);
+
   if (element? R [normal killed ended])
   _____________________________________
   R : isolate.reason;
 
   R : string;
   ___________
-  R : isolate.reason;
+  R : (- isolate.reason);
 
   I : isolate; R : isolate.reason;
   ================================
@@ -661,11 +758,11 @@ only; what the datatypes define is not the program's, for shen.*userdefs*."
 (datatype channel.t
   R : (receiver A);
   _________________
-  R : (channel.endpoint A);
+  R : (- (channel.endpoint A));
 
   S : (sender A);
   _______________
-  S : (channel.endpoint A);
+  S : (- (channel.endpoint A));
 
   X : A;
   ==========================
@@ -685,13 +782,13 @@ only; what the datatypes define is not the program's, for shen.*userdefs*."
   ______________________________
   [timeout] : (channel.ready A);)
 
-(declare isolate.spawn [[A --> B] --> [A --> isolate]])
+(declare isolate.spawn [[isolate.worker A] --> [A --> isolate]])
 (declare isolate.self [--> isolate])
 (declare isolate.kill [isolate --> isolate])
 (declare isolate.monitor [isolate --> [receiver isolate.down]])
 (declare isolate.check-kill [--> boolean])
 (declare isolate.share [A --> A])
-(declare isolate.spawn-each [[A --> B] --> [[list A] --> [[[list isolate.started] --> C] --> C]]])
+(declare isolate.spawn-each [[isolate.worker A] --> [[list A] --> [[[list isolate.started] --> C] --> C]]])
 (declare isolate.stop-each [[list isolate.started] --> boolean])
 (declare channel.new [number --> [receiver A]])
 (declare channel.sender [[receiver A] --> [sender A]])
@@ -707,7 +804,7 @@ only; what the datatypes define is not the program's, for shen.*userdefs*."
   [[spawn | isolate.spawn] [self | isolate.self] [kill | isolate.kill] [monitor | isolate.monitor]
    [check-kill | isolate.check-kill] [share | isolate.share] [spawn-each | isolate.spawn-each]
    [stop-each | isolate.stop-each] [down | isolate.down] [started | isolate.started]
-   [reason | isolate.reason]])
+   [reason | isolate.reason] [worker | isolate.worker]])
 (shen.x.namespaces.publish channel
   [[new | channel.new] [sender | channel.sender] [give | channel.give] [send | channel.send]
    [receive | channel.receive] [next | channel.next] [receive-any | channel.receive-any]
@@ -715,7 +812,7 @@ only; what the datatypes define is not the program's, for shen.*userdefs*."
    [got | channel.got] [ready | channel.ready]])
 (map (/. F (systemf F))
   [isolate.spawn isolate.self isolate.kill isolate.monitor isolate.check-kill isolate.share
-   isolate.spawn-each isolate.stop-each isolate.down isolate.started isolate.reason
+   isolate.spawn-each isolate.stop-each isolate.down isolate.started isolate.reason isolate.worker
    channel.new channel.sender channel.give channel.send channel.receive channel.next
    channel.receive-any channel.wait-any channel.close channel.endpoint channel.got channel.ready])"))
         (set shen.*userdefs* Userdefs))))
@@ -756,7 +853,7 @@ which the printer calls."
 
 (defun shen-jit.register-primitives ()
   (do (shen-jit.primitive shen-jit.fixnum? 1)
-  (do (shen-jit.primitive shen-jit.tagged? 2)
+  (do (do (shen-jit.primitive shen-jit.tagged? 2) (shen-jit.primitive shen-jit.struct-ref 3))
     (do (shen-jit.primitive shen-jit.bytes 1)
     (do (shen-jit.primitive shen-jit.bytes? 1)
     (do (shen-jit.primitive shen-jit.bytes-length 1)
@@ -814,7 +911,8 @@ which the printer calls."
     (do (shen-jit.primitive shen-jit.collect 0)
     (do (shen-jit.primitive shen-jit.write-bytes 4)
     (do (shen-jit.primitive shen-jit.arity 1) (do (shen-jit.primitive shen-jit.function 1)
-    (do (shen-jit.primitive shen-jit.set-arity 2) (do (shen-jit.primitive shen-jit.apply 2) (do (shen-jit.primitive shen-jit.isolate 3) shen.skip))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+    (do (shen-jit.primitive shen-jit.set-arity 2) (do (shen-jit.primitive shen-jit.apply 2) (do (shen-jit.primitive shen-jit.isolate 3) (do (shen-jit.primitive shen-jit.float 1) (do (shen-jit.primitive shen-jit.sqrt 1) (do (shen-jit.primitive shen-jit.quotient 2)
+    (do (shen-jit.primitive shen-jit.remainder 2) (do (shen-jit.primitive shen-jit.word-op 3) (do (shen-jit.primitive shen-jit.truncate 1) shen.skip))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
 
 "Cleanup, as a library that holds something outside the heap needs it.
 (shen-jit.finally Body Cleanup) thaws Body, then Cleanup however Body ended,
@@ -862,7 +960,7 @@ from a template, which needs the arity."
   (do (eval-kl (shen-jit.template-defun shen-jit.template-2 (cons a (cons b ()))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-3 (cons a (cons b (cons c ())))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-4 (cons a (cons b (cons c (cons d ()))))))
-  (do (shen-jit.struct.initialise)
+  (do (do (shen-jit.struct.initialise) (shen-jit.module.initialise))
   (do (shen-jit.isolate-interface)
   (do (shen-jit.register-primitives)
   (do (shen-jit.primitive-procedures)
@@ -889,7 +987,7 @@ from a template, which needs the arity."
           (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.exit))
               (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.code))
                   (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.save-executable))
-                      (set shen-jit.defined ()))))))))))))))))))))
+                      (do (set shen-jit.*checked* false) (set shen-jit.defined ())))))))))))))))))))))
 
 "Definitions are factorised as they are evaluated, as Shen/Scheme's compiler
 does: the kernel's shen.factor binds each selector once and shares the tests
@@ -917,12 +1015,62 @@ shen.shendef->kldef-h, with the definition remembered:"
 " shen.a))
                 shen.skip)
             (do (shen.store-arity F (length (hd (tl (tl Kl)))))
-                (do (shen.record-kl F Kl)
-                    (let Factor (= Kl (value shen-jit.defined))
-                      (do (put F shen-jit.factorised Factor (value *property-vector*))
-                          (do (eval-kl (if Factor (shen.factor Kl) Kl))
-                              (shen.fn-print F))))))))
+                (let Factor (= Kl (value shen-jit.defined))
+                  (let Annotate (and (optimise?) (= F (value shen-jit.*checked*)))
+                    (do (eval-kl (shen-jit.compiled-kl Kl Factor Annotate))
+                        (do (shen.record-kl F Kl)
+                            (do (put F shen-jit.factorised Factor (value *property-vector*))
+                                (do (put F shen-jit.annotated (cons (shen-jit.function F) Annotate) (value *property-vector*))
+                                    (shen.fn-print F))))))))))
       Kl))
+
+"What a definition's KLambda is compiled as: factorised, if define produced it, and under
+(optimise +), if the typechecker has just passed it, as the kernel's type annotator gives it
+(shen.x.type-annotations), with (type X T) around each use of a parameter or a literal whose type
+it knows (docs/modules.md, Typed programs). Not a definition evaluated unchecked, as those a datatype or a macro
+makes under (tc +), whose types are not known to hold."
+
+(defun shen-jit.compiled-kl (Kl Factor Annotate)
+  (let Factored (if Factor (shen.factor Kl) Kl)
+    (if Annotate (shen-jit.mark-annotated (shen.x.type-annotations.annotate-kl Factored)) Factored)))
+
+"An annotated definition's body is marked (shen-jit.annotated Body), which tells the lowerer
+that the typechecker gave its type forms: (type X T) written in untyped code changes nothing."
+
+(defun shen-jit.mark-annotated (Kl)
+  (cons defun (cons (hd (tl Kl)) (cons (hd (tl (tl Kl))) (cons (cons shen-jit.annotated (tl (tl (tl Kl)))) ())))))
+
+"The kernel's shen.work-through names the definition it evaluates once it has typechecked
+it. Module sources evaluate without printing the inferred types."
+
+(defun shen.work-through (V)
+  (shen-jit.work-through V (= () (shen-jit.module.loading-list))))
+
+(defun shen-jit.work-through (V Report)
+  (cond ((= () V) ())
+        ((and (cons? V) (and (cons? (tl V)) (and (cons? (tl (tl V))) (= (hd (tl V)) (intern ":")))))
+         (let Check (shen.typecheck (hd V) (hd (tl (tl V))))
+           (if (= Check false)
+               (shen.type-error)
+               (let Eval (shen-jit.eval-checked (hd V))
+                 (do (if Report
+                         (pr (shen.app Eval (cn " : " (shen.app (shen.pretty-type Check) "
+" shen.r)) shen.s) (stoutput))
+                         skip)
+                     (shen-jit.work-through (tl (tl (tl V))) Report))))))
+        ((cons? V) (shen-jit.work-through (cons (hd V) (cons (intern ":") (cons A (tl V)))) Report))
+        (true (simple-error "implementation error in shen.work-through"))))
+
+"Only a definition is marked, so that an expression raises as it does unchecked, with its
+backtrace."
+
+(defun shen-jit.eval-checked (X)
+  (if (and (cons? X) (and (= define (hd X)) (cons? (tl X))))
+      (let Before (value shen-jit.*checked*)
+        (do (set shen-jit.*checked* (hd (tl X)))
+            (shen-jit.finally (freeze (eval-kl (shen.shen->kl X)))
+                              (freeze (set shen-jit.*checked* Before)))))
+      (eval-kl (shen.shen->kl X))))
 
 "absvector fills a new vector with (fail) already, so vector only sets the
 length stamp; the kernel's version fills it again."
@@ -942,7 +1090,7 @@ catches it with a jump. (fail) is the symbol shen.fail!."
 
 "integer? is a primitive, as in Shen/Scheme: the kernel's finds a power of
 two above the number and subtracts its way down, which took 21 ns for 7 and
-343 ns for 123456789. A fixnum is an integer; so is a finite real without a
+343 ns for 123456789. A fixnum is an integer; so is a finite float without a
 fraction."
 
 (defun integer? (X) (shen-jit.integer? X))
@@ -1135,7 +1283,7 @@ them instead, and # < > are symbol characters, so #<procedure> would pass."
 "The reader's number overrides (docs/semantics.md, section 3). In Shen/Scheme a
 zero digit adds an exact 0 to a fraction, so 8.0 reads as the integer 8;
 skipping zero digits gives the same values here. Literals beyond the fixnum
-range become the nearest real instead of overflowing."
+range become the nearest float instead of overflowing."
 
 (defun shen.compute-fraction-h (Digits Expt)
   (cond ((= () Digits) 0)

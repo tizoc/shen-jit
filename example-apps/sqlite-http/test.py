@@ -14,9 +14,6 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-LIBRARIES = ["ffi", "socket", "sqlite", "buffer", "io", "grammar", "json", "deadline", "clock", "io-socket",
-             "http-head", "http-request", "http-response", "http-server", "http-listener"]
-
 
 def shen_string(text):
     return '"' + str(text).replace("c#", "c#99;#").replace('"', "c#34;") + '"'
@@ -59,9 +56,7 @@ def server(executable, database):
     driver = database.parent / "test-driver.shen"
     driver.write_text(program)
     command = [str(executable), "eval"]
-    for library in LIBRARIES:
-        command += ["-l", f"lib/{library}.shen"]
-    command += ["-l", "example-apps/sqlite-http/main.shen", "-l", str(driver)]
+    command += ["-m", "example-apps/sqlite-http/sqlite-http.shenmod", "-l", str(driver)]
     with tempfile.TemporaryFile() as output, tempfile.TemporaryFile() as errors:
         process = subprocess.Popen(command, cwd=ROOT, stdout=output, stderr=errors)
         try:
@@ -99,8 +94,29 @@ def server(executable, database):
             process.wait(timeout=5)
 
 
+def check_export_close_error(executable):
+    subprocess.run(
+        [
+            str(executable), "eval", "-m", "example-apps/sqlite-http/sqlite-http.shenmod",
+            "-e", '''(define counter-test.check-close
+                (:result.err E) ->
+                  (let Secondary (io.error-secondary E)
+                    (and (= (io.error-resource E) "counter export statement")
+                         (= (length Secondary) 1)
+                         (= (io.error-resource (hd Secondary)) "counter export database")))
+                _ -> false)''',
+            "-e", '''(if (counter-test.check-close (counter-app.export-close [] []))
+                         true (error "counter export cleanup lost an error"))''',
+        ],
+        cwd=ROOT,
+        check=True,
+        stdout=subprocess.DEVNULL,
+    )
+
+
 def main():
     executable = Path(sys.argv[1] if len(sys.argv) > 1 else ROOT / "build/shen-jit").resolve()
+    check_export_close_error(executable)
     with tempfile.TemporaryDirectory(prefix="shen-counter-") as directory:
         database = Path(directory) / "counters.db"
         with server(executable, database) as port:

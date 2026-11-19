@@ -1,0 +1,1 @@
+(shen.module (version 1) (name featured) (requires-features shen/shen-jit) (sources tc- "featured.shen"))

@@ -1,6 +1,6 @@
 \\ Grammars in isolates, which cannot compile: (grammar.finish), in the builder, compiles the loops
 \\ of the rules defined so far and prepares the streaming variants of the rules that reads name.
-\\ Load buffer.shen, io.shen and grammar.shen first.
+\\ Load the grammar module first.
 (set gp.passed 0)
 (set gp.failed 0)
 
@@ -38,7 +38,7 @@
 
 (grammar.finish)
 
-(gp.check "loops and a streaming read in an isolate" [true false [ok skip] [failed 0 "no match"]]
+(gp.check "loops and a streaming read in an isolate" [true false (:result.ok [skip]) [failed 0 "no match"]]
   (gp.ask gp.work "2026"))
 
 \\ Defined once the first isolate has ended: the program can change again.

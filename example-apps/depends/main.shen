@@ -2,6 +2,7 @@
   (use buffer)
   (use datalog)
   (use io)
+  (import result ok => success err)
   (use shen-jit)
   (externals [!= *argv* at calls count cycle cyclic datalog.sort datalog.unique datalog.value< dead defdatalog defined
     defines depth equivalence external-call fact fan-in file-depends file-uses in-file integer live min ok place
@@ -10,9 +11,7 @@
 \* depends: what calls what among Shen and KL source files, worked out by lib/datalog.shen.
 
    Build the executable from the repository root:
-     build/shen-jit eval -q -l lib/native.shen -l lib/datalog.shen -l lib/ffi.shen -l lib/buffer.shen \
-       -l lib/io.shen -l lib/io-file.shen -l example-apps/depends/main.shen \
-       -e '(shen-jit.save-executable "depends" main)'
+     build/shen-jit build example-apps/depends/depends.shenmod
    Run it:
      ./depends [--root F]... [--why F G] [--reach F] [--out DIR] FILE...
 
@@ -154,10 +153,12 @@
                  [defines calls in-file file-uses file-depends cyclic reaches recursive live dead external fan-in depth]))
 
 (define write
-  Db R Path -> (let Result (io.write-file Path (buffer.wrap (datalog.relation->bytes Db R tsv)))
-                 (if (= (hd Result) ok)
-                     (output "~A: ~A~%" R (datalog.count Db R))
-                     (error "cannot write ~A: ~A" Path (io.error-message (hd (tl Result)))))))
+  Db R Path -> (written R (datalog.count Db R) Path
+                 (io.write-file Path (buffer.wrap (datalog.relation->bytes Db R tsv)))))
+
+(define written
+  R Count _ (:success _) -> (output "~A: ~A~%" R Count)
+  _ _ Path (:err Error) -> (error "cannot write ~A: ~A" Path (io.error-message Error)))
 
 (define report
   Db Roots

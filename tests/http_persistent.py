@@ -11,8 +11,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-LIBRARIES = ["ffi", "socket", "buffer", "io", "deadline", "clock", "io-socket",
-             "grammar", "http-head", "http-request", "http-response", "http-server", "http-listener"]
+LIBRARIES = ["http/listener"]
 # Each connection runs in an isolate of its own, so sources say on standard output when they close.
 PROGRAM = '''
 (define persistent.stream
@@ -24,13 +23,13 @@ PROGRAM = '''
             (let N (<-address State 0)
                  _ (address-> State 0 (+ N 1))
               (cond ((and (= Target "/early") (= N 0))
-                      [error (io.error read "test source" "private early failure")])
-                    ((= N 0) [chunk (buffer.from-string "abc")])
-                    ((= Target "/late") [error (io.error read "test source" "private late failure")])
+                      (:result.err (io.error read "test source" "private early failure")))
+                    ((= N 0) (:result.ok [(buffer.from-string "abc")]))
+                    ((= Target "/late") (:result.err (io.error read "test source" "private late failure")))
                     ((and (= Target "/slow") (= N 1))
-                      (do (channel.wait-any [(channel.new 1)] 300) [eof]))
-                    (true [eof]))))
-          (freeze (do (output "source closed~%") [ok]))))))
+                      (do (channel.wait-any [(channel.new 1)] 300) (:result.ok [])))
+                    (true (:result.ok [])))))
+          (freeze (do (output "source closed~%") (:result.ok [])))))))
 (define persistent.handle
   Q -> (cond ((= (http.target Q) "/stop")
                (do (http.stop (http.current-server)) (http.response 204 [] (buffer.new 0))))
@@ -51,7 +50,7 @@ def server(executable):
         port = reservation.getsockname()[1]
     command = [str(executable), "eval"]
     for library in LIBRARIES:
-        command += ["-l", f"lib/{library}.shen"]
+        command += ["-m", library]
     with tempfile.TemporaryDirectory() as directory:
         program = Path(directory) / "persistent.shen"
         program.write_text(PROGRAM.replace("PORT", str(port)))

@@ -10,11 +10,11 @@
               (output "FAIL ~A: ~S, expected ~S~%" Name Actual Expected)))))
 
 (define fs-test.ok
-  [ok Value] -> Value
-  [error Error] -> (error "unexpected error ~A: ~A" (io.error-code Error) (io.error-message Error)))
+  (:result.ok Value) -> Value
+  (:result.err Error) -> (error "unexpected error ~A: ~A" (io.error-code Error) (io.error-message Error)))
 
 (define fs-test.error
-  [error Error] -> Error
+  (:result.err Error) -> Error
   _ -> (error "expected filesystem failure"))
 
 (define fs-test.path
@@ -35,11 +35,11 @@
         (freeze (fs.accessed Info)))
       (fs-test.check "owned metadata survives GC" "data"
         (freeze (fs.name (fs.path Info))))
-      (fs-test.check "existing path" [ok true]
+      (fs-test.check "existing path" (:result.ok true)
         (freeze (fs.exists? Path)))
-      (fs-test.check "missing path" [ok false]
+      (fs-test.check "missing path" (:result.ok false)
         (freeze (fs.exists? (fs-test.path "missing"))))
-      (fs-test.check "non-directory prefix is absent" [ok false]
+      (fs-test.check "non-directory prefix is absent" (:result.ok false)
         (freeze (fs.exists? (fs.join Path "child"))))
       (fs-test.check "directory kind" directory
         (freeze (fs.kind (fs-test.ok (fs.stat (value fs-test.root))))))))
@@ -56,20 +56,20 @@
         (freeze (io.error-domain (fs-test.error (fs.list Path [[entry-limit 1]])))))
       (fs-test.check "name-byte budget fails" limit
         (freeze (io.error-domain (fs-test.error (fs.list Path [[name-byte-limit 1]])))))
-      (fs-test.check "empty directory with zero budgets" [ok []]
+      (fs-test.check "empty directory with zero budgets" (:result.ok [])
         (freeze (fs.list (fs-test.path "empty") [[entry-limit 0] [name-byte-limit 0]])))
       (fs-test.check "file is not a directory" true
         (freeze (io.error? (fs-test.error (fs.list (fs-test.path "data") [])))))))
 
 (let Path (fs-test.path "new/deep")
-  (do (fs-test.check "recursive directory creation" [ok] (freeze (fs.mkdirs Path)))
-      (fs-test.check "recursive mkdir is idempotent" [ok]
+  (do (fs-test.check "recursive directory creation" (:result.ok []) (freeze (fs.mkdirs Path)))
+      (fs-test.check "recursive mkdir is idempotent" (:result.ok [])
         (freeze (fs.mkdirs Path)))
       (fs-test.check "single mkdir existing path is an error" true
         (freeze (io.error? (fs-test.error (fs.mkdir Path)))))
       (fs-test.check "remove nonempty directory fails" true
         (freeze (io.error? (fs-test.error (fs.remove-directory (fs-test.path "new"))))))
-      (fs-test.check "remove empty directory" [ok]
+      (fs-test.check "remove empty directory" (:result.ok [])
         (freeze (fs.remove-directory Path)))
       (fs.remove-directory (fs-test.path "new"))))
 
@@ -83,15 +83,15 @@
         (freeze (fs-test.bytes A)))
       (fs-test.check "failed rename preserves destination" "second"
         (freeze (fs-test.bytes B)))
-      (fs-test.check "replacement rename" [ok]
+      (fs-test.check "replacement rename" (:result.ok [])
         (freeze (fs.replace A B)))
       (fs-test.check "replacement contents" "first"
         (freeze (fs-test.bytes B)))
-      (fs-test.check "replacement removes source" [ok false]
+      (fs-test.check "replacement removes source" (:result.ok false)
         (freeze (fs.exists? A)))
-      (fs-test.check "rename to unused name" [ok]
+      (fs-test.check "rename to unused name" (:result.ok [])
         (freeze (fs.rename B A)))
-      (fs-test.check "remove file" [ok]
+      (fs-test.check "remove file" (:result.ok [])
         (freeze (fs.remove-file A)))
       (fs-test.check "missing unlink remains an error" true
         (freeze (io.error? (fs-test.error (fs.remove-file A)))))))
@@ -115,9 +115,9 @@
         (freeze (fs.parent Path)))
       (fs-test.check "temporary scope catches exceptions" shen
         (freeze (io.error-domain (fs-test.error Result))))
-      (fs-test.check "temporary scope removes its file" [ok false]
+      (fs-test.check "temporary scope removes its file" (:result.ok false)
         (freeze (fs.exists? (<-address Scoped 0))))
-      (fs-test.check "temporary scope closes endpoint" [ok]
+      (fs-test.check "temporary scope closes endpoint" (:result.ok [])
         (freeze (io.close (<-address Scoped 1))))
       (fs-test.check "temporary directory exists" directory
         (freeze (fs.kind (fs-test.ok (fs.stat Dir)))))
@@ -130,7 +130,7 @@
      Error (fs.with-replacement Path
                (/. E
                  (do (io.write-all E (buffer.from-string "partial") [])
-                     [error (io.native-error write fixture 37 Path "injected error")])))
+                     (:result.err (io.native-error write fixture 37 Path "injected error")))))
      Throw (fs.with-replacement Path (/. E (error "writer threw")))
   (do (fs-test.check "replacement preserves callback error" 37
         (freeze (io.error-code (fs-test.error Error))))
@@ -140,7 +140,7 @@
         (freeze (fs-test.bytes Path)))
       (fs-test.check "failed replacement leaves no temporary files" Before
         (freeze (fs-test.ok (fs.list (value fs-test.root) []))))
-      (fs-test.check "write and replace" [ok 3]
+      (fs-test.check "write and replace" (:result.ok 3)
         (freeze (fs.write-replace Path (buffer.from-string "new"))))
       (fs-test.check "successful replacement contents" "new"
         (freeze (fs-test.bytes Path)))
@@ -148,7 +148,7 @@
         (freeze (io.error-domain (fs-test.error (fs.copy-file (fs-test.path "data") Path 5)))))
       (fs-test.check "failed copy keeps original destination" "new"
         (freeze (fs-test.bytes Path)))
-      (fs-test.check "bounded binary copy" [ok 6]
+      (fs-test.check "bounded binary copy" (:result.ok 6)
         (freeze (fs.copy-file (fs-test.path "data") Path 6)))
       (fs-test.check "copy preserves binary bytes" true
         (freeze (buffer.equal? (fs-test.ok (io.read-file (fs-test.path "data") 6))
@@ -167,7 +167,7 @@
      Info (fs-test.ok (fs.stat "data"))
      ViaInfo (io.read-file (fs.path Info) 6)
      _ (set *home-directory* Home)
-  (do (fs-test.check "relative home resolved once during copy" [ok 6] (freeze Copied))
+  (do (fs-test.check "relative home resolved once during copy" (:result.ok 6) (freeze Copied))
       (fs-test.check "metadata paths can be reused by I/O" 6
         (freeze (buffer.length (fs-test.ok ViaInfo))))))
 
@@ -184,26 +184,26 @@
      Change (fs.walk Root []
               (/. Info Depth (do (set *home-directory* "does-not-exist") continue)))
      _ (set *home-directory* Home)
-  (do (fs-test.check "walk visits tree and does not follow loops" [ok (@p Expected false)]
+  (do (fs-test.check "walk visits tree and does not follow loops" (:result.ok (@p Expected false))
         (freeze Result))
-      (fs-test.check "depth zero visits root only" [ok (@p 1 false)]
+      (fs-test.check "depth zero visits root only" (:result.ok (@p 1 false))
         (freeze Shallow))
-      (fs-test.check "walk supports early stop" [ok (@p 1 true)]
+      (fs-test.check "walk supports early stop" (:result.ok (@p 1 true))
         (freeze Stop))
       (fs-test.check "walk enforces global entry budget" limit
         (freeze (io.error-domain Limited)))
       (fs-test.check "walk error reports visited count" 1
         (freeze (io.error-progress Limited)))
-      (fs-test.check "walk prunes selected directory" [ok (@p (- Expected 2) false)]
+      (fs-test.check "walk prunes selected directory" (:result.ok (@p (- Expected 2) false))
         (freeze Skip))
       (fs-test.check "walk catches visitor exception" shen
         (freeze (io.error-domain Fault)))
-      (fs-test.check "walk snapshots home setting" [ok (@p Expected false)]
+      (fs-test.check "walk snapshots home setting" (:result.ok (@p Expected false))
         (freeze Change))))
 
 (if (value fs-test.links)
     (fs-test.check "walk does not follow a linked root with a trailing slash"
-      [ok (@p 1 false)]
+      (:result.ok (@p 1 false))
       (freeze (fs.walk (fs-test.path "tree/loop/") [] (/. Info Depth continue))))
     skip)
 
@@ -212,7 +212,7 @@
           (freeze (fs.kind (fs-test.ok (fs.lstat (fs-test.path "file-link"))))))
         (fs-test.check "stat follows symlink" file
           (freeze (fs.kind (fs-test.ok (fs.stat (fs-test.path "file-link"))))))
-        (fs-test.check "broken symlink exists only without following" [ok false]
+        (fs-test.check "broken symlink exists only without following" (:result.ok false)
           (freeze (fs.exists? (fs-test.path "broken-link"))))) skip)
 
 (if (value fs-test.denied)
@@ -243,7 +243,7 @@
                     (io.close E)
                     (fs.remove-file Path)
                     (fs.mkdir Path)
-                    [error (io.native-error callback fixture 37 Path "primary error")])))
+                    (:result.err (io.native-error callback fixture 37 Path "primary error")))))
      Error (fs-test.error Result)
      _ (fs.remove-directory (<-address Saved 0))
   (do (fs-test.check "primary error survives failed temporary cleanup" 37
@@ -258,9 +258,9 @@
      Restored (fs.rename To From)
   (do (fs-test.check "Unicode metadata" 6
         (freeze (fs.size Info)))
-      (fs-test.check "Unicode rename" [ok]
+      (fs-test.check "Unicode rename" (:result.ok [])
         (freeze Renamed))
-      (fs-test.check "Unicode rename restored" [ok]
+      (fs-test.check "Unicode rename restored" (:result.ok [])
         (freeze Restored))))
 
 (output "~A passed, ~A failed~%" (value fs-test.passed) (value fs-test.failed))

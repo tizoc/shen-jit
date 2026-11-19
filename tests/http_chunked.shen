@@ -1,3 +1,7 @@
+(define fixture.head (:result.ok [V]) -> V)
+
+(load "tests/result_helpers.shen")
+
 \\ Bounded chunked bodies, syntax, extensions, separate trailers and exact remainders.
 (set chunk-test.passed 0)
 (set chunk-test.failed 0)
@@ -11,7 +15,7 @@
               (output "FAIL ~A: wanted ~S, got ~S~%" Name Expected Actual)))))
 
 (define chunk-test.ok
-  [ok Q] -> Q)
+  (:result.ok Q) -> Q)
 
 (define chunk-test.parse
   Fields Limit -> (http.parse-request
@@ -21,8 +25,8 @@
   Limit -> (chunk-test.ok (chunk-test.parse "Transfer-Encoding: chunkedc#13;c#10;" Limit)))
 
 (define chunk-test.code
-  [ok _] -> 0
-  [error E] -> (io.error-code E))
+  (:result.ok _) -> 0
+  (:result.err E) -> (io.error-code E))
 
 (define chunk-test.read
   Wire Limit Options ->
@@ -109,14 +113,14 @@
      R (io.reader E [])
      B (http.body-reader R (chunk-test.request 3))
      Result (http.read-body B)
-     Error (hd (tl Result))
+     Error (fixture.failure Result)
   (do (chunk-test.check "cumulative limit progress" [413 2]
         (freeze [(io.error-code Error) (io.error-progress Error)]))
       (chunk-test.check "failure is cached" Result (freeze (http.read-body B)))
       (io.close E)))
 (let E (io.input-buffer (buffer.from-string "3c#13;c#10;ab"))
      R (io.reader E [])
-     Error (hd (tl (http.read-body (http.body-reader R (chunk-test.request 3)))))
+     Error (fixture.failure (http.read-body (http.body-reader R (chunk-test.request 3))))
   (do (chunk-test.check "truncated data progress excludes framing" 2 (freeze (io.error-progress Error)))
       (io.close E)))
 
@@ -127,10 +131,10 @@
       (/. Out (let At (<-address State 0)
                    Step (if (= At 0) (<-address State 1) 256)
                    N (io.min Step (io.min (shen-jit.bytes-length Out) (- (buffer.length Wire) At)))
-                (if (= N 0) [eof]
+                (if (= N 0) (:result.ok [])
                     (do (shen-jit.copy-bytes Out 0 (buffer.owner Wire) At N)
-                        (address-> State 0 (+ At N)) [read N]))))
-      (function io.no-write) (freeze [ok])))
+                        (address-> State 0 (+ At N)) (:result.ok [N])))))
+      (function io.no-write) (freeze (:result.ok []))))
 (set chunk-test.wire (buffer.from-string
   "POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Transfer-Encoding: chunkedc#13;c#10;c#13;c#10;3;x=yc#13;c#10;abcc#13;c#10;0c#13;c#10;X-End: yes c#13;c#10;c#13;c#10;NEXT"))
 (define chunk-test.splits
@@ -138,7 +142,7 @@
   N ->
     (let E (chunk-test.feed (value chunk-test.wire) (io.record [0 N]))
          R (io.reader E [])
-         Head (hd (tl (http.read-head (http.head-reader R 256))))
+         Head (fixture.head (http.read-head (http.head-reader R 256)))
          Q (chunk-test.ok (http.parse-request Head 3))
          Full (chunk-test.ok (http.read-body (http.body-reader R Q)))
          Tail (chunk-test.ok (io.read-all R 4))
@@ -152,25 +156,25 @@
      R (io.reader E [])
      Time (io.record [0])
      D (deadline.after (freeze (let N (+ 1 (<-address Time 0)) _ (address-> Time 0 N) N)) 5)
-     Error (hd (tl (http.read-body-until (http.body-reader R (chunk-test.request 1)) D)))
+     Error (fixture.failure (http.read-body-until (http.body-reader R (chunk-test.request 1)) D))
   (do (chunk-test.check "one total budget across chunk metadata and data" timeout
         (freeze (io.error-domain Error)))
       (io.close E)))
 (let Calls (io.record [0])
      E (io.endpoint "one-byte fixture" read 64
          (/. Out (if (= (<-address Calls 0) 0)
-                     (do (address-> Calls 0 1) (shen-jit.u8! Out 0 120) [read 1])
+                     (do (address-> Calls 0 1) (shen-jit.u8! Out 0 120) (:result.ok [1]))
                      (error "peek tried to fill the maximum")))
-         (function io.no-write) (freeze [ok]))
+         (function io.no-write) (freeze (:result.ok [])))
      R (io.reader E [])
-     V (chunk-test.ok (io.peek-up-to R 64))
+     V (hd (chunk-test.ok (io.peek-up-to R 64)))
   (do (chunk-test.check "bounded peek waits for availability, not a full span" "x" (freeze (buffer.string V)))
       (chunk-test.check "bounded peek leaves bytes queued" 0 (freeze (io.position R)))
       (buffer.u8! V 0 88)
       (chunk-test.check "bounded peek returns owned bytes" "x"
-        (freeze (buffer.string (chunk-test.ok (io.peek-up-to R 1)))))
+        (freeze (buffer.string (hd (chunk-test.ok (io.peek-up-to R 1))))))
       (chunk-test.check "zero bounded peek does not probe transport" 0
-        (freeze (buffer.length (chunk-test.ok (io.peek-up-to R 0)))))
+        (freeze (buffer.length (hd (chunk-test.ok (io.peek-up-to R 0))))))
       (io.close E)))
 
 (let Q (chunk-test.ok (http.parse-request
@@ -189,11 +193,11 @@
      State (io.record [false])
      E (io.endpoint "native failure fixture" read 64
          (/. Out (if (<-address State 0)
-                     [error (io.native-error read posix 54 "fixture" "forced reset")]
+                     (:result.err (io.native-error read posix 54 "fixture" "forced reset"))
                      (do (shen-jit.copy-bytes Out 0 (buffer.owner Prefix) 0 (buffer.length Prefix))
-                         (address-> State 0 true) [read (buffer.length Prefix)])))
-         (function io.no-write) (freeze [ok]))
-     Error (hd (tl (http.read-body (http.body-reader (io.reader E []) (chunk-test.request 8)))))
+                         (address-> State 0 true) (:result.ok [(buffer.length Prefix)]))))
+         (function io.no-write) (freeze (:result.ok [])))
+     Error (fixture.failure (http.read-body (http.body-reader (io.reader E []) (chunk-test.request 8))))
      _ (io.close E)
   (chunk-test.check "native error keeps code and cumulative decoded progress" [posix 54 2]
     (freeze [(io.error-domain Error) (io.error-code Error) (io.error-progress Error)])))

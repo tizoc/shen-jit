@@ -7,19 +7,19 @@ trap 'grammar_typed_status=$?; rm -rf "$dir"; exit $grammar_typed_status' EXIT
 if command -v cygpath > /dev/null; then dir=$(cygpath -m "$dir"); fi
 
 cat > "$dir/base.shen" <<'EOF'
-(defgrammar <bad.digit> {==> number} B := (- B 48) where (and (>= B 48) (<= B 57));)
+(defgrammar <bad.digit> {==> fixnum} B := (fx- B 48) where (and (fx>= B 48) (fx<= B 57));)
 (defgrammar <bad.letter> B where (and (>= B 97) (<= B 122));)
 (defgrammar <bad.letters> (+ <bad.letter>);)
 (defgrammar <bad.any> B := B;)
 (defgrammar <bad.word> {==> string} (text <bad.letters>) := <bad.letters>;)
-(defgrammar (<bad.times> Byte N) {number --> number ==> number} (at P) := (+ P N);)
-(define bad.fail {number --> string --> A} At Message -> (error "~A at ~A" Message At))
+(defgrammar (<bad.times> Byte N) {fixnum --> fixnum ==> fixnum} (at P) := (fx+ P N);)
+(define bad.fail {fixnum --> string --> A} At Message -> (error "~A at ~A" Message At))
 EOF
 
 passed=0
 refused() {
   printf '%s\n' "$2" | cat "$dir/base.shen" - > "$dir/case.shen"
-  if "$SHEN" eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -e '(tc +)' -l "$dir/case.shen" > "$dir/case.out" 2>&1; then
+  if "$SHEN" eval -m grammar -e '(tc +)' -l "$dir/case.shen" > "$dir/case.out" 2>&1; then
     echo "FAIL accepted: $2"
     exit 1
   fi
@@ -62,10 +62,29 @@ refused 'free variables in <bad.x>' '(defgrammar <bad.x> {==> number} "a" B := B
 refused 'free variables in <bad.x>' '(defgrammar <bad.x> {==> number} (where (> B 1)) B := B;)'
 
 # Rules loaded under (tc +) read from a reader under (tc -).
-"$SHEN" eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -e '(tc +)' -l tests/grammar_typed.shen -e '(tc -)' \
+"$SHEN" eval -m grammar -e '(tc +)' -l tests/grammar_typed.shen -e '(tc -)' \
   -e '(output "read: ~S~%" (grammar.read <gt.numbers> (io.reader (io.input-buffer (buffer.from-string "1 22 333")) []) (/. P M [fail P M])))' \
   > "$dir/read.out" 2>&1
-grep -qxF 'read: [ok [1 22 333]]' "$dir/read.out" || { cat "$dir/read.out"; exit 1; }
+grep -qxF 'read: #<result.ok [[1 22 333]]>' "$dir/read.out" || { cat "$dir/read.out"; exit 1; }
+passed=$((passed + 1))
+
+# Both copies share one default source budget.
+cat tests/grammar_typed.shen > "$dir/two-grammars.shen"
+sed 's/gt\./gt2./g' tests/grammar_typed.shen >> "$dir/two-grammars.shen"
+cat > "$dir/two-grammars.shenmod" <<'EOF'
+(shen.module (version 1) (name two-grammars) (requires grammar)
+  (sources tc+ "two-grammars.shen"))
+EOF
+"$SHEN" eval -m "$dir/two-grammars.shenmod" > "$dir/two.out" 2>&1
+[ "$(grep -c '^[1-9][0-9]* passed, 0 failed$' "$dir/two.out")" = 2 ] || { cat "$dir/two.out"; exit 1; }
+passed=$((passed + 1))
+
+# One ordinary typed load after grammar must fit all 300 declarations in the default budget.
+awk 'BEGIN { for (i = 1; i <= 300; i++) print "(define gt.id" i " {number --> number} X -> X)" }' \
+  > "$dir/identities.shen"
+"$SHEN" eval -m grammar -e '(tc +)' -l "$dir/identities.shen" \
+  -e '(output "last identity: ~A~%" (gt.id300 42))' > "$dir/identities.out" 2>&1 || { tail -8 "$dir/identities.out"; exit 1; }
+grep -qxF 'last identity: 42' "$dir/identities.out" || { cat "$dir/identities.out"; exit 1; }
 passed=$((passed + 1))
 
 echo "$passed passed, 0 failed"

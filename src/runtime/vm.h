@@ -301,6 +301,7 @@ bool program_publish(VM *vm, V sym);
 bool program_publish_all(VM *vm);
 V program_promote(VM *vm, V closure, const char **why);
 V program_promote_foreign(VM *vm, V proc, const char **why);
+bool program_install(VM *vm, V name, V proc);
 
 /* From an object's old address to its copy, so that a copy keeps sharing and cycles (program.c). */
 typedef struct {
@@ -368,7 +369,7 @@ void vm_set_limit(VM *vm, V *mark);
 V make_pair(VM *vm, V head, V tail);
 V make_string(VM *vm, const char *bytes, size_t len);
 V make_bytes(VM *vm, const void *bytes, size_t len);
-V make_real(VM *vm, double d);
+V make_float(VM *vm, double d);
 V make_vector(VM *vm, size_t n, V fill);
 V make_closure(VM *vm, V code, size_t ncaps, const V *caps);
 V make_foreign(VM *vm, V desc, size_t arity);
@@ -392,6 +393,7 @@ size_t symbol_cell(V sym);
 V cell_symbol(VM *vm, size_t cell);
 bool symbol_sealed(V sym);
 void symbol_seal(V sym);
+void symbol_unseal(V sym);
 void symbol_mark_called(V sym);
 bool symbol_needed(VM *vm, V sym);
 /* The word at SYM_CELL holds the function cell's index in its low CELL_BITS, the global's
@@ -465,16 +467,19 @@ static inline bool is_read_only(V v)
            (obj_type(v) == T_POINTER && hdr_size(ptr(v)[0]));
 }
 
-static inline double real_value(V r)
+static inline double float_value(V r)
 {
     double d;
-    __builtin_memcpy(&d, ptr(r) + REAL_VALUE, sizeof d);
+    __builtin_memcpy(&d, ptr(r) + FLOAT_VALUE, sizeof d);
     return d;
 }
 
 /* ffi.c: C functions called from Shen (docs/ffi.md). */
 V h_foreign(VM *vm);
 V ffi_primitive(VM *vm, unsigned prim);
+bool ffi_loads_libraries(void);
+bool ffi_floats(V f, unsigned n);
+V ffi_address(VM *vm, V f);
 const struct shen_api *ffi_api(void);
 void ffi_drain_roots(VM *vm);
 

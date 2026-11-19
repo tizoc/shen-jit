@@ -1,8 +1,8 @@
 \\ Native code written by hand: a Shen program builds a procedure from the
 \\ instructions of docs/bytecode.md, checked before the JIT sees them. It stays out of
-\\ the image until asked for; load this file under (tc -), before the code using it:
+\\ the image until asked for; load its module before the code using it:
 \\
-\\   shen-jit eval -l lib/native.shen -l program.shen
+\\   shen-jit eval -m native -l program.shen
 \\
 \\ (define-native sum-list (Xs Acc)
 \\   (prim T cons? Xs)
@@ -19,19 +19,19 @@
 \\ code can hold only if it is a symbol, number, string, boolean or list of them.
 \\ See docs/bytecode.md, "Native code written by hand".
 \\
-\\ Real registers hold doubles, unboxed, and word registers 64-bit integers that wrap, in code
+\\ Float registers hold doubles, unboxed, and word registers 64-bit integers that wrap, in code
 \\ that calls nothing and catches nothing:
 \\
 \\ (define-native dot (A B End)
-\\   (real Acc 0)
+\\   (float Acc 0)
 \\   (word I 0)
 \\   (loop terms)
 \\   (jump-unless-word (< I End) done)
-\\   (real Acc (+ Acc (* (f64 A I) (f64 B I))))
+\\   (float Acc (+ Acc (* (f64 A I) (f64 B I))))
 \\   (word I (+ I 8))
 \\   (again terms)
 \\   (label done)
-\\   (return-real Acc))
+\\   (return-float Acc))
 \\
 \\ if, when, unless, do, while, for, block, exit and next write loops and branches without labels,
 \\ and become them: see "Structured control" below and docs/bytecode.md.
@@ -50,13 +50,13 @@
   (externals [!= abs again back bit-and bit-not bit-or bit-xor block call-sealed call-value
     capture closure code const dead define-native done entry exit f64 f64! for jump jump-if-false
     jump-unless jump-unless-entry jump-unless-test jump-unless-word label loop move neg nested
-    new next none param pop-handler prim push-handler raise-cond real real! real* real+ real-
-    real-abs real-box real-from-word real-load real-load-at real-move real-neg real-number
-    real-sqrt real-store real-store-at real-unless< real-unless<= real-unless= real-unless>
-    real-unless>= real/ return-real return-word rotate-left rotate-right s32 shift-left
+    new next none param pop-handler prim push-handler raise-cond float float! float* float+ float-
+    float-abs float-box float-from-word float-load float-load-at float-move float-neg float-number
+    float-sqrt float-store float-store-at float-unless< float-unless<= float-unless= float-unless>
+    float-unless>= float/ return-float return-word rotate-left rotate-right s32 shift-left
     shift-right shift-right-signed skip slot! sqrt tagged tail-call tail-call-sealed
     tail-call-value top truncate u16 u16! u32 u32! u64 u64! u8 u8! u< u<= u> u>= unless while
-    word word! word* word+ word- word-and word-box word-from-real word-load-s32 word-load16
+    word word! word* word+ word- word-and word-box word-from-float word-load-s32 word-load16
     word-load32 word-load64 word-load8 word-move word-number word-or word-rotl word-rotr word-sar
     word-shl word-shr word-store16 word-store32 word-store64 word-store8 word-unless-u<
     word-unless-u<= word-unless-u> word-unless-u>= word-unless< word-unless<= word-unless=
@@ -100,7 +100,7 @@
                                     "label defined twice" Labels)
            (map (/. I (check.instruction Ctx Labels I)) Instructions)
            (check.handlers Where none Instructions Handlers)
-           (check.reals Where Instructions)
+           (check.floats Where Instructions)
            (check.flow Where Arity Instructions (+ 1 (check.max Labels -1)))
            (check.nested Where Instructions Codes)))
   Where X _ _ -> (check.fail Where "malformed code object" X))
@@ -169,26 +169,26 @@
   Ctx Labels [Op | Args] -> (check.raw-valid? Ctx Labels (check.shape Op) Args)
   _ _ _ -> false)
 
-\\ The instructions on real and word registers, by what each operand is: a tagged operand read, a
-\\ slot written, a real register read or written, a word register or constant read, a word
+\\ The instructions on float and word registers, by what each operand is: a tagged operand read, a
+\\ slot written, a float register read or written, a word register or constant read, a word
 \\ register written, a label, a loop's head, or the loop to go back to. As raw_kinds in ops.h.
 (define check.shape
   loop -> [head]
   again -> [back]
-  real-number -> [real! tagged]
-  real-box -> [slot! real]
-  real-load -> [real! tagged tagged]
-  real-store -> [tagged tagged real]
-  real-load-at -> [real! tagged word]
-  real-store-at -> [tagged word real]
-  real-from-word -> [real! word]
-  word-from-real -> [word! real]
+  float-number -> [float! tagged]
+  float-box -> [slot! float]
+  float-load -> [float! tagged tagged]
+  float-store -> [tagged tagged float]
+  float-load-at -> [float! tagged word]
+  float-store-at -> [tagged word float]
+  float-from-word -> [float! word]
+  word-from-float -> [word! float]
   word-number -> [word! tagged]
   word-box -> [slot! word]
   word-move -> [word! word]
-  Op -> [real! real] where (element? Op [real-move real-neg real-abs real-sqrt])
-  Op -> [real! real real] where (element? Op [real+ real- real* real/])
-  Op -> [real real label] where (element? Op [real-unless< real-unless> real-unless<= real-unless>= real-unless=])
+  Op -> [float! float] where (element? Op [float-move float-neg float-abs float-sqrt])
+  Op -> [float! float float] where (element? Op [float+ float- float* float/])
+  Op -> [float float label] where (element? Op [float-unless< float-unless> float-unless<= float-unless>= float-unless=])
   Op -> [word! word word] where (element? Op [word+ word- word* word-and word-or word-xor
                                               word-shl word-shr word-sar word-rotl word-rotr])
   Op -> [word word label] where (element? Op [word-unless< word-unless> word-unless<= word-unless>= word-unless=
@@ -204,12 +204,12 @@
                                        (check.raw-valid? Ctx Labels Ks As))
   _ _ _ _ -> false)
 
-\\ As REAL_REGISTERS and WORD_REGISTERS in ops.h.
+\\ As FLOAT_REGISTERS and WORD_REGISTERS in ops.h.
 (define check.raw-operand?
   Ctx _ tagged A -> (check.operand? Ctx A)
   Ctx _ slot! A -> (check.write? Ctx A)
-  _ _ real A -> (check.below? A 48)
-  _ _ real! A -> (check.below? A 48)
+  _ _ float A -> (check.below? A 64)
+  _ _ float! A -> (check.below? A 64)
   _ _ word! A -> (check.below? A 16)
   Ctx _ word [const K] -> (and (check.below? K (nth 4 Ctx)) (integer? (nth (+ K 1) (nth 7 Ctx))))
   _ _ word A -> (check.below? A 16)
@@ -222,7 +222,7 @@
 
 \\ Raw registers and loops are only for code that calls nothing and catches nothing: nothing
 \\ saves a register across a call, and a handler would find them as a raise left them.
-(define check.reals
+(define check.floats
   Where Is -> (if (check.any-raw? Is)
                   (map (/. I (check.assert
                                (not (element? (hd I) [call call-sealed call-value push-handler pop-handler
@@ -419,7 +419,7 @@
   none _ -> []
   [] _ -> []
   [tagged | Ks] [A | As] -> (append (check.slots [A]) (check.raw-used Ks As))
-  [real | Ks] [A | As] -> [[real A] | (check.raw-used Ks As)]
+  [float | Ks] [A | As] -> [[float A] | (check.raw-used Ks As)]
   [word | Ks] [[const _] | As] -> (check.raw-used Ks As)
   [word | Ks] [A | As] -> [[word A] | (check.raw-used Ks As)]
   [_ | Ks] [_ | As] -> (check.raw-used Ks As)
@@ -478,8 +478,8 @@
 
 (define check.raw-step
   _ [] [] State _ -> State
-  Where [real! | Ks] [A | As] [Defined | Handlers] Pending
-  -> (check.raw-step Where Ks As [(adjoin [real A] Defined) | Handlers] Pending)
+  Where [float! | Ks] [A | As] [Defined | Handlers] Pending
+  -> (check.raw-step Where Ks As [(adjoin [float A] Defined) | Handlers] Pending)
   Where [word! | Ks] [A | As] [Defined | Handlers] Pending
   -> (check.raw-step Where Ks As [(adjoin [word A] Defined) | Handlers] Pending)
   Where [slot! | Ks] [A | As] [Defined | Handlers] Pending
@@ -543,18 +543,18 @@
        (trap-error
          (install-code [defun Name Code])
          (/. E (simple-error (make-string "~A~%slots: ~R" (error-to-string E)
-                                          (shen-jit.lower.bind (native.slots Params [] (real.expand (expand-native Body))) 2)))))))
+                                          (shen-jit.lower.bind (native.slots Params [] (float.expand (expand-native Body))) 2)))))))
 
 (define assemble
   Name Params Body -> (native.code Name Params [] Body))
 
 (define native.code
   Name Params Captures Written
-  -> (let Body (real.expand (expand-native Written))
+  -> (let Body (float.expand (expand-native Written))
           B (shen-jit.lower.builder Name (length Params) [])
           Named (native.slots Params Captures Body)
           Window (+ 2 (length Named))
-          C [B (append (shen-jit.lower.bind Named 2) (real.registers Name Named Body))
+          C [B (append (shen-jit.lower.bind Named 2) (float.registers Name Named Body))
                (native.labels Body) Window]
        (do (if (check.distinct? (append Params Captures))
                skip
@@ -725,7 +725,7 @@
 \\ block may be named by a symbol after its keyword; exit leaves the innermost loop or the one
 \\ named, and next goes round it again. A test is a comparison, and, or, not, true, false, or a
 \\ slot holding a boolean. A comparison becomes jump-unless-test, which the next pass makes a test
-\\ of reals if either side is a real register or expression, and of words if not. Nothing here
+\\ of floats if either side is a float register or expression, and of words if not. Nothing here
 \\ is checked: what it makes is, like any other instructions.
 
 (set structure.*count* 0)
@@ -803,7 +803,7 @@
 \\ Whether code cannot fall through its end, so that what would follow it is reached only by a jump.
 (define structure.ends?
   [] -> false
-  Code -> (element? (hd (hd (reverse Code))) [jump return return-word return-real tail-call again]))
+  Code -> (element? (hd (hd (reverse Code))) [jump return return-word return-float tail-call again]))
 
 (define structure.jumps-to?
   _ [] -> false
@@ -894,82 +894,82 @@
   Test L -> (let Fails (structure.label "fails")
               (append (structure.unless Test Fails) [[jump L] [label Fails]])))
 
-\\ Whether an operand is a real: a real register, a number that is not an integer, or what only
-\\ reals give.
-(define structure.real?
-  Regs E -> true where (real.real? Regs E)
+\\ Whether an operand is a float: a float register, a number that is not an integer, or what only
+\\ floats give.
+(define structure.float?
+  Regs E -> true where (float.float? Regs E)
   _ E -> (not (integer? E)) where (number? E)
   _ [const K] -> (and (number? K) (not (integer? K)))
   _ [Op | _] -> true where (element? Op [f64 sqrt abs /])
-  Regs [Op | Args] -> (structure.any-real? Regs Args) where (element? Op [+ - * neg])
+  Regs [Op | Args] -> (structure.any-float? Regs Args) where (element? Op [+ - * neg])
   _ _ -> false)
 
-(define structure.any-real?
+(define structure.any-float?
   _ [] -> false
-  Regs [A | As] -> (or (structure.real? Regs A) (structure.any-real? Regs As)))
+  Regs [A | As] -> (or (structure.float? Regs A) (structure.any-float? Regs As)))
 
 \\ ---------------------------------------------------------------------------
-\\ Raw expressions, as flat instructions. A variable given a value by real or word is a
+\\ Raw expressions, as flat instructions. A variable given a value by float or word is a
 \\ register of that kind, in a namespace of its own; any other variable in an expression is a
 \\ slot, whose number is read with a check. Intermediate values take registers of their own,
-\\ named by depth. Regs is [Reals Words].
+\\ named by depth. Regs is [Floats Words].
 
-(define real.expand
-  Body -> (let Regs [(real.names real Body) (real.names word Body)]
-               _ (map (/. Name (real.own Name)) (append (hd Regs) (hd (tl Regs))))
-            (mapcan (/. I (real.statement Regs I)) Body)))
+(define float.expand
+  Body -> (let Regs [(float.names float Body) (float.names word Body)]
+               _ (map (/. Name (float.own Name)) (append (hd Regs) (hd (tl Regs))))
+            (mapcan (/. I (float.statement Regs I)) Body)))
 
-\\ Real.N and Word.N are the temporaries' names, so no register written by hand may take one.
-(define real.own
+\\ Float.N and Word.N are the temporaries' names, so no register written by hand may take one.
+(define float.own
   Name -> (simple-error (make-string "native code: ~A is the name of a temporary" Name))
-      where (or (real.numbered? "Real." (str Name)) (real.numbered? "Word." (str Name)))
+      where (or (float.numbered? "Float." (str Name)) (float.numbered? "Word." (str Name)))
   Name -> Name)
 
-(define real.numbered?
-  "" Digits -> (and (not (= Digits "")) (real.digits? Digits))
-  (@s C Prefix) (@s C Rest) -> (real.numbered? Prefix Rest)
+(define float.numbered?
+  "" Digits -> (and (not (= Digits "")) (float.digits? Digits))
+  (@s C Prefix) (@s C Rest) -> (float.numbered? Prefix Rest)
   _ _ -> false)
 
-(define real.digits?
+(define float.digits?
   "" -> true
-  (@s C Rest) -> (and (element? C ["0" "1" "2" "3" "4" "5" "6" "7" "8" "9"]) (real.digits? Rest)))
+  (@s C Rest) -> (and (element? C ["0" "1" "2" "3" "4" "5" "6" "7" "8" "9"]) (float.digits? Rest)))
 
-(define real.names
+(define float.names
   Head Body -> (native.add-names
                  (mapcan (/. I (if (and (cons? I) (= (hd I) Head) (cons? (tl I))) [(hd (tl I))] [])) Body)
                  []))
 
-(define real.real?
-  [Reals _] E -> (element? E Reals))
+(define float.float?
+  [Floats _] E -> (element? E Floats))
 
-(define real.word?
+(define float.word?
   [_ Words] E -> (element? E Words))
 
-(define real.statement
-  Regs [real X E] -> (real.into Regs 0 X E)
+(define float.statement
+  Regs [float X E] -> (float.into Regs 0 X E)
   Regs [word X E] -> (word.into Regs 0 X E)
-  Regs [f64! M I E] -> (let Value (real.operand Regs 0 E)
-                             After (real.after Regs 0 E)
+  Regs [f64! M I E] -> (let Value (float.operand Regs 0 E)
+                             After (float.after Regs 0 E)
                          (if (word.index? Regs I)
                              (let Index (word.operand Regs After I)
-                               (append (tl Value) (tl Index) [[real-store-at M (hd Index) (hd Value)]]))
-                             (let Index (real.index After I)
-                               (append (tl Value) (tl Index) [[real-store M (hd Index) (hd Value)]]))))
-  Regs [real-box D E] -> (let Value (real.operand Regs 0 E)
-                           (append (tl Value) [[real-box D (hd Value)]]))
-  Regs [return-real E] -> (append (real.statement Regs [real-box (intern "Real.Result") E])
-                                  [[return (intern "Real.Result")]])
+                               (append (tl Value) (tl Index) [[float-store-at M (hd Index) (hd Value)]]))
+                             (let Index (float.index After I)
+                               (append (tl Value) (tl Index) [[float-store M (hd Index) (hd Value)]]))))
+  Regs [float-box D E] -> (let Value (float.operand Regs 0 E)
+                           (append (tl Value) [[float-box D (hd Value)]]))
+  Regs [return-float E] -> (append (float.statement Regs [float-box (intern "Float.Result") E])
+                                  [[return (intern "Float.Result")]])
   Regs [word-box D E] -> (let Value (word.operand Regs 0 E)
                            (append (tl Value) [[word-box D (hd Value)]]))
-  Regs [return-word E] -> (append (real.statement Regs [word-box (intern "Real.Result") E])
-                                  [[return (intern "Real.Result")]])
+  Regs [return-word E] -> (append (float.statement Regs [word-box (intern "Float.Result") E])
+                                  [[return (intern "Float.Result")]])
   Regs [jump-unless [Op A B] L]
-  -> (let First (real.operand Regs 0 A)
-          Second (real.operand Regs (real.after Regs 0 A) B)
-       (append (tl First) (tl Second) [[(real.test Op) (hd First) (hd Second) L]]))
+  -> (let First (float.operand Regs 0 A)
+          Second (float.operand Regs (float.after Regs 0 A) B)
+       (append (tl First) (tl Second) [[(float.test Op) (hd First) (hd Second) L]]))
   Regs [jump-unless-test [Op A B] L]
-  -> (real.statement Regs
-       [(if (and (not (element? Op [u< u> u<= u>=])) (structure.any-real? Regs [A B]))
+  -> (float.statement Regs
+       [(if (and (not (element? Op [u< u> u<= u>=])) (structure.any-float? Regs [A B]))
             jump-unless
             jump-unless-word)
         [Op A B] L])
@@ -983,13 +983,13 @@
       where (element? Op [u8! u16! u32! u64!])
   _ I -> [I])
 
-(define real.test
-  < -> real-unless<
-  > -> real-unless>
-  <= -> real-unless<=
-  >= -> real-unless>=
-  = -> real-unless=
-  Op -> (simple-error (make-string "native code: not a comparison of reals: ~R" Op)))
+(define float.test
+  < -> float-unless<
+  > -> float-unless>
+  <= -> float-unless<=
+  >= -> float-unless>=
+  = -> float-unless=
+  Op -> (simple-error (make-string "native code: not a comparison of floats: ~R" Op)))
 
 (define word.test
   < -> word-unless<
@@ -1010,50 +1010,50 @@
   u64! -> word-store64)
 
 \\ The temporary after the one operand E takes, if it takes one.
-(define real.after
-  Regs N E -> (if (real.real? Regs E) N (+ N 1)))
+(define float.after
+  Regs N E -> (if (float.float? Regs E) N (+ N 1)))
 
-(define real.temporary
-  N -> (intern (cn "Real." (str N))))
+(define float.temporary
+  N -> (intern (cn "Float." (str N))))
 
 \\ [the register that holds E | the instructions that put it there]. E's own first operand
 \\ can share its temporary, as that is written last.
-(define real.operand
-  Regs N E -> [E] where (real.real? Regs E)
-  Regs N E -> (let T (real.temporary N)
-                [T | (real.into Regs N T E)]))
+(define float.operand
+  Regs N E -> [E] where (float.float? Regs E)
+  Regs N E -> (let T (float.temporary N)
+                [T | (float.into Regs N T E)]))
 
-\\ What puts E in real register D. D is written last, so E may read it.
-(define real.into
-  Regs _ D E -> [[real-move D E]] where (real.real? Regs E)
-  Regs _ D E -> [[real-from-word D E]] where (real.word? Regs E)
-  _ _ D [const K] -> [[real-number D [const K]]]
+\\ What puts E in float register D. D is written last, so E may read it.
+(define float.into
+  Regs _ D E -> [[float-move D E]] where (float.float? Regs E)
+  Regs _ D E -> [[float-from-word D E]] where (float.word? Regs E)
+  _ _ D [const K] -> [[float-number D [const K]]]
   Regs N D [f64 M I] -> (if (word.index? Regs I)
                             (let Index (word.operand Regs N I)
-                              (append (tl Index) [[real-load-at D M (hd Index)]]))
-                            (let Index (real.index N I)
-                              (append (tl Index) [[real-load D M (hd Index)]])))
-  Regs N D [neg A] -> (real.unary Regs N D real-neg A)
-  Regs N D [abs A] -> (real.unary Regs N D real-abs A)
-  Regs N D [sqrt A] -> (real.unary Regs N D real-sqrt A)
-  Regs N D [+ A B] -> (real.binary Regs N D real+ A B)
-  Regs N D [- A B] -> (real.binary Regs N D real- A B)
-  Regs N D [* A B] -> (real.binary Regs N D real* A B)
-  Regs N D [/ A B] -> (real.binary Regs N D real/ A B)
-  Regs N D [Op A B C | More] -> (real.into Regs N D [Op A [Op B C | More]]) where (element? Op [+ *])
+                              (append (tl Index) [[float-load-at D M (hd Index)]]))
+                            (let Index (float.index N I)
+                              (append (tl Index) [[float-load D M (hd Index)]])))
+  Regs N D [neg A] -> (float.unary Regs N D float-neg A)
+  Regs N D [abs A] -> (float.unary Regs N D float-abs A)
+  Regs N D [sqrt A] -> (float.unary Regs N D float-sqrt A)
+  Regs N D [+ A B] -> (float.binary Regs N D float+ A B)
+  Regs N D [- A B] -> (float.binary Regs N D float- A B)
+  Regs N D [* A B] -> (float.binary Regs N D float* A B)
+  Regs N D [/ A B] -> (float.binary Regs N D float/ A B)
+  Regs N D [Op A B C | More] -> (float.into Regs N D [Op A [Op B C | More]]) where (element? Op [+ *])
   Regs N D [Op | X] -> (let Value (word.operand Regs N [Op | X])
-                         (append (tl Value) [[real-from-word D (hd Value)]]))
+                         (append (tl Value) [[float-from-word D (hd Value)]]))
       where (element? Op (word.only))
-  _ _ _ [Op | X] -> (simple-error (make-string "native code: not a real expression: ~R" [Op | X]))
-  _ _ D O -> [[real-number D O]])
+  _ _ _ [Op | X] -> (simple-error (make-string "native code: not a float expression: ~R" [Op | X]))
+  _ _ D O -> [[float-number D O]])
 
-(define real.unary
-  Regs N D Op A -> (let Value (real.operand Regs N A)
+(define float.unary
+  Regs N D Op A -> (let Value (float.operand Regs N A)
                      (append (tl Value) [[Op D (hd Value)]])))
 
-(define real.binary
-  Regs N D Op A B -> (let First (real.operand Regs N A)
-                          Second (real.operand Regs (real.after Regs N A) B)
+(define float.binary
+  Regs N D Op A B -> (let First (float.operand Regs N A)
+                          Second (float.operand Regs (float.after Regs N A) B)
                        (append (tl First) (tl Second) [[Op D (hd First) (hd Second)]])))
 
 \\ What is written only with words.
@@ -1063,7 +1063,7 @@
 
 \\ What the operand of a word instruction can be as it is: a register, or a constant.
 (define word.direct?
-  Regs E -> (or (real.word? Regs E) (integer? E) (and (cons? E) (= (hd E) const))))
+  Regs E -> (or (float.word? Regs E) (integer? E) (and (cons? E) (= (hd E) const))))
 
 (define word.after
   Regs N E -> (if (word.direct? Regs E) N (+ N 1)))
@@ -1071,7 +1071,7 @@
 (define word.temporary
   N -> (intern (cn "Word." (str N))))
 
-\\ As shen-jit.real.operand.
+\\ As shen-jit.float.operand.
 (define word.operand
   Regs N E -> [E] where (word.direct? Regs E)
   Regs N E -> (let T (word.temporary N)
@@ -1079,8 +1079,8 @@
 
 (define word.into
   Regs _ D E -> [[word-move D E]] where (word.direct? Regs E)
-  Regs _ _ E -> (simple-error (make-string "native code: a real register as a word needs truncate: ~R" E))
-      where (real.real? Regs E)
+  Regs _ _ E -> (simple-error (make-string "native code: a float register as a word needs truncate: ~R" E))
+      where (float.float? Regs E)
   Regs N D [+ A B] -> (word.binary Regs N D word+ A B)
   Regs N D [- A B] -> (word.binary Regs N D word- A B)
   Regs N D [* A B] -> (word.binary Regs N D word* A B)
@@ -1100,8 +1100,8 @@
   Regs N D [u32 M I] -> (word.load Regs N D word-load32 M I)
   Regs N D [s32 M I] -> (word.load Regs N D word-load-s32 M I)
   Regs N D [u64 M I] -> (word.load Regs N D word-load64 M I)
-  Regs N D [truncate E] -> (let Value (real.operand Regs N E)
-                             (append (tl Value) [[word-from-real D (hd Value)]]))
+  Regs N D [truncate E] -> (let Value (float.operand Regs N E)
+                             (append (tl Value) [[word-from-float D (hd Value)]]))
   _ _ _ [Op | X] -> (simple-error (make-string "native code: not a word expression: ~R" [Op | X]))
   _ _ _ E -> (simple-error (make-string "native code: not an integer: ~R" E)) where (number? E)
   _ _ D O -> [[word-number D O]])
@@ -1123,7 +1123,7 @@
 (define word.mentioned?
   Regs [const _] -> false
   Regs [_ | Args] -> (word.any-mentioned? Regs Args)
-  Regs I -> (real.word? Regs I))
+  Regs I -> (float.word? Regs I))
 
 (define word.any-mentioned?
   _ [] -> false
@@ -1131,48 +1131,48 @@
 
 \\ An index in slots is integer arithmetic through prim: [what holds it | instructions]. Its slots
 \\ are read at once, so that each statement can use them again.
-(define real.index
+(define float.index
   _ [const K] -> [[const K]]
-  N [Op | Args] -> (let T (intern (cn "Real.Index." (str N)))
-                        Values (real.indices (+ N 1) Args)
+  N [Op | Args] -> (let T (intern (cn "Float.Index." (str N)))
+                        Values (float.indices (+ N 1) Args)
                      [T | (append (tl Values) [[prim T Op | (hd Values)]])])
   _ I -> [I])
 
-(define real.indices
+(define float.indices
   _ [] -> [[]]
-  N [A | As] -> (let Value (real.index N A)
-                     Rest (real.indices (+ N 1) As)
+  N [A | As] -> (let Value (float.index N A)
+                     Rest (float.indices (+ N 1) As)
                   [[(hd Value) | (hd Rest)] | (append (tl Value) (tl Rest))]))
 
 \\ What flat instructions name as registers: the names and numbers, for the slots' table. They are
 \\ not slots, nor both kinds, and they fit. The JIT chooses which get machine registers.
-(define real.registers
+(define float.registers
   Name Slots Body
-  -> (let Reals (mapcan (/. I (real.reads [real real!] I)) Body)
-          Words (mapcan (/. I (real.reads [word word!] I)) Body)
-          RealNames (native.add-names Reals [])
+  -> (let Floats (mapcan (/. I (float.reads [float float!] I)) Body)
+          Words (mapcan (/. I (float.reads [word word!] I)) Body)
+          FloatNames (native.add-names Floats [])
           WordNames (native.add-names Words [])
        (do (map (/. X (if (or (element? X Slots) (element? X WordNames))
                           (simple-error (make-string "native code, ~A: ~R is a register, and is used as something else" Name X))
                           skip))
-                RealNames)
+                FloatNames)
            (map (/. X (if (element? X Slots)
                           (simple-error (make-string "native code, ~A: ~R is a register, and is used as something else" Name X))
                           skip))
                 WordNames)
-           (if (or (> (length RealNames) 48) (> (length WordNames) 16))
-               (simple-error (make-string "native code, ~A: more than 48 real registers or 16 word registers: ~R"
-                                          Name [RealNames WordNames]))
-               (append (shen-jit.lower.bind RealNames 0) (shen-jit.lower.bind WordNames 0))))))
+           (if (or (> (length FloatNames) 64) (> (length WordNames) 16))
+               (simple-error (make-string "native code, ~A: more than 64 float registers or 16 word registers: ~R"
+                                          Name [FloatNames WordNames]))
+               (append (shen-jit.lower.bind FloatNames 0) (shen-jit.lower.bind WordNames 0))))))
 
-(define real.reads
-  Kinds [Op | Args] -> (real.reads-h Kinds (check.shape Op) Args))
+(define float.reads
+  Kinds [Op | Args] -> (float.reads-h Kinds (check.shape Op) Args))
 
-(define real.reads-h
+(define float.reads-h
   _ none _ -> []
   _ [] _ -> []
-  Kinds [K | Ks] [A | As] -> [A | (real.reads-h Kinds Ks As)] where (element? K Kinds)
-  Kinds [_ | Ks] [_ | As] -> (real.reads-h Kinds Ks As)
+  Kinds [K | Ks] [A | As] -> [A | (float.reads-h Kinds Ks As)] where (element? K Kinds)
+  Kinds [_ | Ks] [_ | As] -> (float.reads-h Kinds Ks As)
   _ _ _ -> [])
 
 \\ ---------------------------------------------------------------------------

@@ -5,6 +5,10 @@ work=$(mktemp -d)
 trap 'status=$?; if [ "$status" -ne 0 ]; then cat "$work"/*.log 2>/dev/null; fi; rm -rf "$work"' EXIT
 if command -v cygpath > /dev/null; then work=$(cygpath -m "$work"); fi
 for shen in "$@"; do
+    "$shen" eval -m tests/structs-inference.shenmod > "$work/inference.log" 2>&1
+    grep -x 'struct inference passed' "$work/inference.log"
+    awk '/^struct proof inferences: [0-9]+$/ { n=$4; seen++ }
+         END { exit !(seen == 1 && n > 0 && n < 30000) }' "$work/inference.log"
     image="$work/$(basename "$shen").img"
     "$shen" --save "$image" eval -q -l tests/structs-client.shen -e '(tc +)' -l tests/structs-typed.shen -e '(tc -)' -l tests/structs.shen > "$work/checks.log" 2>&1
     grep '^[0-9]* passed, 0 failed (structs)' "$work/checks.log"

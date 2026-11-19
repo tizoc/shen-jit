@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name clock)
+  (requires ffi buffer io deadline)
+  (sources tc- "clock.shen" tc+ "clock-typed.shen"))

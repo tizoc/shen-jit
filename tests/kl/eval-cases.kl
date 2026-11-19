@@ -8,6 +8,11 @@ exactly, so 8 and 8.0 differ here even though = treats them as equal."
 (error "division by zero" (/ 1 0))
 (error "integer overflow" (+ 2305843009213693951 1))
 (error "integer overflow" (* 2305843009213693951 2))
+(value 2 (shen-jit.truncate 2.7))
+(value -2 (shen-jit.truncate -2.7))
+(value 7 (shen-jit.truncate 7))
+(error "integer overflow" (shen-jit.truncate 1e300))
+(error (shen-jit.truncate abc))
 (value true (= 8 (+ 0.5 7.5)))
 (value "1.0" (str (+ 0.5 0.5)))
 (value "1.5" (str 1.5))
@@ -481,8 +486,8 @@ register on x86-64 outside Windows, which C does not keep. = and cn call C here,
 (error "1 is not a path" (shen-jit.save-executable 1 ()))
 (error "a is not a function of no arguments" (shen-jit.save-executable "x" a))
 (error "save-executable: not running from an executable" (shen-jit.save-executable "x" ()))
-(value ex-real (defun ex-real (N) (if (= N 0) done (ex-real (- N 0.5)))))
-(value done (ex-real 1.5))
+(value ex-float (defun ex-float (N) (if (= N 0) done (ex-float (- N 0.5)))))
+(value done (ex-float 1.5))
 (value ex-str (defun ex-str (X N) (if (= X 0) zero (if (= N 0) X (ex-str X (- N 1))))))
 (value "s" (ex-str "s" 3))
 (value zero (ex-str 0.0 3))
@@ -755,7 +760,7 @@ has them."
 (error "bit operation: " (t.xor 1 1.5))
 (error "bit operation: " (t.not a))
 (error "bit operation: " (t.not 1.5))
-"A real with no fraction is still a real."
+"A float with no fraction is still a float."
 (error "bit operation: " (t.and (+ 0.5 0.5) 1))
 "Shifts work on 62 bits: what leaves on the left is gone, and the right keeps the sign."
 (value 40 (t.shl 5 3))
@@ -948,6 +953,7 @@ its isolates to end, as cases after it define more."
 goes through the stub, and a function that cannot be found raises as anything does."
 (value false (shen-jit.pointer? 1))
 (value false (shen-jit.pointer? (cn "a" "b")))
+(value false (shen-jit.pointer? (shen-jit.bytes 4)))
 (error "shen-jit.pointer-kind: 1 is not a pointer" (shen-jit.pointer-kind 1))
 (error "shen-jit.pointer-address: 1 is not a pointer" (shen-jit.pointer-address 1))
 (error "shen-jit.pointer->string: 1 is not a live pointer" (shen-jit.pointer->string 1))

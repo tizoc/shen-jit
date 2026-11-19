@@ -1,4 +1,4 @@
-\\ Memory outside the Shen heap, in Shen alone over lib/ffi.shen, which has to be loaded first.
+\\ Memory outside the Shen heap, in Shen alone over lib/ffi.shen. Module memory.
 \\
 \\ A block stays where it is, so C may keep its address, and passes as a pointer with no copy.
 \\ The collector neither copies nor scans it, and does not free it: only memory.free
@@ -16,7 +16,7 @@
 
 (shen.x.namespace memory
   (use shen-jit)
-  (externals [define-foreign int64 pointer void])
+  (externals [buffer.storage define-foreign int64 pointer void])
   (export alloc free)
 
 (shen-jit.library lib ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])
@@ -34,5 +34,9 @@
   M -> (do (c-free M)
            (shen-jit.pointer-kill M)
            true))
+
+\\ For typed code: a block is buffer.storage, which shen-jit.u8 and the rest read.
+(declare alloc [fixnum --> buffer.storage])
+(declare free [buffer.storage --> boolean])
 
 )

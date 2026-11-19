@@ -1,0 +1,1 @@
+(shen.module (version 1) (name both) (sources tc- "one.shen" "two.shen" tc+ "three.shen"))
