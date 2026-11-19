@@ -3,7 +3,9 @@
   (use buffer)
   (use shen-jit)
   (use net-ipv4)
+  (use net-wire => wire)
   (import struct defstruct)
+  (import layout write-layout)
   (export address make-address address.a address.b address.c address.d copy-address read-address
           write-address compose-prefix same? address-at? unspecified? multicast? unicast? link-local?
           solicited-node solicited-node? multicast-mac-at
@@ -39,18 +41,15 @@
 (define read-address
   {address --> buffer.view --> fixnum --> address}
   Out B I ->
-    (do (address.a-> Out (buffer.u32-be B I))
-        (address.b-> Out (buffer.u32-be B (fx+ I 4)))
-        (address.c-> Out (buffer.u32-be B (fx+ I 8)))
-        (address.d-> Out (buffer.u32-be B (fx+ I 12)))))
+    (do (address.a-> Out (wire.ipv6-address.a B I))
+        (address.b-> Out (wire.ipv6-address.b B I))
+        (address.c-> Out (wire.ipv6-address.c B I))
+        (address.d-> Out (wire.ipv6-address.d B I))))
 
 (define write-address
   {buffer.view --> fixnum --> address --> buffer.view}
   B I A ->
-    (do (buffer.u32-be-> B I (address.a A))
-        (buffer.u32-be-> B (fx+ I 4) (address.b A))
-        (buffer.u32-be-> B (fx+ I 8) (address.c A))
-        (buffer.u32-be-> B (fx+ I 12) (address.d A))))
+    (write-layout wire.ipv6-address B I (a (address.a A)) (b (address.b A)) (c (address.c A)) (d (address.d A))))
 
 (define compose-prefix
   {address --> address --> address --> address}
@@ -69,10 +68,10 @@
 
 (define address-at?
   {address --> buffer.view --> fixnum --> boolean}
-  A B I -> (and (= (address.a A) (buffer.u32-be B I))
-                (= (address.b A) (buffer.u32-be B (fx+ I 4)))
-                (= (address.c A) (buffer.u32-be B (fx+ I 8)))
-                (= (address.d A) (buffer.u32-be B (fx+ I 12)))))
+  A B I -> (and (= (address.a A) (wire.ipv6-address.a B I))
+                (= (address.b A) (wire.ipv6-address.b B I))
+                (= (address.c A) (wire.ipv6-address.c B I))
+                (= (address.d A) (wire.ipv6-address.d B I))))
 
 (define unspecified?
   {address --> boolean}
@@ -108,31 +107,29 @@
 
 (define multicast-mac-at
   {buffer.view --> fixnum --> fixnum}
-  B I -> (fx+ 56294136348672 (buffer.u32-be B (fx+ I 12))))
+  B I -> (fx+ 56294136348672 (wire.ipv6-address.d B I)))      \\ 33:33, then the low 32 bits (RFC 2464).
 
 (define valid-header?
   {buffer.view --> fixnum --> fixnum --> boolean}
   B I N ->
-    (and (fx>= N 40)
-         (= (shen-jit.shift-right (buffer.u8 B I) 4) 6)
-         (= (buffer.u16-be B (fx+ I 4)) (fx- N 40))
-         (fx> (buffer.u8 B (fx+ I 7)) 0)))
+    (and (fx>= N (wire.ipv6.size))
+         (= (wire.ipv6.version B I) 6)
+         (= (wire.ipv6.payload-length B I) (fx- N (wire.ipv6.size)))
+         (fx> (wire.ipv6.hop-limit B I) 0)))
 
 (define write-header
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> address --> address --> buffer.view}
   B I Count Proto Hop Source Destination ->
-    (do (buffer.u32-be-> B I 1610612736)
-        (buffer.u16-be-> B (fx+ I 4) (fx- Count 40))
-        (buffer.u8-> B (fx+ I 6) Proto)
-        (buffer.u8-> B (fx+ I 7) Hop)
-        (write-address B (fx+ I 8) Source)
-        (write-address B (fx+ I 24) Destination)))
+    (do (write-layout wire.ipv6 B I
+          (version 6) (payload-length (fx- Count (wire.ipv6.size))) (next-header Proto) (hop-limit Hop))
+        (write-address B (wire.ipv6.source-at I) Source)
+        (write-address B (wire.ipv6.destination-at I) Destination)))
 
 (define transport-checksum
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
   B I Proto Length ->
-    (let Pseudo (net-ipv4.sum16 B (fx+ I 8) 32 (fx+ Proto Length))
-      (net-ipv4.checksum (net-ipv4.sum16 B (fx+ I 40) Length Pseudo))))
+    (let Pseudo (net-ipv4.sum16 B (wire.ipv6.source-at I) 32 (fx+ Proto Length))   \\ Both addresses.
+      (net-ipv4.checksum (net-ipv4.sum16 B (fx+ I (wire.ipv6.size)) Length Pseudo))))
 
 (preclude [address.%match])
 )

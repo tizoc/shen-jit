@@ -20,6 +20,13 @@
   (source 128)
   (destination 128))
 
+\\ An IPv6 address as four 32-bit words, as net-ipv6 keeps it.
+(deflayout ipv6-address
+  (a 32)
+  (b 32)
+  (c 32)
+  (d 32))
+
 \\ RFC 768.
 (deflayout udp
   (source-port 16) (destination-port 16)
