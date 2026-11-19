@@ -3717,7 +3717,7 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   `fs.name` does; a root such as `/` keeps its own. A check in `tests/fs.shen` failed before.
   `fs.lstat` of `link/` still reports the directory, which is what POSIX means by the slash.
 
-### Binary layouts and grammar ranges (2026-11-19, Apple M3 Max)
+### Binary layouts, grammar ranges and types over fixnums (2026-11-19, Apple M3 Max)
 
 - `lib/layout.shen` and the grammar entry points `<rule>.parse-at` and `<rule>.end-at` come from an experiment that
   declared a networking stack's packet formats as its RFCs draw them, on branch `net-dsl`. There, reading fields
@@ -3727,6 +3727,11 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   `write-layout` packs them. `.parse-at` and `.end-at` take a kept state and a range of a view because `.parse` made a
   state per parse and needed a view of the range, two allocations per packet. The frame library's header is the first
   layout here. `make test-layout` checks the generated code against raw bytes, ranges, namespaces and inlining.
+- `shen-jit.represent`, from the same experiment, where an opaque type for TCP's sequence numbers, converted to and
+  from fixnums by the identity, made `fx<` across the wrap a type error, but left its values in slots: a loop of
+  sequence arithmetic took 0.061 to 0.070 s against 0.021 with fixnums. Declared represented by fixnums, the
+  annotations of the type read as fixnum's to the lowerer, and the loop takes 0.024 s, in word registers, while the
+  typechecker still refuses `fx<` on it. The rewrite runs only once a type has been declared.
 - `(skip N)`, from the same experiment, where a length-prefixed field's bytes were a rule calling itself once a byte:
   10,000 parses of a 255-byte field took 8.6 ms that way and 0.13 to 0.17 with the item, in a sealed typed build. Its
   bounds check is the form the streaming variant rewrites, so a read from a reader waits for the bytes.

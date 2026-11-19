@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name represented)
+  (requires numbers)
+  (sources tc- "represented-conversions.shen" tc+ "represented.shen"))

@@ -255,6 +255,28 @@ What the compiler does with the types:
   over such values, go to the machine's integer registers in the same definitions, overflow still raising,
   except for a loop's steps (below). Indices
   into bytes are computed there, and a read or store of a float at one takes no conversion.
+- **Types of their own over fixnums.** `(shen-jit.represent T fixnum)` declares that values of the type T are
+  fixnums underneath, so that a T goes to a register as a fixnum does, while the typechecker keeps T a type of its
+  own: a sequence number that wraps at 2^32, say, which `fx<` must not compare. The program converts with functions
+  that are the identity, whose types it declares with rules, and must give T only fixnums:
+
+  ```shen
+  (define seq-of X -> X)                            \\ Loaded unchecked, with tc-.
+  (define seq-number X -> X)
+  (shen-jit.represent seq fixnum)
+
+  (datatype seq-rules
+    X : fixnum;
+    ____________________
+    (seq-of X) : seq;
+
+    X : seq;
+    ____________________
+    (seq-number X) : fixnum;)
+  ```
+
+  Without the declaration, a value of a type the compiler does not know stays in a slot, and arithmetic on it
+  is generic.
 - **Words in registers.** A `word.t`, a 64-bit word of the module [`word`](word.md), goes to an integer register in
   the same definitions, each operation on it an instruction, and is boxed, as 8 new bytes, only where it leaves.
 - **Small functions inlined into loops.** A typed function that keeps its values in registers, of up to 800 nodes,

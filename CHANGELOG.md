@@ -14,6 +14,9 @@ All notable changes to this project are documented in this file. The format is b
 - Typed grammar rules have `<rule>.parse-at`, which parses a range of a view, and `<rule>.end-at`, which gives where a
   match of a prefix ends, both with a `(grammar.state)` the caller keeps, so that a parse allocates nothing but its
   values.
+- `(shen-jit.represent T fixnum)` declares that a type is a fixnum underneath: typed code keeps its values in
+  registers as it does a fixnum's, while the typechecker keeps it a type of its own, so that a sequence number, say,
+  is not compared as a plain fixnum.
 - `(skip N)` in a grammar passes N bytes of anything, N an expression such as a length read before them, in one step,
   and waits for them in a read from a reader.
 

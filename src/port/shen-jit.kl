@@ -987,7 +987,7 @@ from a template, which needs the arity."
           (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.exit))
               (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.code))
                   (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.save-executable))
-                      (do (set shen-jit.*checked* false) (set shen-jit.defined ())))))))))))))))))))))
+                      (do (set shen-jit.*checked* false) (do (set shen-jit.defined ()) (shen-jit.representation-initialise))))))))))))))))))))))
 
 "Definitions are factorised as they are evaluated, as Shen/Scheme's compiler
 does: the kernel's shen.factor binds each selector once and shares the tests
@@ -1032,7 +1032,40 @@ makes under (tc +), whose types are not known to hold."
 
 (defun shen-jit.compiled-kl (Kl Factor Annotate)
   (let Factored (if Factor (shen.factor Kl) Kl)
-    (if Annotate (shen-jit.mark-annotated (shen.x.type-annotations.annotate-kl Factored)) Factored)))
+    (if Annotate
+        (shen-jit.mark-annotated (shen-jit.represented (shen.x.type-annotations.annotate-kl Factored)))
+        Factored)))
+
+"A type a program declares represented by fixnums, with (shen-jit.represent T fixnum), is a fixnum
+to the lowerer: each (type X T) the annotator gives becomes (type X fixnum), so that its values go to
+registers as a fixnum's do, while the typechecker keeps it a type of its own. Its values must be
+fixnums, as the program's own conversions make sure. Until a type is declared, nothing is walked."
+
+(defun shen-jit.represent (T R)
+  (if (= R fixnum)
+      (do (put T shen-jit.representation R (value *property-vector*))
+          (do (set shen-jit.*representations* true) T))
+      (simple-error (cn "shen-jit.represent: only fixnum can represent a type, not " (shen.app R "" shen.a)))))
+
+(defun shen-jit.representation-initialise ()
+  (do (shen.initialise-arity-table (cons shen-jit.represent (cons 2 ())))
+  (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.represent))
+  (do (declare shen-jit.represent (cons symbol (cons --> (cons (cons symbol (cons --> (cons symbol ()))) ()))))
+      (set shen-jit.*representations* false)))))
+
+(defun shen-jit.represented (X)
+  (if (value shen-jit.*representations*) (shen-jit.represented-h X) X))
+
+(defun shen-jit.represented-h (X)
+  (if (cons? X)
+      (if (and (= (hd X) type) (and (cons? (tl X)) (and (cons? (tl (tl X))) (= (tl (tl (tl X))) ()))))
+          (cons type (cons (shen-jit.represented-h (hd (tl X)))
+                           (cons (shen-jit.representation-of (hd (tl (tl X)))) ())))
+          (map (lambda Y (shen-jit.represented-h Y)) X))
+      X))
+
+(defun shen-jit.representation-of (T)
+  (if (symbol? T) (trap-error (get T shen-jit.representation (value *property-vector*)) (lambda E T)) T))
 
 "An annotated definition's body is marked (shen-jit.annotated Body), which tells the lowerer
 that the typechecker gave its type forms: (type X T) written in untyped code changes nothing."

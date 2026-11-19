@@ -603,4 +603,16 @@
 (typed.check "a type form in untyped code converts nothing" [3 false]
   [(typed.via typed.writes-type [1 2]) (typed.has? float-number typed.writes-type)])
 
+\\ A type declared represented by fixnums keeps its values in registers, and stays a type of its own.
+(shen-jit.seal +)
+(optimise +)
+(typed.check "a represented type loads" [represented] (module.load "tests/typed/represented.shenmod"))
+(optimise -)
+(shen-jit.seal -)
+(typed.check "its values in registers, wrapping" [true 705032408 2000000000]
+  [(typed.has? word-number rep.walk) (rep.walk 5000000 (rep.seq-of 4294967000)) (rep.walk 2000000 (rep.seq-of 0))])
+(typed.check "a type of its own to the typechecker" [fixnum false]
+  [(shen.typecheck [rep.seq-number [rep.seq-of 1]] (protect A))
+   (shen.typecheck [fx< [rep.seq-of 1] [rep.seq-of 2]] (protect A))])
+
 (output "~A passed, ~A failed (typed)~%" (value typed.passed) (value typed.failed))

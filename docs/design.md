@@ -157,7 +157,9 @@ and then evaluates it, names in `shen-jit.*checked*` the definition it evaluates
 `(optimise +)`, `shen.record-and-evaluate` gives that definition, and only that one, to the kernel's
 `shen.x.type-annotations.annotate-kl`, after factorising it, marks its body `(shen-jit.annotated Body)` for the
 lowerer, which trusts the type forms of such a body only, and marks the name with the property
-`shen-jit.annotated`, which `shen-jit.code` follows to make the same code again. A `(type X T)` written in untyped
+`shen-jit.annotated`, which `shen-jit.code` follows to make the same code again. Before it is marked, each
+`(type X T)` whose T a program declared represented by fixnums, with `shen-jit.represent`, becomes
+`(type X fixnum)`, which is all the lowerer then sees. A `(type X T)` written in untyped
 code is only taken out. This property, struct readers'
 field positions and foreign functions' raw-call signatures pair their claims with the installed procedure;
 the lowerer checks its identity before using them. Publication follows successful installation, so a failed
