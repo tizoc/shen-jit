@@ -3830,6 +3830,18 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   unless `grammar.finish` had made its loops (1,206 code objects for 1,000 parses, against 9; the TCP
   workload 265 s against 0.36), on `main` too; `grammar.finish` now has a type, so a typed library calls
   it as it loads.
+- A guard at the end of an alternative ran after the rest of an option list, so a failing rest was parsed
+  again by the next alternative, each level doubling the work: 1,000 parses of ten size options and a
+  malformed one took 31.4 ms, 0.25 with `(where Guard)` items first. DHCP's options commit with `require`
+  once an option is known. DNS names find their end with a new `<rule>.end-at`.
+- TCP's segment became a record read once, `read-segment`, and all of its dispatch rules on state and
+  flags taking the peer, the record and the time, where functions took ten and eleven positional
+  fixnums: 362.9 to 367.1 and 368.4 to 370.9 ms, with the UDP echo, which runs none of it, moving as
+  much. Linux's TUN and TAP suites pass with no heap words.
+- **Rejected: an opaque `seq` type for sequence numbers.** Identity conversions to and from fixnums made
+  `fx<` across the wrap a type error, but a value of a type the typed compiler does not know stays in a
+  slot, its arithmetic generic: a loop of sequence arithmetic took 0.061 to 0.070 s against 0.021 with
+  fixnums. It would need a way to say that a type is a fixnum underneath, for registers alone.
 
 ### Dual-stack networking and SLAAC (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
 

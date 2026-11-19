@@ -5,8 +5,10 @@
   (use net-ipv6)
   (use shen-jit)
   (use net-wire => wire)
+  (use grammar)
   (import struct defstruct)
   (import layout write-layout)
+  (externals [defgrammar <end>])
   (export host make configure-static poll ingress next-deadline
           host.device host.link-local host.global host.local-state host.global-state
           host.preferred-until host.valid-until host.router host.router-until
@@ -47,7 +49,8 @@
   (mutable prefix-until : fixnum)
   (mutable router-until : fixnum)
   (mutable preferred-until : fixnum)
-  (mutable valid-until : fixnum))
+  (mutable valid-until : fixnum)
+  (option-state : grammar.state))
 
 (define blank-address
   {--> net-ipv6.address}
@@ -75,6 +78,7 @@
                (or (= Mac 0) (fx> Slots 0))
                (not (and (= IdHigh 0) (= IdLow 0))))
           (:host
+            option-state <- (grammar.state)
             device <- D
             mac <- Mac
             link-local <- (net-ipv6.make-address 4269801472 0 IdHigh IdLow)
@@ -204,16 +208,18 @@
   {buffer.view --> fixnum --> fixnum --> fixnum --> buffer.view}
   B I Kind Mac -> (write-layout wire.ndp-link-address B I (type Kind) (length 1) (address Mac)))
 
+\\ Neighbor discovery's options, RFC 4861 4.6: a type and a length in 8-byte units, never 0, that covers
+\\ both, to the end; a link-layer address takes one unit.
+(defgrammar <options> {==> boolean}
+  <end> := true;
+  Kind Units (where (and (fx> Units 0) (or (not (or (= Kind 1) (= Kind 2))) (= Units 1))))
+    (wire.<bytes> (fx- (fx* 8 Units) 2)) <options> := true;)
+
+(grammar.finish)
+
 (define options-valid?
-  {buffer.view --> fixnum --> fixnum --> boolean}
-  B At End ->
-    (or (= At End)
-        (and (fx<= (fx+ At 2) End)
-             (let Kind (wire.ndp-option.type B At)
-                  Bytes (fx* 8 (wire.ndp-option.length B At))
-               (and (fx> Bytes 0) (fx<= (fx+ At Bytes) End)
-                    (or (not (or (= Kind 1) (= Kind 2))) (= Bytes (wire.ndp-link-address.size)))
-                    (options-valid? B (fx+ At Bytes) End))))))
+  {host --> buffer.view --> fixnum --> fixnum --> boolean}
+  H B At End -> (<options>.parse-at (host.option-state H) B At End (/. Position Message false)))
 
 (define option-offset
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
@@ -309,7 +315,7 @@
          Opt (fx+ Body (wire.ndp-neighbor-solicitation.size))
          Dad (net-ipv6.unspecified? Source)
       (and (net-ipv6.unicast? Target)
-           (options-valid? B Opt End)
+           (options-valid? H B Opt End)
            (if Dad
                (and (net-ipv6.solicited-node? Destination Target)
                     (fx< (option-offset B Opt End 1) 0))
@@ -337,7 +343,7 @@
                     (net-ipv6.same? (host.destination H) (host.link-local H)))
                (and (= (host.global-state H) tentative)
                     (net-ipv6.same? (host.destination H) (host.global H))))
-           (options-valid? B Opt End)
+           (options-valid? H B Opt End)
            (or (duplicate-if-probing H Target)
                (advertise-neighbor H Target (option-mac B Opt End 2)
                                    (wire.ndp-neighbor-advertisement.override B Body) Now)))))
@@ -403,7 +409,7 @@
          Span (fx* (wire.ndp-router-advertisement.router-lifetime B Body) 1000)
       (and (net-ipv6.link-local? Source)
            (or (net-ipv6.same? Destination (host.all-nodes H)) (local-target? H Destination Now))
-           (options-valid? B Opt End)
+           (options-valid? H B Opt End)
            (do (if (or (net-ipv6.same? Source (host.router H)) (fx<= (host.router-until H) Now))
                    (do (net-ipv6.copy-address (host.router H) Source)
                        (host.router-until-> H (fx+ Now Span))

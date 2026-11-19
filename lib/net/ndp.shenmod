@@ -1,6 +1,6 @@
 (shen.module
   (version 1)
   (name net/ndp)
-  (requires net/ipv6 net/link net/wire)
+  (requires net/ipv6 net/link net/wire grammar)
   (typed)
   (sources tc+ "ndp.shen"))

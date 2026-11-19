@@ -1,6 +1,6 @@
 (shen.module
   (version 1)
   (name net/dhcp)
-  (requires net/udp net/wire)
+  (requires net/udp net/wire grammar)
   (typed)
   (sources tc+ "dhcp.shen"))

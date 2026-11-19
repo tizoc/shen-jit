@@ -6,8 +6,10 @@
   (use udp)
   (use shen-jit)
   (use net-wire => wire)
+  (use grammar)
   (import struct defstruct)
   (import layout write-layout)
+  (externals [defgrammar u32-be <end> require])
   (export client make poll maintain
           client.state client.address client.mask client.gateway client.dns
           client.deadline client.expires selecting requesting bound renewing rebinding expired)
@@ -40,7 +42,8 @@
   (mutable expires : fixnum)
   (mutable renewal : fixnum)
   (mutable rebinding : fixnum)
-  (mutable attempts : fixnum))
+  (mutable attempts : fixnum)
+  (option-state : grammar.state))
 
 (define make
   {net-link.device --> fixnum --> fixnum --> client}
@@ -52,6 +55,7 @@
           device <- D
           mac <- Mac
           out <- (buffer.new 300)
+          option-state <- (grammar.state)
           in <- (buffer.new (fx- (net-link.mtu D) 28))
           info <- (udp.make-recv-info)
           options <- (:options
@@ -100,32 +104,26 @@
            (options.renew-> O 0)
            (options.rebind-> O 0)))
 
-(define option
-  {options --> buffer.view --> fixnum --> fixnum --> fixnum --> options}
-  O B I Len Kind ->
-    (cases (and (= Kind 53) (= Len 1)) (options.kind-> O (buffer.u8 B I))
-           (and (= Kind 54) (= Len 4)) (options.server-> O (buffer.u32-be B I))
-           (and (= Kind 1) (= Len 4)) (options.mask-> O (buffer.u32-be B I))
-           (and (= Kind 3) (fx>= Len 4)) (options.gateway-> O (buffer.u32-be B I))
-           (and (= Kind 6) (fx>= Len 4)) (options.dns-> O (buffer.u32-be B I))
-           (and (= Kind 51) (= Len 4)) (options.lease-> O (buffer.u32-be B I))
-           (and (= Kind 58) (= Len 4)) (options.renew-> O (buffer.u32-be B I))
-           (and (= Kind 59) (= Len 4)) (options.rebind-> O (buffer.u32-be B I))
-           true O))
+\\ DHCP's options, RFC 2132: a code, and for all but padding and the end, a length and that many bytes.
+\\ Those the client uses are read into O as they are matched, and the list must end. Once an option is
+\\ known, the rest of the list is required, so that no other alternative parses it again.
+(defgrammar (<options> O) {options ==> boolean}
+  255 (* _) := true;                                                     \\ The end; padding follows.
+  0 (require (<options> O) "malformed options") := <options>;            \\ Padding.
+  53 1 Kind (require (<options> (options.kind-> O Kind)) "malformed options") := <options>;      \\ Message type.
+  54 4 (u32-be IP) (require (<options> (options.server-> O IP)) "malformed options") := <options>;   \\ Server.
+  1 4 (u32-be Mask) (require (<options> (options.mask-> O Mask)) "malformed options") := <options>;  \\ Subnet mask.
+  3 Length (where (fx>= Length 4)) (u32-be IP) (wire.<bytes> (fx- Length 4))                       \\ Routers,
+    (require (<options> (options.gateway-> O IP)) "malformed options") := <options>;               \\ the first.
+  6 Length (where (fx>= Length 4)) (u32-be IP) (wire.<bytes> (fx- Length 4))                       \\ DNS servers,
+    (require (<options> (options.dns-> O IP)) "malformed options") := <options>;                   \\ the first.
+  51 4 (u32-be Seconds) (require (<options> (options.lease-> O Seconds)) "malformed options") := <options>;
+  58 4 (u32-be Seconds) (require (<options> (options.renew-> O Seconds)) "malformed options") := <options>;
+  59 4 (u32-be Seconds) (require (<options> (options.rebind-> O Seconds)) "malformed options") := <options>;
+  _ Length (wire.<bytes> Length) (require (<options> O) "malformed options") := <options>;          \\ Others.
+  <end> := false;)
 
-(define read-options
-  {options --> buffer.view --> fixnum --> fixnum --> boolean}
-  O B I End ->
-    (if (fx>= I End) false
-        (let Kind (buffer.u8 B I)
-          (cases (= Kind 255) true
-                 (= Kind 0) (read-options O B (fx+ I 1) End)
-                 (fx>= (fx+ I 1) End) false
-                 true (let Len (buffer.u8 B (fx+ I 1))
-                            Data (fx+ I 2)
-                            Next (fx+ Data Len)
-                         (and (fx<= Next End)
-                              (read-options (option O B Data Len Kind) B Next End)))))))
+(grammar.finish)
 
 (define option-ip
   {fixnum --> fixnum --> fixnum}
@@ -196,7 +194,7 @@
          (= (wire.dhcp.client-hardware B I) (client.mac C))   \\ to us.
          (= (wire.dhcp.magic-cookie B I) 1669485411)
          (let O (reset-options (client.options C))
-           (and (read-options O B (fx+ I (wire.dhcp.size)) (fx+ I N))
+           (and (<options>.parse-at O (client.option-state C) B (fx+ I (wire.dhcp.size)) (fx+ I N) (/. At Message false))
                 (accept-options C O (wire.dhcp.your-address B I) Now)))))
 
 (define init-input
