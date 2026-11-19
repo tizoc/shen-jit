@@ -68,11 +68,16 @@ reports up to four byte ranges on standalone ACKs, subject to the link MTU. The 
 recently received range comes first, and the cumulative ACK stays at the next missing byte.
 Peers without negotiated SACK use cumulative ACK recovery. [TCP SACK options](https://www.rfc-editor.org/rfc/rfc2018.html)
 
-The sender records reported bytes in a preallocated bitmap of up to 536 bytes per peer.
-The first fast retransmit stops at the next recorded range. A partial advancing ACK during
-fast recovery can schedule one more missing range before the timer expires. Transmit storage
-stays occupied until cumulatively acknowledged. Timeout clears the SACK bitmap so replay
-can cover bytes the peer may have discarded.
+The sender uses one preallocated bitmap for reported bytes and another for repairs already
+sent. Each uses up to 536 bytes per peer. During fast recovery, the sender can retry multiple
+gaps before the first repair is acknowledged. It infers loss when a gap has at least three
+separate SACKed ranges or more than two MSS of SACKed bytes above it.
+
+The sender estimates the bytes still in flight from outstanding originals and repairs and
+uses the remaining congestion window to pace additional repairs, one segment per poll.
+A partial advancing ACK can also expose another missing range. Transmit storage stays
+occupied until cumulatively acknowledged. Timeout clears both bitmaps so replay can cover
+bytes the peer may have discarded. [SACK loss detection and pipe estimation](https://www.rfc-editor.org/rfc/rfc6675.html#section-4)
 
 ## Congestion control
 
@@ -128,9 +133,10 @@ a lost fast retry on the same connection. The adaptive timer test varies RTT and
 the actual retry deadlines after loss and after fresh samples. Congestion tests count
 segments on the wire through slow start, partial ACKs in congestion avoidance, timeout
 replay, and fast retransmit. SACK tests check negotiation, legacy peers, sequence wrap,
-and two losses in a six-segment flight, including a gap shorter than one MSS. The
-allocation regression runs 8,000 typed connections under allocation stress, with a
-warmup-only baseline and an allocating positive control.
+and two repairs sent before either is acknowledged, including a gap shorter than one
+MSS. A five-loss test checks that the fifth repair waits for space in the congestion
+window. The allocation regression runs 9,000 typed connections under allocation stress,
+with a warmup-only baseline and an allocating positive control.
 
 ## Simulated throughput
 

@@ -3803,6 +3803,19 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   check has passed. On the `net-dsl` branch, TCP's lossy run 170.8–171.2 against 162.0–162.8 ms, its UDP echo
   22.4–22.5 against 21.6–21.7.
 
+### Pipelined TCP SACK repair (2026-11-19, Apple M3 Max and Linux in Docker Desktop)
+
+- A preallocated repair bitmap tracks retransmitted bytes during SACK recovery. The
+  sender estimates the original and retransmitted bytes still in flight and paces
+  additional repairs against the reduced congestion window.
+- The wire test held the first repair and captured the second before either was
+  acknowledged. Delivering the second first merged two SACK blocks without advancing
+  the cumulative ACK. A five-loss test sent four repairs and waited for an ACK before
+  sending the fifth.
+- The Linux heap probe measured zero Shen heap words through 16 runs of both cases and
+  the mixed TUN workload. The allocating control used five words. The 9,000-connection
+  stress run added zero collections.
+
 ### TCP selective acknowledgments (2026-11-19, Apple M3 Max and Linux in Docker Desktop)
 
 - SYN and SYN-ACK negotiate SACK-Permitted. The receiver reports up to four ranges from

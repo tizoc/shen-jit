@@ -60,5 +60,5 @@ gets a reply. After the first wave closes, both retained UDP datagrams echo in o
 one verifies recovery. The second TCP wave reuses the same slots. The test checks 131,124 TCP
 bytes and EOF on all eight sockets. A test-only probe checks the Shen heap across 16 runs each
 of simulated reordering, timeout recovery, fast retransmit, adaptive timing, congestion
-control, and SACK recovery from two losses in one window. It also covers the entire TUN
-workload and uses a freshly allocated view as a positive control.
+control, and SACK recovery with two and five losses in a window. It also covers the
+entire TUN workload and uses a freshly allocated view as a positive control.

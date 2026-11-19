@@ -21,10 +21,13 @@
 (defstruct sack-case
   (peers : pair)
   (packet : buffer.view)
+  (held-repair : buffer.view)
   (payload : buffer.view)
   (short : buffer.view)
   (suffix : buffer.view)
-  (output : buffer.view))
+  (output : buffer.view)
+  (bulk : buffer.view)
+  (bulk-output : buffer.view))
 
 (defstruct window-case
   (peers : pair)
@@ -639,10 +642,13 @@
       (:sack-case
         peers <- (setup-link Mtu 8)
         packet <- (buffer.new Mtu)
+        held-repair <- (buffer.new Mtu)
         payload <- Payload
         short <- (buffer.slice Payload 72 12)
         suffix <- (buffer.slice Payload 84 108)
-        output <- (buffer.new 192))))
+        output <- (buffer.new 192)
+        bulk <- (buffer.new 288)
+        bulk-output <- (buffer.new 288))))
 
 (define open-sack
   {pair --> buffer.view --> boolean}
@@ -674,15 +680,25 @@
               (expect (= (net-link.packet-send (pair.left F) Wire Size) net-link.sent) "deliver a later segment"))
           (drop-sack-gaps F Wire (fx+ I 1)))))
 
-(define sack-retry
-  {pair --> buffer.view --> fixnum --> fixnum --> boolean}
-  F Wire Sequence Size ->
-    (do (expect (= (net-link.packet-recv-into (pair.right F) Wire) Size) "one retransmission limited to the gap before timeout")
-        (expect (= (buffer.u32-be Wire 24) Sequence) "retransmit the missing sequence")
-        (tcp.poll (pair.client F) 0)
-        (expect (= (net-link.packet-recv-into (pair.right F) Wire) -1) "no extra retransmission")
-        (expect (= (net-link.packet-send (pair.left F) Wire Size) net-link.sent) "deliver just the missing segment")
-        (expect (= (tcp.poll (pair.server F) 8) 1) "accept the repair")))
+(define sack-warmup
+  {pair --> buffer.view --> buffer.view --> fixnum --> boolean}
+  F Payload Out Segments ->
+    (do (sack-warmup-send F Payload Segments)
+        (expect (= (tcp.recv-into (pair.server F) Out (buffer.length Out)) (fx* Segments 36)) "drain the slow-start data")
+        (tcp.poll (pair.server F) 0)
+        (tcp.poll (pair.client F) 2)
+        true))
+
+(define sack-warmup-send
+  {pair --> buffer.view --> fixnum --> boolean}
+  _ _ 0 -> true
+  F Payload N ->
+    (let C (pair.client F) S (pair.server F)
+      (do (expect (= (tcp.send C Payload 36) 36) "queue slow-start data")
+          (tcp.poll C 0)
+          (tcp.poll S 1)
+          (tcp.poll C 1)
+          (sack-warmup-send F Payload (fx- N 1)))))
 
 (define sack-loss
   {sack-case --> boolean}
@@ -691,16 +707,11 @@
          C (pair.client F) S (pair.server F)
          L (pair.left F) R (pair.right F)
          Wire (sack-case.packet T)
+         Held (sack-case.held-repair T)
          Payload (sack-case.payload T)
          Out (sack-case.output T)
       (do (open-sack F Wire)
-          (expect (= (tcp.send C Payload 36) 36) "queue slow-start data")
-          (do (tcp.poll C 0) (tcp.poll S 1) (tcp.poll C 1))
-          (expect (= (tcp.send C Payload 36) 36) "queue another slow-start segment")
-          (do (tcp.poll C 0) (tcp.poll S 1) (tcp.poll C 1))
-          (expect (= (tcp.recv-into S Out 192) 72) "drain the slow-start data")
-          (tcp.poll S 0)
-          (tcp.poll C 2)
+          (sack-warmup F Payload Out 2)
           (expect (= (tcp.send C Payload 72) 72) "queue the first two segments")
           (tcp.poll C 0)
           (tcp.poll C 0)
@@ -735,19 +746,68 @@
           (tcp.poll C 1)
           (tcp.poll S 0)
           (tcp.poll C 1)
-          (sack-retry F Wire 4294967223 76)
-          (expect (= (net-link.packet-recv-into L Wire) 52) "partial ACK carries one remaining SACK block")
-          (expect (= (buffer.u32-be Wire 28) 4294967295) "partial ACK reaches the second gap")
-          (expect (and (= (buffer.u32-be Wire 44) 11) (= (buffer.u32-be Wire 48) 119))
-                  "the delivered suffix remains selectively acknowledged")
-          (expect (= (net-link.packet-send R Wire 52) net-link.sent) "deliver partial ACK")
-          (tcp.poll C 1)
-          (sack-retry F Wire 4294967295 52)
+          (expect (= (net-link.packet-recv-into R Held) 76) "capture the first repair without delivering it")
+          (expect (= (buffer.u32-be Held 24) 4294967223) "the first repair starts at the cumulative gap")
+          (expect (= (tcp.poll C 0) 0) "send without processing any ACK for the first repair")
+          (expect (= (net-link.packet-recv-into R Wire) 52) "the second repair contains only the 12-byte gap")
+          (expect (= (buffer.u32-be Wire 24) 4294967295) "the second repair skips the first SACK block")
+          (tcp.poll C 0)
+          (expect (= (net-link.packet-recv-into R Wire) -1) "there is no third repair to send")
+          (expect (= (net-link.packet-send L Wire 52) net-link.sent) "deliver the second repair first")
+          (expect (= (tcp.poll S 8) 1) "accept the second repair above the first gap")
+          (expect (= (net-link.packet-recv-into L Wire) 52) "the second repair merges the two SACK blocks")
+          (expect (= (buffer.u32-be Wire 28) 4294967223) "the first repair still has no ACK")
+          (expect (and (= (buffer.u32-be Wire 44) 4294967259) (= (buffer.u32-be Wire 48) 119))
+                  "the SACK covers all bytes beyond the first gap")
+          (expect (= (net-link.packet-send R Wire 52) net-link.sent) "deliver the SACK for the second repair")
+          (expect (= (tcp.poll C 1) 1) "accept the SACK without replaying a repair")
+          (expect (= (net-link.packet-recv-into R Wire) -1) "each repair is sent once")
+          (expect (= (net-link.packet-send L Held 76) net-link.sent) "deliver the held first repair")
+          (expect (= (tcp.poll S 8) 1) "accept the first repair")
           (expect (= (tcp.recv-into S Out 192) 192) "both gaps repaired before advancing the clock again")
           (expect (buffer.equal? Out Payload) "entire window recovered in order")
           (expect (= (tcp.recv-into S Out 192) 0) "no duplicate delivery")
           (expect (= (tcp.poll C 2) 1) "cumulative ACK retires the recovered flight")
           (expect (= (net-link.packet-recv-into R Wire) -1) "selectively acknowledged data was never replayed")
+          (close-pair F false))))
+
+(define drop-sack-prefix
+  {pair --> buffer.view --> fixnum --> boolean}
+  _ _ 8 -> true
+  F Wire I ->
+    (do (expect (= (net-link.packet-recv-into (pair.right F) Wire) 76) "capture a segment of the full window")
+        (if (fx>= I 5)
+            (expect (= (net-link.packet-send (pair.left F) Wire 76) net-link.sent) "deliver the last three originals")
+            true)
+        (drop-sack-prefix F Wire (fx+ I 1))))
+
+(define sack-repair-budget
+  {sack-case --> boolean}
+  T ->
+    (let F (sack-case.peers T)
+         C (pair.client F) S (pair.server F)
+         Wire (sack-case.packet T)
+         Payload (sack-case.bulk T)
+         Out (sack-case.bulk-output T)
+      (do (open-sack F Wire)
+          (sack-warmup F Payload Out 4)
+          (expect (= (tcp.send C Payload 288) 288) "queue the entire window")
+          (poll-burst C 8)
+          (drop-sack-prefix F Wire 0)
+          (expect (= (tcp.poll S 8) 3) "three segments arrive above the five losses")
+          (tcp.poll C 1)
+          (tcp.poll S 0)
+          (tcp.poll C 1)
+          (tcp.poll S 0)
+          (tcp.poll C 1)
+          (poll-burst C 8)
+          (expect (= (tcp.poll S 8) 4) "only four repairs fit the reduced congestion window")
+          (expect (= (tcp.poll C 1) 1) "acknowledging four repairs frees capacity")
+          (poll-burst C 8)
+          (expect (= (tcp.poll S 8) 1) "send the fifth repair after the ACK")
+          (expect (= (tcp.recv-into S Out 288) 288) "all original bytes arrive")
+          (expect (buffer.equal? Payload Out) "repair budgeting preserves the byte stream")
+          (expect (= (tcp.poll C 2) 1) "retire the repaired window")
           (close-pair F false))))
 
 (define make-window-case
@@ -775,6 +835,7 @@
          (congestion-growth (window-case.peers W) (window-case.congestion-payload W)
                             (window-case.congestion-output W) (window-case.congestion-ack W))
          (sack-loss (window-case.sack W))
+         (sack-repair-budget (window-case.sack W))
          (exercise-window W (fx- N 1))))
 
 (define verify

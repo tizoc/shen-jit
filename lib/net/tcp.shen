@@ -23,6 +23,7 @@
   (rx : buffer.view)
   (rx-present : buffer.view)
   (tx-sacked : buffer.view)
+  (tx-repaired : buffer.view)
   (mss : fixnum)
   (capacity : fixnum)
   (mutable phase : symbol)
@@ -44,6 +45,9 @@
   (mutable tx-fast-retransmit : boolean)
   (mutable sack-enabled : boolean)
   (mutable tx-sack-high : fixnum)
+  (mutable sack-loss-end : fixnum)
+  (mutable sack-next-repair : fixnum)
+  (mutable sack-pipe : fixnum)
   (mutable rx-sack-recent : fixnum)
   (mutable cwnd : fixnum)
   (mutable ssthresh : fixnum)
@@ -93,6 +97,7 @@
         rx <- (buffer.new Capacity)
         rx-present <- (buffer.new Mss)
         tx-sacked <- (buffer.new Mss)
+        tx-repaired <- (buffer.new Mss)
         mss <- Mss
         capacity <- Capacity
         phase <- closed
@@ -114,6 +119,9 @@
         tx-fast-retransmit <- false
         sack-enabled <- false
         tx-sack-high <- 0
+        sack-loss-end <- 0
+        sack-next-repair <- -1
+        sack-pipe <- 0
         rx-sack-recent <- -1
         cwnd <- 0
         ssthresh <- Capacity
@@ -185,6 +193,18 @@
                true)
            true))
 
+(define sack-recovering?
+  {peer --> boolean}
+  P -> (and (peer.sack-enabled P) (fx> (peer.recovery-bytes P) 0)))
+
+(define clear-sack-recovery
+  {peer --> boolean}
+  P -> (do (if (sack-recovering? P) (clear-presence (peer.tx-repaired P) (peer.mss P)) true)
+           (peer.sack-loss-end-> P 0)
+           (peer.sack-next-repair-> P -1)
+           (peer.sack-pipe-> P 0)
+           true))
+
 (define clear-duplicate-acks
   {peer --> boolean}
   P -> (do (peer.tx-duplicate-acks-> P 0)
@@ -212,6 +232,7 @@
               (peer.rtt-blocked-bytes-> P 0)
               (clear-duplicate-acks P)
               (clear-sack P)
+              (clear-sack-recovery P)
               (peer.sack-enabled-> P false)
               (peer.rx-sack-recent-> P -1)
               (peer.cwnd-> P 0)
@@ -256,6 +277,17 @@
 (define wrap-offset
   {fixnum --> fixnum --> fixnum}
   At Capacity -> (if (fx>= At Capacity) (fx- At Capacity) At))
+
+(define write-sack-marks
+  {buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
+  _ _ _ 0 _ -> true
+  Map At Capacity N Mark ->
+    (let I (shen-jit.shift-right At 3)
+         Bits (buffer.u8 Map I)
+         Mask (presence-mask At)
+      (do (if (= (flag? Bits Mask) Mark) Map
+              (buffer.u8-> Map I (shen-jit.bit-xor Bits Mask)))
+          (write-sack-marks Map (wrap-offset (fx+ At 1) Capacity) Capacity (fx- N 1) Mark))))
 
 (define receive-tail
   {peer --> fixnum}
@@ -445,6 +477,8 @@
                  (peer.tx-due-> P -1)
                  (peer.rtt-sample-at-> P -1)
                  (clear-duplicate-acks P)
+                 (clear-sack-recovery P)
+                 (peer.recovery-bytes-> P 0)
                  (peer.ack-needed-> P false)
                  (peer.rx-duplicate-acks-> P 0)
                  true))
@@ -547,15 +581,68 @@
       (do (emit-data P R Now Flight N)
           (peer.tx-flight-> P (fx+ Flight N))
           (peer.send-next-> P End)
+          (if (sack-recovering? P) (peer.sack-pipe-> P (fx+ (peer.sack-pipe P) N)) P)
           (if (fx> (peer.remote-window P) 0) (start-rtt-sample P Now End) false)
           (if (= Flight 0) (peer.tx-due-> P (fx+ Now (peer.tx-rto P))) P)
           true)))
 
+(define send-ring-offset
+  {peer --> fixnum --> fixnum}
+  P I -> (wrap-offset (fx+ (peer.tx-head P) I) (peer.capacity P)))
+
+(define sacked?
+  {peer --> fixnum --> boolean}
+  P I -> (marked? (peer.tx-sacked P) (send-ring-offset P I)))
+
+(define repaired?
+  {peer --> fixnum --> boolean}
+  P I -> (marked? (peer.tx-repaired P) (send-ring-offset P I)))
+
+\\ Walk back from the highest SACK. Evidence only increases to the left.
+(define sack-loss-frontier
+  {peer --> fixnum --> fixnum --> fixnum --> boolean --> fixnum}
+  P I Bytes Runs InRun ->
+    (cases (fx< I 0) 0
+           (sacked? P I) (sack-loss-frontier P (fx- I 1) (fx+ Bytes 1)
+                                             (if InRun Runs (fx+ Runs 1)) true)
+           (or (fx>= Runs 3) (fx> Bytes (fx* (peer.send-mss P) 2))) (fx+ I 1)
+           true (sack-loss-frontier P (fx- I 1) Bytes Runs false)))
+
+\\ Count unsacked originals not inferred lost, plus unacknowledged repairs.
+(define measure-sack-pipe
+  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
+  P I Flight LostEnd Count ->
+    (if (= I Flight) Count
+        (let Next (if (sacked? P I) Count
+                      (fx+ (if (fx>= I LostEnd) (fx+ Count 1) Count)
+                           (if (repaired? P I) 1 0)))
+          (measure-sack-pipe P (fx+ I 1) Flight LostEnd Next))))
+
+(define find-sack-repair
+  {peer --> fixnum --> fixnum --> fixnum}
+  P I End ->
+    (cases (fx>= I End) -1
+           (or (sacked? P I) (repaired? P I)) (find-sack-repair P (fx+ I 1) End)
+           true I))
+
+(define refresh-sack-recovery
+  {peer --> boolean}
+  P ->
+    (let LostEnd (sack-loss-frontier P (fx- (peer.tx-sack-high P) 1) 0 0 false)
+      (do (peer.sack-loss-end-> P LostEnd)
+          (peer.sack-next-repair-> P (find-sack-repair P 0 LostEnd))
+          (peer.sack-pipe-> P (measure-sack-pipe P 0 (peer.tx-flight P) LostEnd 0))
+          true)))
+
+(define mark-repair
+  {peer --> fixnum --> fixnum --> boolean}
+  P Offset Count ->
+    (write-sack-marks (peer.tx-repaired P) (send-ring-offset P Offset) (peer.capacity P) Count true))
+
 (define sack-hole-end
   {peer --> fixnum --> fixnum --> fixnum}
   P I Limit ->
-    (if (or (fx>= I Limit)
-            (marked? (peer.tx-sacked P) (wrap-offset (fx+ (peer.tx-head P) I) (peer.capacity P))))
+    (if (or (fx>= I Limit) (sacked? P I) (repaired? P I))
         I (sack-hole-end P (fx+ I 1) Limit)))
 
 (define fast-retry-length
@@ -565,6 +652,31 @@
       \\ Always retry the cumulative gap, even if the peer reneged on that byte.
       (if (fx> (peer.tx-sack-high P) 0) (sack-hole-end P 1 Limit) Limit)))
 
+(define fast-retransmit
+  {peer --> net-link.ring --> fixnum --> fixnum --> fixnum --> boolean}
+  P R Now Flight End ->
+    (let Count (fast-retry-length P End)
+      (do (congestion-fast-loss P Flight)
+          (retransmit-data P R Now 0 Count)
+          (peer.tx-fast-retransmit-> P false)
+          (if (sack-recovering? P)
+              (do (mark-repair P 0 Count) (refresh-sack-recovery P))
+              true))))
+
+(define send-sack-repair
+  {peer --> net-link.ring --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  P R Now Offset End Credit ->
+    (let LostEnd (peer.sack-loss-end P)
+         Limit (smaller (smaller End LostEnd)
+                        (fx+ Offset (smaller Credit (peer.send-mss P))))
+         Next (sack-hole-end P (fx+ Offset 1) Limit)
+         Count (fx- Next Offset)
+      (do (retransmit-data P R Now Offset Count)
+          (mark-repair P Offset Count)
+          (peer.sack-next-repair-> P (find-sack-repair P Next LostEnd))
+          (peer.sack-pipe-> P (fx+ (peer.sack-pipe P) Count))
+          true)))
+
 (define flush-data
   {peer --> net-link.ring --> fixnum --> boolean --> boolean}
   P R Now Expired ->
@@ -572,20 +684,25 @@
          Replay (peer.tx-replay P)
          Window (peer.remote-window P)
          End (smaller Flight (if (= Window 0) 1 Window))
+         Repair (peer.sack-next-repair P)
+         Pipe (peer.sack-pipe P)
+         Credit (fx- (peer.cwnd P) Pipe)
+         FastEnd (if (sack-recovering? P) (smaller End Credit) End)
          Available (if (and (= Window 0) (= Flight 0)) (type 1 fixnum)
-                       (fx- (smaller Window (peer.cwnd P)) Flight))
+                       (fx- (smaller Window (peer.cwnd P)) (larger Flight Pipe)))
          N (smaller (fx- (peer.tx-length P) Flight) (smaller (peer.send-mss P) Available))
       (cases (and Expired (fx> End 0))
                (do (clear-sack P)
-                   (if (fx> Window 0) (congestion-timeout P Flight) true)
+                   (clear-sack-recovery P)
+                   (if (fx> Window 0) (congestion-timeout P Flight)
+                       (do (peer.recovery-bytes-> P 0) true))
                    (replay-data P R Now 0 End true))
              (and (fx>= Replay 0) (fx< Replay (smaller End (peer.cwnd P))))
                (replay-data P R Now Replay End false)
-             (and (peer.tx-fast-retransmit P) (fx> End 0) (fx> Window 0))
-               (do (congestion-fast-loss P Flight)
-                   (retransmit-data P R Now 0 (fast-retry-length P End))
-                   (peer.tx-fast-retransmit-> P false)
-                   true)
+             (and (peer.tx-fast-retransmit P) (fx> FastEnd 0) (fx> Window 0))
+               (fast-retransmit P R Now Flight FastEnd)
+             (and (fx>= Repair 0) (fx< Repair End) (fx> Window 0) (fx> Credit 0))
+               (send-sack-repair P R Now Repair End Credit)
              (and (fx> (peer.rx-duplicate-acks P) 0) (not (peer.ack-needed P))) (emit-ack P R Now)
              (and (peer.ack-needed P) (wants-sack? P)) (emit-ack P R Now)
              (fx> N 0) (send-new-data P R Now Flight N)
@@ -755,7 +872,9 @@
          Mss (peer.send-mss P)
          Recovery (peer.recovery-bytes P)
       (cases (fx> Recovery 0)
-               (do (peer.recovery-bytes-> P (larger 0 (fx- Recovery N))) true)
+               (do (if (fx>= N Recovery) (clear-sack-recovery P) true)
+                   (peer.recovery-bytes-> P (larger 0 (fx- Recovery N)))
+                   true)
              (= Cwnd Capacity) true
              (fx< Cwnd Threshold)
                (do (peer.cwnd-> P (smaller Threshold (fx+ Cwnd (smaller N Mss)))) true)
@@ -766,17 +885,6 @@
                          (peer.ca-acked-> P (fx- Credit Cwnd))
                          true)
                      (do (peer.ca-acked-> P Credit) true))))))
-
-(define write-sack-marks
-  {buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
-  _ _ _ 0 _ -> true
-  Map At Capacity N Mark ->
-    (let I (shen-jit.shift-right At 3)
-         Bits (buffer.u8 Map I)
-         Mask (presence-mask At)
-      (do (if (= (flag? Bits Mask) Mark) Map
-              (buffer.u8-> Map I (shen-jit.bit-xor Bits Mask)))
-          (write-sack-marks Map (wrap-offset (fx+ At 1) Capacity) Capacity (fx- N 1) Mark))))
 
 (define retire-sack
   {peer --> fixnum --> boolean}
@@ -799,6 +907,9 @@
       (do (if (or (= Ack SampleEnd) (seq-after? Ack SampleEnd)) (take-rtt-sample P Now) false)
           (if (fx> Blocked 0) (peer.rtt-blocked-bytes-> P (larger 0 (fx- Blocked N))) P)
           (retire-sack P N)
+          (if (and (sack-recovering? P) (fx< N (peer.recovery-bytes P)))
+              (write-sack-marks (peer.tx-repaired P) (peer.tx-head P) (peer.capacity P) N false)
+              true)
           (peer.tx-head-> P (wrap-offset (fx+ (peer.tx-head P) N) (peer.capacity P)))
           (peer.tx-length-> P (fx- (peer.tx-length P) N))
           (peer.tx-flight-> P Left)
@@ -822,6 +933,12 @@
   {peer --> fixnum}
   P -> (seq-add (peer.send-next P) (fx- 0 (peer.tx-flight P))))
 
+(define queue-sack-head-repair
+  {peer --> boolean}
+  P -> (do (peer.tx-duplicate-acks-> P 3)
+           (peer.tx-fast-retransmit-> P (not (repaired? P 0)))
+           true))
+
 (define acknowledge-data
   {peer --> fixnum --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
   P Seq Ack Window Now PureAck ->
@@ -833,7 +950,8 @@
           (do (update-window P Seq Ack Window)
               (cases (fx> N 0) (advance-ack P Ack N Flight Now)
                      (and (fx> Flight 0) (= OldWindow 0) (fx> (peer.remote-window P) 0))
-                       (do (peer.tx-replay-> P 0) true)
+                       (if (sack-recovering? P) (queue-sack-head-repair P)
+                           (do (peer.tx-replay-> P 0) true))
                      (and PureAck (fx> Flight 0) (fx> Window 0) (= Window OldWindow)
                           (fx< (peer.tx-replay P) 0)) (count-duplicate-ack P)
                      (fx< (peer.tx-duplicate-acks P) 3) (clear-duplicate-acks P)
@@ -874,11 +992,10 @@
                          (read-sack-blocks P B (fx+ At 2) (fx+ At Size) Ack)
                          false))
                    false)
-          \\ A partial ACK in fast recovery exposes another reported gap. One retry per ACK.
-          (if (and (seq-after? Ack Previous) (fx> (peer.recovery-bytes P) 0) (fx> (peer.tx-sack-high P) 0))
-              (do (peer.tx-duplicate-acks-> P 3)
-                  (peer.tx-fast-retransmit-> P true)
-                  true)
+          (if (sack-recovering? P)
+              (do (if (or (repaired? P 0) (and (seq-after? Ack Previous) (fx> (peer.tx-sack-high P) 0)))
+                      (queue-sack-head-repair P) true)
+                  (refresh-sack-recovery P))
               false))
         false))
 
