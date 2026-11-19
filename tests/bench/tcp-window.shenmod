@@ -1,0 +1,7 @@
+(shen.module
+  (version 1)
+  (name tcp-window-bench)
+  (requires net/tcp)
+  (typed)
+  (main tcp-window-bench.run)
+  (sources tc+ "tcp-window.shen"))

@@ -4,4 +4,4 @@
   (requires net/tun net/interface)
   (typed)
   (main tun-test.main)
-  (sources tc- "net_tun_native.shen" tc+ "net_tun_echo.shen"))
+  (sources tc- "net_tun_native.shen" tc+ "net_tcp.shen" tc+ "net_tun_echo.shen"))

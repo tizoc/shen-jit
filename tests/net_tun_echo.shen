@@ -6,6 +6,7 @@
   (use net-ipv4)
   (use net-interface)
   (use tcp)
+  (use tcp-test)
   (use udp)
   (use shen-jit)
   (import struct defstruct)
@@ -171,7 +172,8 @@
 (define measured
   {net-tun.adapter --> server --> fixnum --> boolean}
   Tun S Expected ->
-    (let Until (fx+ (net-tun.monotonic 0) 25000)
+    (let Loss (tcp-test.make-window-case 43)
+         Until (fx+ (net-tun.monotonic 0) 25000)
          Scratch (echo-session.scratch (fx<-vector (server.streams S) 1))
          _ (mark 0)
          _ (words 0)
@@ -181,6 +183,7 @@
          _ (if (and (= (buffer.length View) 1) (fx> Control 0)) true (error "heap probe missed a new view"))
          _ (notify 0)
          _ (mark 0)
+         _ (tcp-test.exercise-window Loss 16)
          Count (echo Tun S Until Expected)
          Words (words 0)
       (if (= Words 0)

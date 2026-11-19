@@ -701,7 +701,7 @@ connection behind the I/O library's readers and writers, with deadlines.
 [In-memory IPv4 and UDP](https://github.com/tizoc/shen-jit/blob/main/docs/net-udp.md) sends datagrams between
 two typed Shen peers over bounded packet queues, with a caller-supplied clock.
 [In-memory TCP](https://github.com/tizoc/shen-jit/blob/main/docs/net-tcp.md) uses the same link for
-individual connections and bounded listeners with preallocated stream buffers.
+individual connections and bounded listeners with preallocated TCP sliding windows.
 [Linux TUN packet I/O](https://github.com/tizoc/shen-jit/blob/main/docs/net-tun.md) connects the packet queues
 to a Linux kernel network interface. The shared IPv4 interface serves TCP, UDP, and ICMP echo on one link.
 
@@ -1245,7 +1245,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-buffer` | Buffer/cursor bounds, copying, foreign lifetime, typed clients, format examples, grammars, typed grammars, grammars in isolates and images/GC |
 | `make test-io` | Bounded chunk I/O, binary files and framing, socket endpoints/echo, native lifetimes, typed results and images/GC |
 | `make test-net-udp` | In-memory IPv4/UDP echo, independent wire fixtures, queue and clock behavior, and allocation stress |
-| `make test-net-tcp` | In-memory TCP echo, segment and ACK loss, stream backpressure, shutdown, and allocation stress |
+| `make test-net-tcp` | In-memory TCP echo, sliding-window recovery, stream backpressure, shutdown, and allocation stress |
 | `make test-net-interface` | Shared IPv4 dispatch, UDP overflow, receive retry, and ICMP wire fixtures |
 | `make test-net-tun` | Optional Linux TCP, UDP, and ping through one TUN interface with a direct heap allocation check |
 | `make test-http` | Request/response framing, streaming, persistent connections, shutdown, SQLite example, typing and images/GC |

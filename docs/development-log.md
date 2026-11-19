@@ -3803,6 +3803,20 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   check has passed. On the `net-dsl` branch, TCP's lossy run 170.8–171.2 against 162.0–162.8 ms, its UDP echo
   22.4–22.5 against 21.6–21.7.
 
+### Bounded TCP sliding window (2026-11-19, Apple M3 Max and Linux in Docker Desktop)
+
+- Each peer now reserves eight MSS worth of bytes in each circular buffer. Cumulative ACKs
+  release the acknowledged prefix. A timeout replays the unacknowledged flight, and the
+  receiver trims duplicate prefixes. Tests drop a middle segment with later segments
+  already in flight, lose an ACK, and exercise byte-ring wrap and 32-bit sequence wrap.
+- With the same typed benchmark and 128 KiB payload, the lossless simulated link improved
+  from 489 to 61 ms at 2 ms RTT, 4,890 to 610 ms at 20 ms, and 24,450 to 3,050 ms at 100 ms.
+  The baseline kept one segment in flight. Two runs of each version produced the same result.
+- The Linux probe reported zero Shen heap words after setup across 16 simulated middle-segment
+  losses and 131,124 TCP bytes over eight Linux connections on the shared TUN interface.
+  A fresh buffer view used five words in the positive control. The 3,000-connection typed
+  stress run also added zero collections over its warmup-only baseline.
+
 ### Shared IPv4 interface (2026-11-19, Linux in Docker Desktop)
 
 - One typed interface dispatches IPv4 to a TCP listener, a UDP port, and an ICMP echo responder.

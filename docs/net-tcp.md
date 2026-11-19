@@ -1,8 +1,8 @@
 # In-memory TCP
 
 The optional `net/tcp` module, [lib/net/tcp.shen](../lib/net/tcp.shen), provides individual TCP peers and a
-bounded TCP listener over the [packet link](net-udp.md). Each connection keeps one segment in flight in
-each direction and uses a fixed initial retransmission timeout. The stack emits 20-byte IPv4 and TCP
+bounded TCP listener over the [packet link](net-udp.md). Each connection uses bounded send and receive
+windows with cumulative acknowledgments. The stack emits 20-byte IPv4 and TCP
 headers, honors the MSS option in incoming SYNs, and skips unnegotiated options. TCP runs entirely in
 managed Shen/JIT. [Linux TUN](net-tun.md) connects the link to kernel TCP sockets. To share a link
 with UDP and ICMP, use [the shared IPv4 interface](net-tun.md#shared-ipv4-interface).
@@ -11,7 +11,7 @@ with UDP and ICMP, use [the shared IPv4 interface](net-tun.md#shared-ipv4-interf
 shen-jit eval -m tools/tcp-echo.shenmod -e '(tcp-echo.run "hello")'
 ```
 
-This prints `hello`. The example sends up to 536 bytes in one stream write. The library supports repeated
+This prints `hello`. The example sends up to 536 bytes in one stream write. The library supports larger
 writes and partial reads with the same preallocated buffers.
 
 ## Setup and progress
@@ -26,23 +26,26 @@ writes and partial reads with the same preallocated buffers.
 | `tcp.poll Peer Budget` | Check the clock, consume at most `Budget` queued packets and send at most one segment. Returns the number of incoming packets consumed. Poll both peers to drive the connection. |
 | `tcp.state Peer` | Inspect the connection state, such as `tcp.established`, `tcp.close-wait`, `tcp.time-wait`, `tcp.closed`, `tcp.timed-out`, or `tcp.reset`. |
 
-The MTU must be at least 41. Each peer reserves a send buffer and receive buffer of `min(536, Mtu - 40)` bytes
-each. The link reserves `Slots × Mtu` packet bytes in each direction, plus fixed queue metadata. Reuse device
-handles, peer state, application buffers and a non-allocating clock for an allocation-free typed loop.
+The MTU must be at least 41. Each peer reserves two circular byte buffers of
+`8 × min(536, Mtu - 40)` bytes each, up to 4,288 bytes for sending and 4,288 for receiving.
+The sender limits in-flight bytes by the advertised receive window and segments writes at the
+negotiated MSS. The link reserves `Slots × Mtu` packet bytes in each direction, plus fixed queue
+metadata. Reuse device handles, peer state, application buffers and a non-allocating clock for an
+allocation-free typed loop.
 
 The peers start a retransmission timer when a segment is queued onto the link. The timeout starts at one second,
 doubles on each retry up to 60 seconds, and the peer enters `tcp.timed-out` when the sixth retry expires.
-A received segment is acknowledged according to the next expected byte, including across 32-bit sequence
-wraparound. The peer keeps the unacknowledged bytes in its send buffer and can resend them without reading from
-the application again. A single queued byte can probe a zero window and recover a lost window update. The
-clock makes these transitions reproducible. [TCP sequence numbers and windows](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.4) ·
-[Retransmission timer](https://www.rfc-editor.org/rfc/rfc6298.html)
+A cumulative ACK advances the send buffer across 32-bit sequence wrap. On timeout, the sender
+replays outstanding bytes from the oldest unacknowledged byte, within the current window. The
+receiver discards data ahead of a gap and trims duplicate prefixes from overlapping
+retransmissions. One byte can probe a zero window and recover a lost window update. The clock
+makes these transitions reproducible. [TCP sequence numbers and windows](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.4)
 
 ## Byte stream
 
 | Operation | Outcomes |
 | --- | --- |
-| `tcp.send Peer Payload Count` | Accept up to `Count` bytes from the view's prefix into the send buffer. Returns the accepted count, which may be zero while a previous segment awaits acknowledgment. |
+| `tcp.send Peer Payload Count` | Accept up to `Count` bytes from the view's prefix into the send buffer. Returns the accepted count, bounded by the space left for queued and unacknowledged bytes. |
 | `tcp.recv-into Peer Out Count` | Copy up to `Count` bytes into the view's prefix. Returns the copied count, zero when no bytes are available, or `-1` on a nonempty read after the peer's FIN and the last buffered byte. |
 | `tcp.shutdown-write Peer` | Queue FIN after all accepted bytes have been acknowledged. Returns true if queued. Continue calling `tcp.poll` to drive shutdown and read remaining bytes in the other direction. |
 
@@ -71,9 +74,18 @@ Half-open handshakes take up slots and are reclaimed on timeout. A full listener
 clients to retry. An accepted connection retains its slot until released. Tokens are scoped to the listener,
 and reuse of a slot gives the next connection a fresh token. Access through a released token raises.
 
-`make test-net-tcp` builds a typed executable and compares the SYN bytes with an independently generated fixture.
-It drops a data segment and a standalone ACK in separate connections, verifies timer boundaries and exactly-once
-byte delivery, and exercises stream backpressure, a lost window update, and FIN retransmission after a lost
-final ACK. Listener checks cover capacity, slot reuse, half-open expiration, and output rotation under
-backpressure. The allocation regression runs 2,000 typed connections under allocation stress, with a
-warmup-only baseline and a positive control that allocates a fresh buffer view each iteration.
+`make test-net-tcp` builds a typed executable and checks independent SYN bytes, segmentation at
+the peer's MSS, cumulative ACKs, ring and sequence wraparound, dropped data and ACKs, and
+overlapping retransmissions. It also checks zero-window probes, FIN retransmission, listener
+capacity and reuse, and output rotation. The allocation regression runs 3,000 typed connections
+under allocation stress, with a warmup-only baseline and an allocating positive control.
+
+## Simulated throughput
+
+The benchmark transfers 128 KiB in one direction over a lossless in-memory link with a fixed simulated
+RTT. It reports the elapsed simulated time after setup and handshake.
+
+```sh
+shen-jit build tests/bench/tcp-window.shenmod -o /tmp/shen-tcp-window
+/tmp/shen-tcp-window
+```

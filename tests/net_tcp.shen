@@ -4,7 +4,7 @@
   (use net-link)
   (use net-ipv4)
   (import struct defstruct)
-  (export setup checks verify exercise)
+  (export setup checks verify exercise window-case make-window-case exercise-window)
 
 (defstruct pair
   (time : (vector fixnum))
@@ -17,6 +17,12 @@
   (client-out : buffer.view)
   (original : buffer.view)
   (wire : buffer.view))
+
+(defstruct window-case
+  (peers : pair)
+  (payload : buffer.view)
+  (suffix : buffer.view)
+  (output : buffer.view))
 
 (define clock
   {fixnum --> (vector fixnum)}
@@ -62,7 +68,7 @@
          Packet (buffer.new 40)
          Expected (fill (buffer.new 40) 0
                      [69 0 0 40 0 0 64 0 64 6 182 204 192 0 2 1 192 0 2 2
-                      48 57 0 7 255 255 255 254 0 0 0 0 80 2 0 88 251 71 0 0])
+                      48 57 0 7 255 255 255 254 0 0 0 0 80 2 2 192 248 223 0 0])
       (and (expect (tcp.connect C 4294967294) "queue SYN")
            (expect (= (tcp.poll C 0) 0) "poll with zero ingress budget")
            (expect (= (net-link.packet-recv-into (pair.right F) Packet) 40) "SYN wire length")
@@ -93,7 +99,11 @@
           (tcp.poll C 2)
           (tcp.poll S 2)
           (expect (= (tcp.state S) tcp.established) "complete handshake with inbound SYN options")
-          (expect (= (tcp.send S (pair.payload F) 3) 2) "honor advertised two-byte MSS"))))
+          (expect (= (tcp.send S (pair.payload F) 3) 3) "queue a write larger than the MSS")
+          (tcp.poll S 0)
+          (tcp.poll S 0)
+          (expect (= (net-link.packet-recv-into Left (pair.wire F)) 42) "honor advertised two-byte MSS")
+          (expect (= (net-link.packet-recv-into Left (pair.wire F)) 41) "send the rest before the ACK"))))
 
 (define open-pair
   {tcp.peer --> tcp.peer --> boolean}
@@ -147,17 +157,11 @@
           (tcp.poll C 2)
           (expect (buffer.equal? (pair.payload F) (pair.server-out F)) "server bytes"))))
 
-(define echo-and-close
+(define close-pair
   {pair --> boolean --> boolean}
   F DropAck ->
     (let C (pair.client F) S (pair.server F) A (pair.client-out F) B (pair.server-out F)
-      (do (expect (= (tcp.send S B 3) 3) "queue the echo")
-          (tcp.poll S 2)
-          (tcp.poll C 2)
-          (expect (= (tcp.recv-into C A 3) 3) "read the echo")
-          (expect (buffer.equal? A (pair.payload F)) "echo bytes")
-          (tcp.poll S 2)
-          (expect (tcp.shutdown-write C) "client FIN")
+      (do (expect (tcp.shutdown-write C) "client FIN")
           (tcp.poll C 2)
           (tcp.poll S 2)
           (expect (= (tcp.state S) tcp.close-wait) "server half-close")
@@ -182,17 +186,64 @@
           (tcp.poll C 2)
           (expect (= (tcp.state C) tcp.closed) "TIME-WAIT expires"))))
 
+(define echo-and-close
+  {pair --> boolean --> boolean}
+  F DropAck ->
+    (let C (pair.client F) S (pair.server F) A (pair.client-out F) B (pair.server-out F)
+      (do (expect (= (tcp.send S B 3) 3) "queue the echo")
+          (tcp.poll S 2)
+          (tcp.poll C 2)
+          (expect (= (tcp.recv-into C A 3) 3) "read the echo")
+          (expect (buffer.equal? A (pair.payload F)) "echo bytes")
+          (tcp.poll S 2)
+          (close-pair F DropAck))))
+
 (define loss-cycle
   {pair --> buffer.view --> boolean --> boolean}
   F Payload DropAck ->
     (let C (pair.client F) S (pair.server F)
       (do (open-pair C S)
           (expect (= (tcp.send C Payload 3) 3) "send three bytes")
-          (expect (= (tcp.send C Payload 3) 0) "one segment can await an ACK")
+          (expect (not (tcp.shutdown-write C)) "FIN waits for queued data")
           (tcp.poll C 2)
           (drop-first F DropAck)
           (retry-data F DropAck)
           (echo-and-close F DropAck))))
+
+(define window-loss
+  {pair --> buffer.view --> buffer.view --> buffer.view --> boolean}
+  F Payload Suffix Out ->
+    (let C (pair.client F) S (pair.server F)
+         Left (pair.left F) Right (pair.right F)
+         Wire (pair.wire F)
+      (do (open-pair C S)
+          (expect (= (tcp.send C Payload 9) 9) "queue three segments")
+          (tcp.poll C 0)
+          (tcp.poll S 2)
+          (tcp.poll C 0)
+          (expect (= (net-link.packet-recv-into Right Wire) 43) "drop second segment before any ACK")
+          (expect (= (buffer.u32-be Wire 24) 2) "second segment sequence wraps")
+          (tcp.poll C 0)
+          (expect (= (tcp.poll S 2) 1) "third segment arrives above the gap")
+          (expect (= (tcp.recv-into S (pair.server-out F) 3) 3) "read the first segment")
+          (expect (buffer.equal? (pair.server-out F) (pair.payload F)) "first segment content")
+          (expect (= (tcp.recv-into S Out 6) 0) "out-of-order data is not delivered")
+          (expect (= (tcp.poll C 2) 2) "read the partial and duplicate cumulative ACKs")
+          (advance F 999)
+          (tcp.poll C 0)
+          (expect (= (net-link.packet-recv-into Right Wire) -1) "no premature flight replay")
+          (advance F 1)
+          (tcp.poll C 0)
+          (expect (= (net-link.packet-recv-into Right Wire) 43) "replay the missing segment")
+          (expect (= (buffer.u32-be Wire 24) 2) "replay starts at the oldest unacknowledged byte")
+          (expect (= (net-link.packet-send Left Wire 43) net-link.sent) "deliver the missing segment")
+          (tcp.poll C 0)
+          (expect (= (tcp.poll S 2) 2) "replay also fills the gap's suffix")
+          (expect (= (tcp.recv-into S Out 6) 6) "exactly six bytes remain")
+          (expect (buffer.equal? Out Suffix) "retry preserves stream order and bytes")
+          (expect (= (tcp.recv-into S Out 6) 0) "retries do not duplicate delivery")
+          (expect (= (tcp.poll C 2) 1) "one cumulative ACK retires both remaining segments")
+          (close-pair F false))))
 
 (define exercise
   {pair --> fixnum --> boolean --> boolean}
@@ -203,40 +254,70 @@
       (and (loss-cycle F Input false) (loss-cycle F Input true)
            (exercise F (fx- N 1) Allocate))))
 
+(define make-window-case
+  {fixnum --> window-case}
+  Mtu ->
+    (:window-case
+      peers <- (setup Mtu)
+      payload <- (buffer.from-string "abcdefghi")
+      suffix <- (buffer.from-string "defghi")
+      output <- (buffer.new 6)))
+
+(define exercise-window
+  {window-case --> fixnum --> boolean}
+  _ 0 -> true
+  W N ->
+    (and (window-loss (window-case.peers W) (window-case.payload W) (window-case.suffix W) (window-case.output W))
+         (exercise-window W (fx- N 1))))
+
 (define verify
   {fixnum --> boolean --> boolean}
   Iterations Allocate ->
     (let F (setup 128)
-      (and (exercise F 1 false) (exercise F 1 true) (exercise F Iterations Allocate))))
+         W (make-window-case 43)
+      (and (exercise F 1 false) (exercise F 1 true) (exercise-window W 1)
+           (exercise F Iterations Allocate) (exercise-window W Iterations))))
+
+(define exchange-polls
+  {tcp.peer --> tcp.peer --> fixnum --> boolean}
+  _ _ 0 -> true
+  C S N -> (do (tcp.poll C 2) (tcp.poll S 2) (exchange-polls C S (fx- N 1))))
 
 (define receive-window
   {fixnum --> boolean}
   Mtu ->
     (let F (setup Mtu)
          C (pair.client F) S (pair.server F)
-         P (pair.payload F) Out (pair.server-out F)
+         P (pair.payload F)
+         Full (buffer.from-string "abcdefgh")
+         Out (buffer.new 8)
       (do (open-pair C S)
-          (expect (= (tcp.send C P 3) 3) "fill receive buffer")
+          (expect (= (tcp.send C Full 8) 8) "queue a receive window's worth of data")
+          (expect (= (tcp.send C P 3) 0) "a full local send ring applies backpressure")
+          (exchange-polls C S 8)
           (tcp.poll C 2)
+          (expect (= (tcp.send C P 3) 3) "buffer writes while the advertised window is closed")
+          (tcp.poll C 2)
+          (tcp.poll C 0)
+          (expect (= (net-link.packet-recv-into (pair.right F) (pair.wire F)) 41) "one-byte zero-window probe")
+          (expect (= (net-link.packet-recv-into (pair.right F) (pair.wire F)) -1) "only one probe in flight")
+          (expect (= (net-link.packet-send (pair.left F) (pair.wire F) 41) net-link.sent) "deliver zero-window probe")
           (tcp.poll S 2)
           (tcp.poll C 2)
-          (expect (= (tcp.send C P 3) 1) "one-byte zero-window probe")
-          (expect (= (tcp.send C P 3) 0) "backpressure with one pending probe")
-          (tcp.poll C 2)
-          (tcp.poll S 2)
-          (tcp.poll C 2)
-          (expect (= (tcp.recv-into S Out 3) 3) "original bytes survived the probe")
-          (expect (buffer.equal? P Out) "original window contents")
+          (expect (= (tcp.recv-into S Out 8) 8) "original bytes survived the probe")
+          (expect (buffer.equal? Full Out) "original window contents")
           (expect (= (tcp.recv-into S Out 3) 0) "full receiver did not accept the probe")
           (tcp.poll S 2)
           (expect (= (net-link.packet-recv-into (pair.left F) (pair.wire F)) 40) "drop window update")
           (advance F 1000)
           (tcp.poll C 2)
           (tcp.poll S 2)
-          (tcp.poll C 2)
           (expect (= (tcp.recv-into S Out 3) 1) "probe recovers a lost window update")
           (expect (= (buffer.u8 Out 0) 97) "probe byte")
-          (expect (= (tcp.recv-into S Out 3) 0) "probe delivered once"))))
+          (expect (= (tcp.recv-into S Out 3) 0) "probe delivered once")
+          (exchange-polls C S 2)
+          (expect (= (tcp.recv-into S Out 3) 2) "the reopened window delivers queued bytes")
+          (expect (and (= (buffer.u8 Out 0) 98) (= (buffer.u8 Out 1) 99)) "remaining bytes"))))
 
 (define partial-read
   {fixnum --> boolean}
@@ -256,7 +337,56 @@
           (tcp.poll C 2)
           (tcp.poll S 2)
           (expect (= (tcp.recv-into S Out 5) 5) "two writes form one byte stream")
-          (expect (= (buffer.string Out) "bcabc") "receive buffer compaction preserves order"))))
+          (expect (= (buffer.string Out) "bcabc") "partial reads preserve stream order"))))
+
+(define ring-wrap
+  {fixnum --> boolean}
+  Mtu -> (let F (setup Mtu)
+          C (pair.client F)
+          S (pair.server F)
+          Prefix (buffer.from-string "abcdefghijklmnopqrstuvw")
+          Suffix (buffer.from-string "xyz012")
+          Out (buffer.new 23)
+          Tail (buffer.new 6)
+       (do (open-pair C S)
+           (expect (= (tcp.send C Prefix 23) 23) "queue all but the final ring byte")
+           (exchange-polls C S 8)
+           (expect (= (tcp.recv-into S Out 23) 23) "advance the receive head")
+           (expect (buffer.equal? Out Prefix) "first window content")
+           (tcp.poll S 0)
+           (tcp.poll C 2)
+           (expect (= (tcp.send C Suffix 6) 6) "write across the send ring boundary")
+           (exchange-polls C S 2)
+           (expect (= (tcp.recv-into S Tail 6) 6) "read across the receive ring boundary")
+           (expect (buffer.equal? Tail Suffix) "ring wrap preserves bytes"))))
+
+(define overlapping-replay
+  {fixnum --> boolean}
+  Mtu -> (let F (setup Mtu)
+              C (pair.client F)
+              S (pair.server F)
+              Wire (pair.wire F)
+              Rest (buffer.from-string "bcdef")
+              Out (buffer.new 6)
+          (do (open-pair C S)
+              (expect (= (tcp.send C (pair.payload F) 1) 1) "send a short first segment")
+              (tcp.poll C 0)
+              (tcp.poll S 2)
+              (expect (= (net-link.packet-recv-into (pair.left F) Wire) 40) "lose the short segment's ACK")
+              (expect (= (tcp.send C Rest 5) 5) "append while the short segment is in flight")
+              (tcp.poll C 0)
+              (tcp.poll C 0)
+              (expect (= (net-link.packet-recv-into (pair.right F) Wire) 43) "lose following segment")
+              (expect (= (net-link.packet-recv-into (pair.right F) Wire) 42) "lose final segment")
+              (advance F 1000)
+              (tcp.poll C 0)
+              (tcp.poll C 0)
+              (expect (= (tcp.poll S 2) 2) "receive replay with different segment boundaries")
+              (expect (= (tcp.recv-into S Out 6) 6) "trim the replay's duplicate prefix")
+              (expect (= (buffer.string Out) "abcdef") "deliver only new bytes from the overlap")
+              (expect (= (tcp.recv-into S Out 6) 0) "all bytes delivered exactly once")
+              (tcp.poll C 2)
+              (close-pair F false))))
 
 (define listener-reuse
   {fixnum --> boolean}
@@ -385,8 +515,9 @@
 
 (define checks
   {fixnum --> boolean}
-  Mtu -> (and (fixture Mtu) (option-fixtures Mtu) (receive-window 43) (partial-read 45)
+  Mtu -> (and (fixture Mtu) (option-fixtures Mtu) (receive-window 41) (partial-read 45)
+              (ring-wrap 43) (overlapping-replay 43)
               (listener-reuse Mtu) (listener-fairness Mtu) (listener-half-open-timeout Mtu) (verify 1 false)))
 
-(preclude [pair.%match])
+(preclude [pair.%match window-case.%match])
 )
