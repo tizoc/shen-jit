@@ -109,7 +109,7 @@
           (cases (fx<= Head 63) At
                  (and (fx>= Head 192) (fx< (fx+ At 1) End))
                    (let Target (shen-jit.bit-and (buffer.u16-be B At) 16383)
-                     (if (fx< Target At) (label-offset B Target End (fx- Left 1)) (type -1 fixnum)))
+                     (if (fx< Target At) (label-offset B Target End (fx- Left 1)) (fixnum -1)))
                  true -1))))
 
 (define name-equal?

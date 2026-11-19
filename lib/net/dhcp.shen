@@ -270,7 +270,7 @@
          Configured (or (= State renewing) (= State rebinding))
          Broadcast (not (= State renewing))
          Attempts (client.attempts C)
-         Delay (shen-jit.shift-left 1000 (if (fx< Attempts 5) Attempts (type 5 fixnum)))
+         Delay (shen-jit.shift-left 1000 (if (fx< Attempts 5) Attempts (fixnum 5)))
          Deadline (fx+ Now Delay)
       (if (net-link.full? Tx) false
           (do (udp.write-packet (net-link.ring.data Tx) (net-link.tail-offset Tx)

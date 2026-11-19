@@ -37,7 +37,7 @@
 
 (define lookup
   {(list route) --> fixnum --> fixnum}
-  Routes IP -> (if (net-ipv4.unicast? IP) (longest Routes IP -1 0) (type 0 fixnum)))
+  Routes IP -> (if (net-ipv4.unicast? IP) (longest Routes IP -1 0) (fixnum 0)))
 
 (preclude [route.%match])
 )

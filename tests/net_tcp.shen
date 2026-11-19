@@ -677,7 +677,7 @@
   {pair --> buffer.view --> fixnum --> boolean}
   _ _ 6 -> true
   F Wire I ->
-    (let Size (if (= I 2) (type 52 fixnum) 76)
+    (let Size (if (= I 2) (fixnum 52) 76)
       (do (expect (= (net-link.packet-recv-into (pair.right F) Wire) Size) "capture a segment of the six-segment flight")
           (if (or (= I 0) (= I 2)) true
               (expect (= (net-link.packet-send (pair.left F) Wire Size) net-link.sent) "deliver a later segment"))

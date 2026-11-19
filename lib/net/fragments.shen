@@ -133,7 +133,7 @@
              (or (and (fx>= Last 0) (or (fx> End Last) (and More (= End Last)) (not More)))
                  (and (not More) (fx> (assembly.highest A) End))
                  (overlaps? Map FirstBlock EndBlock))
-               (do (assembly.rejected-> A true) (type 0 fixnum))
+               (do (assembly.rejected-> A true) (fixnum 0))
              true
                (let Out (assembly.bytes A)
                     Total (fx+ (assembly.received A) N)
@@ -143,7 +143,7 @@
                      (if (fx> End (assembly.highest A)) (assembly.highest-> A End) A)
                      (assembly.received-> A Total)
                      (if More A (assembly.end-> A End))
-                     (if (= Total (assembly.end A)) (complete T Index A) (type 0 fixnum)))))))
+                     (if (= Total (assembly.end A)) (complete T Index A) (fixnum 0)))))))
 
 (define receive
   {table --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}

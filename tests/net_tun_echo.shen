@@ -205,10 +205,10 @@
 (define run
   {string --> boolean}
   Name ->
-    (let Mtu (type 1500 fixnum)
+    (let Mtu (fixnum 1500)
          Link (net-link.make 8 Mtu 0 (freeze (net-tun.monotonic 0)))
          Guest (net-ipv4.address 192 0 2 2)
-         Slots (type 4 fixnum)
+         Slots (fixnum 4)
          F (net-interface.make (net-link.left Link) Guest 7777 Slots 4294967290 7777 2)
          S (make-server F Slots Mtu)
          Tun (net-tun.attach (net-link.right Link) Name)
@@ -217,7 +217,7 @@
 (define run-tap
   {string --> boolean}
   Name ->
-    (let Mtu (type 1500 fixnum)
+    (let Mtu (fixnum 1500)
          Clock (freeze (net-tun.monotonic 0))
          IpLink (net-link.make 8 Mtu 0 Clock)
          FrameLink (net-link.make 8 (fx+ Mtu 14) 0 Clock)
@@ -227,7 +227,7 @@
          Route (net-routes.make Subnet 25 0)
          Eth (net-ethernet.make (net-link.left FrameLink) (net-link.right IpLink)
                                  Mac Guest [Route] 4)
-         Slots (type 4 fixnum)
+         Slots (fixnum 4)
          F (net-interface.make-host-sized (net-link.left IpLink) Guest [7777] Slots
                                           1212 20 [7777] 2 131072)
          S (make-server F Slots Mtu)

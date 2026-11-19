@@ -285,7 +285,7 @@
                At (net-link.tail-offset Tx)
                N (net-link.head-length R)
                Len (fx+ N (wire.ethernet.size))
-               Wire (if (fx>= Len 60) Len (type 60 fixnum))
+               Wire (if (fx>= Len 60) Len (fixnum 60))
             (do (ethernet-header A B At Mac Kind)
                 (buffer.copy-into! B (fx+ At (wire.ethernet.size)) (net-link.ring.data R) (net-link.head-offset R) N)
                 (pad B (fx+ At Len) (fx+ At Wire))
@@ -385,7 +385,7 @@
   _ _ _ _ _ 0 Done -> Done
   A H Now I Left Budget Done ->
     (let N (net-ndp.neighbor-at H I)
-         Next (if (= I (net-ndp.host.slots H)) (type 1 fixnum) (fx+ I 1))
+         Next (if (= I (net-ndp.host.slots H)) (fixnum 1) (fx+ I 1))
          Pending (net-ndp.neighbor.pending N)
       (if (and (net-ndp.neighbor-ready? N Now) (send-ip A Pending (net-ndp.neighbor.mac N) (wire.ipv6-type) Now))
           (do (net-link.consume Pending)
@@ -436,8 +436,8 @@
          Due (if (net-link.ready? (neighbor.pending N) 0)
                  (earlier (neighbor.expires N)
                           (if Free (if (fx> (neighbor.mac N) 0) Now (neighbor.request-at N))
-                              (type -1 fixnum)))
-                 (type -1 fixnum))
+                              (fixnum -1)))
+                 (fixnum -1))
       (neighbor-deadline A Now Free (fx- I 1) (earlier At Due))))
 
 (define pending-ipv6?
@@ -459,7 +459,7 @@
          Now (net-link.now Frames)
          Rx (net-link.head-deadline (net-link.device.rx Frames))
          Free (not (net-link.full? (net-link.device.tx Frames)))
-         Tx (if Free (net-link.head-deadline (net-link.device.rx (adapter.packets A))) (type -1 fixnum))
+         Tx (if Free (net-link.head-deadline (net-link.device.rx (adapter.packets A))) (fixnum -1))
       (if (and Free (ready6? (adapter.ipv6 A) Now)) (earlier (earlier Rx Tx) Now)
           (neighbor-deadline A Now Free (adapter.slots A) (earlier Rx Tx)))))
 

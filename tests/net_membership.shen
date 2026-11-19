@@ -102,7 +102,7 @@
   F Kind Code IP ->
     (let B (fixture.wire F)
          Host (net-ipv4.address 192 0 2 9)
-         Destination (if (= IP 0) (type 3758096385 fixnum) IP)
+         Destination (if (= IP 0) (fixnum 3758096385) IP)
       (do (net-ipv4.write-header-ttl B 0 28 2 Host Destination 1)
           (buffer.u32-be-> B 20 (fx+ (fx* Kind 16777216) (fx* Code 65536)))
           (buffer.u32-be-> B 24 IP)
@@ -159,11 +159,11 @@
   F Group Source Now ->
     (let B (fixture.wire F)
          Router (net-ipv4.address 192 0 2 9)
-         Bytes (if (= Source 0) (type 32 fixnum) (type 36 fixnum))
+         Bytes (if (= Source 0) (fixnum 32) (fixnum 36))
       (do (net-ipv4.write-header-ttl B 0 Bytes 2 Router Group 1)
           (buffer.u32-be-> B 20 285278208)
           (buffer.u32-be-> B 24 Group)
-          (buffer.u32-be-> B 28 (if (= Source 0) (type 41746432 fixnum) (type 41746433 fixnum)))
+          (buffer.u32-be-> B 28 (if (= Source 0) (fixnum 41746432) (fixnum 41746433)))
           (if (= Source 0) B (buffer.u32-be-> B 32 Source))
           (buffer.u16-be-> B 22 (net-ipv4.packet-checksum B 20 (fx- Bytes 20)))
           (net-multicast.ingress4 (fixture.members F) B 0 Bytes Now))))
@@ -172,7 +172,7 @@
   {fixture --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
   F Kind Group A B ->
     (let Wire (fixture.wire F)
-         Count (if (= B 0) (type 1 fixnum) (type 2 fixnum))
+         Count (if (= B 0) (fixnum 1) (fixnum 2))
       (and (= (take F) (fx+ 40 (fx* 4 Count)))
            (= (buffer.u8 Wire 24) 34)
            (= (buffer.u16-be Wire 30) 1)

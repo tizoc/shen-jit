@@ -166,7 +166,7 @@
 (define save-wait
   {listener --> peer --> boolean}
   L P ->
-    (let I (if (= (listener.wait-slots L) (listener.wait-used L)) (type 0 fixnum)
+    (let I (if (= (listener.wait-slots L) (listener.wait-used L)) (fixnum 0)
                (vacant-wait L (listener.wait-slots L)))
       (and (fx> I 0)
            (let W (wait-at L I)
@@ -392,7 +392,7 @@
   {listener --> buffer.view --> fixnum --> fixnum --> fixnum}
   L B T Count ->
     (if (and (= (segment-flags B T) 2) (= Count (header-length B T))) (find-vacant L 1)
-        (type 0 fixnum)))
+        (fixnum 0)))
 
 (define write-reset
   {buffer.view --> fixnum --> buffer.view --> fixnum --> fixnum --> buffer.view}
@@ -400,8 +400,8 @@
     (let Flags (segment-flags B T)
          Ack (flag? Flags (flag-bits control ack))
          Space (fx+ (fx- Count (header-length B T))
-                    (fx+ (if (flag? Flags (flag-bits control syn)) (type 1 fixnum) (type 0 fixnum))
-                         (if (flag? Flags (flag-bits control fin)) (type 1 fixnum) (type 0 fixnum))))
+                    (fx+ (if (flag? Flags (flag-bits control syn)) (fixnum 1) (fixnum 0))
+                         (if (flag? Flags (flag-bits control fin)) (fixnum 1) (fixnum 0))))
       (write-layout wire.tcp Out At
         (source-port (wire.tcp.destination-port B T)) (destination-port (wire.tcp.source-port B T))
         (sequence (if Ack (wire.tcp.acknowledgement B T) 0))
@@ -530,7 +530,7 @@
   {listener --> (list fixnum) --> net-ipv6.address --> net-ipv6.address --> fixnum --> fixnum}
   L Reserved Local Remote Port ->
     (let I (find-vacant L 1)
-         LocalPort (if (= I 0) (type 0 fixnum) (claim-port L Reserved 16384))
+         LocalPort (if (= I 0) (fixnum 0) (claim-port L Reserved 16384))
       (if (= LocalPort 0) 0
           (let S (slot-at L I)
                P (configure-peer (listener-slot.peer S) LocalPort Local Remote Port)
@@ -616,7 +616,7 @@
   _ _ _ _ 0 -> true
   L Tx Now I Left ->
     (let W (wait-at L I)
-         Next (if (= I (listener.wait-slots L)) (type 1 fixnum) (fx+ I 1))
+         Next (if (= I (listener.wait-slots L)) (fixnum 1) (fx+ I 1))
       (do (transmit-wait L W Tx Now Next)
           (wait-output L Tx Now Next (fx- Left 1)))))
 
@@ -677,16 +677,16 @@
   P Now Writable ->
     (let Due (peer.tx-due P)
          Wait (if (and (= (state P) time-wait) (not (peer.ack-needed P)))
-                  (peer.wait-until P) (type -1 fixnum))
+                  (peer.wait-until P) (fixnum -1))
       (if (and Writable (output-ready? P)) Now
-          (earlier Wait (if (or Writable (fx>= (peer.tx-retries P) 6)) Due (type -1 fixnum))))))
+          (earlier Wait (if (or Writable (fx>= (peer.tx-retries P) 6)) Due (fixnum -1))))))
 
 (define table-deadline
   {listener --> fixnum --> boolean --> fixnum --> fixnum --> fixnum}
   _ _ _ 0 At -> At
   L Now Writable I At ->
     (let S (slot-at L I)
-         Due (if (= (listener-slot.lease S) vacant) (type -1 fixnum)
+         Due (if (= (listener-slot.lease S) vacant) (fixnum -1)
                  (peer-deadline (listener-slot.peer S) Now Writable))
       (table-deadline L Now Writable (fx- I 1) (earlier At Due))))
 
@@ -702,7 +702,7 @@
   _ _ _ 0 At -> At
   L Now Writable I At ->
     (let W (wait-at L I)
-         Due (if (wait-entry.ack-needed W) (if Writable Now (type -1 fixnum)) (wait-entry.until W))
+         Due (if (wait-entry.ack-needed W) (if Writable Now (fixnum -1)) (wait-entry.until W))
       (wait-deadline L Now Writable (fx- I 1) (earlier At Due))))
 
 (define listener-poll

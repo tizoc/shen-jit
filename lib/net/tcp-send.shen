@@ -58,12 +58,12 @@
          Recent (seq-distance (seq-of (peer.rx-sack-recent P)) (peer.recv-next P))
          First (if (and (fx>= (peer.rx-sack-recent P) 0)
                         (fx< Recent Limit) (receive-marked? P Tail Recent))
-                   (sack-run-start P Tail Recent) (type -1 fixnum))
+                   (sack-run-start P Tail Recent) (fixnum -1))
          Blocks (fx+ At (wire.tcp-sack-option.size))
          Used (if (fx>= First 0)
                   (do (write-sack-block P B Blocks First (sack-run-end P Tail (fx+ First 1) Limit))
-                      (type 1 fixnum))
-                  (type 0 fixnum))
+                      (fixnum 1))
+                  (fixnum 0))
          N (write-sack-runs P B Blocks Tail 0 Limit First Used Max)
          Size (fx* N (wire.tcp-sack-block.size))
       (if (= N 0) 0
@@ -111,7 +111,7 @@
   P Flags ->
     (let Space (window P)
          Shift (if (or (flag? Flags (flag-bits control syn)) (fx< (peer.remote-scale P) 0))
-                   (type 0 fixnum) (peer.window-scale P))
+                   (fixnum 0) (peer.window-scale P))
       (smaller 65535 (shen-jit.shift-right Space Shift))))
 
 (define write-segment
@@ -383,7 +383,7 @@
          Pipe (peer.sack-pipe P)
          Credit (fx- (peer.cwnd P) Pipe)
          FastEnd (if (sack-recovering? P) (smaller End Credit) End)
-         Available (if (and (= Window 0) (= Flight 0)) (type 1 fixnum)
+         Available (if (and (= Window 0) (= Flight 0)) (fixnum 1)
                        (fx- (smaller Window (peer.cwnd P)) (larger Flight Pipe)))
          N (smaller (fx- (peer.tx-length P) Flight) (smaller (peer.send-mss P) Available))
       (cases (and Expired (fx> End 0))

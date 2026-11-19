@@ -544,7 +544,7 @@
 (define due
   {fixnum --> fixnum --> boolean --> fixnum}
   At Now Free ->
-    (if Free (if (fx< At Now) Now At) (type -1 fixnum)))
+    (if Free (if (fx< At Now) Now At) (fixnum -1)))
 
 (define probe-deadline
   {host --> fixnum --> fixnum --> boolean --> fixnum --> fixnum}
@@ -554,8 +554,8 @@
          Next (if (net-link.ready? (neighbor.pending N) 0)
                   (earlier (neighbor.expires N)
                            (if (and (= (neighbor.mac N) 0) (local-ready? H))
-                               (due (neighbor.probe-at N) Now Free) (type -1 fixnum)))
-                  (type -1 fixnum))
+                               (due (neighbor.probe-at N) Now Free) (fixnum -1)))
+                  (fixnum -1))
       (probe-deadline H (fx- I 1) Now Free (earlier At Next))))
 
 (define dad-deadline
@@ -572,9 +572,9 @@
          Local (dad-deadline (host.local-state H) (host.local-at H) Now Free)
          Global (dad-deadline (host.global-state H) (host.global-at H) Now Free)
          Rs (if (and (fx> (host.rs-left H) 0) (local-ready? H))
-                (due (host.rs-at H) Now Free) (type -1 fixnum))
+                (due (host.rs-at H) Now Free) (fixnum -1))
          Lifetime (if (and (not (host.static H)) (not (= (host.global-state H) absent)))
-                      (host.valid-until H) (type -1 fixnum))
+                      (host.valid-until H) (fixnum -1))
       (probe-deadline H (host.slots H) Now Free (earlier (earlier Local Global) (earlier Rs Lifetime)))))
 
 (preclude [host.%match neighbor.%match])

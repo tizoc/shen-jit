@@ -39,7 +39,7 @@
           Right (net-link.right Cable)
           Host (net-ipv4.address 198 51 100 1)
           Guest (net-ipv4.address 198 51 100 2)
-          Bcast (type 4294967295 fixnum)
+          Bcast (fixnum 4294967295)
           D (net-dhcp.make Left 2199023255574 100)
           F (net-interface.make-host Left Guest [] 1 12 34 [68] 1)
           Inbox (net-interface.udp-binding F 68)

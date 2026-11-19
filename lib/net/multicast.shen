@@ -114,8 +114,8 @@
   {net-link.device --> fixnum --> fixnum --> fixnum --> membership}
   D IP Slots Seed ->
     (let Left (fx- (net-link.mtu D) 48)
-         Sources (cases (fx>= Left 32) (type 8 fixnum)
-                        (fx<= Left 0) (type 0 fixnum)
+         Sources (cases (fx>= Left 32) (fixnum 8)
+                        (fx<= Left 0) (fixnum 0)
                         true (fxquotient Left 4))
       (make-sized D IP Slots Sources Seed)))
 
@@ -371,7 +371,7 @@
   M G Span Now ->
     (let Due (group.query-at G)
       (do (if (or (fx< Due 0) (fx> Due (fx+ Now Span)))
-              (let Delay (if (fx> Span 0) (fx+ 1 (jitter M (fx- Span 1))) (type 0 fixnum))
+              (let Delay (if (fx> Span 0) (fx+ 1 (jitter M (fx- Span 1))) (fixnum 0))
                 (group.query-at-> G (fx+ Now Delay)))
               G)
           true)))
@@ -458,8 +458,8 @@
          Code (wire.igmp.max-response B At)
          Old (= Bytes (wire.igmp.size))
          Modern (fx>= Bytes (wire.igmp3-query.size))
-         Count (if Modern (wire.igmp3-query.sources B At) (type 0 fixnum))
-         Span (if (and Old (= Code 0)) (type 10000 fixnum) (igmp-delay Code))
+         Count (if Modern (wire.igmp3-query.sources B At) (fixnum 0))
+         Span (if (and Old (= Code 0)) (fixnum 10000) (igmp-delay Code))
       (and (or (and (= IP 0) (= Dst (all-systems)) (= Count 0))
                (and (net-ipv4.multicast? IP) (= IP Dst) (or Modern (not (ssm4? IP)))))
            (or (and Old (or (not (= Code 0)) (= IP 0)))
@@ -510,7 +510,7 @@
          General (net-ipv6.unspecified? Group)
          Old (= Bytes (wire.mld.size))
          Modern (fx>= Bytes (wire.mld2-query.size))
-         Count (if Modern (wire.mld2-query.sources B At) (type 0 fixnum))
+         Count (if Modern (wire.mld2-query.sources B At) (fixnum 0))
          Code (wire.mld.max-response B At)
          Span (if Old Code (mld-delay Code))
          To (wire.ipv6.destination-at I)
@@ -693,7 +693,7 @@
          Header (if Four (igmp-offset) (mld-offset))
          Per (if Four (wire.igmp3-record.size) (wire.mld2-record.size))
          Records (fx+ (if (fx> First 0) 1 0) (if (fx> Blocks 0) 1 0))
-         One (if (fx> First 0) (fx+ Per (fx* First Width)) (type 0 fixnum))
+         One (if (fx> First 0) (fx+ Per (fx* First Width)) (fixnum 0))
          Size (fx+ (fx+ Header (wire.membership-report.size)) (fx+ (fx* Records Per) (fx* (fx+ First Blocks) Width)))
          B (net-link.ring.data Tx)
          I (net-link.tail-offset Tx)
@@ -718,7 +718,7 @@
   G I Pending ->
     (let S (source-at G I)
          Old (source.reports S)
-         Left (if (fx> Old 0) (fx- Old 1) (type 0 fixnum))
+         Left (if (fx> Old 0) (fx- Old 1) (fixnum 0))
       (do (source.reports-> S Left)
           (if (and (= Left 0) (= (source.state S) blocked)) (source.state-> S vacant) S)
           (note-reports G (fx- I 1) (or Pending (fx> Left 0))))))
@@ -796,7 +796,7 @@
   {membership --> net-link.ring --> net-ipv6.address --> fixnum --> fixnum --> fixnum --> boolean}
   _ _ _ _ _ 0 -> false
   M Tx Source Now I Left ->
-    (let Next (if (= I (membership.slots M)) (type 1 fixnum) (fx+ I 1))
+    (let Next (if (= I (membership.slots M)) (fixnum 1) (fx+ I 1))
       (if (step-group M (at M I) Tx Source Now)
           (do (membership.next-> M Next) true)
           (scan M Tx Source Now Next (fx- Left 1)))))

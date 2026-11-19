@@ -185,7 +185,7 @@
   {fixture --> fixnum --> fixnum --> fixnum --> boolean --> fixnum --> boolean --> fixnum}
   F Offset Count Id More Proto Hop ->
     (let B (fixture.wire F)
-         At (if Hop (type 48 fixnum) (type 40 fixnum))
+         At (if Hop (fixnum 48) (fixnum 40))
          Size (fx+ (fx+ At 8) Count)
       (do (net-ipv6.write-header B 0 Size (if Hop 0 44) 64 (fixture.source F) (fixture.destination F))
           (if Hop (do (buffer.u32-be-> B 40 738197504)

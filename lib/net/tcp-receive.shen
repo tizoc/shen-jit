@@ -517,7 +517,7 @@
           (remember-window P Seq (segment.acknowledgement Seg) (segment.window Seg))
           (peer.send-mss-> P Mss)
           (peer.remote-scale-> P (if (and (sack-capable? P) (or Listening (fx> (peer.window-scale P) 0)))
-                                     (segment.scale Seg) (type -1 fixnum)))
+                                     (segment.scale Seg) (fixnum -1)))
           (peer.sack-enabled-> P Sacked))))
 
 (define terminal?

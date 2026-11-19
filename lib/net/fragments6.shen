@@ -154,7 +154,7 @@
          Total (fx+ (assembly.received A) Bytes)
       (cases (assembly.rejected A) 0
              (or (fx> (fx+ Prefix High) (table.limit T)) (conflict? A Offset End More))
-               (do (assembly.rejected-> A true) (type 0 fixnum))
+               (do (assembly.rejected-> A true) (fixnum 0))
              true
                (do (if (= Offset 0) (remember-first A B I (fx+ (fx- Frag I) (wire.ipv6-fragment.size)) Prev Bytes) A)
                    (buffer.copy-into! (assembly.bytes A) (fx+ (wire.ipv6.size) Offset) B
@@ -165,7 +165,7 @@
                    (assembly.received-> A Total)
                    (if More A (assembly.end-> A End))
                    (if (and (fx> (assembly.header-size A) 0) (= Total (assembly.end A)))
-                       (complete T A Index) (type 0 fixnum))))))
+                       (complete T A Index) (fixnum 0))))))
 
 \\ Atomic fragments are handled by the header walker, outside the slot table.
 (define receive
@@ -204,7 +204,7 @@
                     (do (buffer.copy-into! Out 0 (assembly.header A) 0 Size)
                         (buffer.copy-into! Out Size (assembly.bytes A) (wire.ipv6.size) N)
                         (fx+ Size N)))
-                  (type 0 fixnum)))
+                  (fixnum 0)))
           0)))
 
 (define deadline
