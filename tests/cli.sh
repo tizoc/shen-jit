@@ -336,6 +336,12 @@ SHEN_JIT_IMAGE="$dir/app2.img" "$SHEN" eval -e '(output "~A ~A~%" (triple 2) (qu
 check save-again "$dir/save2.out" "6 24"
 SHEN_JIT_IMAGE="$dir/app2.img" "$SHEN" eval -e '(define quad X -> X)' > "$dir/save3.out" 2>&1
 check save-sealed "$dir/save3.out" "shen-jit: uncaught error: quad is sealed and cannot be redefined"
+# A lambda that captures nothing is made once, with its definition, and stays one closure in an image.
+"$SHEN" --save "$dir/lambda.img" eval -e '(define lam _ -> (/. X [X]))' \
+    -e '(define same-twice F -> (shen-jit.same? (F 1) (F 2)))' > /dev/null 2>&1
+SHEN_JIT_GC_STRESS=1 SHEN_JIT_IMAGE="$dir/lambda.img" "$SHEN" eval \
+    -e '(output "~A ~A~%" (same-twice (function lam)) ((lam 0) 5))' > "$dir/save-lambda.out" 2>&1
+check save-lambda "$dir/save-lambda.out" "true [5]"
 
 # Modules (docs/modules.md): -m takes a name, looked for under SHEN_JIT_PATH's directories and then
 # the installation's lib/, beside a copied executable here, or a descriptor's path; a saved image

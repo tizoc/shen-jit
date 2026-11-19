@@ -3977,9 +3977,15 @@ static void *compile_code(VM *vm, V code)
             put_result(&e, p[1], SLJIT_MEM1(SLJIT_R0), (sljit_sw)((CLO_CAPS + p[2]) * sizeof(V)) - TAG_PROC);
             break;
         case OP_CLOSURE: {
-            /* Inline bump allocation, as for cons. The entry is the code's
-               native code once compiled, so later closures skip the stub. */
+            /* One that captures nothing the loader made, in place of its code. Others are
+               an inline bump allocation, as for cons. The entry is the code's native code
+               once compiled, so later closures skip the stub. */
             uint32_t n = p[3];
+            V *code_cell = ra_at(&vm->program->consts, e.cbase + e.nconst + p[2]);
+            if (is_proc(*code_cell)) {
+                put_result(&e, p[1], SLJIT_MEM0(), (sljit_sw)code_cell);
+                break;
+            }
             struct sljit_label *restart = sljit_emit_label(c);
             sljit_emit_op1(c, SLJIT_MOV, R0, HP);
             sljit_emit_op2(c, SLJIT_ADD, R1, R0, IMM((CLO_CAPS + n) * sizeof(V)));
@@ -3988,7 +3994,6 @@ static void *compile_code(VM *vm, V code)
             alloc->back = restart;
             sljit_emit_op1(c, SLJIT_MOV, HP, R1);
             sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0), 0, IMM(HEADER(T_CLOSURE, n)));
-            V *code_cell = ra_at(&vm->program->consts, e.cbase + e.nconst + p[2]);
             sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM0(), (sljit_sw)code_cell);
             sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0), CLO_CODE * sizeof(V), R1);
             sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM1(SLJIT_R1), CODE_NATIVE * sizeof(V) - TAG_OBJECT);

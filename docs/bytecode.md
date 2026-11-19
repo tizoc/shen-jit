@@ -81,7 +81,7 @@ Boolean) as an immediate, and reads any other from its constant cell.
 | `(move D S)` | Slot D := slot S. |
 | `(const D K)` | D := constant K. |
 | `(capture D I)` | D := capture I of the running closure (slot 1). I is zero-based and at most 4095. |
-| `(closure D C S1 ... Sn)` | D := a new closure of code C capturing up to 4096 slots S1..Sn, in that order. |
+| `(closure D C S1 ... Sn)` | D := a new closure of code C capturing up to 4096 slots S1..Sn, in that order. With no slots, D := the one closure of C, which the loader made as it built the code, so that it allocates nothing and gives the same closure each time. |
 | `(prim D Op O1 ... On)` | D := primitive Op (a KLambda primitive name) applied to O1..On. N must equal Op's arity. |
 | `(label L)` | Marks L. |
 | `(jump L)` | Continue at L. |

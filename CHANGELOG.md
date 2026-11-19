@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- A `lambda` or `freeze` that captures nothing, `(fn add)` included, is made once, as its definition is loaded:
+  evaluating it allocates nothing and gives the same closure each time, as in Shen/Scheme, and it can be sent to an
+  isolate.
+
 ## [0.9] - 2026-11-19
 
 ### Added

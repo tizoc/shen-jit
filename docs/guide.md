@@ -338,9 +338,10 @@ are other programs.
   Sending on a closed channel raises "channel closed". A channel is freed when its receiver closes it,
   reads its end, or ends, and not before.
 - **What crosses:** an argument or a message is copied, with its sharing and cycles. Symbols are the same in every
-  isolate, so a function goes by its name, and the isolate that gets it calls `(fn F)`. Closures made as the program runs, `fn`'s
-  among them, streams and pointers are refused. A receive endpoint moves to a new isolate only in its argument,
-  marked with `(channel.give R)`, and its old holder can no longer read it.
+  isolate, so a function goes by its name, and the isolate that gets it calls `(fn F)`. A lambda or `freeze` written in a
+  definition and capturing nothing, `(fn add)` included, is made once, with the definition, and crosses by pointer.
+  Other closures, `fn`'s of a name in a variable among them, streams and pointers are refused. A receive endpoint
+  moves to a new isolate only in its argument, marked with `(channel.give R)`, and its old holder can no longer read it.
 - **An isolate starts as a program does:** its globals are unbound and its property list is empty, so it takes what
   it needs from its argument. Only the program's first isolate, the builder, defines: `eval`, `load` and the like
   raise an error in any other. Its heap starts at 128 KB and grows; `SHEN_JIT_MAX_HEAP` and `SHEN_JIT_GC_STRESS`

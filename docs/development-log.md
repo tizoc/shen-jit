@@ -346,6 +346,23 @@ Lowering rules, the collector and the kernel port have their own sections.
   The independent workloads were 0.98 to 1.00, and the benchmark suite, four rounds alternating which ran first,
   0.98: vector, absvector and tuple reads and writes 0.84 to 0.89, tuple patterns 0.75 to 0.79; the rows at 1.03 to
   1.04 include `symbol?`, `variable?` and `shen.sysfunc?`, which move with placement.
+- **Closures that capture nothing, made once** (2026-11-19, Apple M3 Max, against 0.9). The kernel turns
+  `(fn inc)` into `(lambda Z (inc Z))`, and every lambda or `freeze` that captured nothing still allocated a closure of
+  three words each time it ran. Code holds only what the reader makes, so the closure cannot be a constant of lowered
+  code; instead the loader, as it builds a code object, makes the closure of each nested code that a `closure` with no
+  slots names and puts it in the slot that held the code, and the instruction loads it as a constant is loaded.
+  Promotion takes it into the program space with the definition, as it does the definition's own closure, so isolates,
+  images and the collector need nothing new; the loader runs only in the builder, which alone adds to that space, where
+  the JIT, which any isolate runs, could not make it. A nested code that code written by hand also closes over captures
+  keeps its slot, and both are made each time. Under `SHEN_JIT_GC_STRESS`, a call of `(define w N -> (fn inc))`,
+  `(/. X X)`, `(/. A B (+ A B))` or `(freeze (inc 41))` allocated once and now does not; 10^7 such calls through a
+  loop, median of five alternating rounds, 25.6 → 11.5 ms for the first two alike. 517 of the 1,527 `closure`
+  instructions of stage 0 capture nothing: the program space grows by 12 KB (786 → 798 KB) and the heap at startup
+  holds 359 fewer closures (live 279 → 270 KB). Beyond the target nothing moved: the independent workloads, run twice
+  with seven rounds each while the machine's load was 5 to 10, were 0.97 to 1.03 and then 0.98 to 1.01, the first
+  run's 1.02 and 1.03 not repeating, and startup, 40 alternating runs, 5.11 → 5.03 ms. Each evaluation of such a lambda now gives the same closure, as in
+  Shen/Scheme, where before each gave a new one; a small definition inlined into its callers still gives each its own,
+  which semantics records as a deviation. Such a closure also crosses to an isolate by pointer, where it was refused.
 
 ### Errors and handlers
 

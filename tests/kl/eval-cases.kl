@@ -1248,3 +1248,12 @@ like the lowerer's own node tags (apply, var) are variables like any other."
 (value t.walk-capture (defun t.walk-capture (X) (do (cons X (cons X (cons X (cons X ())))) (t.walk-target 99 (lambda var X)))))
 (value t.walk-target (defun t.walk-target (A F) (F 0)))
 (value 7 (t.walk-capture 7))
+"A lambda or freeze that captures nothing is made once, as its code is loaded, so each time it is
+evaluated it gives that one closure, which a collection does not move. One that captures is new each time."
+(value ec-same (defun ec-same (Xs Ys) (if (= Xs ()) () (cons (= (hd Xs) (hd Ys)) (ec-same (tl Xs) (tl Ys))))))
+(value ec-loop (defun ec-loop (N Acc) (if (= N 0) Acc (ec-loop (- N 1) (cons (cons (lambda X X) (cons (freeze ec) (cons (lambda A (lambda B A)) (cons (lambda X N) ())))) Acc)))))
+(value (true true true false) (let L (ec-loop 2 ()) (ec-same (hd L) (hd (tl L)))))
+(value (5 ec 7 1) (let C (hd (ec-loop 3 ())) (cons ((hd C) 5) (cons (thaw (hd (tl C))) (cons ((hd (tl (tl C))) 7 2) (cons ((hd (tl (tl (tl C)))) 0) ()))))))
+"Code written by hand may close over one nested code with captures and without: then both are made each time."
+(value ec-mixed (let I (cons (cons closure (cons 3 (cons 0 ()))) (cons (cons closure (cons 4 (cons 0 (cons 2 ())))) (cons (cons prim (cons 5 (cons cons (cons 3 (cons 4 ()))))) (cons (cons return (cons 5 ())) ())))) (let N (cons code (cons ec-inner (cons 1 (cons 3 (cons () (cons (cons (cons return (cons 2 ())) ()) (cons () ()))))))) (shen-jit.install (cons defun (cons ec-mixed (cons (cons code (cons ec-mixed (cons 1 (cons 6 (cons () (cons I (cons (cons N ()) ()))))))) ())))))))
+(value (1 2 false) (let P (ec-mixed 0) (cons ((hd P) 1) (cons ((tl P) 2) (cons (= (hd P) (hd (ec-mixed 0))) ())))))

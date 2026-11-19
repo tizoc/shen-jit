@@ -66,6 +66,9 @@
 (define pt.call
   [F Out] -> (channel.send Out [((fn F) 21) (map (fn F) [1 2]) (map (function pt.twice) [3])]))
 
+(define pt.lambda
+  [_ Out] -> (channel.send Out (/. X [X])))
+
 (define pt.start
   [_ Out] -> (channel.send Out [(trap-error (value *pt.global*) (/. E unbound))
                                  (do (set *pt.global* mine) (value *pt.global*))
@@ -234,6 +237,11 @@
 
 (pt.check "a closure is refused" "#<procedure> cannot be sent: only the program's functions can"
   (pt.message (freeze (channel.send (channel.sender (channel.new 1)) [(/. X X)]))))
+
+(pt.check "a lambda that captures nothing, in a definition, is one closure, which crosses by pointer" [true [5]]
+  (let A (pt.ask pt.lambda 0)
+       B (pt.ask pt.lambda 0)
+    [(shen-jit.same? A B) (A 5)]))
 
 (pt.check "a stream is refused" "#<stream> cannot be sent"
   (pt.message (freeze (channel.send (channel.sender (channel.new 1)) (stoutput)))))

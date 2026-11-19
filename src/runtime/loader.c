@@ -307,6 +307,31 @@ static bool check_control(Loader *l)
     return ok || fail(l, "bad control flow: labels or the final instruction");
 }
 
+/* A closure that captures nothing is made once, here: the slot of its code holds it instead,
+   and the closure instruction gives it (jit.c). Lowered code closes over each nested code once;
+   code written by hand may also close over one with captures, and its slot then keeps the code.
+   Making a closure may collect, which updates the slots, roots until the code is built. */
+static bool make_empty_closures(Loader *l, size_t codes)
+{
+    for (size_t i = 0; i < l->len; i += insn_length(l->buf + i)) {
+        const uint32_t *p = l->buf + i;
+        V *slot = p[0] == OP_CLOSURE && !p[3] ? ra_at(&l->vm->program->consts, codes + p[2]) : NULL;
+        if (!slot || is_proc(*slot))
+            continue;
+        V closure = make_closure(l->vm, *slot, 0, NULL);
+        if (closure == V_CLEARED)
+            return fail(l, "out of memory");
+        *slot = closure;
+    }
+    for (size_t i = 0; i < l->len; i += insn_length(l->buf + i)) {
+        const uint32_t *p = l->buf + i;
+        V *slot = p[0] == OP_CLOSURE && p[3] ? ra_at(&l->vm->program->consts, codes + p[2]) : NULL;
+        if (slot && is_proc(*slot))
+            *slot = ptr(*slot)[CLO_CODE];
+    }
+    return true;
+}
+
 /* (code Name Arity FrameSize Constants Instructions Codes) */
 static V build_code(Loader *l, V form)
 {
@@ -345,7 +370,7 @@ static V build_code(Loader *l, V form)
     for (V insns = nth(form, 5); insns != V_NIL; insns = ptr(insns)[1])
         if (!encode(l, ptr(insns)[0], frame, nconst, ncode))
             goto done;
-    if (!check_control(l))
+    if (!check_control(l) || !make_empty_closures(l, cbase + nconst))
         goto done;
     /* entry N L: a call with N arguments starts at L, with them in slots
        2 to N+1. The code's arity word carries N above the arity. */

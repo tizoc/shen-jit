@@ -49,6 +49,9 @@ PASS eq-fresh-absvectors
 PASS eq-absvectors-differ
 PASS eq-closures-distinct
 PASS eq-closure-identity
+PASS eq-closures-loop
+PASS eq-closure-made-once
+PASS eq-closure-capturing
 PASS eq-boolean-symbol
 PASS eq-symbol
 PASS eq-number-string
@@ -163,4 +166,4 @@ PASS seal-redefine-kernel (deviation)
 PASS seal-open-call (deviation)
 PASS seal-kernel-call
 
-164 passed, 0 failed (shen-scheme)
+167 passed, 0 failed (shen-scheme)

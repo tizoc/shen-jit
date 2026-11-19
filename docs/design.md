@@ -359,7 +359,9 @@ collection copies at most a word for every four allocated. With its own area the
 **The program space** is a range of reserved address space, committed as it fills, that collections neither copy nor scan:
 a pointer into it is recognised by one range test and left as it is. Every symbol has a slot at its start. A definition,
 once installed, is copied there with all it reaches: its code objects, bytecode, constants and inline body: pairs,
-strings, floats, symbols, code and the definition's closure, which captures nothing. Code holds only what the reader
+strings, floats, symbols, code and closures that capture nothing: the definition's, and that of each lambda or freeze in it
+that captures nothing, which the loader makes as it builds the code and puts in the constant slot that held it, so that
+evaluating one allocates nothing and gives the same closure each time. Code holds only what the reader
 makes, symbols, numbers, strings, booleans and lists of them, so every definition goes there: one whose code holds
 anything else, such as a vector put into a form given to `eval`, is refused when it is installed, and a check before
 copying makes sure it leaves nothing behind. A foreign function goes there too, with its description: a vector, but
@@ -438,8 +440,8 @@ copies, out of the sender's heap into a fragment with a table from old addresses
 instead of forwarding pointers, so the sender's objects are untouched and nothing allocates in
 its heap meanwhile; sharing and cycles are kept. Into the receiver's heap, the fragment, which
 is freed next, is forwarded in as a collection forwards, which took a third of the time the
-table did. What lies in the program space crosses by pointer: symbols, constants and the
-program's functions. The receiver makes room for all of it first, so nothing moves while it is
+table did. What lies in the program space crosses by pointer: symbols, constants, the
+program's functions and the closures its code makes once. The receiver makes room for all of it first, so nothing moves while it is
 copied. A byte buffer or string of 256 KB or more, which a fragment keeps in a block of its own,
 is not copied in: the block becomes one of the receiver's large objects as it is, so a big
 message costs one copy, in the sender, and the receiver's collections never copy it. Closures in a heap, streams, pointers, code and the end of a stream are refused. A receive endpoint moves only in a spawn's argument, marked by

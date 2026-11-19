@@ -162,7 +162,13 @@ cheap to raise and catch.
 strings or byte buffers with the same bytes, shared or not, pairs whose heads and tails are `=`,
 absvectors of the same length whose elements are `=`, pointers of the same kind and
 address that are both read only or both not, or the same symbol, special, procedure,
-stream or exception. Closures compare by identity.
+stream or exception. Closures compare by identity. A `lambda` or `freeze` that
+captures nothing is made once, as its code is loaded, so each evaluation of it
+gives the same closure, as in Shen/Scheme; one that captures is new each time.
+*Deviation:* a small definition is inlined where it is called
+([bytecode.md](bytecode.md), "Lowering rules"), and each caller then has a
+copy of its lambdas, so the same lambda reached through two callers may give
+two closures where Shen/Scheme gives one.
 
 `=` follows a term as deep as it goes, without overflowing the C stack, and it
 cannot raise. On two absvectors that contain themselves, which have no end, it
