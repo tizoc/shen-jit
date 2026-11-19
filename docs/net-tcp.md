@@ -1,10 +1,11 @@
 # In-memory TCP
 
-The optional `net/tcp` module, [lib/net/tcp.shen](../lib/net/tcp.shen), provides individual TCP peers and a
-bounded TCP listener over the [packet link](net-udp.md). Each connection uses bounded send and receive
-windows with cumulative and selective acknowledgments. The stack emits 20-byte IPv4 headers,
-advertises and honors MSS, negotiates scaled windows, and can add SACK options to TCP headers. TCP runs entirely in
-managed Shen/JIT. The shared interface can use IPv4 and IPv6 together with one connection table.
+The optional `net/tcp` module, [lib/net/tcp.shen](../lib/net/tcp.shen) with its sending, receiving and listener
+parts beside it, provides individual TCP peers and a bounded TCP listener over the [packet link](net-udp.md).
+Each connection uses bounded send and receive windows with cumulative and selective acknowledgments. The stack
+emits 20-byte IPv4 headers, advertises and honors MSS, negotiates scaled windows, and can add SACK options to
+TCP headers. TCP runs entirely in managed Shen/JIT. The shared interface can use IPv4 and IPv6 together with one
+connection table.
 [Linux TUN](net-tun.md) connects the link to kernel TCP sockets. To share a link
 with UDP and ICMP, use [the shared IPv4 interface](net-tun.md#shared-ipv4-interface).
 

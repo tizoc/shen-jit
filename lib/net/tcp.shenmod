@@ -3,4 +3,4 @@
   (name net/tcp)
   (requires net/link net/ipv6 net/wire grammar net/seq)
   (typed)
-  (sources tc+ "tcp.shen"))
+  (sources tc+ "tcp.shen" "tcp-send.shen" "tcp-receive.shen" "tcp-listener.shen"))

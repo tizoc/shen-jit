@@ -3915,6 +3915,16 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   and state the listener keeps, and answered by rules, its sequences `seq`s and its ACK written with
   `write-layout`. Its one-record fixture passed as written, and inside the TUN and TAP echo tests' allocation
   probe used no heap words. TCP connections 363.8 to 365.2 ms and 420.3 to 422.4, at loads of 3.6 and 4.
+- Read the networking code again and changed what read poorly, each step its own commit: the symbol
+  families got datatypes admitting only their members, so a misspelt state is a type error (checked in a
+  store and a pattern); protocol numbers, ether types, ICMP errors, well-known addresses and the RFCs'
+  times got names, the numbers as zero-argument definitions that compile to the constant; the
+  interface's IPv6 path carries the packet as a record, definitions of eight arguments or more in
+  `lib/net` 30 to 22; TCP's tables and multicast's groups keep IPv4 addresses mapped into IPv6 ones, so
+  one find-peer, new-segment, reject-segment and next-sequence serve both families (TCP 2,042 to 1,986
+  lines); and tcp.shen split into four files of one namespace. Each against the one before: UDP echo
+  and TCP connections within 0.3 ms throughout. lib/net grew from 6,433 to 6,608 lines, mostly
+  datatypes and names. Linux's TUN and TAP suites pass with no heap words.
 
 ### Source-specific multicast (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
 
