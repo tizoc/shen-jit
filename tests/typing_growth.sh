@@ -50,6 +50,7 @@ check_rejected_chain 1.5 20 100000 -m result -m numbers
 check_rejected_chain 1 20 120000 -m http/server
 check_rejected_chain '[]' 14 120000 -m http/server
 check_rejected_chain '(:process.running)' 20 150000 -m process
+check_rejected_chain null 12 100000 -m json
 
 check_rejected_chain '[[chunk-size 8]]' 20 100000 -m process/io
 check_rejected_chain inherit 20 150000 -m process

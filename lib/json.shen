@@ -11,8 +11,8 @@
   (use shen-jit)
   (externals [? at byte-limit defgrammar depth-limit object require span text])
   (shadow <e> read value)
-  (export from-string from-number from-array array decode encode integer json.number => number json.string => string option parse read
-    stringify value object null)
+  (export from-string from-number from-array from-null array decode encode integer json.number => number
+    json.string => string option parse read stringify value object null)
 
 (define scan-fail
   I What -> (error "json: byte ~A: ~A" I What))
@@ -369,8 +369,8 @@
          _ (emit Out Value 0 (snd Limits))
       (buffer.finish Out)))
 
-\\ A string, a number or a list is a value, but a value is not one of them without a check, as
-\\ json.string and json.array make: those rules go one way.
+\\ Strings, numbers, Booleans and arrays widen when a JSON value is expected.
+\\ Accessors such as json.string and json.array check the value's shape.
 (datatype t
   S : string;
   ___________________________
@@ -381,13 +381,11 @@
   N : (- value);
 
   ___________________________
-  null : value;
+  null : (- value);
 
+  B : boolean;
   ___________________________
-  true : value;
-
-  ___________________________
-  false : value;
+  B : (- value);
 
   Token : string;
   ===========================

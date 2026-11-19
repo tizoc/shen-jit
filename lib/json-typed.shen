@@ -1,7 +1,7 @@
 (shen.x.namespace json
   (use buffer)
   (shadow value)
-  (export from-string from-number from-array parse stringify)
+  (export from-string from-number from-array from-null parse stringify)
 
 (define parse
   {string --> (list option) --> value}
@@ -22,5 +22,9 @@
 (define from-array
   {(list value) --> value}
   Items -> Items)
+
+(define from-null
+  {--> value}
+  -> null)
 
 )
