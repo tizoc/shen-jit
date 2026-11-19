@@ -7,9 +7,7 @@ dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
 if command -v cygpath > /dev/null; then dir=$(cygpath -m "$dir"); fi # a path Windows programs can open
 here=$(dirname "$0")
-"$SHEN" eval -q -l lib/native.shen -l lib/datalog.shen -l lib/ffi.shen -l lib/buffer.shen \
-    -l lib/io.shen -l lib/io-file.shen -l "$here/main.shen" \
-    -e "(shen-jit.save-executable \"$dir/depends\" depends.main)" < /dev/null > "$dir/build.log" 2>&1
+"$SHEN" build "$here/depends.shenmod" -o "$dir/depends" < /dev/null > "$dir/build.log" 2>&1
 if [ ! -x "$dir/depends" ]; then
     tail -5 "$dir/build.log"
     exit 1

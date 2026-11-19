@@ -4,7 +4,7 @@
 \\ (defun Name Code) forms, one per line, per input: OUT-DIR/<file>.sbc.
 \\ Every defun name in the input is sealed. Run from the shen-jit
 \\ directory, under a previous release of shen-jit or Shen/Scheme, once make
-\\ has written build/tools/lower.shen:
+\\ has written build/tools/lower.shen and namespaces.shen:
 \\
 \\   HOST script src/lowerer/stage0.shen [KLAMBDA-DIR [OUT-DIR [FILE ...]]]
 \\
@@ -13,14 +13,18 @@
 \\
 \\ Output syntax, for a simple reader: lists in parentheses, separated by
 \\ single spaces; () is the empty list; true and false are the Booleans;
-\\ integers are decimal; reals contain "." or "e" (shortest round-trip
+\\ integers are decimal; floats contain "." or "e" (shortest round-trip
 \\ digits); strings are in double quotes, where \" is a quote, \\ a
 \\ backslash, \xHH any other byte outside 32-126; any other token is a
 \\ symbol. Symbols never start like a number and contain no space,
 \\ parenthesis, quote or backslash.
 
+\\ The lowerer is a namespace, which the pinned kernel's extension expands, whatever the
+\\ host's own extension (build/tools/namespaces.shen, from the Makefile).
 (set *hush* true)
 (load "src/lowerer/host.shen")
+(load "build/tools/namespaces.shen")
+(stage0.namespaces.initialise)
 (load "build/tools/lower.shen")
 (set *hush* false)
 
@@ -49,12 +53,8 @@
 (define shen-jit.stage0.run
   Out Files
   -> (let Start (get-time unix)
-          \\ KLambda is read unprocessed: read-file would macroexpand it, and
-          \\ the kernel's own definitions are the raw forms.
-          Read (map (/. F [(hd F) | (read-from-string-unprocessed
-                                       (read-file-as-string (hd (tl F))))])
-                    Files)
-          Inputs (shen-jit.stage0.select-overrides Read)
+          Read (map (/. F [(hd F) | (shen-jit.host.read-kl (hd (tl F)))]) Files)
+          Inputs (shen-jit.host.select-overrides Read)
           Sealed (shen-jit.stage0.defun-names Inputs)
           \\ What shen-jit.sealed? and shen-jit.inline-body give in
           \\ shen-jit, for the same definitions (src/lowerer/host.shen).
@@ -65,7 +65,7 @@
           Write (map (/. O (shen-jit.stage0.write-file (cn Out (cn (hd O) ".sbc")) (tl O)))
                      Outputs)
           \\ The defuns exactly as read, so shen-jit's self-hosting check
-          \\ lowers the same data, independent of how each reader reads reals.
+          \\ lowers the same data, independent of how each reader reads floats.
           Forms (map (/. I (shen-jit.stage0.write-file
                              (cn Out (cn (hd I) ".forms"))
                              (stage0.filter (/. X (cons? X)) (tl I))))
@@ -75,29 +75,6 @@
            (output "files written: ~A, to ~A~%" (length Write) Out)
            (output "time: read ~As, lower ~As, write ~As~%"
                    (- Lowering Start) (- Lowered Lowering) (- End Lowered)))))
-
-\\ A port defun replaces the kernel defun of the same name, which is omitted.
-\\ The replacement must take the same number of parameters.
-(define shen-jit.stage0.select-overrides
-  Inputs -> (let Port (mapcan (/. I (if (= (hd I) "shen-jit") (tl I) [])) Inputs)
-                 Overrides (mapcan (/. X (shen-jit.stage0.defun-signature X)) Port)
-              (map (/. I (if (= (hd I) "shen-jit")
-                             I
-                             [(hd I) | (shen-jit.stage0.omit Overrides (tl I))]))
-                   Inputs)))
-
-(define shen-jit.stage0.defun-signature
-  [defun F Params | _] -> [[F | (length Params)]]
-  _ -> [])
-
-(define shen-jit.stage0.omit
-  _ [] -> []
-  Overrides [[defun F Params | Body] | Forms]
-  -> (let Entry (assoc F Overrides)
-       (cond ((empty? Entry) [[defun F Params | Body] | (shen-jit.stage0.omit Overrides Forms)])
-             ((= (tl Entry) (length Params)) (shen-jit.stage0.omit Overrides Forms))
-             (true (simple-error (make-string "override of ~A changes its parameter count" F)))))
-  Overrides [X | Forms] -> [X | (shen-jit.stage0.omit Overrides Forms)])
 
 (define shen-jit.stage0.defun-names
   Inputs -> (mapcan (/. I (mapcan (/. X (shen-jit.stage0.defun-name X)) (tl I))) Inputs))

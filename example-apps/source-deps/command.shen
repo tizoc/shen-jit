@@ -1,11 +1,12 @@
 (shen.x.namespace source-deps
   (use fs)
   (use io)
+  (import result let-ok ok err)
   (use json)
   (use shen-jit)
   (use source-deps)
   (shadow read run)
-  (externals [*argv* chunk-size impact ok reach])
+  (externals [*argv* chunk-size impact reach])
 
 (define query-option
   [] -> []
@@ -19,14 +20,14 @@
 
 (define run
   Input Output Query Limits ->
-    (io.let-ok Data (io.with-input-file Input
-                     (/. In (read (io.reader In [[chunk-size 16384]]) Input Limits)))
-      (io.let-ok Analysis (source-deps.analyze Data Query)
-        (fs.with-replacement Output (/. Out (source-deps.report Analysis Out Limits))))))
+    (let-ok Data (io.with-input-file Input
+                   (/. In (read (io.reader In [[chunk-size 16384]]) Input Limits)))
+            Analysis (source-deps.analyze Data Query)
+      (fs.with-replacement Output (/. Out (source-deps.report Analysis Out Limits)))))
 
 (define finish
-  [ok N] -> (output "Wrote ~A dependency records~%" N)
-  [error Error] ->
+  (:ok N) -> (output "Wrote ~A dependency records~%" N)
+  (:err Error) ->
     (error "~A: ~A" (io.error-resource Error) (io.error-message Error)))
 
 (define main

@@ -1,6 +1,6 @@
 \\ Dedicated application state keeps the image's every-allocation checks bounded.
 (define source-image.ok
-  [ok X] -> X
+  (:result.ok X) -> X
   X -> (error "source-deps image: ~S" X))
 
 (set source-image.data

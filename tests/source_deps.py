@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independent name-matching/BFS oracle and real CLI checks for source-deps."""
+"""Independent name-matching/BFS oracle and float CLI checks for source-deps."""
 from collections import defaultdict
 import json
 import os
@@ -18,7 +18,7 @@ def string(value):
 
 
 def run(args, *, success=True, **kwargs):
-    result = subprocess.run(list(map(str, args)), cwd=ROOT, stdin=subprocess.DEVNULL,
+    result = subprocess.run(list(map(str, args)), cwd=kwargs.pop('cwd', ROOT), stdin=subprocess.DEVNULL,
                             capture_output=True, text=True, encoding='utf-8', errors='backslashreplace', timeout=120,
                             env={**os.environ, **kwargs.pop('env', {})}, **kwargs)
     if success:
@@ -288,12 +288,17 @@ def main():
     directory.mkdir(exist_ok=True)
     program = directory / ('source-deps.exe' if os.name == 'nt' else 'source-deps')
     base = [executable, 'eval', '-s', 'fs.*adapter-files*', '[' + string(adapter) + ']',
-            '-l', 'example-apps/source-deps/load.shen']
-    run(base + ['-e', '(shen-jit.save-executable ' + string(program) + ' source-deps.entry)'])
+            '-m', 'example-apps/source-deps/source-deps.shenmod']
+    # Built from the descriptor, with nothing set: run from a directory with no adapter, the
+    # program finds the one beside it, as the runtime looks there for a library not found as named.
+    # Sealed, so json's grammars must make their loops in a sealed program.
+    run([executable, 'build', 'example-apps/source-deps/source-deps.shenmod', '-o', program])
     source, output = directory / 'facts λ.ndjson', directory / 'report λ.ndjson'
     records = fixture()
     write(source, records)
-    run([program, source, output])
+    elsewhere = directory / 'elsewhere'
+    elsewhere.mkdir(exist_ok=True)
+    run([program, source, output], cwd=elsewhere)
     oracle = check_report(read(output), records)
     checks = 1
     argv = '[' + ' '.join(map(string, ['source-deps', source, output])) + ']'

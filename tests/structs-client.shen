@@ -2,6 +2,25 @@
 (defstruct struct-test.cell key (mutable value))
 (defstruct struct-test.other key (mutable value))
 (defstruct struct-test.empty)
+(defstruct struct-test.positional _ _)
+(defstruct struct-test.positional-other _ _)
+(define struct-test.unpack (:struct-test.positional X Y) -> [X Y])
+(define struct-test.same-fields? (:struct-test.positional X X) -> true _ -> false)
+(define struct-test.nested
+  (:struct-test.positional [X | _] (:struct-test.positional _ Y)) -> [X Y])
+(set struct-test.saved-positional (:struct-test.positional saved 23))
+
+(shen.x.namespace struct-test.anonymous
+  (import struct defstruct)
+  (export pair pair.make)
+  (defstruct pair _ _))
+
+(shen.x.namespace struct-test.anonymous-client
+  (use struct)
+  (use struct-test.anonymous => a)
+  (export sample)
+  (define combined (:a.pair X Y) -> (+ X Y))
+  (define sample -> (combined (struct.make a.pair 3 4))))
 (defstruct struct-test.declared (name : string) (mutable count : number))
 (define struct-test.show R -> (make-string "#<shown ~A>" (struct-test.shown.key R)))
 (defstruct struct-test.shown (printer struct-test.show) key)

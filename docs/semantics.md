@@ -53,7 +53,7 @@ states which fields hold values:
 | String | Byte length and bytes; immutable. |
 | Byte buffer | Byte length and bytes, which can be stored to, and which the collector does not scan. |
 | Symbol | Name string, name hash; its cell's index and its global's number, with flags. |
-| Real | IEEE double. |
+| Float | IEEE double. |
 | Absvector | Length and that many values. |
 | Closure | Code object and captured values; a `defun` is a closure with no captures. Raw native entry. |
 | Foreign function | A C function, its description and arity. Raw native entry and address. |
@@ -95,13 +95,13 @@ offset from the VM's register. A dropped symbol's number is reused.
 - **Integers** are fixnums only. Any integer result outside the fixnum range
   raises a catchable "integer overflow" error. *Deviation:* Shen/Scheme has
   bignums.
-- **Reals** are IEEE doubles. Mixed integer/real arithmetic produces a real.
+- **Floats** are IEEE doubles. Mixed integer/float arithmetic produces a float.
 - **Division:** `(/ A B)` of two integers is an integer when B divides A
-  exactly and a real otherwise; any real operand gives a real. A zero divisor,
-  integer or real, raises an error. *Deviation:* Shen/Scheme raises only for an integer zero, and a real zero
-  gives an infinity or NaN. Other real operations follow IEEE, so infinities and NaN can arise from overflow.
+  exactly and a float otherwise; any float operand gives a float. A zero divisor,
+  integer or float, raises an error. *Deviation:* Shen/Scheme raises only for an integer zero, and a float zero
+  gives an infinity or NaN. Other float operations follow IEEE, so infinities and NaN can arise from overflow.
 - **Comparison:** `<`, `>`, `<=` and `>=` compare mathematical values across
-  integers and reals, exactly, with no rounding of the integer; a non-number
+  integers and floats, exactly, with no rounding of the integer; a non-number
   operand raises an error.
 - **Equality:** `=` compares numbers by mathematical value, so `(= 8 8.0)` and
   `(= 0.0 -0.0)` are true, and NaN equals no other value, itself included unless
@@ -110,14 +110,14 @@ offset from the VM's register. A dropped symbol's number is reused.
 - **Literals** are computed by the kernel reader with integer arithmetic
   (`shen.compute-integer`, and `shen.expt` for exponents), so a literal beyond
   the fixnum range, such as `1e300`, would overflow. Small overrides of
-  `shen.compute-integer` and `shen.compute-E` make such literals the nearest real,
+  `shen.compute-integer` and `shen.compute-E` make such literals the nearest float,
   or next to it if the digits before an exponent were already rounded, in a fraction
-  or as more digits than a real holds. "8.0" still reads as the integer 8, as in Shen/Scheme.
+  or as more digits than a float holds. "8.0" still reads as the integer 8, as in Shen/Scheme.
   *Deviation:* Shen/Scheme reads such a literal as a bignum. So too the smallest
   fixnum: a minus sign applies after its digits are read, and those alone are past
-  the range, so `-2305843009213693952` reads as a real, equal to that integer by
+  the range, so `-2305843009213693952` reads as a float, equal to that integer by
   value. `(- -2305843009213693951 1)` gives the integer itself.
-- **Printing:** `str` prints integers in decimal and reals with the shortest
+- **Printing:** `str` prints integers in decimal and floats with the shortest
   digits that read back exactly, always with a decimal point or exponent
   (`(str (+ 0.5 0.5))` is "1.0"). The choice between positional and exponent
   notation is not a compatibility requirement.
@@ -334,7 +334,7 @@ another isolate `eval`, `eval-kl` and installing raise an error ([design.md](des
   `write-string` raise "character streams are not supported", as in
   Shen/Scheme; the kernel only calls them for character streams.
 - `(get-time run)` returns CPU seconds and `(get-time unix)` wall-clock seconds
-  since the epoch, both as reals. Other arguments raise an error. *Deviation:*
+  since the epoch, both as floats. Other arguments raise an error. *Deviation:*
   Shen/Scheme also accepts `real`.
 
 ## 13. Stage 1 order and extensions
@@ -350,7 +350,10 @@ which file streams are closed.
 `stlib.initialise` there.
 
 This follows Shen/Scheme's build. The factorise-defun, expand-dynamic and
-type-annotations extensions are not initialized. As built, what `define`
+type-annotations extensions are not initialized; under `(optimise +)`, a definition
+that typechecks is compiled as the type-annotations extension annotates it, trusted
+to be what its types say: [Typed programs](modules.md#typed-programs) lists what that
+changes. As built, what `define`
 produces is evaluated factorised by the kernel's `shen.factor`, as with
 `(factorise +)` (section 10); `ps`
 shows the definition as `define` produced it, and `shen.*factorise?*` stays

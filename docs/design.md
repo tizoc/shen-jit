@@ -27,8 +27,9 @@ and types, and records arities and lambda forms. Shen/JIT avoids recording those
 itself and saving the result.
 
 **Stage 0,** under a host, lowers the kernel's KLambda, leaving out what the port overrides, then the port
-(`build/port/shen-jit.kl`) and the lowerer itself. `tokl.shen` compiles the lowerer and
-`src/port/struct.shen` to KLambda first; the latter is appended to `src/port/shen-jit.kl` to form the port. The output is
+(`build/port/shen-jit.kl`) and the lowerer itself. `tokl.shen` compiles the lowerer, its files
+joined into one, `src/port/struct.shen` and `src/port/module.shen` to KLambda first; the latter two are appended to
+`src/port/shen-jit.kl` to form the port. The output is
 files of definitions as text, in `build/stage0`, so no state of the host reaches the target. Release tarballs carry this
 output, so they build with a C compiler alone, and `generated.sha256` holds its hashes.
 
@@ -37,10 +38,12 @@ precompiled KLambda directly. The same archive supplies sources and tests for ev
 
 The host is the earlier release of Shen/JIT that `tools/ci-deps.sh` names, or Shen/Scheme, which makes the same files byte for byte. A host that is
 Shen/JIT has its own lowerer sealed in its image, so the tools load the one being built under other names: `build/tools/lower.shen`, which the Makefile makes
-with `shen-jit.lower.` changed to `stage0.lower.`. `tokl.shen` starts the compiler's variable numbering from zero in each definition, so that it does not depend on the host.
+from those joined files with the namespace `shen-jit.lower` changed to `stage0.lower`. `tokl.shen` starts the compiler's variable numbering from zero in each definition, so that it does not depend on the host.
 
 The lowerer checker reads `lib/native.shen` through a copy of the pinned namespace extension under
 `stage0.namespaces`, so an older host's namespace implementation does not constrain that library's source.
+`tokl.shen` and stage 0 load the same copy before reading, as the lowerer's files and the port's own
+sources, `src/port/struct.shen` and `src/port/module.shen`, are namespaces.
 
 **Stage 1,** under the runtime alone:
 
@@ -92,6 +95,18 @@ as the primitive; under `(tc -)` it emits the plain definitions and `declare`s t
 the record; accessors contain direct constant-index address operations and the predicate calls the
 existing `shen-jit.tagged?` primitive. No C or JIT change is involved.
 
+A typed struct records the signature entry for `T.%make` after its declaration. Construction uses
+that signature, with a membership rule for each union. If built-in type theory is disabled or the
+entry is missing or replaced, the datatype can prove the constructor type from the field premises.
+The rule for matching fields against a struct or union remains available in either case.
+
+Declarations use the kernel's prior-type query, including any active user-defined rules
+that can type the function reference. The kernel warns when the prior type changes.
+
+An anonymous field's schema label is its one-based slot number. The expander emits a
+private reader for that position and records its type and slot for the lowerer. For
+an anonymous layout it checks arity and passes the arguments directly to the internal constructor.
+
 Schemas live in the property vector; syntax registrations are global state. Both persist in images.
 Each schema gets a fresh tag, reused on an identical declaration. The kernel's writer calls a function
 bound to a vector's first slot to print it, so the tag is defined as the record's printer, the default
@@ -106,6 +121,70 @@ check generated definitions against imports. Neither callback receives namespace
 schemas. The source expander registers schemas in source order and consumes protection only in literal
 field positions.
 The extension is in the startup image, and the libraries' fixed records use it. See [structs.md](structs.md).
+
+## Modules
+
+`src/port/module.shen`, in the startup image, loads modules described by `.shenmod` files
+([modules.md](modules.md)). It reads a descriptor with `read-from-string-unprocessed`, so nothing in it is
+evaluated, checks its fields, loads what it requires depth first, keeping the chain to refuse a cycle, then
+loads each source: a `tc-` one form by form, as `load` does but without printing each result, and a `tc+` one
+with `load`, typechecked, silenced when the module was only required. It records the module as loaded only
+after its last source. The list of modules loaded is a global, so an image keeps it. While a module's sources load, the kernel's
+`shen.*datatypes*` is set, at each source, to the entries of `shen.*alldatatypes*` the module may see: those the
+image started with, recorded by `main.c` at each start, but for any a module defined, the public rules of its transitive
+dependencies, and its own active rules from earlier sources.
+The port's `shen.rules->prolog` records each successfully compiled datatype under the module currently loading,
+including redefinitions on retry or after a plain `load`; `include` changes scope without transferring ownership.
+A filter over `shen.*alldatatypes*` keeps the kernel's order of rules. The caller's list comes back afterwards,
+with public rules from the successfully loaded modules added. The executable sets
+the default path at each start (`main.c`), as it may have moved since the image was saved: `SHEN_JIT_PATH`'s
+directories, then `lib/` beside it and `../lib`. The image's features include `shen-jit/ffi` when its runtime
+loads C libraries (`ffi_loads_libraries`), which a static build does not. `eval`'s `-m` is a clause the port
+adds to the kernel launcher's `eval-command-h`, and `build` one it adds to `launch-shen`: it loads the module with
+sealing on and `*hush*` set, puts both back, and calls `shen-jit.save-executable` with the descriptor's `main`.
+The build refuses a module in its dependency graph that was already loaded in the starting image, since a
+cached load cannot change its compilation mode. Dependencies first loaded during the build can still be shared.
+In `build`, a descriptor's `(typed)` loads the program under `(optimise +)` too, and refuses `--open`. Wherever a
+typed module loads, what it requires loads sealed, then its sources sealed and under `(optimise +)`, and the
+caller's modes come back after (`load-module`, `load-sources`); a load that fails unseals what it defined, which
+`shen.record-and-evaluate` reports to the loader (`note-definition`, `unsealed-unless-loaded`), so that the next
+try can define it again.
+
+### Typed definitions
+
+The port's `shen.work-through`, the kernel's step that typechecks each form `load` and the REPL read under `(tc +)`
+and then evaluates it, names in `shen-jit.*checked*` the definition it evaluates, for as long as it does. Under
+`(optimise +)`, `shen.record-and-evaluate` gives that definition, and only that one, to the kernel's
+`shen.x.type-annotations.annotate-kl`, after factorising it, marks its body `(shen-jit.annotated Body)` for the
+lowerer, which trusts the type forms of such a body only, and marks the name with the property
+`shen-jit.annotated`, which `shen-jit.code` follows to make the same code again. A `(type X T)` written in untyped
+code is only taken out. This property, struct readers'
+field positions and foreign functions' raw-call signatures pair their claims with the installed procedure;
+the lowerer checks its identity before using them. Publication follows successful installation, so a failed
+redefinition cannot change the old definition's claims. A definition evaluated
+unchecked, as a datatype's Prolog or a macro's output under `(tc +)`, is not marked, since its types are not known
+to hold. The lowerer takes the annotations out before anything else ([bytecode.md](bytecode.md)), after reading
+from them which parameters are `float`, `fixnum` or `word.t`. A definition with such a parameter, with one of those
+anywhere among its annotations, that reads a typed struct's `fixnum` or `float` field, or with a float it makes
+itself, is lowered first with its floats, fixnums and 64-bit
+words in the float and word registers that hand-written native code uses, and its own sealed tail calls as a `loop` and `again`
+(`src/lowerer/registers.shen`); if that code reads a register after a call, across which nothing keeps those
+registers, rather than leaving by a return, a tail call or a raise as an error's message does, has a handler,
+computes nothing in them or runs out of them, it is lowered again as usual. A call of a C function of
+doubles is no call there. Such a definition's inline form, for callers that keep registers too, may be larger
+than usual, and inlines at any depth where it is sealed, as its own code inlined all it calls; one that is a loop
+is inlined as a loop of the caller's, two levels deep. The builder records the next free float
+and word registers and the loops' heads with each parameter's place, and the environment binds a variable to
+`[float R]`, `[word W]` or `[bits W]`, a fixnum or a 64-bit word, as well as to a slot or a label. A word leaves
+the registers as 8 new bytes, which is what `lib/word.shen` makes of one. Every read of a float from a slot is checked, so what the types say decides only what is kept in
+registers, never what memory is read. Struct fields are where they decide that too: `defstruct` records each
+reader's field's place, and while the lowerer normalises an annotated definition, or the inlined body of another,
+`shen-jit.lower.*typed*` is set, and a call of a sealed reader becomes the lowered-only primitive
+`shen-jit.field`, a load with no check. `defstruct` records too whether a field is a `fixnum` or a `float`; the read
+of such a field is then `shen-jit.field-word` or `shen-jit.field-float` while the lowerer works, which register code
+takes into a register, checked as any read from a slot is, and which emits as `shen-jit.field`. An `if` one of
+whose branches raises gives what the other gives, and an error's message, which calls make, is made as boxed
+code from slots the registers it reads were boxed into, so that no register is read after one of those calls.
 
 ## Guest frames and calling convention
 
@@ -174,7 +253,9 @@ Some refinements are built on that:
   Liveness walks share a work stack and an array of visited marks for one compilation, clearing the marks
   before each walk. If either buffer could not be allocated, the store is kept.
 - **Tests branch directly.** A Boolean primitive followed by a jump on its result branches on the comparison and stores
-  nothing, and after a `cons?` that falls through, `hd` and `tl` of that slot need no test. A run of conses, as a chain
+  nothing, and after a `cons?` that falls through, `hd` and `tl` of that slot need no test, until a call, a jump, a
+  loop's head or a write to the slot, register code between them included. So, after a struct's reader has found
+  a slot's value a vector at least as long as the struct, do the struct's other reads of it. A run of conses, as a chain
   with constant heads lowers to, checks room once and passes each pair on in CACHE.
 - **Leaves skip the stack check:** code that makes no call, with a frame of at most 64 words. Every check
   reserves 64 words beyond its own frame, and `jit_call` reserves as much, so a leaf's frame is always in checked space.
@@ -183,7 +264,7 @@ Some refinements are built on that:
 - **Loops keep their slots in registers.** Code that loops through a self tail call, makes no call but named tail calls and has no
   handlers keeps slots 2 and up in registers when they fit: six on arm64 and four on x86-64. Those are saved registers, except for two
   of the four on x86-64 outside Windows, which are scratch registers, unless code written by hand uses them, and wait in the frame around any call to C. Code written by hand
-  with more raw values than scratch registers gives them the saved ones instead ([bytecode.md](bytecode.md), "Real and word registers"). It stores them back before any call
+  with more raw values than scratch registers gives them the saved ones instead ([bytecode.md](bytecode.md), "Float and word registers"). It stores them back before any call
   into C that may collect or raise, and loads them again after a collection, so the frame's words are always
   valid and the collector never sees a stale pointer.
 - **Two more registers hold results read again soon.** Code with no slots in registers and no raw values keeps up to two
@@ -193,10 +274,11 @@ Some refinements are built on that:
 - **Loops exit out of line.** A test that ends a loop, an `=` with a constant symbol, number or special whose true branch only returns, jumps
   to a return placed with the slow paths, so a turn of the loop takes one jump, back, instead of two.
 - **Small functions are inlined,** by the lowerer, sealed or open, two levels deep, or at any depth when the body
-  is primitives alone over parameters and constants, up to twice the size, as a struct's reader or constructor is. An open one sits behind a test that the name's
+  is primitives alone over parameters and constants, up to 48 nodes, as a struct's reader or constructor is, or a
+  sealed typed body inlined into code that keeps registers. An open one sits behind a test that the name's
   definition still has that body, which on arm64 and x86-64 is a nop that a redefinition patches into a branch to the ordinary
   call, and elsewhere a test each time. Bodies inlined after stage 0 are marked in the bytecode, so a backtrace names them as if
-  they were not inlined.
+  they were not inlined. A lambda passed to a sealed one that only applies it makes no closure: it runs where it is applied.
 - **Open self tail calls are patched too:** they jump straight back to the body, and a `defun` of the name rewrites
   that branch, so the next turn reaches the new definition.
 
@@ -248,7 +330,7 @@ heap address. Native code lives in SLJIT's executable memory, and a collection f
 
 `=` walks pair tails in a loop of its own and enters it directly for a head that is a pair; other heads and
 vector elements go through the general comparator. The recursion depth is an argument, so no state is shared
-between calls or threads. A fixnum equals a real when the real, in range, truncates to it and converts back to
+between calls or threads. A fixnum equals a float when the float, in range, truncates to it and converts back to
 itself. Strings and buffers compare whole words, as padding is always 0.
 
 ## Collection
@@ -277,7 +359,7 @@ collection copies at most a word for every four allocated. With its own area the
 **The program space** is a range of reserved address space, committed as it fills, that collections neither copy nor scan:
 a pointer into it is recognised by one range test and left as it is. Every symbol has a slot at its start. A definition,
 once installed, is copied there with all it reaches: its code objects, bytecode, constants and inline body: pairs,
-strings, reals, symbols, code and the definition's closure, which captures nothing. Code holds only what the reader
+strings, floats, symbols, code and the definition's closure, which captures nothing. Code holds only what the reader
 makes, symbols, numbers, strings, booleans and lists of them, so every definition goes there: one whose code holds
 anything else, such as a vector put into a form given to `eval`, is refused when it is installed, and a check before
 copying makes sure it leaves nothing behind. A foreign function goes there too, with its description: a vector, but
@@ -288,9 +370,9 @@ symbol that it refers to is published: its name moves there too, and it is never
 symbols it reaches, which are the only things in the space it writes to, and frees the slots of those nothing needs,
 until isolates exist (below).
 
-Reals are boxed, each a 16-byte object, and native code does their arithmetic and comparisons on its slow path, after the
+Floats are boxed, each a 16-byte object, and native code does their arithmetic and comparisons on its slow path, after the
 test for fixnums fails, loading each operand into a float register and allocating the result in line. Code written by hand can keep them unboxed
-in real registers, and 64-bit integers in word registers, which the collector never sees ([bytecode.md](bytecode.md), "Real and word registers").
+in float registers, and 64-bit integers in word registers, which the collector never sees ([bytecode.md](bytecode.md), "Float and word registers").
 
 The roots are the scanned extent of the guest stack, the global slots, function cells and constants, what C holds, and a few VM
 fields. C holds values in explicitly registered locals, and in the roots that outlive a call (`shen_root_new`), which any OS
@@ -424,13 +506,15 @@ it, so a loop compiles at its first call. An isolate cannot compile, so a progra
 in isolates calls `grammar.finish` in the builder before it spawns them, as `http.listen` does,
 which compiles the loops still pending and prepares the streaming variants of the rules that
 reads name; an image saved after it carries them made. In an isolate, a loop or variant never
-made is refused, saying to call it.
+made is refused, saying to call it. The stub that stands for a loop until then is defined with
+sealing off, as the loop replaces it, so code compiled against it reaches the loop by name; the
+loop is sealed if sealing is on when it is made.
 
 A function goes to an isolate by its name, a published symbol, and the isolate gets it with
 `fn`; what `fn` makes is a closure in a heap, which does not cross. A foreign function found at
 its first call in one isolate is found for all: they store the same address.
 
-**The HTTP listener** (`lib/http-listener.shen`) is a supervisor in the program that calls
+**The HTTP listener** (`lib/http/listener.shen`) is a supervisor in the program that calls
 `http.run`, and an isolate for each connection, given the accepted descriptor, the handler's name
 and its arguments, the request options, a sender to the supervisor's channel, and the receive
 endpoint of a channel of its own, which the supervisor closes to ask it to stop. While there is

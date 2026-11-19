@@ -10,16 +10,17 @@ matches the complete-input packet example on the [buffers page](buffers.md):
 | 2–5 | Unsigned 32-bit payload length, big-endian |
 | 6 onward | Exactly that many payload bytes |
 
-Load `buffer.shen`, `io.shen`, then `frame.shen` with type checking off. Memory framing needs no FFI and
-works on static builds. File input additionally uses `ffi.shen` / `io-file.shen`; TCP uses
-`ffi.shen`, `socket.shen` and [io-socket.shen](io-sockets.md).
+Load the module `frame`, which loads `buffer` and `io` first. Memory framing needs no FFI and
+works on static builds. File input additionally uses the module `io/file`, and TCP
+[`io/socket`](io-sockets.md).
 
 ```sh
-shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/frame.shen \
-  -e '(let E (io.input-buffer (frame.encode 42 (buffer.from-string "hello") 1024)) F (frame.reader (io.reader E [[chunk-size 2]]) 1024) Result (frame.next F) End (frame.next F) _ (io.close E) [(hd (tl Result)) (buffer.string (hd (tl (tl Result)))) End])'
+shen-jit eval -m frame \
+  -e '(define describe-frame (:result.ok [(:frame.frame Tag Payload)]) End -> [Tag (buffer.string Payload) End])' \
+  -e '(let E (io.input-buffer (frame.encode 42 (buffer.from-string "hello") 1024)) F (frame.reader (io.reader E [[chunk-size 2]]) 1024) Result (frame.next F) End (frame.next F) _ (io.close E) (describe-frame Result End))'
 ```
 
-This returns `[42 hello [eof]]`, even though the header and payload cross several reader chunks.
+This returns `[42 hello #<result.ok []>]`, even though the header and payload cross several reader chunks.
 Programs should match the error alternative before extracting a successful frame.
 
 ## Operations
@@ -28,11 +29,11 @@ Programs should match the error alternative before extracting a successful frame
 | --- | --- |
 | `frame.encode Tag Payload Limit` | An owned wire-format view, including the six-byte header |
 | `frame.reader Reader Limit` | A framer borrowing an existing I/O reader |
-| `frame.next F` | `[frame Tag OwnedPayload]`, `[eof]` or `[error Error]` |
+| `frame.next F` | `(:result.ok [(:frame.frame Tag OwnedPayload)])`, `(:result.ok [])` or `(:result.err Error)` |
 | `frame.position F` | The underlying reader's consumed position |
 
 Tag must be a nonnegative fixnum at most 65535. Limit is a nonnegative fixnum at most 4294967295. An
-integral boxed real is refused. The payload limit is mandatory for encoding and decoding; a payload whose
+integral boxed float is refused. The payload limit is mandatory for encoding and decoding; a payload whose
 advertised length exceeds it is rejected after the header, before allocation or payload consumption.
 Encoding validates arguments before allocating output and copies only Payload's logical range. A zero
 limit allows empty frames. No integer conversion through a floating-point value is involved.
@@ -71,19 +72,28 @@ stale, as described on the I/O pages.
 
 ## Typed clients and complete parsing
 
-Declarations expose opaque `frame.reader` and the `frame.result` datatype. Load libraries with `(tc -)`,
+Declarations expose opaque `frame.reader` and the return type `(io.result (option.t frame.frame))` for `frame.next`. Load libraries with `(tc -)`,
 then check clients with `(tc +)`:
 
 ```shen
-(define frame-text
-  {frame.result --> (io.result string)}
-  [frame Tag Payload] -> [ok (buffer.string Payload)]
-  [eof] -> [ok "end"]
-  [error Error] -> [error Error])
+(shen.x.namespace example
+  (use option)
+  (import frame frame)
+  (use buffer)
+  (use frame)
+  (use io)
+  (import result ok err)
+  (export frame-text)
+
+  (define frame-text
+    {(io.result (option.t frame.frame)) --> (io.result string)}
+    (:ok [(:frame Tag Payload)]) -> (ok (buffer.string Payload))
+    (:ok []) -> (ok "end")
+    (:err Error) -> (err Error)))
 ```
 
 The payload is just bytes: validate the selected text encoding or parse a complete payload separately.
-For example, load `cursor.shen` and `tools/buffer-parsers.shen` to pass a successful payload to
+For example, load `tools/buffer-parsers.shenmod` to pass a successful payload to
 `buffer-example.json`. Protocol framing and JSON recognition then happen once each; neither needs Shen's
 default I/O. A future grammar compiler can use this boundary without implementing resumable parsing first.
 
@@ -91,7 +101,7 @@ default I/O. A future grammar compiler can use this boundary without implementin
 
 [tools/frame-echo.shen](../tools/frame-echo.shen) demonstrates a complete connected-session handler.
 `frame-echo.serve Endpoint Limit` owns and closes the endpoint, reads frames, writes an identical response
-and flushes each response before reading the next request. It returns `[ok MessageCount]` or `[error Error]`.
+and flushes each response before reading the next request. It returns `(:result.ok MessageCount)` or `(:result.err Error)`.
 Malformed input closes the connection; payloads and queued I/O stay bounded. It is a sequential session
 handler, with no listener loop, thread cap, timeouts, authentication or HTTP semantics.
 

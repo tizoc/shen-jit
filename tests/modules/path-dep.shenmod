@@ -1,0 +1,1 @@
+(shen.module (version 1) (name path-dep) (sources tc- "path-dep.shen"))

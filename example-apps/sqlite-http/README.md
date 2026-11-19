@@ -83,8 +83,8 @@ would need separate runtime/library support; this example uses an explicit appli
 
 ## Files and tests
 
-`main.shen` holds the routes, database scopes, startup and shutdown. `run.shen` loads their public
-dependencies and passes the command-line arguments. Applications can instead load `main.shen` and call
+`main.shen` holds the routes, database scopes, startup and shutdown. `sqlite-http.shenmod` names the libraries
+it requires, and `run.shen` loads it and passes the command-line arguments. Applications can instead load `main.shen` and call
 `(counter-app.start Path Host Port F Options)`, which starts the database's owner and a server whose handler is `F`,
 called with `Db`, what reaches the owning isolate, and the request, such as `counter-app.handle`: a handler runs in an
 isolate of its connection's, which inherits no globals. If it fails, it ends the owning isolate and closes the

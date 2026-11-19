@@ -1,3 +1,5 @@
+(load "tests/result_helpers.shen")
+
 (set counter-test.passed 0)
 (set counter-test.failed 0)
 
@@ -56,9 +58,9 @@
          Head (buffer.from-string
                 (make-string "PUT /counters/body HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Content-Type: ~Ac#13;c#10;Content-Length: ~Ac#13;c#10;c#13;c#10;"
                   Type (buffer.length V)))
-         Q (hd (tl (http.parse-request Head 4096)))
+         Q (fixture.success (http.parse-request Head 4096))
          E (io.input-buffer V)
-         Full (hd (tl (http.read-body (http.body-reader (io.reader E []) Q))))
+         Full (fixture.success (http.read-body (http.body-reader (io.reader E []) Q)))
          _ (io.close E)
          Response (counter-app.handle (value counter-test.path) Full)
       [(http.buffered-response.status Response) (buffer.string (http.buffered-response.body Response))]))

@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name sqlite)
+  (requires ffi)
+  (sources tc- "sqlite.shen"))

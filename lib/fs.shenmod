@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name fs)
+  (requires ffi buffer io io/file result)
+  (sources tc- "fs.shen" tc+ "fs-paths.shen" tc+ "fs-typed.shen" tc+ "fs-operations.shen"))

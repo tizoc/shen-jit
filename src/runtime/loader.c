@@ -114,12 +114,13 @@ static long primitive_index(V name)
     for (size_t i = 0; i < primitive_count; i++)
         if (symbol_is(name, primitive_table[i].name))
             return (long)i;
-    return symbol_is(name, "raise-cond") ? (long)PRIM_RAISE_COND : -1;
+    return symbol_is(name, "raise-cond") ? (long)PRIM_RAISE_COND
+           : symbol_is(name, "shen-jit.field") ? (long)PRIM_FIELD : -1;
 }
 
 static int primitive_arity(size_t index)
 {
-    return index == PRIM_RAISE_COND ? 0 : primitive_table[index].arity;
+    return index == PRIM_RAISE_COND ? 0 : index == PRIM_FIELD ? 2 : primitive_table[index].arity;
 }
 
 /* The constant slot of sealed calls to sym, shared within one load. It holds
@@ -162,7 +163,7 @@ static bool encode(Loader *l, V insn, uint64_t frame, uint64_t nconst, uint64_t 
     uint64_t x;
     /* Each operand position has a kind: s slot, o slot or constant (an
        operand), k constant, c code, i capture index, l label, f function symbol,
-       n count, r a real register, w a word register, W a word register or a constant. */
+       n count, r a float register, w a word register, W a word register or a constant. */
     static const char *const kinds[OP_COUNT] = {
         [OP_MOVE] = "ss", [OP_CONST] = "sk", [OP_CAPTURE] = "si",
         [OP_CLOSURE] = "sc", [OP_PRIM] = "s", [OP_LABEL] = "l", [OP_JUMP] = "l",
@@ -173,10 +174,10 @@ static bool encode(Loader *l, V insn, uint64_t frame, uint64_t nconst, uint64_t 
         [OP_JUMP_UNLESS_ENTRY] = "snl", [OP_INLINE] = "fl"};
     /* What reads or writes memory is laid out as prim is, in the words the JIT reads: the
        register, the primitive that raises what is wrong with it, a count and the operands. */
-    if (op == OP_REAL_LOAD || op == OP_REAL_STORE) {
+    if (op == OP_FLOAT_LOAD || op == OP_FLOAT_STORE) {
         uint64_t reg, m, i;
-        bool store = op == OP_REAL_STORE;
-        if (n != 4 || !small_int(nth(insn, store ? 3 : 1), REAL_REGISTERS, &reg) ||
+        bool store = op == OP_FLOAT_STORE;
+        if (n != 4 || !small_int(nth(insn, store ? 3 : 1), FLOAT_REGISTERS, &reg) ||
             !operand(nth(insn, store ? 1 : 2), frame, nconst, &m) ||
             !operand(nth(insn, store ? 2 : 3), frame, nconst, &i))
             return fail(l, "bad operand");
@@ -211,7 +212,7 @@ static bool encode(Loader *l, V insn, uint64_t frame, uint64_t nconst, uint64_t 
             ok = byte_count(l, v, &x, op == OP_ENTRY ? "entry has more than 255 parameters" :
                                                        "call has more than 255 arguments");
             break;
-        case 'r': ok = small_int(v, REAL_REGISTERS, &x); break;
+        case 'r': ok = small_int(v, FLOAT_REGISTERS, &x); break;
         case 'w': ok = small_int(v, WORD_REGISTERS, &x); break;
         case 'W': ok = operand(v, WORD_REGISTERS, nconst, &x); break;
         default: /* 'f' */
@@ -497,13 +498,8 @@ V sj_install(VM *vm, V form)
     const char *refused = NULL;
     if (!l.error && defun) {
         result = program_promote(vm, result, &refused);
-        if (result != V_CLEARED) {
-            if (vm->program->redefine)
-                vm->program->redefine(vm, symbol_cell(nth(form, 1)));
-            *cell_function(vm, symbol_cell(nth(form, 1))) = result;
-            if (vm->seal_user)
-                symbol_seal(nth(form, 1));
-        }
+        if (result != V_CLEARED && !program_install(vm, nth(form, 1), result))
+            refused = "out of memory";
         result = nth(form, 1);
     }
     vm_unroot(vm, 1);

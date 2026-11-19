@@ -120,7 +120,7 @@ void set_system_error(int32_t n)
    Windows, each of these is a different call. */
 #define WITH_RESULT(name, T0, T1, T2, T3)                                                      \
     int64_t name##_word(T0 a, T1 b, T2 c, T3 d) { return (int64_t)(a * 1000 + b * 100 + c * 10 + d); } \
-    double name##_real(T0 a, T1 b, T2 c, T3 d) { return (double)a * 1000 + (double)b * 100 + (double)c * 10 + (double)d; }
+    double name##_float(T0 a, T1 b, T2 c, T3 d) { return (double)a * 1000 + (double)b * 100 + (double)c * 10 + (double)d; }
 #define I int64_t
 #define D double
 WITH_RESULT(mask0, I, I, I, I)
@@ -261,7 +261,7 @@ shen_value kind_of(shen_vm *vm, shen_value *args)
                          : shen_is_pair(vm, v) ? "pair"
                          : shen_is_vector(vm, v) ? "vector"
                          : shen_is_symbol(vm, v) ? "symbol"
-                         : shen_is_real(vm, v) ? "real"
+                         : shen_is_float(vm, v) ? "float"
                          : shen_is_bytes(vm, v) ? "bytes"
                          : shen_is_procedure(vm, v) ? "procedure"
                          : shen_pointer(vm, v, NULL) ? "pointer" : "other");
@@ -272,7 +272,7 @@ shen_value kind_of(shen_vm *vm, shen_value *args)
 #define CHECK(c) if (!(c)) return shen_make_fixnum(__LINE__)
 shen_value reads_right(shen_vm *vm, shen_value *args)
 {
-    shen_value pair = args[0], vector = args[1], string = args[2], bytes = args[3], symbol = args[4], real = args[5];
+    shen_value pair = args[0], vector = args[1], string = args[2], bytes = args[3], symbol = args[4], number = args[5];
     CHECK(shen_fixnum(shen_head(vm, pair)) == 1);
     CHECK(shen_is_pair(vm, shen_tail(vm, pair)));
     CHECK(shen_vector_length(vm, vector) == 3);
@@ -290,7 +290,7 @@ shen_value reads_right(shen_vm *vm, shen_value *args)
     b[2] = 77;
     s = shen_string_bytes(vm, shen_symbol_name(vm, symbol), &n);
     CHECK(s && n == 3 && memcmp(s, "foo", 3) == 0);
-    CHECK(shen_number(vm, real) == 1.5);
+    CHECK(shen_number(vm, number) == 1.5);
     CHECK(shen_number(vm, shen_make_fixnum(3)) == 3.0);
     /* The wrong type never raises. */
     shen_value one = shen_make_fixnum(1);
@@ -337,7 +337,7 @@ shen_value make_all(shen_vm *vm, shen_value *args)
     list = shen_cons(vm, v, list);
     v = shen_make_string(vm, "abc", 3);
     list = shen_cons(vm, v, list);
-    v = shen_make_real(vm, 1.5);
+    v = shen_make_float(vm, 1.5);
     return shen_cons(vm, v, list);
 }
 

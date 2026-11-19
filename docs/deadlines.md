@@ -1,12 +1,11 @@
 # Operation deadlines
 
 [lib/deadline.shen](../lib/deadline.shen) supplies absolute operation budgets with an injectable clock.
-[lib/clock.shen](../lib/clock.shen) supplies a system monotonic clock through the existing FFI. Load
-`buffer.shen` and `io.shen` before `deadline.shen`; load `ffi.shen` before `clock.shen`.
+[lib/clock.shen](../lib/clock.shen) supplies a system monotonic clock through the existing FFI. Their modules are
+`deadline` and `clock`, which load what they need first.
 
 ```sh
-shen-jit eval -l lib/ffi.shen -l lib/buffer.shen -l lib/io.shen \
-  -l lib/deadline.shen -l lib/clock.shen \
+shen-jit eval -m clock \
   -e '(let D (clock.deadline 5000) [(> (deadline.remaining D) 0) (<= (deadline.slice D 100) 100)])'
 ```
 
@@ -27,7 +26,7 @@ writing a response.
 | `deadline.expired? D` | True at or after the absolute endpoint |
 | `deadline.slice D Maximum` | The smaller of remaining time and a positive integer Maximum |
 
-Durations and clock results must be nonnegative fixnums; integral boxed reals are refused. Zero duration is
+Durations and clock results must be nonnegative fixnums; integral boxed floats are refused. Zero duration is
 immediately expired. Arithmetic overflow raises. Injected clocks must be nondecreasing; backwards movement
 raises. One task owns a deadline and its clock state, as it owns the I/O operation using them. The deadline
 can derive a shorter phase without extending a total operation/connection budget. An expired parent
@@ -56,7 +55,8 @@ budgets for the new execution rather than reusing an old absolute time or clock 
 
 ## Socket I/O
 
-Load `deadline.shen`, and optionally `clock.shen`, along with the [socket endpoint libraries](io-sockets.md).
+The [socket endpoint module](io-sockets.md), `io/socket`, requires `deadline`; load `clock` too, with `-m clock`,
+for the system clock.
 `io.socket-deadline E D` installs a budget for both directions of a connected endpoint and returns E.
 `io.socket-unlimited E` removes it and returns E. A new endpoint has no deadline. Transfer options remain
 `[]`; this policy is attached to the owned endpoint rather than passed to every reader/writer call.

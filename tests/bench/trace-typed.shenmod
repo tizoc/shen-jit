@@ -1,0 +1,8 @@
+(shen.module
+  (version 1)
+  (name trace-typed)
+  (requires numbers memory word)
+  (typed)
+  (main trace-typed-main)
+  (sources tc+ "trace-typed.shen"
+           tc- "trace-typed-run.shen"))

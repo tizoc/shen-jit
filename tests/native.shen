@@ -75,7 +75,7 @@
   (tail-call native-test.three X A X))
 (native-test.check "more arguments than parameters" [2 1 | 2] (freeze (native-test.widen 1)))
 
-\\ Constants: a string, a real, a Boolean, a symbol, a list, and with const the
+\\ Constants: a string, a float, a Boolean, a symbol, a list, and with const the
 \\ value of an expression. Code holds only what the reader makes, so a vector is refused.
 (set native-test.*list* [x y])
 (define-native native-test.constants ()
@@ -293,6 +293,37 @@
 (native-test.check "two arguments, a pair" 1
   (freeze (let F (value native-test.*entry*) (F [1] 8))))
 
+\\ Register code keeps what the JIT knows of pairs, but not of a slot it boxes a word into: hd there
+\\ tests again.
+(set native-test.*boxed-over*
+  (shen-jit.install-code
+    [code native-test.boxed-over 1 5 [5]
+      [[prim 3 cons? 2]
+       [jump-if-false 3 0]
+       [word-number 0 [const 0]]
+       [word-box 2 0]
+       [prim 4 hd 2]
+       [return 4]
+       [label 0]
+       [return 2]]
+      []]))
+(native-test.check "a pair boxed over, tested again" [error "hd: 5 is not a pair"]
+  (freeze (native-test.result (freeze ((value native-test.*boxed-over*) [1])))))
+(native-test.check "not a pair" 7 (freeze ((value native-test.*boxed-over*) 7)))
+
+\\ Nor what it knows of a struct's length, where a struct read found one: the read after the box tests again.
+(set native-test.*length-boxed-over*
+  (shen-jit.install-code
+    [code native-test.length-boxed-over 1 5 [1 3 5]
+      [[prim 3 shen-jit.struct-ref 2 [const 0] [const 1]]
+       [word-number 0 [const 2]]
+       [word-box 2 0]
+       [prim 4 shen-jit.struct-ref 2 [const 0] [const 1]]
+       [return 4]]
+      []]))
+(native-test.check "a struct boxed over, tested again" [error "<-address: 5 is not an absvector"]
+  (freeze (native-test.result (freeze ((value native-test.*length-boxed-over*) (absvector 3))))))
+
 \\ ---------------------------------------------------------------------------
 \\ Code to refuse. Each would misbehave or crash if it reached the JIT.
 
@@ -300,6 +331,8 @@
 (native-test.raw "writes the return address" [code f 0 4 [1] [[const 2 0] [const 0 0] [return 2]] []])
 (native-test.raw "writes the procedure" [code f 0 4 [1] [[const 2 0] [move 1 2] [return 2]] []])
 (native-test.raw "reads the return address" [code f 0 4 [] [[move 2 0] [return 2]] []])
+(native-test.raw "reads a field with no check" [code f 1 4 [1] [[prim 3 shen-jit.field 2 [const 0]] [return 3]] []])
+(native-test.raw "calls C with floats" [code f 1 4 [] [[float-number 0 2] [float-call1 0 sin 0] [float-box 3 0] [return 3]] []])
 (native-test.raw "reads the procedure" [code f 0 4 [] [[move 2 1] [return 2]] []])
 (native-test.raw "returns the procedure" [code f 0 4 [] [[return 1]] []])
 (native-test.raw "a slot past the frame" [code f 0 4 [1] [[const 9 0] [return 9]] []])
@@ -410,83 +443,83 @@
 (native-test.refused "redefines a sealed function, built" (freeze (define-native reverse () (return 1))))
 
 \\ ---------------------------------------------------------------------------
-\\ Real registers.
+\\ Float registers.
 
 \\ A loop: what comes before its head runs once, a register keeps its value round the loop, and a
-\\ slot read for a number takes an integer as well as a real.
-(define-native native-test.real-sum (B I End Start)
-  (real Acc Start)
+\\ slot read for a number takes an integer as well as a float.
+(define-native native-test.float-sum (B I End Start)
+  (float Acc Start)
   (loop top)
   (prim T >= I End)
   (jump-if-false T more)
-  (return-real Acc)
+  (return-float Acc)
   (label more)
-  (real Acc (+ Acc (f64 B I)))
+  (float Acc (+ Acc (f64 B I)))
   (prim I + I 8)
   (again top))
 
-(set native-test.reals (shen-jit.bytes 24))
-(shen-jit.f64! (value native-test.reals) 0 1.5)
-(shen-jit.f64! (value native-test.reals) 8 2.5)
-(shen-jit.f64! (value native-test.reals) 16 0.25)
-(native-test.check "a loop on a buffer" 4.25 (freeze (native-test.real-sum (value native-test.reals) 0 24 0)))
-(native-test.check "from a real" 4.75 (freeze (native-test.real-sum (value native-test.reals) 0 24 0.5)))
-(native-test.check "no times round gives what it started with, boxed" 2.5 (freeze (native-test.real-sum (value native-test.reals) 0 0 2.5)))
-(native-test.check "it is a real" true (freeze (number? (native-test.real-sum (value native-test.reals) 0 0 2))))
+(set native-test.floats (shen-jit.bytes 24))
+(shen-jit.f64! (value native-test.floats) 0 1.5)
+(shen-jit.f64! (value native-test.floats) 8 2.5)
+(shen-jit.f64! (value native-test.floats) 16 0.25)
+(native-test.check "a loop on a buffer" 4.25 (freeze (native-test.float-sum (value native-test.floats) 0 24 0)))
+(native-test.check "from a float" 4.75 (freeze (native-test.float-sum (value native-test.floats) 0 24 0.5)))
+(native-test.check "no times round gives what it started with, boxed" 2.5 (freeze (native-test.float-sum (value native-test.floats) 0 0 2.5)))
+(native-test.check "it is a float" true (freeze (number? (native-test.float-sum (value native-test.floats) 0 0 2))))
 (native-test.check "not a number" [error "a is not a number"]
-  (freeze (native-test.result (freeze (native-test.real-sum (value native-test.reals) 0 24 a)))))
+  (freeze (native-test.result (freeze (native-test.float-sum (value native-test.floats) 0 24 a)))))
 (native-test.check "past the end" [error "bytes: 32 is not a valid index"]
-  (freeze (native-test.result (freeze (native-test.real-sum (value native-test.reals) 32 40 0)))))
+  (freeze (native-test.result (freeze (native-test.float-sum (value native-test.floats) 32 40 0)))))
 (native-test.check "not memory" error
-  (freeze (hd (native-test.result (freeze (native-test.real-sum "abc" 0 8 0))))))
+  (freeze (hd (native-test.result (freeze (native-test.float-sum "abc" 0 8 0))))))
 
 \\ Each operation, nested, with literals and slots among them.
-(define-native native-test.real-ops (A B)
-  (real X A)
-  (real Y B)
-  (real R (- (/ (* (+ X Y) 2) Y) (sqrt (abs (neg X)))))
-  (return-real R))
-(native-test.check "arithmetic" 4 (freeze (native-test.real-ops 4 2)))
+(define-native native-test.float-ops (A B)
+  (float X A)
+  (float Y B)
+  (float R (- (/ (* (+ X Y) 2) Y) (sqrt (abs (neg X)))))
+  (return-float R))
+(native-test.check "arithmetic" 4 (freeze (native-test.float-ops 4 2)))
 
 \\ What is on both sides, written after it is read.
-(define-native native-test.real-same (A)
-  (real X A)
-  (real X (+ (* X X) X))
-  (real X (- X (* X 0.5)))
-  (return-real X))
-(native-test.check "a register read in what writes it" 6 (freeze (native-test.real-same 3)))
+(define-native native-test.float-same (A)
+  (float X A)
+  (float X (+ (* X X) X))
+  (float X (- X (* X 0.5)))
+  (return-float X))
+(native-test.check "a register read in what writes it" 6 (freeze (native-test.float-same 3)))
 
-(define-native native-test.real-many (A B)
-  (real X (+ A B 1 2.5))
-  (real Y (* A B 2))
-  (return-real (+ X Y)))
-(native-test.check "several operands, from slots" 25.5 (freeze (native-test.real-many 2 4)))
+(define-native native-test.float-many (A B)
+  (float X (+ A B 1 2.5))
+  (float Y (* A B 2))
+  (return-float (+ X Y)))
+(native-test.check "several operands, from slots" 25.5 (freeze (native-test.float-many 2 4)))
 
-(define-native native-test.real-divide (A B)
-  (real X A)
-  (real Y B)
-  (return-real (/ X Y)))
-(native-test.check "division by zero gives infinity" true (freeze (> (native-test.real-divide 1 0) 1e300)))
+(define-native native-test.float-divide (A B)
+  (float X A)
+  (float Y B)
+  (return-float (/ X Y)))
+(native-test.check "division by zero gives infinity" true (freeze (> (native-test.float-divide 1 0) 1e300)))
 
 \\ An index in arithmetic, and a store.
-(define-native native-test.real-store (B I X)
-  (real V X)
+(define-native native-test.float-store (B I X)
+  (float V X)
   (f64! B (* (+ I 1) 8) (+ V 1))
-  (return-real (f64 B (* (+ I 1) 8))))
-(native-test.check "a store, and an index worked out" 3.5 (freeze (native-test.real-store (shen-jit.bytes 16) 0 2.5)))
+  (return-float (f64 B (* (+ I 1) 8))))
+(native-test.check "a store, and an index worked out" 3.5 (freeze (native-test.float-store (shen-jit.bytes 16) 0 2.5)))
 (native-test.check "a store past the end" [error "bytes: 16 is not a valid index"]
-  (freeze (native-test.result (freeze (native-test.real-store (shen-jit.bytes 16) 1 2.5)))))
+  (freeze (native-test.result (freeze (native-test.float-store (shen-jit.bytes 16) 1 2.5)))))
 
 \\ Each comparison, NaN making each one false.
-(define-native native-test.real-lt (A B) (jump-unless (< A B) no) (return yes) (label no) (return no))
-(define-native native-test.real-gt (A B) (jump-unless (> A B) no) (return yes) (label no) (return no))
-(define-native native-test.real-le (A B) (jump-unless (<= A B) no) (return yes) (label no) (return no))
-(define-native native-test.real-ge (A B) (jump-unless (>= A B) no) (return yes) (label no) (return no))
-(define-native native-test.real-eq (A B) (jump-unless (= A B) no) (return yes) (label no) (return no))
+(define-native native-test.float-lt (A B) (jump-unless (< A B) no) (return yes) (label no) (return no))
+(define-native native-test.float-gt (A B) (jump-unless (> A B) no) (return yes) (label no) (return no))
+(define-native native-test.float-le (A B) (jump-unless (<= A B) no) (return yes) (label no) (return no))
+(define-native native-test.float-ge (A B) (jump-unless (>= A B) no) (return yes) (label no) (return no))
+(define-native native-test.float-eq (A B) (jump-unless (= A B) no) (return yes) (label no) (return no))
 
 (define native-test.compare-all
-  A B -> [(native-test.real-lt A B) (native-test.real-gt A B) (native-test.real-le A B)
-          (native-test.real-ge A B) (native-test.real-eq A B)])
+  A B -> [(native-test.float-lt A B) (native-test.float-gt A B) (native-test.float-le A B)
+          (native-test.float-ge A B) (native-test.float-eq A B)])
 
 (set native-test.nan (let I (* 1e300 1e300) (- I I)))
 (native-test.check "below" [yes no yes no no] (freeze (native-test.compare-all 1.5 2)))
@@ -494,22 +527,22 @@
 (native-test.check "equal" [no no yes yes yes] (freeze (native-test.compare-all 2 2)))
 (native-test.check "NaN" [no no no no no] (freeze (native-test.compare-all (value native-test.nan) 1)))
 (native-test.check "a comparison raises on what is no number" [error "a is not a number"]
-  (freeze (native-test.result (freeze (native-test.real-lt a 1)))))
+  (freeze (native-test.result (freeze (native-test.float-lt a 1)))))
 
 \\ What calls C or collects keeps them: boxes that allocate, a primitive that calls C and
 \\ allocates, and an = that calls C and does not.
-(define-native native-test.real-keep (N Acc)
-  (real X 0)
-  (real Y 100)
+(define-native native-test.float-keep (N Acc)
+  (float X 0)
+  (float Y 100)
   (loop top)
   (prim T = N 0)
   (jump-if-false T more)
   (return Acc)
   (label more)
-  (real X (+ X 1))
-  (real Y (- Y 1))
-  (real-box A X)
-  (real-box B Y)
+  (float X (+ X 1))
+  (float Y (- Y 1))
+  (float-box A X)
+  (float-box B Y)
   (prim S str N)
   (prim S2 str N)
   (prim E = S S2)
@@ -520,42 +553,42 @@
   (again top)
   (label fail)
   (return fail))
-(native-test.check "kept across C and collections" 20000 (freeze (native-test.real-keep 200 0)))
+(native-test.check "kept across C and collections" 20000 (freeze (native-test.float-keep 200 0)))
 
 \\ All twelve, for a square root whose registers an instruction encodes in extra bits.
-(define-native native-test.real-twelve (A)
-  (real R0 A)
-  (real R1 (+ R0 1))
-  (real R2 (+ R1 1))
-  (real R3 (+ R2 1))
-  (real R4 (+ R3 1))
-  (real R5 (+ R4 1))
-  (real R6 (+ R5 1))
-  (real R7 (+ R6 1))
-  (real R8 (+ R7 1))
-  (real R9 (+ R8 1))
-  (real R10 (sqrt (* R9 R9)))
-  (real R0 (sqrt R10))
-  (real R10 (sqrt R1))
-  (real R0 (+ R0 R10 R2 R3 R4 R5 R6 R7 R8))
-  (return-real R0))
+(define-native native-test.float-twelve (A)
+  (float R0 A)
+  (float R1 (+ R0 1))
+  (float R2 (+ R1 1))
+  (float R3 (+ R2 1))
+  (float R4 (+ R3 1))
+  (float R5 (+ R4 1))
+  (float R6 (+ R5 1))
+  (float R7 (+ R6 1))
+  (float R8 (+ R7 1))
+  (float R9 (+ R8 1))
+  (float R10 (sqrt (* R9 R9)))
+  (float R0 (sqrt R10))
+  (float R10 (sqrt R1))
+  (float R0 (+ R0 R10 R2 R3 R4 R5 R6 R7 R8))
+  (return-float R0))
 (native-test.check "every register, and a root in each" true
-  (freeze (let V (native-test.real-twelve 3)
+  (freeze (let V (native-test.float-twelve 3)
             (and (> V 61.46) (< V 61.47)))))
 
 (native-test.refused "an unknown instruction among them"
-  (freeze (define-native native-test.bad (A) (real X A) (call-result R F) (return-real X))))
+  (freeze (define-native native-test.bad (A) (float X A) (call-result R F) (return-float X))))
 
 \\ What must be refused.
-(native-test.refused "a call" (freeze (define-native native-test.bad (A) (real X A) (call R reverse A) (return-real X))))
-(native-test.refused "a call of a value" (freeze (define-native native-test.bad (F) (real X 1) (call R F 1) (return-real X))))
+(native-test.refused "a call" (freeze (define-native native-test.bad (A) (float X A) (call R reverse A) (return-float X))))
+(native-test.refused "a call of a value" (freeze (define-native native-test.bad (F) (float X 1) (call R F 1) (return-float X))))
 (native-test.refused "a handler"
-  (freeze (define-native native-test.bad (A) (push-handler h) (real X A) (pop-handler) (return-real X) (label h) (return A))))
-(native-test.refused "a register unset" (freeze (define-native native-test.bad (A) (real X (+ Y 1)) (real Y 1) (return-real X))))
+  (freeze (define-native native-test.bad (A) (push-handler h) (float X A) (pop-handler) (return-float X) (label h) (return A))))
+(native-test.refused "a register unset" (freeze (define-native native-test.bad (A) (float X (+ Y 1)) (float Y 1) (return-float X))))
 (native-test.refused "a register set on one path"
-  (freeze (define-native native-test.bad (A) (jump-if-false A l) (real X 1) (label l) (return-real X))))
-(native-test.refused "a register as a slot" (freeze (define-native native-test.bad (A) (real X A) (prim Y + X 1) (return Y))))
-(native-test.refused "a register as memory" (freeze (define-native native-test.bad (A) (real X A) (real Y (f64 X 0)) (return-real Y))))
+  (freeze (define-native native-test.bad (A) (jump-if-false A l) (float X 1) (label l) (return-float X))))
+(native-test.refused "a register as a slot" (freeze (define-native native-test.bad (A) (float X A) (prim Y + X 1) (return Y))))
+(native-test.refused "a register as memory" (freeze (define-native native-test.bad (A) (float X A) (float Y (f64 X 0)) (return-float Y))))
 (native-test.refused "going back to nothing" (freeze (define-native native-test.bad () (again l))))
 (native-test.refused "going back to a label"
   (freeze (define-native native-test.bad (A) (label l) (again l))))
@@ -574,9 +607,9 @@
 (native-test.refused "a register the loop's head has, and going back without it"
   (freeze (define-native native-test.bad (A)
             (jump-if-false A inside)
-            (real X 1)
+            (float X 1)
             (loop l)
-            (real Y X)
+            (float Y X)
             (label inside)
             (again l))))
 (native-test.refused "a slot read at the head, set only later"
@@ -590,39 +623,41 @@
             (return A))))
 (native-test.refused "after going back, nothing"
   (freeze (define-native native-test.bad (A) (loop l) (again l) (return A))))
-(native-test.refused "not a real expression" (freeze (define-native native-test.bad (A) (real X (foo A)) (return-real X))))
+(native-test.refused "not a float expression" (freeze (define-native native-test.bad (A) (float X (foo A)) (return-float X))))
 (native-test.refused "not a comparison" (freeze (define-native native-test.bad (A) (jump-unless (foo A A) l) (label l) (return A))))
 (native-test.refused "more registers than there are"
   (freeze (define-native native-test.bad (A)
-            (real R0 A) (real R1 A) (real R2 A) (real R3 A) (real R4 A) (real R5 A) (real R6 A) (real R7 A)
-            (real R8 A) (real R9 A) (real R10 A) (real R11 A) (real R12 A) (real R13 A) (real R14 A) (real R15 A)
-            (real R16 A) (real R17 A) (real R18 A) (real R19 A) (real R20 A) (real R21 A) (real R22 A) (real R23 A)
-            (real R24 A) (real R25 A) (real R26 A) (real R27 A) (real R28 A) (real R29 A) (real R30 A) (real R31 A)
-            (real R32 A) (real R33 A) (real R34 A) (real R35 A) (real R36 A) (real R37 A) (real R38 A) (real R39 A)
-            (real R40 A) (real R41 A) (real R42 A) (real R43 A) (real R44 A) (real R45 A) (real R46 A) (real R47 A)
-            (real R48 A) (return-real R48))))
-(native-test.raw "a register out of range" [code native-test.bad 0 3 [0] [[real-number 48 [const 0]] [return [const 0]]] []])
-(native-test.raw "a negative register" [code native-test.bad 0 3 [0] [[real-number -1 [const 0]] [return [const 0]]] []])
-(native-test.raw "a slot for a register" [code native-test.bad 0 3 [0] [[real-box 2 2] [return 2]] []])
-(native-test.raw "a label that is not there" [code native-test.bad 0 3 [0] [[real-number 0 [const 0]] [real-unless< 0 0 9] [return [const 0]]] []])
-(native-test.raw "a load into nothing" [code native-test.bad 1 4 [0] [[real-load 48 2 [const 0]] [return 2]] []])
-(native-test.raw "a store of nothing" [code native-test.bad 1 4 [0] [[real-store 2 [const 0] 0] [return 2]] []])
+            (float R0 A) (float R1 A) (float R2 A) (float R3 A) (float R4 A) (float R5 A) (float R6 A) (float R7 A)
+            (float R8 A) (float R9 A) (float R10 A) (float R11 A) (float R12 A) (float R13 A) (float R14 A) (float R15 A)
+            (float R16 A) (float R17 A) (float R18 A) (float R19 A) (float R20 A) (float R21 A) (float R22 A) (float R23 A)
+            (float R24 A) (float R25 A) (float R26 A) (float R27 A) (float R28 A) (float R29 A) (float R30 A) (float R31 A)
+            (float R32 A) (float R33 A) (float R34 A) (float R35 A) (float R36 A) (float R37 A) (float R38 A) (float R39 A)
+            (float R40 A) (float R41 A) (float R42 A) (float R43 A) (float R44 A) (float R45 A) (float R46 A) (float R47 A)
+            (float R48 A) (float R49 A) (float R50 A) (float R51 A) (float R52 A) (float R53 A) (float R54 A) (float R55 A)
+            (float R56 A) (float R57 A) (float R58 A) (float R59 A) (float R60 A) (float R61 A) (float R62 A) (float R63 A)
+            (float R64 A) (return-float R48))))
+(native-test.raw "a register out of range" [code native-test.bad 0 3 [0] [[float-number 64 [const 0]] [return [const 0]]] []])
+(native-test.raw "a negative register" [code native-test.bad 0 3 [0] [[float-number -1 [const 0]] [return [const 0]]] []])
+(native-test.raw "a slot for a register" [code native-test.bad 0 3 [0] [[float-box 2 2] [return 2]] []])
+(native-test.raw "a label that is not there" [code native-test.bad 0 3 [0] [[float-number 0 [const 0]] [float-unless< 0 0 9] [return [const 0]]] []])
+(native-test.raw "a load into nothing" [code native-test.bad 1 4 [0] [[float-load 64 2 [const 0]] [return 2]] []])
+(native-test.raw "a store of nothing" [code native-test.bad 1 4 [0] [[float-store 2 [const 0] 0] [return 2]] []])
 (native-test.refused "none of those was installed, again" (freeze ((fn native-test.bad))))
 
-\\ More real registers than the machine gives: those live in the native frame, and work the same.
-(define-native native-test.real-many-more (A)
-  (real R0 A) (real R1 (+ R0 1)) (real R2 (+ R1 1)) (real R3 (+ R2 1)) (real R4 (+ R3 1))
-  (real R5 (+ R4 1)) (real R6 (+ R5 1)) (real R7 (+ R6 1)) (real R8 (+ R7 1)) (real R9 (+ R8 1))
-  (real R10 (+ R9 1)) (real R11 (+ R10 1)) (real R12 (+ R11 1)) (real R13 (+ R12 1)) (real R14 (+ R13 1))
-  (real R15 (sqrt (* R14 R14)))
-  (real R16 (/ (neg R15) 2))
+\\ More float registers than the machine gives: those live in the native frame, and work the same.
+(define-native native-test.float-many-more (A)
+  (float R0 A) (float R1 (+ R0 1)) (float R2 (+ R1 1)) (float R3 (+ R2 1)) (float R4 (+ R3 1))
+  (float R5 (+ R4 1)) (float R6 (+ R5 1)) (float R7 (+ R6 1)) (float R8 (+ R7 1)) (float R9 (+ R8 1))
+  (float R10 (+ R9 1)) (float R11 (+ R10 1)) (float R12 (+ R11 1)) (float R13 (+ R12 1)) (float R14 (+ R13 1))
+  (float R15 (sqrt (* R14 R14)))
+  (float R16 (/ (neg R15) 2))
   (jump-unless (< R16 R0) wrong)
-  (real-box A1 R15)
+  (float-box A1 R15)
   (prim S str A1)
-  (return-real (+ R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16))
+  (return-float (+ R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16))
   (label wrong)
   (return wrong))
-(native-test.check "more registers than the machine's" 127.5 (freeze (native-test.real-many-more 1)))
+(native-test.check "more registers than the machine's" 127.5 (freeze (native-test.float-many-more 1)))
 
 \\ ---------------------------------------------------------------------------
 \\ Word registers.
@@ -692,19 +727,19 @@
 (native-test.check "not an integer" [error "1.5 is not an integer"] (freeze (native-test.result (freeze (native-test.word-of 1.5)))))
 (native-test.check "nor is a symbol" [error "a is not an integer"] (freeze (native-test.result (freeze (native-test.word-of a)))))
 
-\\ Between words and reals.
-(define-native native-test.word-real (A)
+\\ Between words and floats.
+(define-native native-test.word-float (A)
   (word X A)
-  (real R (* X 0.5))
-  (return-real R))
-(native-test.check "a word in a real expression" 1.5 (freeze (native-test.word-real 3)))
+  (float R (* X 0.5))
+  (return-float R))
+(native-test.check "a word in a float expression" 1.5 (freeze (native-test.word-float 3)))
 
-(define-native native-test.real-word (A)
-  (real R A)
+(define-native native-test.float-word (A)
+  (float R A)
   (word X (truncate (* R 2)))
   (return-word X))
-(native-test.check "truncate" 3 (freeze (native-test.real-word 1.75)))
-(native-test.check "truncate, toward zero" -3 (freeze (native-test.real-word -1.75)))
+(native-test.check "truncate" 3 (freeze (native-test.float-word 1.75)))
+(native-test.check "truncate, toward zero" -3 (freeze (native-test.float-word -1.75)))
 
 \\ Each comparison, and that unsigned sees -1 as the largest.
 (define-native native-test.word-lt (A B) (word X A) (word Y B) (jump-unless-word (< X Y) no) (return yes) (label no) (return no))
@@ -795,10 +830,10 @@
   (word X I)
   (u64! M X 1)
   (return M))
-(define-native native-test.real-at (M I)
+(define-native native-test.float-at (M I)
   (word X I)
-  (return-real (f64 M X)))
-(define-native native-test.real-store-at (M I)
+  (return-float (f64 M X)))
+(define-native native-test.float-store-at (M I)
   (word X I)
   (f64! M X 1.5)
   (return M))
@@ -814,19 +849,19 @@
 (native-test.check "a negative index, by bytes" [error "bytes: -1 is not a valid index"] (freeze (native-test.result (freeze (native-test.byte-at (native-test.bytes8) -1)))))
 (native-test.check "a store past the end" [error "bytes: 9 is not a valid index"] (freeze (native-test.result (freeze (native-test.store-at (native-test.bytes8) 9)))))
 (native-test.check "a store before the start" [error "bytes: -8 is not a valid index"] (freeze (native-test.result (freeze (native-test.store-at (native-test.bytes8) -8)))))
-(native-test.check "a real past the end" [error "bytes: 9 is not a valid index"] (freeze (native-test.result (freeze (native-test.real-at (native-test.bytes8) 9)))))
-(native-test.check "a real before the start" [error "bytes: -1 is not a valid index"] (freeze (native-test.result (freeze (native-test.real-at (native-test.bytes8) -1)))))
-(native-test.check "a real store past the end" [error "bytes: 9 is not a valid index"] (freeze (native-test.result (freeze (native-test.real-store-at (native-test.bytes8) 9)))))
-(native-test.check "a real read" 1.5 (freeze (native-test.real-at (native-test.real-store-at (shen-jit.bytes 16) 8) 8)))
+(native-test.check "a float past the end" [error "bytes: 9 is not a valid index"] (freeze (native-test.result (freeze (native-test.float-at (native-test.bytes8) 9)))))
+(native-test.check "a float before the start" [error "bytes: -1 is not a valid index"] (freeze (native-test.result (freeze (native-test.float-at (native-test.bytes8) -1)))))
+(native-test.check "a float store past the end" [error "bytes: 9 is not a valid index"] (freeze (native-test.result (freeze (native-test.float-store-at (native-test.bytes8) 9)))))
+(native-test.check "a float read" 1.5 (freeze (native-test.float-at (native-test.float-store-at (shen-jit.bytes 16) 8) 8)))
 (native-test.check "not memory" error (freeze (hd (native-test.result (freeze (native-test.word-at "abc" 0))))))
 (native-test.check "not a pointer with a length" error (freeze (hd (native-test.result (freeze (native-test.word-at a 0))))))
 
 \\ What the word index works out in words, when it mentions one, and in prim otherwise.
 (define-native native-test.index-kinds (M I)
   (word X I)
-  (real A (f64 M (+ X 8)))
-  (real B (f64 M (+ I 8)))
-  (return-real (+ A B)))
+  (float A (f64 M (+ X 8)))
+  (float B (f64 M (+ I 8)))
+  (return-float (+ A B)))
 (native-test.check "either way of working out an index" 3 (freeze (native-test.index-kinds (shen-jit.f64! (shen-jit.bytes 16) 8 1.5) 0)))
 
 \\ What calls C or collects keeps word registers, in the registers and out of them.
@@ -841,7 +876,7 @@
   (word A (+ A 1))
   (word M (+ M 1))
   (word-box S A)
-  (real-box R A)
+  (float-box R A)
   (prim Text str N)
   (prim N - N 1)
   (again top))
@@ -861,7 +896,7 @@
 (define-native native-test.loops (Rows Cols)
   (word Acc 0)
   (word R 0)
-  (real Sum 0)
+  (float Sum 0)
   (prim Count + 0 0)
   (loop rows)
   (jump-unless-word (< R Rows) done)
@@ -869,7 +904,7 @@
   (loop cols)
   (jump-unless-word (< C Cols) next-row)
   (word Acc (+ Acc (* R C)))
-  (real Sum (+ Sum 0.5))
+  (float Sum (+ Sum 0.5))
   (prim Count + Count 1)
   (word C (+ C 1))
   (again cols)
@@ -878,7 +913,7 @@
   (again rows)
   (label done)
   (word-box A Acc)
-  (real-box S Sum)
+  (float-box S Sum)
   (prim P cons A S)
   (prim P cons Count P)
   (return P))
@@ -971,7 +1006,7 @@
 \\ Collections and calls into C within the inner loop keep all of it, the outer loop's too.
 (define-native native-test.loops-keep (Rows Cols Bytes)
   (word Acc 0)
-  (real Sum 0)
+  (float Sum 0)
   (word R 0)
   (loop rows)
   (jump-unless-word (< R Rows) done)
@@ -979,10 +1014,10 @@
   (loop cols)
   (jump-unless-word (< C Cols) next-row)
   (word Acc (+ Acc (u8 Bytes C)))
-  (real Sum (+ Sum 1))
+  (float Sum (+ Sum 1))
   (word-box Boxed Acc)
   (prim Text str Boxed)
-  (real-box B Sum)
+  (float-box B Sum)
   (prim Pair cons B Text)
   (word C (+ C 1))
   (again cols)
@@ -991,7 +1026,7 @@
   (again rows)
   (label done)
   (word-box A Acc)
-  (real-box S Sum)
+  (float-box S Sum)
   (prim P cons A S)
   (return P))
 (native-test.check "kept across C, in loops within loops, as a buffer moves" [6840 | 60]
@@ -1135,7 +1170,7 @@
 (define-native native-test.limit-u32 (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (word X (u32 M I)) (word N (- N 1)) (again top) (label done) (return-word N))
 (define-native native-test.limit-s32 (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (word X (s32 M I)) (word N (- N 1)) (again top) (label done) (return-word N))
 (define-native native-test.limit-u64 (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (word X (u64 M I)) (word N (- N 1)) (again top) (label done) (return-word N))
-(define-native native-test.limit-f64 (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (real X (f64 M I)) (word N (- N 1)) (again top) (label done) (return-word N))
+(define-native native-test.limit-f64 (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (float X (f64 M I)) (word N (- N 1)) (again top) (label done) (return-word N))
 (define-native native-test.limit-u8! (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (u8! M I 7) (word N (- N 1)) (again top) (label done) (return-word N))
 (define-native native-test.limit-u16! (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (u16! M I 7) (word N (- N 1)) (again top) (label done) (return-word N))
 (define-native native-test.limit-u32! (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (u32! M I 7) (word N (- N 1)) (again top) (label done) (return-word N))
@@ -1169,19 +1204,19 @@
 \\ An integer as an index is one more word index, and keeps memory at one width.
 (define-native native-test.literal-index (M N0)
   (word N N0)
-  (real Acc 0)
+  (float Acc 0)
   (loop top)
   (jump-unless-word (> N 0) done)
   (f64! M 8 (+ Acc (f64 M 0)))
-  (real Acc (+ Acc (f64 M 8)))
+  (float Acc (+ Acc (f64 M 8)))
   (word N (- N 1))
   (again top)
   (label done)
-  (return-real Acc))
+  (return-float Acc))
 (native-test.check "an integer as an index" 10.5 (freeze (native-test.literal-index (shen-jit.f64! (shen-jit.bytes 16) 0 1.5) 3)))
 (native-test.check "and past the end" [error "bytes: 8 is not a valid index"]
   (freeze (native-test.result (freeze (native-test.literal-index (shen-jit.f64! (shen-jit.bytes 8) 0 1.5) 3)))))
-(define-native native-test.literal-below (M) (real X (f64 M -1)) (return-real X))
+(define-native native-test.literal-below (M) (float X (f64 M -1)) (return-float X))
 (native-test.check "and before the start" [error "bytes: -1 is not a valid index"]
   (freeze (native-test.result (freeze (native-test.literal-below (shen-jit.bytes 8))))))
 
@@ -1193,7 +1228,7 @@
   (loop top)
   (jump-unless-word (> N 0) done)
   (word Acc (+ Acc (u8 M I)))
-  (real X (f64 M 0))
+  (float X (f64 M 0))
   (word N (- N 1))
   (again top)
   (label done)
@@ -1207,8 +1242,8 @@
   (word N N0)
   (loop top)
   (jump-unless-word (> N 0) done)
-  (real X (f64 M S))
-  (real Y (f64 M I))
+  (float X (f64 M S))
+  (float Y (f64 M I))
   (word N (- N 1))
   (again top)
   (label done)
@@ -1314,35 +1349,35 @@
 (native-test.check "and of memory used most" [error "bytes: 8 is not a valid index"]
   (freeze (native-test.result (freeze (native-test.run-places 16 8 5)))))
 
-\\ And reals: two used once, outside the loop, and more in it than there are float registers.
-(define-native native-test.real-places (A N0)
-  (real Low 16)
-  (real Root (sqrt Low))
-  (real R0 A) (real R1 A) (real R2 A) (real R3 A) (real R4 A) (real R5 A) (real R6 A) (real R7 A)
-  (real R8 A) (real R9 A) (real R10 A) (real R11 A) (real R12 A) (real R13 A) (real R14 A) (real R15 A)
-  (real R16 A) (real R17 A) (real R18 A) (real R19 A) (real R20 A) (real R21 A) (real R22 A) (real R23 A)
-  (real R24 A) (real R25 A) (real R26 A) (real R27 A) (real R28 A) (real R29 A) (real R30 A) (real R31 A)
+\\ And floats: two used once, outside the loop, and more in it than there are float registers.
+(define-native native-test.float-places (A N0)
+  (float Low 16)
+  (float Root (sqrt Low))
+  (float R0 A) (float R1 A) (float R2 A) (float R3 A) (float R4 A) (float R5 A) (float R6 A) (float R7 A)
+  (float R8 A) (float R9 A) (float R10 A) (float R11 A) (float R12 A) (float R13 A) (float R14 A) (float R15 A)
+  (float R16 A) (float R17 A) (float R18 A) (float R19 A) (float R20 A) (float R21 A) (float R22 A) (float R23 A)
+  (float R24 A) (float R25 A) (float R26 A) (float R27 A) (float R28 A) (float R29 A) (float R30 A) (float R31 A)
   (word N N0)
   (loop top)
   (jump-unless-word (> N 0) done)
-  (real R0 (+ R0 R1)) (real R1 (+ R1 R2)) (real R2 (+ R2 R3)) (real R3 (+ R3 R4)) (real R4 (+ R4 R5))
-  (real R5 (+ R5 R6)) (real R6 (+ R6 R7)) (real R7 (+ R7 R8)) (real R8 (+ R8 R9)) (real R9 (+ R9 R10))
-  (real R10 (+ R10 R11)) (real R11 (+ R11 R12)) (real R12 (+ R12 R13)) (real R13 (+ R13 R14)) (real R14 (+ R14 R15))
-  (real R15 (+ R15 R16)) (real R16 (+ R16 R17)) (real R17 (+ R17 R18)) (real R18 (+ R18 R19)) (real R19 (+ R19 R20))
-  (real R20 (+ R20 R21)) (real R21 (+ R21 R22)) (real R22 (+ R22 R23)) (real R23 (+ R23 R24)) (real R24 (+ R24 R25))
-  (real R25 (+ R25 R26)) (real R26 (+ R26 R27)) (real R27 (+ R27 R28)) (real R28 (+ R28 R29)) (real R29 (+ R29 R30))
-  (real R30 (+ R30 R31))
+  (float R0 (+ R0 R1)) (float R1 (+ R1 R2)) (float R2 (+ R2 R3)) (float R3 (+ R3 R4)) (float R4 (+ R4 R5))
+  (float R5 (+ R5 R6)) (float R6 (+ R6 R7)) (float R7 (+ R7 R8)) (float R8 (+ R8 R9)) (float R9 (+ R9 R10))
+  (float R10 (+ R10 R11)) (float R11 (+ R11 R12)) (float R12 (+ R12 R13)) (float R13 (+ R13 R14)) (float R14 (+ R14 R15))
+  (float R15 (+ R15 R16)) (float R16 (+ R16 R17)) (float R17 (+ R17 R18)) (float R18 (+ R18 R19)) (float R19 (+ R19 R20))
+  (float R20 (+ R20 R21)) (float R21 (+ R21 R22)) (float R22 (+ R22 R23)) (float R23 (+ R23 R24)) (float R24 (+ R24 R25))
+  (float R25 (+ R25 R26)) (float R26 (+ R26 R27)) (float R27 (+ R27 R28)) (float R28 (+ R28 R29)) (float R29 (+ R29 R30))
+  (float R30 (+ R30 R31))
   (word N (- N 1))
   (again top)
   (label done)
-  (return-real (+ Root (+ R0 R31))))
-(native-test.check "more reals than fit" 13 (freeze (native-test.real-places 1.0 3)))
+  (return-float (+ Root (+ R0 R31))))
+(native-test.check "more floats than fit" 13 (freeze (native-test.float-places 1.0 3)))
 
 \\ What must be refused.
 (native-test.refused "a word unset" (freeze (define-native native-test.bad (A) (word X (+ Y 1)) (word Y 1) (return-word X))))
 (native-test.refused "a word as a slot" (freeze (define-native native-test.bad (A) (word X A) (prim Y + X 1) (return Y))))
-(native-test.refused "a real in a word expression" (freeze (define-native native-test.bad (A) (real R A) (word X (+ R 1)) (return-word X))))
-(native-test.refused "both kinds under one name" (freeze (define-native native-test.bad (A) (real X A) (word X A) (return-word X))))
+(native-test.refused "a float in a word expression" (freeze (define-native native-test.bad (A) (float R A) (word X (+ R 1)) (return-word X))))
+(native-test.refused "both kinds under one name" (freeze (define-native native-test.bad (A) (float X A) (word X A) (return-word X))))
 (native-test.refused "a fraction as a word" (freeze (define-native native-test.bad (A) (word X 1.5) (return-word X))))
 (native-test.refused "not a word expression" (freeze (define-native native-test.bad (A) (word X (foo A)) (return-word X))))
 (native-test.refused "not a comparison of words" (freeze (define-native native-test.bad (A) (word X A) (jump-unless-word (foo X X) l) (label l) (return A))))
@@ -1390,15 +1425,15 @@
 (native-test.check "while, next and exit" 2550 (freeze (native-test.evens 100 100000)))
 (native-test.check "while, left early" 110 (freeze (native-test.evens 100 100)))
 
-\* if and else, comparing reals because a side is a real register. *\
+\* if and else, comparing floats because a side is a float register. *\
 (define-native native-test.clamp (X)
-  (real V X)
-  (if (< V 0) (real V 0) (if (> V 1) (real V 1)))
-  (return-real V))
+  (float V X)
+  (if (< V 0) (float V 0) (if (> V 1) (float V 1)))
+  (return-float V))
 
-(native-test.check "if on reals, below" 0.0 (freeze (native-test.clamp -2.5)))
-(native-test.check "if on reals, between" 0.25 (freeze (native-test.clamp 0.25)))
-(native-test.check "if on reals, above" 1.0 (freeze (native-test.clamp 7.5)))
+(native-test.check "if on floats, below" 0.0 (freeze (native-test.clamp -2.5)))
+(native-test.check "if on floats, between" 0.25 (freeze (native-test.clamp 0.25)))
+(native-test.check "if on floats, above" 1.0 (freeze (native-test.clamp 7.5)))
 
 \* and, or and not, and != *\
 (define-native native-test.in-range (X Lo Hi)
@@ -1524,7 +1559,7 @@
   (word I 8)
   (f64! M (truncate (+ I 0.5)) (+ 1.5 2.5))
   (return M))
-(native-test.check "a store index keeps the real value it stores" 4
+(native-test.check "a store index keeps the float value it stores" 4
   (freeze (shen-jit.f64 (native-test.mixed-store (shen-jit.bytes 16)) 8)))
 (define-native native-test.mixed-load (M A)
   (word I 7)

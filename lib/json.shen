@@ -1,14 +1,17 @@
-\\ Complete UTF-8 JSON over byte views. Load buffer.shen and grammar.shen first, under (tc -).
+\\ Complete UTF-8 JSON over byte views. Module json.
 \\ Numbers decode to lossless [number Token] values; native numbers can also be encoded.
 
 (shen.x.namespace json
+  (use option)
+  (use result)
+  (import result ok)
   (use buffer)
   (use grammar)
   (use io)
   (use shen-jit)
-  (externals [? at byte-limit defgrammar depth-limit eof object ok require span text])
+  (externals [? at byte-limit defgrammar depth-limit object require span text])
   (shadow <e> read value)
-  (export array decode encode integer json.number => number json.string => string option parse read
+  (export from-string from-number from-array array decode encode integer json.number => number json.string => string option parse read
     stringify value object null)
 
 (define scan-fail
@@ -210,7 +213,7 @@
   R Options -> (read-result (grammar.read (<next> (snd (options Options))) R (function scan-fail))))
 
 (define read-result
-  [ok end] -> [eof]
+  (:ok [end]) -> (ok [])
   Result -> Result)
 
 (define decode-view
@@ -244,9 +247,6 @@
     (let Limits (options Options)
          _ (if (<= (buffer.length View) (fst Limits)) true (error "json: input exceeds byte limit"))
       (decode-view View (snd Limits))))
-
-(define parse
-  Text Options -> (decode (buffer.from-string Text) Options))
 
 \\ A string value, or an array's values; any other value raises.
 (define json.string
@@ -369,19 +369,16 @@
          _ (emit Out Value 0 (snd Limits))
       (buffer.finish Out)))
 
-(define stringify
-  Value Options -> (buffer.string (encode Value Options)))
-
 \\ A string, a number or a list is a value, but a value is not one of them without a check, as
 \\ json.string and json.array make: those rules go one way.
 (datatype t
   S : string;
   ___________________________
-  S : value;
+  S : (- value);
 
   N : number;
   ___________________________
-  N : value;
+  N : (- value);
 
   ___________________________
   null : value;
@@ -398,7 +395,7 @@
 
   Values : (list value);
   ___________________________
-  Values : value;
+  Values : (- value);
 
   Key : string; Value : value;
   ===========================
@@ -408,22 +405,20 @@
   ===========================
   [object | Members] : value;
 
-  N : number;
-  ===========================
+  N : fixnum;
+  ___________________________
   [byte-limit N] : option;
 
   N : number;
-  ===========================
+  ___________________________
   [depth-limit N] : option;)
 
 (declare decode [buffer.view --> [[list option] --> value]])
-(declare parse [string --> [[list option] --> value]])
-(declare read [io.reader --> [[list option] --> [grammar.read-result value]]])
+(declare read [io.reader --> [[list option] --> [result.t [io.error * [option.t value]]]]])
 (declare json.number [string --> value])
 (declare json.string [value --> string])
 (declare array [value --> [list value]])
 (declare integer [value --> number])
 (declare encode [value --> [[list option] --> buffer.view]])
-(declare stringify [value --> [[list option] --> string]])
 
 )

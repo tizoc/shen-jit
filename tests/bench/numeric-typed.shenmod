@@ -1,0 +1,8 @@
+(shen.module
+  (version 1)
+  (name numeric-typed)
+  (requires numbers memory)
+  (typed)
+  (main numeric-typed-main)
+  (sources tc+ "numeric-typed.shen"
+           tc- "numeric-typed-run.shen"))

@@ -3281,12 +3281,19 @@ static sljit_s32 emit_groupf_ext(struct sljit_compiler *compiler,
 static SLJIT_INLINE sljit_s32 emit_sse2_load(struct sljit_compiler *compiler,
 	sljit_s32 single, sljit_s32 dst, sljit_s32 src, sljit_sw srcw)
 {
+	/* Shen/JIT: a register copied whole, as movsd between registers keeps the upper half,
+	   and so waits for whatever last wrote the destination. */
+	if (FAST_IS_REG(src))
+		return emit_groupf(compiler, MOVAPS_x_xm | EX86_SSE2, dst, src, 0);
 	return emit_groupf(compiler, MOVSD_x_xm | (single ? EX86_PREF_F3 : EX86_PREF_F2) | EX86_SSE2, dst, src, srcw);
 }
 
 static SLJIT_INLINE sljit_s32 emit_sse2_store(struct sljit_compiler *compiler,
 	sljit_s32 single, sljit_s32 dst, sljit_sw dstw, sljit_s32 src)
 {
+	/* Shen/JIT: as emit_sse2_load. */
+	if (FAST_IS_REG(dst))
+		return emit_groupf(compiler, MOVAPS_x_xm | EX86_SSE2, dst, src, 0);
 	return emit_groupf(compiler, MOVSD_xm_x | (single ? EX86_PREF_F3 : EX86_PREF_F2) | EX86_SSE2, src, dst, dstw);
 }
 

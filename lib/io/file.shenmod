@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name io/file)
+  (requires ffi buffer io result)
+  (sources tc+ "file-path-bytes.shen" tc- "file.shen" tc+ "file-typed.shen"))

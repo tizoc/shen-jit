@@ -3,10 +3,11 @@
 (shen.x.namespace source-deps
   (use datalog)
   (use io)
+  (import result let-ok ok err)
   (use source-deps)
   (externals [!= ambiguous analyze at backward call-file count defdatalog defined definition-linkage edge
     excluded-file file-edge format forward global global-allowed global-count integer invalid-owner legacy legacy-file
-    local local-count missing-external-declaration missing-target ok owned raw-definition reach reached relation
+    local local-count missing-external-declaration missing-target owned raw-definition reach reached relation
     resolved root rule select shen site source-call source-context source-declaration source-definition
     source-diagnostic source-file source-format source-parse unique-global unique-local unique-owner unknown
     unknown-scope unowned unresolved unresolved-reason usable-file var visible])
@@ -122,17 +123,17 @@
   (rule (reached From) <-- (backward) (reached To) (edge From To)))
 
 (define source-deps.select
-  _ [] -> [ok []]
+  _ [] -> (:ok [])
   Db [Mode File Name] ->
     (selected Mode File Name (datalog.match Db [defined File Name [var "Byte"]]))
   Db [Mode File Name Byte] ->
     (selected Mode File Name (datalog.match Db [defined File Name Byte])))
 
 (define selected
-  Mode File Name [[File Name Byte]] -> [ok [Mode [fn File Name Byte]]]
-  _ File Name [] -> [error (io.error select File (make-string "no usable definition of ~A" Name))]
+  Mode File Name [[File Name Byte]] -> (:ok [Mode [fn File Name Byte]])
+  _ File Name [] -> (:err (io.error select File (make-string "no usable definition of ~A" Name)))
   _ File Name _ ->
-    [error (io.error select File (make-string "multiple definitions of ~A; query is ambiguous" Name))])
+    (:err (io.error select File (make-string "multiple definitions of ~A; query is ambiguous" Name))))
 
 (define walk-db
   _ [] -> []
@@ -146,9 +147,9 @@
     (trap-error
       (let Db (datalog.run program (<-address Data 1))
         (if (> (datalog.count Db invalid-owner) 0)
-            [error (io.native-error analyze format 0 "source facts" "caller identity has no matching definition")]
-            (io.let-ok Selected (source-deps.select Db Query)
-              [ok (io.record [analysis Data Db Selected (walk-db Db Selected)])])))
-      (/. E [error (io.native-error analyze shen 0 "source facts" (error-to-string E))])))
+            (:err (io.native-error analyze format 0 "source facts" "caller identity has no matching definition"))
+            (let-ok Selected (source-deps.select Db Query)
+              (:ok (io.record [analysis Data Db Selected (walk-db Db Selected)])))))
+      (/. E (:err (io.native-error analyze shen 0 "source facts" (error-to-string E))))))
 
 )

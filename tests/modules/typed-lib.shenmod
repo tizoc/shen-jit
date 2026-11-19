@@ -1,0 +1,2 @@
+(shen.module (version 1) (name typed-lib) (requires typed-dep) (typed)
+  (sources tc+ "typed-lib.shen" tc- "typed-lib-untyped.shen"))

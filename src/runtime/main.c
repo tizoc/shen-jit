@@ -149,8 +149,11 @@ static int stage1(const char *dir, const char *image)
 
     if (!call0(vm, "shen.initialise"))
         return 1;
-    /* The extensions Shen/Scheme initialises (docs/semantics.md, section 13). */
-    V features = make_pair(vm, intern_cstr(vm, "shen/shen-jit"), V_NIL);
+    /* The extensions Shen/Scheme initialises (docs/semantics.md, section 13). A build that
+       loads C libraries advertises shen-jit/ffi too, which modules can require. */
+    V features = ffi_loads_libraries() ? make_pair(vm, intern_cstr(vm, "shen-jit/ffi"), V_NIL) : V_NIL;
+    if (features != V_CLEARED)
+        features = make_pair(vm, intern_cstr(vm, "shen/shen-jit"), features);
     if (features == V_CLEARED ||
         jit_call(vm, function(vm, "shen.x.features.initialise"), 1, &features) == V_CLEARED) {
         sj_report(vm, "shen.x.features.initialise");
@@ -183,7 +186,7 @@ static void print_stats(void)
             cpu > 0 ? 100 * stats_vm->gc_seconds / cpu : 0, 1000 * stats_vm->gc_longest,
             stats_vm->space_words * sizeof(uint64_t) / 1024);
     /* What stays live, by type, to help find memory growth. */
-    static const char *const names[T_LIMIT] = {"pairs", "strings", "bytecode", "symbols", "reals",
+    static const char *const names[T_LIMIT] = {"pairs", "strings", "bytecode", "symbols", "floats",
                                                "absvectors", "closures", "foreign functions", "code",
                                                "exceptions", "streams", "pointers"};
     size_t count[T_LIMIT] = {0}, words[T_LIMIT] = {0}, total = 0;
@@ -231,6 +234,58 @@ static const char *executable_file(const char *name, char *path, size_t size)
     return name;
 }
 
+/* Puts the root of len bytes before the list in slot. */
+static bool push_root(VM *vm, V *slot, const char *root, size_t len)
+{
+    V s = make_string(vm, root, len);
+    if (s == V_CLEARED)
+        return false;
+    V list = make_pair(vm, s, *slot);
+    if (list == V_CLEARED)
+        return false;
+    *slot = list;
+    return true;
+}
+
+/* The directories modules are looked for under, in order (docs/modules.md): those SHEN_JIT_PATH
+   lists, then the installation's lib/, beside the executable in an archive, or one directory up
+   from build/ in a source tree. Set for each run, as the executable may have moved. */
+static bool set_module_roots(VM *vm, const char *self)
+{
+    V *slot = global_slot_new(vm, intern_cstr(vm, "shen-jit.*module-roots*"));
+    if (!slot)
+        return false;
+    *slot = V_NIL;
+    const char *end = self + strlen(self);
+    while (end > self && end[-1] != '/' && end[-1] != '\\')
+        end--;
+    const char *dir = end > self ? self : ".";
+    int dir_len = end > self ? (int)(end - self - 1) : 1;
+    char root[4096];
+    const char *installed[] = {"/../lib", "/lib"};
+    for (int i = 0; i < 2; i++) {
+        int n = snprintf(root, sizeof root, "%.*s%s", dir_len, dir, installed[i]);
+        if (n < 0 || (size_t)n >= sizeof root || !push_root(vm, slot, root, (size_t)n))
+            return false;
+    }
+#ifdef _WIN32
+    const char separator = ';';
+#else
+    const char separator = ':';
+#endif
+    const char *path = getenv("SHEN_JIT_PATH");
+    const char *at = path ? path + strlen(path) : NULL;
+    while (at && at > path) { /* from the last entry to the first, as each goes in front */
+        const char *start = at;
+        while (start > path && start[-1] != separator)
+            start--;
+        if (at > start && !push_root(vm, slot, start, (size_t)(at - start)))
+            return false;
+        at = start > path ? start - 1 : path;
+    }
+    return true;
+}
+
 /* A size setting in words: bytes, or with K, M or G, rounded up to a word. 0 when it is not set or
    empty. Anything else ends the process, as it would otherwise mean another size or none. */
 static size_t size_setting(const char *name)
@@ -268,6 +323,16 @@ static int run(int argc, char **argv)
     jit_attach(vm, jit);
     vm->self = self;
     vm_note_main_stack(vm);
+    if (!set_module_roots(vm, self))
+        return 1;
+    /* The datatypes the image starts with, which every module's typechecked sources see besides
+       their own and those of the modules they require (docs/modules.md). Lists are not changed in
+       place, so this keeps them as they are now. */
+    V *startup = global_slot_new(vm, intern_cstr(vm, "shen-jit.*startup-datatypes*"));
+    if (!startup)
+        return 1;
+    V datatypes = global_value(vm, intern_cstr(vm, "shen.*datatypes*"));
+    *startup = datatypes == V_CLEARED ? V_NIL : datatypes;
     /* For testing: collect after every N words allocated. */
     const char *stress = getenv("SHEN_JIT_GC_STRESS");
     vm->stress = stress ? strtoul(stress, NULL, 10) : 0;

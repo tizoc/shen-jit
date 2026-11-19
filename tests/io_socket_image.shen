@@ -1,3 +1,6 @@
+(define fixture.frame-tag (:result.ok [(:frame.frame Tag _)]) -> Tag)
+(define fixture.frame-payload (:result.ok [(:frame.frame _ V)]) -> V)
+
 \\ Loaded once before saving; callers select save, reload or targeted GC work.
 (define io-socket-image.pair
   ->
@@ -46,7 +49,7 @@
                _ (io.close C)
                _ (io.close S)
             (if (and Dead (and (= Closed Memo)
-                              (and (= Written [ok 2]) (and (= Read [ok 2]) (= (buffer.string V) "ok")))))
+                              (and (= Written (:result.ok 2)) (and (= Read (:result.ok (:io.transfer true 2))) (= (buffer.string V) "ok")))))
                 (output "socket image ok~%")
                 (error "saved socket affected a new connection"))))))
 
@@ -65,8 +68,8 @@
              End (frame.next F)
              _ (io.close C)
              _ (io.close S)
-          (if (and (= Shutdown [ok])
-                   (and (= (hd (tl Result)) 42)
-                        (and (= (buffer.string (hd (tl (tl Result)))) "abc") (= End [eof]))))
+          (if (and (= Shutdown (:result.ok []))
+                   (and (= (fixture.frame-tag Result) 42)
+                        (and (= (buffer.string (fixture.frame-payload Result)) "abc") (= End (:result.ok [])))))
               (output "socket gc ok~%")
               (error "socket framing failed under GC stress")))))

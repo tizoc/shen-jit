@@ -1,0 +1,7 @@
+(shen.module
+  (version 1)
+  (name structs-inference)
+  (requires result)
+  (sources tc- "structs-inference-setup.shen"
+           tc+ "structs-inference.shen"
+           tc- "structs-inference-check.shen"))

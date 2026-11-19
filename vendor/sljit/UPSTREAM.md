@@ -14,3 +14,8 @@ Shen/JIT adds one patch of its own (2026-11-02): `SLJIT_LABEL_ALIGN_32` in
 `sljitLir.h`, and the argument check in `sljitLir.c` accepting it. The code
 that aligns labels already handles any power of two; only the check stopped
 at 16. Shen/JIT aligns loop heads to 32 bytes (`src/runtime/jit.c`).
+
+And a second (2026-11-16): on x86, `emit_sse2_load` and `emit_sse2_store` in
+`sljitNativeX86_common.c` copy one float register to another with `movaps`
+rather than `movsd`, which keeps the destination's upper half and so waits for
+whatever last wrote it, chaining rounds of a loop that are otherwise apart.

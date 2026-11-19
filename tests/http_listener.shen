@@ -1,3 +1,5 @@
+(load "tests/result_helpers.shen")
+
 (set listener-test.passed 0)
 (set listener-test.failed 0)
 
@@ -75,10 +77,10 @@
                               (/. Peer (io.read-all (io.reader Peer []) 4096)))))
 
 (define listener-test.parse
-  [ok V] -> (let B (shen-jit.string->bytes (buffer.string V))
+  (:result.ok V) -> (let B (shen-jit.string->bytes (buffer.string V))
                  N (shen-jit.bytes-length B)
               (if (= N 0) [] (listener-test.split B N 0)))
-  [error Error] -> (error "client read: ~A" (io.error-message Error)))
+  (:result.err Error) -> (error "client read: ~A" (io.error-message Error)))
 
 (define listener-test.split
   B N At -> (cond ((> (+ At 4) N) [(shen-jit.bytes->string B 9 3) ""])
@@ -115,18 +117,18 @@
      _ (http.stop S)
      _ (http.stop S)
      Result (http.run S)
-  (do (listener-test.check "empty listener stops" [ok] (freeze Result))
+  (do (listener-test.check "empty listener stops" (:result.ok []) (freeze Result))
       (listener-test.check "without making its events channel" [] (freeze (http.server.events S)))
       (listener-test.check "stopped state" stopped (freeze (http.state S)))
       (listener-test.check "empty statistics" [0 0 0 0 0 0] (freeze (http.stats S)))
-      (listener-test.check "run again gives it too" [ok] (freeze (http.run S)))
+      (listener-test.check "run again gives it too" (:result.ok []) (freeze (http.run S)))
       (listener-test.check "listener port is closed" true
         (freeze (listener-test.raises? (freeze (listener-test.client S)))))))
 
 \\ A connection waiting for its head does not hold the next one back, and is killed once the grace
 \\ has passed: counted as failed and as cancelled.
 (let Run (listener-test.serve (listener-test.listen [[shutdown-grace 0]]) [[stall "/stop"]])
-  (do (listener-test.check "a stalled connection stops nothing" [ok] (freeze (hd Run)))
+  (do (listener-test.check "a stalled connection stops nothing" (:result.ok []) (freeze (hd Run)))
       (listener-test.check "the next is served meanwhile" [[["200" "ok"] []]] (freeze (nth 3 Run)))
       (listener-test.check "the stalled one is killed" [0 2 2 1 1 2] (freeze (nth 2 Run)))))
 
@@ -139,7 +141,7 @@
 (let Run (listener-test.serve (listener-test.listen []) [[get "/fail"] [get "/ok"] [get "/stop"]])
   (do (listener-test.check "handler failure does not stop admission" [["500" ""] ["200" "ok"] ["200" "ok"]]
         (freeze (nth 3 Run)))
-      (listener-test.check "server survives a failed connection" [ok] (freeze (hd Run)))
+      (listener-test.check "server survives a failed connection" (:result.ok []) (freeze (hd Run)))
       (listener-test.check "request failure is counted separately" [0 3 3 1 0]
         (freeze (reverse (tl (reverse (nth 2 Run))))))))
 
@@ -154,7 +156,7 @@
   (freeze (http.current-server)))
 
 (define listener-test.progress
-  [error Error N] -> [(io.error-domain Error) N (io.error-progress Error)])
+  (:result.err Error) -> [(io.error-domain Error) (io.error-progress Error) (io.error-progress Error)])
 
 (let L (socket.listen "127.0.0.1" 0)
      C (io.socket (socket.connect "127.0.0.1" (socket.port L)) "cancel client")
@@ -187,7 +189,7 @@
      Result (http.run S)
      _ (set listener-test.poll-failure false)
   (do (listener-test.check "listener error is retained" serve
-        (freeze (io.error-operation (hd (tl Result)))))
+        (freeze (io.error-operation (fixture.failure Result))))
       (listener-test.check "listener error stops it" stopped (freeze (http.state S)))
       (listener-test.check "listener error closes listener" true
         (freeze (listener-test.raises? (freeze (listener-test.client S)))))))

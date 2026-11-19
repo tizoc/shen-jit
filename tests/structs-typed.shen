@@ -1,6 +1,10 @@
 \\ Read under (tc +): typed declarations, typed clients and namespaced field types.
 (defstruct struct-test.tpoint (x : number) (mutable y : number))
 (defstruct struct-test.tempty)
+(defstruct (struct-test.anonymous-pair (A * B)) (_ : A) (_ : B))
+(define struct-test.anonymous-swap
+  {(struct-test.anonymous-pair (A * B)) --> (struct-test.anonymous-pair (B * A))}
+  (:struct-test.anonymous-pair X Y) -> (:struct-test.anonymous-pair Y X))
 
 (define struct-test.tnorm {struct-test.tpoint --> number}
   P -> (+ (struct-test.tpoint.x P) (struct-test.tpoint.y P)))
@@ -58,6 +62,46 @@
 (define struct-test.area2 {struct-test.shape --> number}
   (:struct-test.square side <- S) -> (* S S)
   Shape -> (struct-test.area Shape))
+
+\\ Structs with type parameters, and a union of them.
+(defstruct (struct-test.box A) (mutable value : A))
+(defstruct (struct-test.pair (A * B)) (first : A) (second : B))
+
+(define struct-test.box-bump {(struct-test.box number) --> (struct-test.box number)}
+  B -> (struct-test.box.value-> B (+ 1 (struct-test.box.value B))))
+
+(define struct-test.swap {(struct-test.pair (A * B)) --> (struct-test.pair (B * A))}
+  (:struct-test.pair first <- X second <- Y) -> (struct-test.pair.make Y X))
+
+(struct.union (struct-test.product (A * B)) (struct-test.pair (A * B)))
+
+(define struct-test.product-second
+  {(struct-test.product (A * B)) --> B}
+  (:struct-test.pair second <- Y ...) -> Y)
+
+(defstruct (struct-test.ok A) (_ : A))
+(defstruct (struct-test.err E) (_ : E))
+(struct.union (struct-test.result (E * A)) (struct-test.ok A) (struct-test.err E))
+
+(define struct-test.bind
+  {(struct-test.result (E * A)) --> (A --> (struct-test.result (E * B))) --> (struct-test.result (E * B))}
+  (:struct-test.ok V) F -> (F V)
+  (:struct-test.err E) _ -> (struct-test.err.make E))
+
+(define struct-test.positive {number --> (struct-test.result (string * number))}
+  N -> (if (> N 0) (struct-test.ok.make N) (struct-test.err.make "not positive")))
+
+(define struct-test.shown {(struct-test.result (string * number)) --> string}
+  (:struct-test.ok V) -> (str V)
+  (:struct-test.err E) -> E)
+
+\\ The last constructor forces a common element type. Retrying every combination
+\\ of proofs for the preceding ok values used to exceed the default inference limit.
+(define struct-test.mixed-count {number --> number}
+  N -> (length [(:struct-test.ok N) (:struct-test.ok N) (:struct-test.ok N)
+                (:struct-test.ok N) (:struct-test.ok N) (:struct-test.ok N)
+                (:struct-test.ok N) (:struct-test.ok N) (:struct-test.ok N)
+                (:struct-test.err "last")]))
 
 (shen.x.namespace struct-test.geometry
   (use struct)

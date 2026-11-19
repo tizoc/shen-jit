@@ -19,7 +19,7 @@
   (buffer.string (library-ns.typed.preserve (buffer.from-string "A"))))
 (library-ns.check "JSON keeps its data vocabulary" "{c#34;answerc#34;:42}"
   (library-ns.client.round-trip "{c#34;answerc#34;:42}"))
-(library-ns.check "imported data symbols" [ok 65] (library-ns.client.result))
+(library-ns.check "imported data symbols" (:result.ok 65) (library-ns.client.result))
 (library-ns.check "namespaced grammar names" true (library-ns.client.digits? "123"))
 (library-ns.check "namespaced grammar failure" false (library-ns.client.digits? "1a"))
 (library-ns.check "scoped Datalog vocabulary and qualified relations" 3 (library-ns.client.rule-count))

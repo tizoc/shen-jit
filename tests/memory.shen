@@ -113,14 +113,14 @@
   0 _ _ Acc -> Acc
   R M N Acc -> (memory-test.sum-f64-times (- R 1) M N (memory-test.sum-f64 M 0 N Acc)))
 
-(set reals (memory.alloc 16))
-(shen-jit.f64! (value reals) 0 1.5)
-(shen-jit.f64! (value reals) 8 2.5)
-(set breals (shen-jit.bytes 16))
-(shen-jit.f64! (value breals) 0 0.5)
-(shen-jit.f64! (value breals) 8 1.5)
-(memory-test.check "f64 across collections, on a pointer" 40000 (freeze (memory-test.sum-f64-times 10000 (value reals) 16 0)))
-(memory-test.check "f64 across collections, on a buffer" 20000 (freeze (memory-test.sum-f64-times 10000 (value breals) 16 0)))
+(set floats (memory.alloc 16))
+(shen-jit.f64! (value floats) 0 1.5)
+(shen-jit.f64! (value floats) 8 2.5)
+(set bfloats (shen-jit.bytes 16))
+(shen-jit.f64! (value bfloats) 0 0.5)
+(shen-jit.f64! (value bfloats) 8 1.5)
+(memory-test.check "f64 across collections, on a pointer" 40000 (freeze (memory-test.sum-f64-times 10000 (value floats) 16 0)))
+(memory-test.check "f64 across collections, on a buffer" 20000 (freeze (memory-test.sum-f64-times 10000 (value bfloats) 16 0)))
 
 \\ Read only: reads as it did, and every way of storing raises, inline or not, and in a copy.
 (define memory-test.store-u8 M I X -> (shen-jit.u8! M I X))
@@ -133,7 +133,7 @@
 (set ro (shen-jit.pointer-read-only (value fixed)))
 (memory-test.check "read only, the same memory" 88 (freeze (memory-test.read (value ro) 0)))
 (memory-test.check "and its length" 16 (freeze (memory-test.length (value ro))))
-(memory-test.check "and as a real" 1.5 (freeze (shen-jit.f64 (value ro) 8)))
+(memory-test.check "and as a float" 1.5 (freeze (shen-jit.f64 (value ro) 8)))
 (memory-test.check "the pointer it came from stays writable" 9 (freeze (shen-jit.u8 (memory-test.store-u8 (value fixed) 1 9) 1)))
 (memory-test.check "which it sees" 9 (freeze (shen-jit.u8 (value ro) 1)))
 (memory-test.raises "u8!, compiled" "bytes: " (freeze (memory-test.store-u8 (value ro) 0 1)))
@@ -156,23 +156,23 @@
 (memory-test.raises "f64! past the end" "bytes: 9" (freeze (memory-test.store-f64 (value fixed) 9 2.5)))
 (memory-test.raises "f64! of what is no number" "bytes: a" (freeze (memory-test.store-f64 (value fixed) 8 a)))
 
-\\ Real registers, on either kind of memory.
-(define-native memory-test.real-double (From To I End)
+\\ Float registers, on either kind of memory.
+(define-native memory-test.float-double (From To I End)
   (prim T >= I End)
   (jump-if-false T more)
   (return To)
   (label more)
   (f64! To I (* 2 (f64 From I)))
   (prim I + I 8)
-  (tail-call memory-test.real-double From To I End))
+  (tail-call memory-test.float-double From To I End))
 
 (set doubled (memory.alloc 16))
 (shen-jit.f64! (value fixed) 8 1.5)
-(memory-test.check "pointer to pointer, in registers" 3 (freeze (shen-jit.f64 (memory-test.real-double (value fixed) (value doubled) 8 16) 8)))
-(memory-test.check "pointer to buffer" 3 (freeze (shen-jit.f64 (memory-test.real-double (value fixed) (shen-jit.bytes 16) 8 16) 8)))
-(memory-test.check "read only to pointer" 3 (freeze (shen-jit.f64 (memory-test.real-double (value ro) (value doubled) 8 16) 8)))
-(memory-test.raises "a store to one read only raises" "bytes: " (freeze (memory-test.real-double (value fixed) (value ro) 8 16)))
-(memory-test.raises "and past the end" "bytes: 16" (freeze (memory-test.real-double (value fixed) (value doubled) 16 24)))
+(memory-test.check "pointer to pointer, in registers" 3 (freeze (shen-jit.f64 (memory-test.float-double (value fixed) (value doubled) 8 16) 8)))
+(memory-test.check "pointer to buffer" 3 (freeze (shen-jit.f64 (memory-test.float-double (value fixed) (shen-jit.bytes 16) 8 16) 8)))
+(memory-test.check "read only to pointer" 3 (freeze (shen-jit.f64 (memory-test.float-double (value ro) (value doubled) 8 16) 8)))
+(memory-test.raises "a store to one read only raises" "bytes: " (freeze (memory-test.float-double (value fixed) (value ro) 8 16)))
+(memory-test.raises "and past the end" "bytes: 16" (freeze (memory-test.float-double (value fixed) (value doubled) 16 24)))
 
 \\ One width through a pointer makes its length a limit, and one read only has none to store by.
 (define-native memory-test.limit-load (M I0 N0)
@@ -180,7 +180,7 @@
   (word N N0)
   (loop top)
   (jump-unless-word (> N 0) done)
-  (real X (f64 M I))
+  (float X (f64 M I))
   (word N (- N 1))
   (again top)
   (label done)
@@ -203,7 +203,7 @@
 (memory-test.raises "and does not store" (make-string "bytes: ~S is read only" (value ro)) (freeze (memory-test.limit-store (value ro) 0 1)))
 
 (memory.free (value doubled))
-(memory-test.raises "as a dead pointer does" "bytes: 0" (freeze (memory-test.real-double (value fixed) (value doubled) 0 8)))
+(memory-test.raises "as a dead pointer does" "bytes: 0" (freeze (memory-test.float-double (value fixed) (value doubled) 0 8)))
 (memory-test.raises "with one width as well" "bytes: 0" (freeze (memory-test.limit-load (value doubled) 0 1)))
 (memory.free (value fixed))
 
@@ -391,6 +391,6 @@
 (memory.free (value shared))
 (memory.free (value fields))
 (memory.free (value kept))
-(memory.free (value reals))
+(memory.free (value floats))
 
 (output "~A passed, ~A failed~%" (value memory-test.*passed*) (value memory-test.*failed*))

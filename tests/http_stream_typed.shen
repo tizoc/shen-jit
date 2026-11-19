@@ -1,6 +1,6 @@
 (define stream-typed.source
   {--> http.source}
-  -> (http.source (/. Maximum D [eof]) (freeze [ok])))
+  -> (http.source (/. Maximum D (:result.ok [])) (freeze (:result.ok []))))
 
 (define stream-typed.response
   {http.request --> http.response}
@@ -20,13 +20,13 @@
 
 (define stream-typed.sent
   {(io.result number) --> boolean}
-  [ok N] -> (> N 0)
-  [error _] -> false)
+  (:result.ok N) -> (> N 0)
+  (:result.err _) -> false)
 
 (define stream-typed.parsed
   {(io.result http.request) --> boolean}
-  [error _] -> false
-  [ok Q] ->
+  (:result.err _) -> false
+  (:result.ok Q) ->
     (let E (io.output-buffer (buffer.new 256))
          Good (stream-typed.sent (stream-typed.send E Q (deadline.after (freeze 0) 100)))
          _ (io.close E)

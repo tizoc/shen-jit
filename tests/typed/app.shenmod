@@ -1,0 +1,7 @@
+(shen.module
+  (version 1)
+  (name typed/app)
+  (requires numbers buffer)
+  (typed)
+  (main app-main)
+  (sources tc+ "app.shen" tc- "app-main.shen"))

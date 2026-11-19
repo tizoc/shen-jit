@@ -1,0 +1,1 @@
+(shen.module (version 1) (name rules-user) (requires rules-base) (sources tc+ "rules-user.shen"))

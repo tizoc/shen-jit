@@ -22,8 +22,24 @@
 (ts-test.check "query requires text"
   (ts-test.raises? (freeze (treesitter.query [] (buffer.new 0) [] []))))
 
+(define ts-test.matched-operation
+  (:treesitter.error operation <- Op ...) -> Op
+  _ -> unexpected-error)
+
+(let E (treesitter.error parse native 1 0 "example.c" "parse failed")
+  (do (ts-test.check "error struct predicate" (treesitter.error? E))
+      (ts-test.check "error struct predicate rejects another value" (not (treesitter.error? [])))
+      (ts-test.check "labelled error pattern" (= (ts-test.matched-operation E) parse))))
+
+(let E (io.error read "another library" "read failed")
+  (map (/. Accessor (ts-test.check "error accessor rejects an I/O error"
+                       (ts-test.raises? (freeze (Accessor E)))))
+       [(function treesitter.error-operation) (function treesitter.error-domain)
+        (function treesitter.error-code) (function treesitter.error-offset)
+        (function treesitter.error-resource) (function treesitter.error-message)]))
+
 \\ Limits precede native resolution, including on static builds.
-(let Language (treesitter.lang.make "unresolved" missing 15)
+(let Language (treesitter.language.make "unresolved" missing 15)
   (do (ts-test.check "input budget before native work"
         (= (ts-test.error-domain (treesitter.parse Language (buffer.new 2) [[input-limit 1]])) limit))
       (ts-test.check "query budget before native work"

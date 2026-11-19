@@ -1,9 +1,9 @@
 \\ Public framing and socket types, checked after loading the libraries with tc off.
 (define frame-typed.text
-  {frame.result --> (io.result string)}
-  [frame Tag Payload] -> [ok (buffer.string Payload)]
-  [eof] -> [ok "end"]
-  [error Error] -> [error Error])
+  {(io.result (option.t frame.frame)) --> (io.result string)}
+  (:result.ok [(:frame.frame Tag Payload)]) -> (result.ok (buffer.string Payload))
+  (:result.ok []) -> (result.ok "end")
+  (:result.err Error) -> (result.err Error))
 
 (define frame-typed.socket
   {number --> io.endpoint}
@@ -28,6 +28,6 @@
          B (frame-typed.text (frame.next F))
          Position (frame.position F)
          _ (io.close E)
-      (and (= [A B] [[ok "typed"] [ok "end"]]) (= Position 11))))
+      (and (= [A B] [(:result.ok "typed") (:result.ok "end")]) (= Position 11))))
 
 (output "~A~%" (if (frame-typed.run) "1 passed, 0 failed" "0 passed, 1 failed"))

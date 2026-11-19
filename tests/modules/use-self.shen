@@ -1,0 +1,1 @@
+(module.use [use-self])

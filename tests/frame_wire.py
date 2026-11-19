@@ -29,9 +29,7 @@ def main():
                        _ (socket.close L)
                     (frame-echo.serve (io.socket Peer "oracle peer") 1048576))'''
     command = [str(executable), "eval"]
-    for library in ["lib/ffi.shen", "lib/socket.shen", "lib/buffer.shen", "lib/io.shen",
-                    "lib/io-socket.shen", "lib/frame.shen", "tools/frame-echo.shen"]:
-        command += ["-l", library]
+    command += ["-m", "tools/frame-echo.shenmod"]
     command += ["-e", program]
     process = subprocess.Popen(command, cwd=root, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     try:
@@ -59,7 +57,7 @@ def main():
             assert peer.recv(1) == b""
         output, errors = process.communicate(timeout=10)
         assert process.returncode == 0, errors.decode(errors="replace")
-        assert b"[ok 3]" in output, output.decode(errors="replace")
+        assert b"#<result.ok 3>" in output, output.decode(errors="replace")
         print("3 independent wire cases passed")
     finally:
         if process.poll() is None:

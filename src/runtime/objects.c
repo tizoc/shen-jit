@@ -54,13 +54,13 @@ V make_bytes(VM *vm, const void *bytes, size_t len)
     return make_byte_object(vm, T_BYTES, bytes, len);
 }
 
-V make_real(VM *vm, double d)
+V make_float(VM *vm, double d)
 {
-    uint64_t *p = vm_alloc(vm, REAL_WORDS);
+    uint64_t *p = vm_alloc(vm, FLOAT_WORDS);
     if (!p)
         return FAILED;
-    p[0] = HEADER(T_REAL, 0);
-    memcpy(p + REAL_VALUE, &d, sizeof d);
+    p[0] = HEADER(T_FLOAT, 0);
+    memcpy(p + FLOAT_VALUE, &d, sizeof d);
     return tagged(p, TAG_OBJECT);
 }
 
@@ -197,6 +197,8 @@ size_t symbol_cell(V sym) { return (size_t)(ptr(sym)[SYM_CELL] & CELL_MASK); }
 bool symbol_sealed(V sym) { return (ptr(sym)[SYM_CELL] >> SEALED_BIT) & 1; }
 
 void symbol_seal(V sym) { __atomic_fetch_or(&ptr(sym)[SYM_CELL], UINT64_C(1) << SEALED_BIT, __ATOMIC_RELAXED); }
+
+void symbol_unseal(V sym) { __atomic_fetch_and(&ptr(sym)[SYM_CELL], ~(UINT64_C(1) << SEALED_BIT), __ATOMIC_RELAXED); }
 
 void symbol_mark_called(V sym) { __atomic_fetch_or(&ptr(sym)[SYM_CELL], UINT64_C(1) << CALLED_BIT, __ATOMIC_RELAXED); }
 

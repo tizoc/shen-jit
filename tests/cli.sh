@@ -169,6 +169,16 @@ check eval-status "$dir/eval.out" "status 1"
 check sealed-chain "$dir/sealed.out" "  in g"
 check sealed-chain-outer "$dir/sealed.out" "  in f"
 
+# A lambda passed to a small sealed function that applies it runs in place, with no closure: the
+# arguments' effects keep their order, a variable it captures keeps its value, and a lambda applied
+# twice is applied twice.
+"$SHEN" --seal eval -e '(define cli-then X F -> (F X))' -e '(define cli-twice X F -> (F (F X)))' \
+    -e '(define cli-order -> (cli-then (do (set *cli-seen* [a]) 1) (/. Y (do (set *cli-seen* [b | (value *cli-seen*)]) (+ Y 1)))))' \
+    -e '(define cli-add X -> (cli-then 1 (/. Y (+ X Y))))' \
+    -e '(output "lambda-arg ~A ~A ~A ~A~%" (cli-order) (value *cli-seen*) (cli-add 4) (cli-twice 1 (/. Y (* Y 3))))' \
+    > "$dir/lambda-arg.out" 2>&1
+check lambda-arg "$dir/lambda-arg.out" "lambda-arg 2 [b a] 5 9"
+
 # Functions the kernel did not know when compiling a call, such as one
 # defined later at the top level, are called through fn: by name when the
 # arity matches, with currying and fn's error otherwise.
@@ -241,7 +251,7 @@ printf '(define mk 0 Acc -> Acc N Acc -> (mk (- N 1) [N | Acc]))\n(define deep [
 "$SHEN" script "$dir/deep.shen" > "$dir/deep.out" 2>&1
 check deep-recursion "$dir/deep.out" "300000 300001"
 
-# A literal past the fixnum range is the nearest real, which adding up its digits in
+# A literal past the fixnum range is the nearest float, which adding up its digits in
 # doubles is not, and the largest fixnum and 1e18 stay integers.
 cat > "$dir/big.shen" <<'EOF'
 (output "~A ~A ~A~%" 2305843009213693951 2305843009213693952 -2305843009213693952)
@@ -326,6 +336,125 @@ SHEN_JIT_IMAGE="$dir/app2.img" "$SHEN" eval -e '(output "~A ~A~%" (triple 2) (qu
 check save-again "$dir/save2.out" "6 24"
 SHEN_JIT_IMAGE="$dir/app2.img" "$SHEN" eval -e '(define quad X -> X)' > "$dir/save3.out" 2>&1
 check save-sealed "$dir/save3.out" "shen-jit: uncaught error: quad is sealed and cannot be redefined"
+
+# Modules (docs/modules.md): -m takes a name, looked for under SHEN_JIT_PATH's directories and then
+# the installation's lib/, beside a copied executable here, or a descriptor's path; a saved image
+# keeps what it loaded. tests/modules.shen checks the loader itself.
+SHEN_JIT_PATH="$PWD/tests/modules" "$SHEN" eval -m a -e '(output "~A~%" (mod-a 2))' > "$dir/mod.out" 2>&1
+check module-by-name "$dir/mod.out" "23"
+"$SHEN" eval -m tests/modules/a.shenmod -e '(output "~A~%" (module.loaded))' > "$dir/mod2.out" 2>&1
+check module-by-path "$dir/mod2.out" "[b c/d a]"
+mkdir -p "$dir/installed/lib"
+cp "$SHEN" "$dir/installed/"
+printf '(shen.module (version 1) (name here) (sources tc- "here.shen"))\n' > "$dir/installed/lib/here.shenmod"
+printf '(define here-f -> found)\n' > "$dir/installed/lib/here.shen"
+"$dir/installed/$(basename "$SHEN")" eval -m here -e '(output "~A~%" (here-f))' > "$dir/mod3.out" 2>&1
+check module-installed "$dir/mod3.out" "found"
+"$SHEN" --save "$dir/modules.img" eval -m tests/modules/b.shenmod > /dev/null 2>&1
+SHEN_JIT_IMAGE="$dir/modules.img" "$SHEN" eval -e '(output "~A~%" (module.loaded))' > "$dir/mod4.out" 2>&1
+check module-saved "$dir/mod4.out" "[b]"
+"$SHEN" --help > "$dir/help.out" 2>&1
+check module-help "$dir/help.out" "            -m, --module <NAME or FILE.shenmod>"
+"$SHEN" eval -m nowhere > "$dir/mod5.out" 2>&1
+contains module-missing "$dir/mod5.out" "module: no nowhere.shenmod in"
+printf '(shen.module (version 1) (name args) (requires b) (sources tc- "args.shen"))\n' > "$dir/args.shenmod"
+printf '(define args-f -> (tl (value *argv*)))\n(output "args ~S ~A~%%" (args-f) (mod-b 1))\n' > "$dir/args.shen"
+SHEN_JIT_PATH="$PWD/tests/modules" "$SHEN" script "$dir/args.shenmod" one two > "$dir/mod6.out" 2>&1
+check module-script "$dir/mod6.out" 'args ["one" "two"] 10'
+absent module-script-quiet "$dir/mod6.out" "(fn args-f)"
+
+# Checked module sources still run and warn, but their inferred types stay quiet.
+cat > "$dir/quiet.shen" <<'EOF'
+(define quiet-f {number --> number}
+  N -> N)
+(output "module output ~A~%" (quiet-f 42))
+EOF
+printf '(shen.module (version 1) (name quiet) (sources tc+ "quiet.shen"))\n' > "$dir/quiet.shenmod"
+printf '(shen.module (version 1) (name quiet-user) (requires quiet) (sources tc- "quiet-user.shen"))\n' > "$dir/quiet-user.shenmod"
+printf '(output "dependency result ~A~%%" (quiet-f 3))\n' > "$dir/quiet-user.shen"
+"$SHEN" eval -e '(declare quiet-f [string --> string])' -m "$dir/quiet.shenmod" > "$dir/quiet.out" 2>&1
+check module-explicit-output "$dir/quiet.out" "module output 42"
+check module-type-warning "$dir/quiet.out" "warning: changing the type of quiet-f may create errors"
+absent module-no-type-report "$dir/quiet.out" "(fn quiet-f)"
+absent module-no-inference-report "$dir/quiet.out" "typechecked in"
+absent module-no-timing-report "$dir/quiet.out" "run time:"
+"$SHEN" eval -m "$dir/quiet-user.shenmod" > "$dir/quiet-user.out" 2>&1
+check module-dependency-output "$dir/quiet-user.out" "module output 42"
+check module-dependency-defined "$dir/quiet-user.out" "dependency result 3"
+absent module-dependency-no-type-report "$dir/quiet-user.out" "(fn quiet-f)"
+"$SHEN" eval -e '(tc +)' -l "$dir/quiet.shen" > "$dir/quiet-load.out" 2>&1
+contains checked-load-type-report "$dir/quiet-load.out" "(fn quiet-f) : (number --> number)"
+contains checked-load-inference-report "$dir/quiet-load.out" "typechecked in"
+
+# build makes an executable from a descriptor that names its main: sealed unless --open, and named
+# after the module's last part by default, here hello, from app/hello.
+"$SHEN" build tests/modules/hello.shenmod -o "$dir/hello" > "$dir/build.out" 2>&1
+echo "status $?" >> "$dir/build.out"
+check build-status "$dir/build.out" "status 0"
+"$dir/hello" one two > "$dir/hello.out" 2>&1
+check build-run "$dir/hello.out" 'hello ["one" "two"] 20'
+check build-sealed "$dir/hello.out" "redefined: mod-b is sealed and cannot be redefined"
+"$SHEN" build tests/modules/hello.shenmod -o "$dir/hello-open" --open > /dev/null 2>&1
+"$dir/hello-open" > "$dir/hello-open.out" 2>&1
+check build-open "$dir/hello-open.out" "redefined: yes"
+mkdir -p "$dir/built"
+here=$PWD
+(cd "$dir/built" && "$SHEN" build "$here/tests/modules/hello.shenmod") > /dev/null 2>&1
+if [ -f "$dir/built/hello" ] || [ -f "$dir/built/hello.exe" ]; then pass=$((pass + 1)); else
+    fail=$((fail + 1)); echo "FAIL build-default-name: no hello in $dir/built"; fi
+"$SHEN" build tests/modules/a.shenmod -o "$dir/no-main" > "$dir/no-main.out" 2>&1
+contains build-no-main "$dir/no-main.out" "has no (main Function), the entry point it needs"
+# A saved image cannot supply modules compiled before the build chose its mode. Check both
+# a cached dependency and the root itself, and that the refusal leaves the loader usable.
+SHEN_JIT_IMAGE="$dir/modules.img" "$SHEN" build tests/modules/hello.shenmod -o "$dir/inherited" > "$dir/inherited.out" 2>&1
+echo "status $?" >> "$dir/inherited.out"
+check build-inherited-status "$dir/inherited.out" "status 1"
+contains build-inherited-module "$dir/inherited.out" "build: module b is already loaded; build from an image without it"
+if [ -f "$dir/inherited" ]; then fail=$((fail + 1)); echo "FAIL build-inherited: wrote an executable"; fi
+"$SHEN" eval -m tests/modules/hello.shenmod \
+    -e "(trap-error (shen-jit.apply (shen-jit.function shen-jit.module.build) [\"tests/modules/hello.shenmod\" true \"$dir/inherited-root\"]) (/. E (output \"~A~%\" (error-to-string E))))" \
+    -e '(output "after ~A ~A~%" (module.use [b]) (shen-jit.sealed? (gensym probe)))' > "$dir/inherited-root.out" 2>&1
+contains build-inherited-root "$dir/inherited-root.out" "build: module app/hello is already loaded"
+check build-inherited-restored "$dir/inherited-root.out" "after [] false"
+# Modules first loaded during a build can still be shared by several dependencies.
+cp tests/modules/hello.shen "$dir/diamond.shen"
+printf '(shen.module (version 1) (name diamond) (requires b a) (main hello-main) (sources tc- "diamond.shen"))\n' > "$dir/diamond.shenmod"
+SHEN_JIT_PATH="$PWD/tests/modules" "$SHEN" build "$dir/diamond.shenmod" -o "$dir/diamond" > "$dir/diamond-build.out" 2>&1
+"$dir/diamond" > "$dir/diamond.out" 2>&1
+check build-shared-dependency "$dir/diamond.out" "redefined: mod-b is sealed and cannot be redefined"
+# A built program looks for modules where it runs: building leaves the module path as it was.
+printf '(define paths-main -> (output "path ~S~%%" (hd (module.path))))\n' > "$dir/paths.shen"
+printf '(shen.module (version 1) (name paths) (main paths-main) (sources tc- "paths.shen"))\n' > "$dir/paths.shenmod"
+"$SHEN" build "$dir/paths.shenmod" -o "$dir/paths" > /dev/null 2>&1
+SHEN_JIT_PATH="$dir/elsewhere" "$dir/paths" > "$dir/paths.out" 2>&1
+check build-module-path "$dir/paths.out" "path \"$dir/elsewhere\""
+# A typed program, (typed), builds under (optimise +), so what typechecks compiles with its types,
+# its libraries' too, and always sealed; without (typed), under (optimise -), nothing does.
+"$SHEN" build tests/typed/app.shenmod -o "$dir/typed-app" > /dev/null 2>&1
+"$dir/typed-app" > "$dir/typed-app.out" 2>&1
+check build-typed "$dir/typed-app.out" "2.5 55 annotated true true false true"
+"$SHEN" build tests/typed/app-untyped.shenmod -o "$dir/untyped-app" > /dev/null 2>&1
+"$dir/untyped-app" > "$dir/untyped-app.out" 2>&1
+check build-untyped "$dir/untyped-app.out" "2.5 55 annotated false false false false"
+"$SHEN" build tests/typed/app.shenmod -o "$dir/typed-open" --open > "$dir/typed-open.out" 2>&1
+contains build-typed-open "$dir/typed-open.out" "is a typed program, which is always sealed, so --open does not apply"
+# Optimization metadata still identifies its installed procedure after an image reload.
+"$SHEN" --seal --save "$dir/typed-metadata.img" eval -e '(optimise +)' -m tests/typed/fields.shenmod \
+    -e '(if (element? shen-jit/ffi (shen.x.features.current)) (module.load "tests/typed/foreign.shenmod") skip)' \
+    > "$dir/typed-metadata-save.out" 2>&1
+SHEN_JIT_IMAGE="$dir/typed-metadata.img" "$SHEN" --seal eval -e '(optimise +)' -e '(tc +)' \
+    -l tests/typed/saved-fields.shen -e '(tc -)' -e '(shen-jit.code saved-field)' \
+    -e '(output "field ~A~%" (shen-jit.apply (shen-jit.function saved-field) [(spot.make 7 8)]))' \
+    -e '(if (element? shen-jit/ffi (shen.x.features.current)) (do (tc +) (load "tests/typed/saved-foreign.shen") (tc -) (output "~A~%" (shen-jit.code saved-foreign)) (output "foreign ~A~%" (= (foreign-cos 1.5) (shen-jit.apply (shen-jit.function saved-foreign) [1.5])))) (output "foreign static~%"))' \
+    > "$dir/typed-metadata.out" 2>&1
+contains typed-image-field-code "$dir/typed-metadata.out" "shen-jit.field"
+check typed-image-field-result "$dir/typed-metadata.out" "field 7"
+if grep -q '^foreign static$' "$dir/typed-metadata.out"; then
+    check typed-image-static "$dir/typed-metadata.out" "foreign static"
+else
+    contains typed-image-foreign-code "$dir/typed-metadata.out" "float-call1"
+    check typed-image-foreign-result "$dir/typed-metadata.out" "foreign true"
+fi
 
 # Large objects live apart from the semispaces and are not copied
 #: one survives collections under GC stress, and
@@ -503,17 +632,17 @@ cat > "$dir/beside.shen" <<'EOF'
 EOF
 SHEN_JIT_GC_STRESS= SHEN_JIT_SEMISPACE=64M SHEN_JIT_MAX_HEAP=64M "$SHEN" script "$dir/beside.shen" > "$dir/beside.out" 2>&1
 check limit-small-after-large "$dir/beside.out" "within the limit: true"
-# Reals and strings that primitives make at the limit raise "out of memory", which a handler takes
+# Floats and strings that primitives make at the limit raise "out of memory", which a handler takes
 # like any other error, after an earlier one was caught.
 cat > "$dir/made.shen" <<'EOF'
 (trap-error (simple-error "earlier") (/. E skip))
-(define made.reals V I -> (do (address-> V I (* 1.5 I)) (made.reals V (+ I 1))))
+(define made.floats V I -> (do (address-> V I (* 1.5 I)) (made.floats V (+ I 1))))
 (define made.strings V I -> (do (address-> V I (str I)) (made.strings V (+ I 1))))
-(output "reals: ~A~%" (trap-error (made.reals (absvector 4000000) 0) (/. E (error-to-string E))))
+(output "floats: ~A~%" (trap-error (made.floats (absvector 4000000) 0) (/. E (error-to-string E))))
 (output "strings: ~A~%" (trap-error (made.strings (absvector 4000000) 0) (/. E (error-to-string E))))
 EOF
 SHEN_JIT_GC_STRESS= SHEN_JIT_MAX_HEAP=64M "$SHEN" script "$dir/made.shen" > "$dir/made.out" 2>&1
-check limit-real "$dir/made.out" "reals: out of memory"
+check limit-float "$dir/made.out" "floats: out of memory"
 check limit-string "$dir/made.out" "strings: out of memory"
 # A large string from compiled tlstr is a large object, which the limit refuses when the heap is full,
 # though the reserve a caught "out of memory" leaves the area has room for it.
@@ -575,7 +704,7 @@ cat > "$dir/dl.shen" <<'EOF'
   (rule (e b) <-- (e a)))
 (output "compiled ~R~%" (datalog.sorted (datalog.run dl.kept [[e a b] [e b c]]) t))
 EOF
-SHEN_JIT_GC_STRESS= "$SHEN" --save "$dir/dl.img" eval -l lib/native.shen -l lib/datalog.shen -l "$dir/dl.shen" > "$dir/dl.out" 2>&1 < /dev/null
+SHEN_JIT_GC_STRESS= "$SHEN" --save "$dir/dl.img" eval -m datalog -l "$dir/dl.shen" > "$dir/dl.out" 2>&1 < /dev/null
 check datalog-before-saving "$dir/dl.out" "compiled ((a b) (a c) (b c))"
 SHEN_JIT_GC_STRESS= SHEN_JIT_IMAGE="$dir/dl.img" "$SHEN" eval \
     -e '(output "saved ~R~%" (datalog.sorted (datalog.run dl.kept [[e x y] [e y z]]) t))' \
@@ -788,7 +917,7 @@ cat > "$dir/native.shen" <<EOF
 (define native.main -> (output "double ~A~%" (native.double 21)))
 (shen-jit.save-executable "$dir/native" native.main)
 EOF
-"$SHEN" eval -l lib/native.shen -l "$dir/native.shen" > /dev/null 2>&1
+"$SHEN" eval -m native -l "$dir/native.shen" > /dev/null 2>&1
 "$dir/native" > "$dir/native.out" 2>&1
 check save-exe-native "$dir/native.out" "double 42"
 # Buffers are saved with their contents, also a large one, whose block is its own.
@@ -1072,7 +1201,7 @@ check kill-reading "$dir/kill-read.out" "reading: killed"
 # and a parallel map's wait for its isolates; the REPL goes on, and kills the map's isolates, so
 # that it can define again.
 mkfifo "$dir/chanwait"
-SHEN_JIT_GC_STRESS= "$SHEN" eval -l lib/parallel.shen -e '(define blocked X -> (channel.receive (channel.new 1)))' \
+SHEN_JIT_GC_STRESS= "$SHEN" eval -m parallel -e '(define blocked X -> (channel.receive (channel.new 1)))' \
     -r < "$dir/chanwait" > "$dir/chanwait.out" 2>&1 &
 pid=$!
 exec 3> "$dir/chanwait"
@@ -1153,7 +1282,7 @@ cat > "$dir/ffi.shen" <<EOF
          (ffi.strlen 1)))
 (shen-jit.save-executable "$dir/ffi" ffi.main)
 EOF
-"$SHEN" eval -l lib/ffi.shen -l "$dir/ffi.shen" > "$dir/ffi.out" 2>&1 < /dev/null
+"$SHEN" eval -m ffi -l "$dir/ffi.shen" > "$dir/ffi.out" 2>&1 < /dev/null
 if grep -q "this static build" "$dir/ffi.out"; then
     check ffi-static "$dir/ffi.out" "foreign: this static build cannot load libraries"
 else
@@ -1173,7 +1302,7 @@ else
 (shen-jit.u8! (value mem.kept) 0 9)
 (output "before saving ~A~%" (shen-jit.u8 (value mem.kept) 0))
 EOF
-    "$SHEN" --save "$dir/mem.img" eval -l lib/ffi.shen -l lib/memory.shen -l "$dir/mem.shen" > "$dir/mem.out" 2>&1 < /dev/null
+    "$SHEN" --save "$dir/mem.img" eval -m memory -l "$dir/mem.shen" > "$dir/mem.out" 2>&1 < /dev/null
     check memory-before-saving "$dir/mem.out" "before saving 9"
     SHEN_JIT_IMAGE="$dir/mem.img" "$SHEN" eval \
         -e '(output "~A ~A~%" (shen-jit.bytes-length (value mem.kept)) (trap-error (shen-jit.u8 (value mem.kept) 0) (/. E (error-to-string E))))' \
@@ -1185,7 +1314,7 @@ EOF
 (shen-jit.u8! (value handle.kept) 0 9)
 (output "before saving ~A~%" (shen-jit.u8 (value handle.kept) 0))
 EOF
-    "$SHEN" --save "$dir/handle.img" eval -l lib/ffi.shen -l lib/memory.shen -l lib/handle.shen -l "$dir/handle.shen" > "$dir/handle.out" 2>&1 < /dev/null
+    "$SHEN" --save "$dir/handle.img" eval -m memory -m handle -l "$dir/handle.shen" > "$dir/handle.out" 2>&1 < /dev/null
     check handle-before-saving "$dir/handle.out" "before saving 9"
     SHEN_JIT_IMAGE="$dir/handle.img" "$SHEN" eval \
         -e '(let K (value handle.kept) (do (set handle.kept []) (shen-jit.collect) (output "~A ~A ~A~%" (shen-jit.bytes-length K) (handle.sweep) (trap-error (handle.close K) (/. E (error-to-string E))))))' \
@@ -1197,7 +1326,7 @@ EOF
 (define ffi.outer X -> (+ 1 (ffi.strlen X)))
 (ffi.outer 1)
 EOF
-    "$SHEN" eval -l lib/ffi.shen -l "$dir/ffi3.shen" > "$dir/ffi3.out" 2>&1 < /dev/null
+    "$SHEN" eval -m ffi -l "$dir/ffi3.shen" > "$dir/ffi3.out" 2>&1 < /dev/null
     check ffi-backtrace "$dir/ffi3.out" "  in ffi.strlen"
     check ffi-backtrace-caller "$dir/ffi3.out" "  in ffi.outer"
 
@@ -1205,11 +1334,7 @@ EOF
     # cannot hold it back, and leaves the server as it was: listening, until a stop and a run
     # close it. Under GC stress, loading the libraries outlasts the waits, so it runs without.
     if [ "$posix" = yes ]; then
-        set --
-        for name in ffi socket buffer io grammar deadline clock io-socket http-head http-request http-response \
-            http-server http-listener; do
-            set -- "$@" -l "lib/$name.shen"
-        done
+        set -- -m http/listener
         mkfifo "$dir/serve"
         SHEN_JIT_GC_STRESS= "$SHEN" eval "$@" -r < "$dir/serve" > "$dir/serve.out" 2>&1 &
         pid=$!
@@ -1225,7 +1350,7 @@ EOF
         ends
         contains serve-interrupted "$dir/serve.out" "interrupted"
         contains serve-left-listening "$dir/serve.out" "listening"
-        contains serve-stopped-after "$dir/serve.out" "[ok]"
+        contains serve-stopped-after "$dir/serve.out" "#<result.ok []>"
         contains serve-closed "$dir/serve.out" "stopped"
         set --
     fi
@@ -1237,7 +1362,7 @@ EOF
 (define-foreign child.system child.libc "system" (string) --> int32)
 (child.system "(yes 2> /dev/null; echo \$? > $dir/child.out) | head -1 > /dev/null")
 EOF
-        "$SHEN" eval -l lib/ffi.shen -l "$dir/child.shen" > /dev/null 2>&1 < /dev/null
+        "$SHEN" eval -m ffi -l "$dir/child.shen" > /dev/null 2>&1 < /dev/null
         check child-sigpipe "$dir/child.out" "141"
     fi
 
@@ -1284,7 +1409,7 @@ EOF
 (output "message: ~A~%" (value q.message))
 (output "continues: ~A~%" (+ 20 22))
 EOF
-    "$SHEN" eval -l lib/ffi.shen -l "$dir/nest-quiet.shen" > "$dir/nest-quiet.out" 2>&1 < /dev/null
+    "$SHEN" eval -m ffi -l "$dir/nest-quiet.shen" > "$dir/nest-quiet.out" 2>&1 < /dev/null
     check nested-quiet-result "$dir/nest-quiet.out" "result: done"
     check nested-quiet-message "$dir/nest-quiet.out" "message: stack overflow"
     check nested-quiet-continues "$dir/nest-quiet.out" "continues: 42"
@@ -1318,7 +1443,7 @@ EOF
 (define-foreign-procedure c.misuse c.lib "$1" 0)
 (c.misuse)
 EOF
-        SHEN_JIT_GC_STRESS=$3 "$SHEN" eval -l lib/ffi.shen -l "$dir/misuse.shen" > "$dir/misuse.out" 2>&1 < /dev/null
+        SHEN_JIT_GC_STRESS=$3 "$SHEN" eval -m ffi -l "$dir/misuse.shen" > "$dir/misuse.out" 2>&1 < /dev/null
         contains "misuse-$1" "$dir/misuse.out" "shen-jit: foreign function c.misuse: $2"
     }
     misuse returns_none "it returned SHEN_NONE"
@@ -1339,7 +1464,7 @@ EOF
        (output "net: ~A~%" (socket.recv-string A 100))))
 (shen-jit.save-executable "$dir/net" net.main)
 EOF
-    "$SHEN" eval -l lib/ffi.shen -l lib/socket.shen -l "$dir/net.shen" > /dev/null 2>&1 < /dev/null
+    "$SHEN" eval -m socket -l "$dir/net.shen" > /dev/null 2>&1 < /dev/null
     "$dir/net" > "$dir/net.out" 2>&1 < /dev/null
     check socket-saved-program "$dir/net.out" "net: over the wire"
 

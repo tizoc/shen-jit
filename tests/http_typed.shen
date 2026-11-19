@@ -1,9 +1,9 @@
 \\ Load libraries with tc off, then check this client.
 (define http-typed.value
-  {http.head-result --> string}
-  [head V] -> (buffer.string V)
-  [eof] -> "end"
-  [error Error] -> (io.error-message Error))
+  {(io.result (option.t buffer.view)) --> string}
+  (:result.ok [V]) -> (buffer.string V)
+  (:result.ok []) -> "end"
+  (:result.err Error) -> (io.error-message Error))
 
 (define http-typed.install
   {io.endpoint --> number --> io.endpoint}

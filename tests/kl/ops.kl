@@ -71,9 +71,9 @@ function returns a fixnum or a Boolean computed without =, or raises."
 
 (defun t-if-bad () (if 1 a b))
 
-(defun t-add-real () (+ 1.5 2))
+(defun t-add-float () (+ 1.5 2))
 
-(defun t-add-real-check () (let R (+ 1.5 2) (if (< R 3.6) (if (> R 3.4) 1 0) 0)))
+(defun t-add-float-check () (let R (+ 1.5 2) (if (< R 3.6) (if (> R 3.4) 1 0) 0)))
 
 (defun t-sub-overflow () (- (- -2305843009213693951 1) 1))
 
@@ -85,7 +85,7 @@ function returns a fixnum or a Boolean computed without =, or raises."
 
 (defun t-div-exact () (/ 84 2))
 
-(defun t-div-real () (let R (/ 1 4) (if (< R 0.26) (if (> R 0.24) 1 0) 0)))
+(defun t-div-float () (let R (/ 1 4) (if (< R 0.26) (if (> R 0.24) 1 0) 0)))
 
 (defun t-div-zero () (/ 1 0))
 
@@ -95,11 +95,11 @@ function returns a fixnum or a Boolean computed without =, or raises."
 
 (defun t-compare (A B) (+ (if (< A B) 1 0) (+ (if (> A B) 10 0) (+ (if (<= A B) 100 0) (if (>= A B) 1000 0)))))
 
-(defun t-compare-real () (t-compare 1.5 2))
+(defun t-compare-float () (t-compare 1.5 2))
 
 (defun t-eq-fixnums () (if (= 3 3) (if (= 3 4) 0 1) 0))
 
-(defun t-eq-int-real () (= 8 (+ 0.5 7.5)))
+(defun t-eq-int-float () (= 8 (+ 0.5 7.5)))
 
 (defun t-eq-strings () (= "abc" "abc"))
 

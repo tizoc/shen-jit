@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name process/io)
+  (requires process result)
+  (sources tc- "io.shen" tc+ "report-typed.shen" "io-typed.shen"))

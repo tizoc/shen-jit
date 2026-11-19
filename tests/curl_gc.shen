@@ -4,8 +4,8 @@
      Result (curl.request C "POST" (cn (value curl-test.base) "/echo") [] Body [[proxy ""]])
      _ (curl.close C)
      _ (shen-jit.collect)
-     R (hd (tl Result))
-  (if (and (= (hd Result) ok) (= (curl.status R) 200)
+     R (fixture.success Result)
+  (if (and (result.ok? Result) (= (curl.status R) 200)
            (buffer.equal? Body (curl.body R)) (= (curl.header-values R "x-method") ["POST"]))
       (output "curl gc ok~%") (error "curl ownership failed under GC stress")))
 
@@ -18,7 +18,7 @@
                    _ (shen-jit.collect)
                    _ (shen-jit.copy-bytes (buffer.owner Output) (<-address Count 0) Bytes 0 N)
                    _ (address-> Count 0 (+ (<-address Count 0) N))
-                [written N])) (freeze [ok]))
+                (:result.ok N))) (freeze (:result.ok [])))
      Result (curl.request-to C "GET" (cn (value curl-test.base) "/binary") [] (buffer.new 0) Sink
                 [[proxy ""] [chunk-size 512]])
      Input (curl.input "GET" (value curl-test.base) [] (buffer.new 0) (curl.stream-options [[proxy ""]]))
@@ -27,6 +27,6 @@
      Again (curl.request C "GET" (cn (value curl-test.base) "/binary") [] (buffer.new 0) [[proxy ""]])
      _ (io.close Sink)
      _ (curl.close C)
-  (if (and (= (hd Result) ok) (= (<-address Count 0) 1024) Raised (= (hd Again) ok)
-           (buffer.equal? Output (curl.body (hd (tl Again)))))
+  (if (and (result.ok? Result) (= (<-address Count 0) 1024) Raised (result.ok? Again)
+           (buffer.equal? Output (curl.body (fixture.success Again))))
       (output "curl stream gc ok~%") (error "stream callback roots or exception cleanup failed")))

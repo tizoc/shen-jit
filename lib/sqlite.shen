@@ -1,7 +1,7 @@
-\\ SQLite, over the FFI. It stays out of the image until asked for; load it after
-\\ lib/ffi.shen, under (tc -), before the code using it:
+\\ SQLite, over the FFI. It stays out of the image until asked for; load its module
+\\ before the code using it:
 \\
-\\   shen-jit eval -l lib/ffi.shen -l lib/sqlite.shen -l program.shen
+\\   shen-jit eval -m sqlite -l program.shen
 \\
 \\ (sqlite.with-database "people.db"
 \\   (/. Db

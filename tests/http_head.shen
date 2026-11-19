@@ -1,3 +1,5 @@
+(load "tests/result_helpers.shen")
+
 \\ Every split and truncation, bounded scan state, untouched body and total fake-clock budgets.
 (set http-test.passed 0)
 (set http-test.failed 0)
@@ -14,9 +16,9 @@
   Name F -> (http-test.check Name true (freeze (trap-error (do (thaw F) false) (/. X true)))))
 
 (define http-test.value
-  [head V] -> (buffer.string V)
-  [eof] -> [eof]
-  [error E] -> [(io.error-domain E) (io.error-message E) (io.error-progress E)])
+  (:result.ok [V]) -> (buffer.string V)
+  (:result.ok []) -> (:result.ok [])
+  (:result.err E) -> [(io.error-domain E) (io.error-message E) (io.error-progress E)])
 
 (define http-test.source
   Wire State Terminal Time ->
@@ -30,9 +32,9 @@
                       (do (shen-jit.copy-bytes B 0 (buffer.owner Wire) (+ (buffer.offset Wire) At) N)
                           (address-> State 0 (+ At N))
                           (if (empty? Time) true (address-> Time 0 (+ 10 (<-address Time 0))))
-                          [read N])))))
+                          (:result.ok [N]))))))
       (function io.no-write)
-      (freeze [ok])))
+      (freeze (:result.ok []))))
 
 (set http-test.head "GET / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;")
 (set http-test.wire (buffer.from-string (cn (value http-test.head) "body")))
@@ -40,7 +42,7 @@
 (define http-test.split
   Split ->
     (let State (io.record [0 0 Split])
-         E (http-test.source (value http-test.wire) State [eof] [])
+         E (http-test.source (value http-test.wire) State (:result.ok []) [])
          R (io.reader E [])
          F (http.head-reader R 35)
          Result (http.read-head F)
@@ -51,7 +53,7 @@
              (freeze (and (shen-jit.same? Result Again) (= Calls (<-address State 1)))))
          Body (io.read-all R 4)
          _ (io.close E)
-      [(http-test.value Result) (buffer.string (hd (tl Body))) Position]))
+      [(http-test.value Result) (buffer.string (fixture.success Body)) Position]))
 
 (define http-test.splits
   0 -> true
@@ -67,7 +69,7 @@
   N ->
     (let E (io.input-buffer (buffer.slice (value http-test.wire) 0 N))
          F (http.head-reader (io.reader E [[chunk-size 1]]) 35)
-         Expected (if (= N 0) [eof] [library "incomplete head" N])
+         Expected (if (= N 0) (:result.ok []) [library "incomplete head" N])
          _ (http-test.check "every incomplete prefix" Expected
              (freeze (http-test.value (http.read-head F))))
          _ (io.close E)
@@ -81,7 +83,7 @@
   (do (http-test.check "byte limit" [library "head exceeds byte limit" 34]
         (freeze (http-test.value (http.read-head F))))
       (http-test.check "limit preserves the unconsumed suffix" "c#10;body"
-        (freeze (buffer.string (hd (tl (io.read-all R 5))))))
+        (freeze (buffer.string (fixture.success (io.read-all R 5)))))
       (io.close E)))
 
 (define http-test.bad
@@ -105,14 +107,14 @@
      R (io.reader E [])
   (do (http-test.raises "too small limit" (freeze (http.head-reader R 3)))
       (http-test.raises "too large limit" (freeze (http.head-reader R 1048577)))
-      (http-test.raises "real limit" (freeze (http.head-reader R (+ 0.5 0.5))))
+      (http-test.raises "float limit" (freeze (http.head-reader R (+ 0.5 0.5))))
       (http-test.raises "not a reader" (freeze (http.head-reader [] 128)))
       (io.close E)))
 
 (let Time (io.record [0])
      D (deadline.after (freeze (<-address Time 0)) 25)
      State (io.record [0 0 1])
-     E (http-test.source (value http-test.wire) State [eof] Time)
+     E (http-test.source (value http-test.wire) State (:result.ok []) Time)
      F (http.head-reader (io.reader E [[chunk-size 1]]) 128)
      Result (http.read-head-until F D)
   (do (http-test.check "header deadline is total across progress" [timeout "deadline expired" 3]
@@ -121,7 +123,7 @@
       (io.close E)))
 
 (let State (io.record [0 0 128])
-     E (http-test.source (value http-test.wire) State [eof] [])
+     E (http-test.source (value http-test.wire) State (:result.ok []) [])
      F (http.head-reader (io.reader E []) 128)
      D (deadline.after (freeze 0) 0)
   (do (http-test.check "expired budget does not read" [timeout "deadline expired" 0]
@@ -131,10 +133,10 @@
 
 (let State (io.record [0 0 128])
      E (http-test.source (buffer.slice (value http-test.wire) 0 8) State
-                        [error (io.native-error read posix 5 "peer" "read failed")] [])
+                        (:result.err (io.native-error read posix 5 "peer" "read failed")) [])
      F (http.head-reader (io.reader E []) 128)
      Result (http.read-head F)
-     Error (hd (tl Result))
+     Error (fixture.failure Result)
   (do (http-test.check "transport details and aggregate progress" [posix 5 8]
         (freeze [(io.error-domain Error) (io.error-code Error) (io.error-progress Error)]))
       (io.close E)))

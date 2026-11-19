@@ -11,15 +11,15 @@
 
 (define request-typed.completed
   {(io.result http.request) --> boolean}
-  [error Error] -> false
-  [ok Request] ->
+  (:result.err Error) -> false
+  (:result.ok Request) ->
     (let Wire (http.encode-response Request (request-typed.handler Request) 4096 1024)
-      (and (= (http.method Request) "POST") (> (buffer.length Wire) 3))))
+      (and (= (http.method Request) "POST") (fx> (buffer.length Wire) 3))))
 
 (define request-typed.parsed
   {(io.result http.request) --> boolean}
-  [error Error] -> false
-  [ok Request] ->
+  (:result.err Error) -> false
+  (:result.ok Request) ->
     (let E (io.input-buffer (buffer.from-string "abc"))
          R (io.reader E [])
          B (http.body-reader R Request)
@@ -34,14 +34,14 @@
 
 (define request-typed.chunked-complete
   {(io.result http.request) --> boolean}
-  [error _] -> false
-  [ok Q] -> (and (http.chunked? Q) (= (http.content-length Q) 3)
+  (:result.err _) -> false
+  (:result.ok Q) -> (and (http.chunked? Q) (= (http.content-length Q) 3)
                  (= (http.trailers Q) [["x" "yes"]]) (= (buffer.string (http.body Q)) "abc")))
 
 (define request-typed.chunked-parsed
   {(io.result http.request) --> boolean}
-  [error _] -> false
-  [ok Q] ->
+  (:result.err _) -> false
+  (:result.ok Q) ->
     (let E (io.input-buffer (buffer.from-string "3c#13;c#10;abcc#13;c#10;0c#13;c#10;X: yesc#13;c#10;c#13;c#10;"))
          B (http.body-reader-with (io.reader E []) Q [[chunk-count-limit 2] [trailer-limit 16]])
          Good (request-typed.chunked-complete (http.read-body B))
@@ -56,10 +56,10 @@
 
 \\ Two heads read in place from one reader, then the end.
 (define request-typed.target
-  {(grammar.read-result http.request) --> string}
-  [ok Q] -> (http.target Q)
-  [eof] -> "eof"
-  [error E] -> (io.error-message E))
+  {(io.result (option.t http.request)) --> string}
+  (:result.ok [Q]) -> (http.target Q)
+  (:result.ok []) -> "eof"
+  (:result.err E) -> (io.error-message E))
 
 (define request-typed.read
   {--> boolean}

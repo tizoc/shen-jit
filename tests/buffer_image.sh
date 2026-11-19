@@ -6,7 +6,7 @@ dir=$(mktemp -d)
 trap 'buffer_test_status=$?; if [ "$buffer_test_status" -ne 0 ]; then cat "$dir"/*.out 2>/dev/null; fi; rm -rf "$dir"' EXIT
 if command -v cygpath > /dev/null; then dir=$(cygpath -m "$dir"); fi
 
-"$SHEN" --save "$dir/managed.img" eval -l lib/buffer.shen -l lib/cursor.shen \
+"$SHEN" --save "$dir/managed.img" eval -m cursor \
   -e '(set buffer-saved.cursor (cursor.skip (cursor.new (buffer.from-string "abcdef")) 2))' \
   > "$dir/save.out" 2>&1
 SHEN_JIT_IMAGE="$dir/managed.img" "$SHEN" eval \
@@ -22,7 +22,7 @@ if [ "${TEST_GC_STRESS:-}" = 1 ]; then # a collection at every allocation: make 
     gc=1
 fi
 
-"$SHEN" --save "$dir/foreign.img" eval -l lib/ffi.shen -l lib/memory.shen -l lib/buffer.shen \
+"$SHEN" --save "$dir/foreign.img" eval -m memory -m buffer \
   -e '(set buffer-saved.foreign (trap-error (buffer.wrap (memory.alloc 8)) (/. E (if (= (error-to-string E) "foreign: this static build cannot load libraries") [] (simple-error (error-to-string E))))))' \
   > "$dir/foreign-save.out" 2>&1
 SHEN_JIT_IMAGE="$dir/foreign.img" "$SHEN" eval \
@@ -34,7 +34,7 @@ fi
 
 # A grammar's loop saved before its first call compiles in the loaded image.
 printf '(defgrammar <saved.digit> B where (saved.digit? B);)\n(defgrammar <saved.digits> (+ <saved.digit>);)\n(define saved.digit? B -> (and (>= B 48) (<= B 57)))\n' > "$dir/grammar.shen"
-"$SHEN" --save "$dir/grammar.img" eval -l lib/buffer.shen -l lib/grammar.shen -l "$dir/grammar.shen" \
+"$SHEN" --save "$dir/grammar.img" eval -m grammar -l "$dir/grammar.shen" \
   > "$dir/grammar-save.out" 2>&1
 SHEN_JIT_IMAGE="$dir/grammar.img" "$SHEN" eval \
   -e '(output "grammar: ~A ~A~%" (grammar.match? <saved.digits> (buffer.from-string "2026")) (grammar.match? <saved.digits> (buffer.from-string "20x")))' \
@@ -42,7 +42,7 @@ SHEN_JIT_IMAGE="$dir/grammar.img" "$SHEN" eval \
 grep -qxF 'grammar: true false' "$dir/grammar-load.out" || { cat "$dir/grammar-load.out"; exit 1; }
 
 printf '(define wrong-cursor {number --> number} N -> (cursor.peek N))\n' > "$dir/wrong.shen"
-if "$SHEN" eval -l lib/buffer.shen -l lib/cursor.shen -e '(tc +)' -l "$dir/wrong.shen" \
+if "$SHEN" eval -m cursor -e '(tc +)' -l "$dir/wrong.shen" \
      > "$dir/wrong.out" 2>&1; then
   echo 'typed cursor misuse was accepted'
   exit 1

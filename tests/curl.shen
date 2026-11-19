@@ -10,11 +10,11 @@
               (output "FAIL ~A: wanted ~S, got ~S~%" Name Expected Actual)))))
 
 (define curl-test.ok
-  [ok R] -> R
-  [error E] -> (error "request failed: ~A (~A)" (io.error-message E) (io.error-code E)))
+  (:result.ok R) -> R
+  (:result.err E) -> (error "request failed: ~A (~A)" (io.error-message E) (io.error-code E)))
 
 (define curl-test.error
-  [error E] -> E
+  (:result.err E) -> E
   _ -> (error "expected a failed transfer"))
 
 (define curl-test.url
@@ -47,8 +47,8 @@
       (curl-test.check "metadata URL" (curl-test.url "/binary") (freeze (curl.url First)))
       (curl-test.check "elapsed milliseconds" true (freeze (>= (curl.elapsed First) 0)))
       (curl-test.check "no redirects" 0 (freeze (curl.redirects First)))
-      (curl-test.check "explicit close" [ok] (freeze (curl.close C)))
-      (curl-test.check "idempotent close" [ok] (freeze (curl.close C)))
+      (curl-test.check "explicit close" (:result.ok []) (freeze (curl.close C)))
+      (curl-test.check "idempotent close" (:result.ok []) (freeze (curl.close C)))
       (curl-test.check "closed request refused" true
         (freeze (curl-test.raises? (freeze (curl-test.get C "/binary" [])))))
       (curl-test.check "owned body after close" 255 (freeze (buffer.u8 (curl.body Again) 255)))))
@@ -141,8 +141,15 @@
 
 (curl-test.check "one-shot convenience" 200
   (freeze (curl.status (curl-test.ok (curl.get (curl-test.url "/binary") [[proxy ""]])))))
-(curl-test.check "scoped client cleans up on exception" error
-  (freeze (hd (curl.with-client (/. C (error "scope failed"))))))
+(let E (io.error write "download" "disk full")
+  (curl-test.check "scoped client preserves a transfer error and its progress"
+    (:result.err (io.progress E 7))
+    (freeze (curl.with-client (/. C (:result.err (io.progress E 7)))))))
+
+(curl-test.check "scoped client diagnoses malformed transfer errors" "curl: invalid callback error"
+  (freeze (io.error-message (curl-test.error (curl.with-client (/. C (:result.err (@p "bad" 7))))))))
+(curl-test.check "scoped client cleans up on exception" true
+  (freeze (result.err? (curl.with-client (/. C (error "scope failed"))))))
 
 (curl-test.check "field parse failure preserves body progress" 3
   (freeze

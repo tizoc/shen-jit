@@ -1,0 +1,2 @@
+(shen.module (version 1) (name cd-parent) (requires source-cd cd-sibling)
+  (sources tc- "observe-home.shen"))

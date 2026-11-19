@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name buffer)
+  (requires numbers option)
+  (sources tc- "buffer-view.shen" tc+ "buffer-typed.shen"
+           tc- "buffer.shen" tc+ "buffer-ops-typed.shen" "buffer-builder.shen"))

@@ -9,10 +9,10 @@ is external. Files are read as Shen reads them, so a macro in them is applied fi
 Build it from the repository root:
 
 ```sh
-build/shen-jit eval -q -l lib/native.shen -l lib/datalog.shen -l lib/ffi.shen -l lib/buffer.shen \
-  -l lib/io.shen -l lib/io-file.shen -l example-apps/depends/main.shen \
-  -e '(shen-jit.save-executable "depends" depends.main)'
+build/shen-jit build example-apps/depends/depends.shenmod
 ```
+
+Its descriptor names the entry point, `(main depends.main)`, and `build` writes `depends`, sealed.
 
 From a release archive, run the same from the archive's root with `./shen-jit`.
 

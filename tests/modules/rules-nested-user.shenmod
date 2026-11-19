@@ -1,0 +1,2 @@
+(shen.module (version 1) (name rules-nested-user) (requires rules-nested)
+  (sources tc+ "rules-nested-user.shen"))

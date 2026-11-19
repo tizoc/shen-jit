@@ -1,15 +1,17 @@
 # Subprocesses and pipelines
 
-`lib/process.shen` launches programs with explicit arguments and owned child handles.
-`lib/process-io.shen` adds bounded capture, streaming through our [I/O endpoints](io.md), cancellation
+`lib/process/process.shen`, the module `process`, launches programs with explicit arguments and owned child handles.
+`lib/process/io.shen`, the module `process/io`, adds bounded capture, streaming through our [I/O endpoints](io.md), cancellation
 and pipelines. Neither library uses kernel streams for file or pipe contents.
+
+Typed clients get spawn option rules from `process.t`. Requiring `process/io` also enables
+`process.io.t`, which types the seven communication options and the `[Program Arguments]` pipeline command.
 
 ## Build and load
 
 ```sh
 make process
-build/shen-jit eval -l lib/ffi.shen -l lib/buffer.shen -l lib/io.shen -l lib/io-file.shen \
-  -l lib/deadline.shen -l lib/clock.shen -l lib/process.shen -l lib/process-io.shen -l program.shen
+build/shen-jit eval -m process/io -l program.shen
 ```
 
 The adapter depends only on the public `include/shen.h` API and system libraries. Linux needs glibc
@@ -24,12 +26,13 @@ sh lib/build-process.sh lib/shen-process.so
 ```
 
 `CC` and `CFLAGS` are supported. Loading never invokes a compiler. The facade searches `./build/`,
-`./lib/` and the current directory for `shen-process.so` and `shen-process.dll`. Set
+`./lib/` and the current directory for `shen-process.so` and `shen-process.dll`, then the same from the
+executable's directory. Set
 `process.*adapter-files*` before loading to use absolute names elsewhere. The adapter ABI is 1.
 
 ## Start a child
 
-`(process.spawn Program Arguments Options)` returns `[ok Child]` or `[error Error]`. Arguments is a
+`(process.spawn Program Arguments Options)` returns `(:result.ok Child)` or `(:result.err Error)`. Arguments is a
 list of strings, excluding argv[0]; Program supplies argv[0]. There is no implicit shell expansion,
 globbing, interpolation or batch-file execution. Invalid option shapes, NUL bytes and invalid argument
 values raise before starting a child. OS launch failures remain structured native errors.
@@ -49,6 +52,11 @@ Stream is `inherit`, `null`, `pipe` or `[file Path]`. For stdout/stderr, `[file 
 `[append Path]` appends. File redirects and relative program paths are interpreted against the child
 working directory. Creating an output redirect can truncate a file even if a later launch step fails;
 use the filter example's replacement scope when preserving an old destination matters.
+
+In typed code, redirects take a `process.stream` where the option supplies that type.
+If you bind a redirect first, use `(type inherit process.stream)` or a function returning
+`process.stream`. The process I/O option `[chunk-size N]` checks where `process.option` is
+expected, as in the options list passed to `process.run`.
 
 Home and environment are snapshotted once for a pipeline. No operation changes the parent's native
 cwd or environment. PATH overrides affect executable lookup too. POSIX falls back to `/usr/bin:/bin`
@@ -71,11 +79,14 @@ case-insensitively. Hidden Windows drive-directory variables are not part of the
 | Function | Result |
 | --- | --- |
 | `(process.pid Child)` | PID metadata; never a substitute for the owned handle |
-| `(process.poll Child)` | `[ok [running]]`, `[ok [exited Code]]`, `[ok [signalled Signal]]`, or an error |
-| `(process.wait Child Milliseconds)` | `[ok Status]`, `[pending]`, or `[error Error]` |
+| `(process.poll Child)` | `(:result.ok (:process.running))`, `(:result.ok (:process.exited Code))`, `(:result.ok (:process.signalled Signal))`, or an error |
+| `(process.wait Child Milliseconds)` | `(:result.ok [Status])`, `(:result.ok [])` at the deadline, or `(:result.err Error)` |
 | `(process.terminate Child)` | Request termination of the child, or its configured group/job |
 | `(process.kill Child)` | Force termination of the child, or its configured group/job |
 | `(process.close Child)` | Release pipes/native ownership after observing exit; idempotent |
+
+The `process` module exports the status constructors `running`, `exited` and `signalled` and
+the predicates `running?`, `exited?` and `signalled?`. A timed-out wait returns `(:result.ok [])`.
 
 A timed wait does not terminate the child. Closing a running child is an error and leaves it owned.
 Nonzero exit codes are data, not launch failures. POSIX signal exits are distinct; Windows retains
@@ -122,10 +133,14 @@ for each output. Spawn options apply except standard-stream redirects: use low-l
     (process.run Program Arguments (buffer.from-string "hello")
       [[timeout 2000] [stdout-limit 4096] [stderr-limit 4096]]))
 
-(define example.success?
-  [ok Report] -> (process.success? Report)
-  [error _] -> false
-  [error _ _] -> false)
+(shen.x.namespace example
+  (use process)
+  (import result ok err)
+  (export success?)
+
+  (define success?
+    (:ok Report) -> (process.success? Report)
+    (:err _) -> false))
 ```
 
 `process.communicate Child Input Options` does the same pumping for an already spawned child, but
@@ -161,10 +176,13 @@ do not allocate a corresponding buffer. Capturing retains chunks and joins them 
 allow space for both the chunks and the final view. Streaming keeps bounded transfer chunks, plus
 caller-owned source/sink storage and bounded native argument/environment copies.
 
-A normal exit returns `[ok Report]`, including a nonzero exit. Launch/setup failures can return
-`[error Error]`. Transfer failures, limits, cancellation and timeouts return `[error Error Partial]`.
-Run and pipelines call the cancellation predicate once before starting anything: a value that is not
-a frozen boolean raises there, and a cancellation already requested returns `[error Error]`.
+A normal exit returns `(:result.ok Report)`, including a nonzero exit. A failure returns
+`(:result.err (@p Error Reports))`, with the reports of what had started: none for a launch or setup failure,
+and for transfer failures, limits, cancellation and timeouts the partial report, in a list. A result is
+a `(process.result A)`, which is `(result.t ((io.error * (list process.report)) * A))`, so `result.let-ok`
+chains it. Run and pipelines call the cancellation predicate once before starting anything: a value that
+is not a frozen boolean raises there, and a cancellation already requested returns
+`(:result.err (@p Error []))`.
 If a child exits before consuming stdin, a pipe-write failure can be primary, with its exit status in
 the partial report.
 Already received output is retained within its cap. Failure requests termination, closes pipes,
@@ -177,7 +195,7 @@ report's child remains owned: retain it, wait/terminate as appropriate, then clo
 | --- | --- |
 | `process.child` | Child handle; run closes it after successful cleanup, communicate leaves it owned |
 | `process.status` | Last observed status |
-| `process.success?` | Status is `[exited 0]` |
+| `process.success?` | Status is `(:process.exited 0)` |
 | `process.input-count` | Bytes acknowledged by the child's stdin pipe |
 | `process.input-read-count` | Source bytes consumed, including the retained pending suffix |
 | `process.pending-input` | Bounded prefetched input not acknowledged by the child |
@@ -199,7 +217,7 @@ single operation deadline. Each stage has its own group/job when grouping is ena
       (buffer.from-string "pipeline bytes") [[timeout 2000]]))
 ```
 
-Results contain reports in command order: `[ok Reports]` or `[error Error PartialReports]`. Inspect
+Results contain reports in command order: `(:result.ok Reports)` or `(:result.err (@p Error PartialReports))`. Inspect
 all statuses; a nonzero stage does not become an I/O error. Intermediate stdout is not copied or
 counted by Shen: its report marks that stream unobserved and has an empty captured view/count zero.
 The last report holds captured stdout. Input counts refer to the parent's first-stage writes.
@@ -230,7 +248,7 @@ ownership. Inputs are copied to native storage before the native work, and manag
 
 ```sh
 make process fs
-build/shen-jit script tools/process-filter.shen INPUT OUTPUT PROGRAM ARG ...
+build/shen-jit script tools/process-filter.shenmod INPUT OUTPUT PROGRAM ARG ...
 ```
 
 The example streams INPUT through a program, captures at most 64 KiB of stderr, and limits stdout to

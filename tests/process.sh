@@ -5,11 +5,10 @@ SHEN=$1
 dir=$(mktemp -d)
 trap 'process_status=$?; if [ "$process_status" -ne 0 ]; then cat "$dir"/*.out 2>/dev/null; fi; rm -rf "$dir"' EXIT
 if command -v cygpath > /dev/null; then dir=$(cygpath -m "$dir"); fi
-"$SHEN" eval -l lib/ffi.shen -l lib/buffer.shen -l lib/io.shen -l lib/io-file.shen \
-  -l lib/deadline.shen -l lib/clock.shen -l lib/process.shen -l lib/process-io.shen \
+"$SHEN" eval -m process/io \
   -l tests/process_pure.shen > "$dir/pure.out" 2>&1
 grep -a '^[0-9]* passed\|^FAIL' "$dir/pure.out" | awk '{ print } END { exit !/ 0 failed/ }'
-"$SHEN" eval -l lib/ffi.shen \
+"$SHEN" eval -m ffi \
   -e '(shen-jit.library process-probe ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])' \
   -e '(define-foreign process-probe.abs process-probe "abs" (int32) --> int32)' \
   -e '(output "process shared: ~A~%"

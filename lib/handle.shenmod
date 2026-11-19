@@ -1,0 +1,4 @@
+(shen.module
+  (version 1)
+  (name handle)
+  (sources tc- "handle.shen"))

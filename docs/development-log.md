@@ -106,6 +106,25 @@ Lowering rules, the collector and the kernel port have their own sections.
   `reverse` 7.0 to 4.6 ms (2.70 to 1.79 times Shen/Scheme).
 - **Known pairs** (2026-11-01, M3 Max). A bit per slot, set where `cons?` falls through, so `hd` and `tl` skip the
   tag check. List patterns 7-20% faster. Kept across labels from 2026-11-02.
+- **Known pairs through register code** (2026-11-17, Apple M3 Max at load 2 to 4, against the commit before). They
+  were dropped after every instruction that was not one of those that keep CACHE, so in typed register code a `tl`
+  after a `fix-` and a `word-box` tested the pair again. Now only a call, tail call, return, handler push, jump or
+  loop head ends them, and a `float-box` or `word-box` into a slot drops that slot's; nothing else in register code
+  writes a slot. Typed `take` over 5,000 fixnums 26.1 -> 24.9 ms, merge sort of 20,000 61.6 -> 59.4, twelve
+  alternating rounds, minimums 2% lower; the rest within noise. `tests/native.shen` boxes a word over a slot known
+  to hold a pair and reads it with `hd`, which crashes if the slot's bit stays.
+- **Known struct lengths** (2026-11-17, Apple M3 Max at load 3 to 4.7, against the commit before). A struct's reader
+  is `shen-jit.struct-ref`, element K of a struct of N elements: `<-address`, but testing that the value is a vector
+  at least N long, so the JIT keeps, per slot, the least length found, as it keeps known pairs, and the struct's
+  other reads of the slot are one load. Not the tag, which a prototype tested and which cost open code, where each
+  call of a reader runs its body, 6 to 20% ("Struct reads checked once per value", under "Modules and typed
+  programs"). A vector shorter than its struct now raises at any field, `struct: X is shorter than its struct`. Ten
+  alternating rounds: untyped and sealed, four fields of each of 1,000 structs 10,000 times 36.7 -> 29.1 ms, building
+  a buffer 48.8 -> 45.4, views 118.7 -> 114.6, a view's length 12.7 -> 11.2, copies 76.4 -> 73.9; open code, JSON,
+  HTTP and typed code within 2%. Typed code keeps `shen-jit.field`. **Found on the way:** `src/lowerer/tokl.shen`
+  gave the host no arity for `shen-jit.tagged?`, so the typed predicate, a struct's helper, was compiled to a call
+  through `fn`, one argument at a time, in every typed test of a struct's kind and pattern of a union; with the
+  arity, a typed match over 1,000 shapes of a union of two structs, 2,000 times, 58 -> 5.7 ms.
 - **Loop registers, modelled first** (2026-11-02, M3 Max). Hand-written arm64, slots against registers: control
   loop 0.554 to 0.50 ns, `absvector-read` 1.07 to 1.05 ns, `reverse` 1.17 to 0.79 ns only with no frame stores in
   the loop. Counting loops gain 2-10%, not worth the 200-300 lines first estimated.
@@ -407,6 +426,8 @@ Lowering rules, the collector and the kernel port have their own sections.
   redefines the same names. Either adds code without simplifying anything.
 - **Rotating loops, with the exit test repeated at the back edge** (2026-11-03). Its backward jump must meet the
   body label's state, and in open loops it would pass by the patched jump. No estimate.
+  For typed loops, the exit put after the body was tried and rejected: "A loop's exit after its body, rejected"
+  (2026-11-17), under "Modules and typed programs".
 - **Stores of pattern parts used further on** (2026-11-03, M3 Max). What remains of the pattern rows (a nested late
   mismatch 5.5 ns, Shen/Scheme 4.0) was judged to need a register allocator.
 - **First-argument clause indexing** (2026-11-04, M3 Max). Sound. `hamilton` 0.66 with `edge` split by hand;
@@ -914,6 +935,30 @@ cannot. The kernel suite is the kernel's `tests/runme.shen`; the stlib install l
   29.89–29.91 with the plain vector, which stays: the word the tag adds remains. `make bench`, three rounds:
   geomean 1.00; two equality rows at 1.06–1.07 timed 0.98–0.99 alone. `make bench-independent`, 7 rounds:
   0.93–1.01. Stage 0 output changes in `yacc`, which now inlines a few more of its small functions.
+- **Up to 48 nodes** (2026-11-14, Apple M3 Max, load near 3, against the commit before). The spectral norm's
+  element function, typed with `fl` and `fx` operators, is 33 nodes, so its row loop called it and stayed boxed,
+  allocating a float per element. At 48 it inlines and the row loop keeps its floats in registers: 94.0 against
+  40.0 ms. `make bench`, three rounds: geomean 1.00, no result differences. `make bench-independent`, 7 rounds:
+  every row within 2% but startup, 5 against 4 ms in whole milliseconds. The executable is 2 KB larger, from the
+  kernel's own bodies of 33 to 48 nodes now inlined at stage 0.
+- **A lambda argument applied where an inlined body applies it** (2026-11-16, Apple M3 Max, load near 4, against the
+  commit before). A call to a small sealed function was inlined, but a lambda passed to it stayed a closure, made
+  before the body and called dynamically there: an inlined call binds its arguments after normalising the body, so
+  `let-lambda`, which drops such a closure for a `let` written in the source, never saw them, and only `(freeze E)`
+  arguments had a case of their own. `inline-frozen` now substitutes a lambda whose parameter the body only applies,
+  under `let-lambda`'s conditions. Found while trying a `let-ok` that expands to `(bind R (/. X Rest))`, as
+  `result.let-ok` does, with `bind` 11 nodes over two leaf helpers: 5,000,000 chains of three steps, four alternated
+  rounds, sealed, 87.8–90.9 ms, and 62.8–64.6 with a non-ok result, now 52.9–54.3 and 42.6–43.3, as the macro's own
+  code takes. Open, it is no faster: `open-call` binds each argument before the test that the definition is
+  unchanged, as the call after a redefinition needs the closure, and putting the lambda in both branches instead
+  would double the code at each level of a chain. Stage 0 output changes in the lowerer and in `tests/kl/ops.kl`, not
+  in the kernel or the benchmark programs. `make bench`, three alternated rounds, load near 3: geomean 1.01, no
+  result differences, rows from 0.95 to 1.08, the slower ones the `match` rows that do not match, `dict` and the
+  realistic pipeline. All 57 of the suite's definitions lower to the same code in both builds, and timed alone the
+  slowest row, `match tuple (single clause, not matching)`, took 66.2–69.5 ms against 66.0–68.1, and the pipeline at
+  depth 7 130.8–135.6 against 130.2–132.0, with one run at 142: where code lies, not what it runs.
+  `make bench-independent`, 7 rounds: every row within 1%, but those of a few milliseconds, startup 4 against 4 and
+  the contract examples 15 against 14.
 
 ### Factorisation
 
@@ -1168,6 +1213,56 @@ that. Its readings decided nothing below.
   unreachable. Extra operands of a raw instruction were dropped, and a misplaced `exception` was reported as the
   instruction before it.
 
+### Declaration lookup and proof search
+
+2026-11-17 and 18, Apple M3 Max. Inferences start at zero after module loading. Each comparison uses one executable.
+
+- **Outcome rules that widen only where expected.** Unrestricted struct union rules drove the grammar client from
+  28,996 inferences with list outcomes to 769,287. I/O, frames, JSON and result clients went from 4,977, 3,445,
+  11,428 and 2,612 to 60,713, 69,456, 39,949 and 50,706. Over 750,000 of grammar's inferences came before checking
+  the first body. Each open declaration lookup of `(fn F)` tried every union's widening rule. Precluding 18
+  I/O union predicates took grammar to 152,388, and precluding the two result predicates took it to 58,890.
+  Sharing an empty-result alias alone still cost 677,151. Expected-type widening cut that to 48,722 and the HTTP
+  request client from 137,636 to 19,710. Guarding channel and isolate rules cut grammar further to 18,299.
+  Sharing outcomes, hiding private match rules and guarding numeric literals brought grammar to 12,663.
+
+  For 300 fresh typed definitions, unrestricted rules took 3,361,200 inferences after `grammar` and 4,389,000
+  after `http`. The following comparison adds shared results and private rule scope after expected-type widening.
+
+  | Modules loaded | Before | After |
+  | --- | ---: | ---: |
+  | `grammar` | 59,100 | 35,700 |
+  | `json` | 221,400 | 38,700 |
+  | `http/server` | 184,500 | 39,900 |
+  | `http/listener` | 426,900 | 41,100 |
+  | `process/io` | 74,700 | 48,300 |
+  | All 35 libraries | 894,000 | 62,700 |
+
+  After `http/listener`, 1,000 definitions cost 137,000 inferences and fit the default limit.
+
+- **Rejected: declaration lookup cut in the port.** With unrestricted widening, a Shen loop for the
+  empty-hypothesis scan preserved rule order and reduced the counted grammar inferences to 246,885. Loading the
+  client from a saved grammar image took 48 to 39 ms (32 alternating trials). Skipping left rules in declaration
+  queries cut the client to 62,435 and let 300 definitions fit at 271,200, but took 57.4 versus 56.2 ms
+  (eight pairs). Inspecting compiled rules to skip the entire lookup cut 300 definitions to 8,400 inferences
+  and 8.18 ms from 57.32 (15 pairs). A rule targeting one definition took 9,281 and 8.92 ms. Wildcard facts
+  forced the full lookup at 274,500 inferences and 61.17 ms against 58.63. Chains of option rules in HTTP also
+  forced fallback. The analysis, guards and port copy of the warning check were dropped once ordinary lookup
+  over guarded library rules took 35,700 for 300 definitions after grammar while preserving the kernel warnings.
+
+- **Rejected: guided proof search.** Ordinary search took about 5.86 million inferences for six result patterns
+  and 1.71 million for two eleven-field tuples. Filtering closed rule bodies and proving tuple columns together
+  brought those to 6,127 and 4,765. Even variable-free facts can observe bindings through nested modes, as a
+  `(list (- number))` rule demonstrated. Filtering excluded those and retried the original query when needed.
+  When a binding-sensitive rule supplied the proof, the failed filtered pass added about 250,000 inferences.
+  Hints that intersected candidate unions across rows kept those guards intact. At four, eight and eleven fields,
+  they took 6,252, 11,284 and 15,058 where only the second union worked, against 36,093, 3,008,079 and 81,291,492.
+  With both unions accepted they took 4,658, 8,166 and 10,797 against 42,256, 3,560,444 and 96,243,545.
+  Annotated hints and filters also worked through nested constructors, but required port hooks and added 7 to
+  8 ms to `result`, `io/file` and `grammar` startup (12 pairs). Ordinary search with a union-returning
+  `result.ok` checks the six-pattern case in 5,297. Building rows with `map` over the two inputs takes 719,
+  or 1,097 with a guarded conversion. Those rewrites made the extra proof machinery unnecessary.
+
 ### Managed structs
 
 - **Typed unions** (2026-11-09). Records of several structs can be matched by one function, but a typed
@@ -1333,6 +1428,47 @@ that. Its readings decided nothing below.
   - In a namespace, a dotted label lost its prefix: `describe` took the annotator's protection off plain
     fields, and the name enumerator saw them unprotected. Outside a namespace, a label still loses what
     precedes its last dot, as the package form prefixes the labels in it.
+- **Type parameters** (2026-11-16 and 18, Apple M3 Max). A field may use the struct's declared parameters, and
+  the typechecker keeps a mutable value's binding monomorphic. Two parameters take a product, as in
+  `(pair (A * B))`. Separate parameters produced a three-element type that could unify with an arrow. Tests
+  refuse lambdas at both struct and union consumers and check a pair as a union member. Both bootstrap hosts
+  agreed on the generated files.
+- **Anonymous fields** (2026-11-17). A positional field has a private constant-index reader and uses the
+  existing pattern handler. Unknown constructors or patterns fail while reading. Labels and `...` on anonymous
+  layouts are diagnosed before the field count.
+
+- **Library outcomes as structs, and the shape of `result.t`** (2026-11-17 and 18, Apple M3 Max). Results,
+  frames, transfers and process statuses moved from tagged lists to structs. I/O errors use named fields,
+  including the byte count and any secondary close error. `(result.t (E * A))` uses the same product encoding as
+  paired structs. Shared result and option types reduced 25 handwritten datatype blocks to 15. A sealed
+  one-step `let-ok` inlines the bind, tag, field read and constructor.
+  - **One proof for each constructor in a union.** Typing a construction through the constructor signature and
+    again through a union rule multiplied retries. Keeping construction with signatures and field assumptions
+    with patterns cut an eight-red/one-blue case from 3,492,875 to 6,792 inferences (23,496 at 32 reds). Eight
+    `ok`s and an `err` fell from 185,704 to 7,376, and nullary constructors from 1,309,865 to 2,912.
+    Construction can still use the generated rule if its signature is missing or replaced. A general rule
+    index was rejected because macro expansion could alter the compiled rule's conclusion.
+  - **Constructors that give the union.** Inline signatures for `result.ok` and `result.err` cost 2,090
+    inferences to check and reduced the six-pattern client from 5,857,666 to 5,297. See "Rejected: guided proof
+    search" above.
+  - **One proof for each result and status.** Removing duplicate introductions took rejected 4-, 6- and
+    8-integer chains from 23,767, 135,031 and 699,895 to 3,597, 6,505 and 10,229. Ten bindings had hit the
+    default limit. Afterwards they took 14,769 for integers, 28,827 for nullary process statuses and 23,070
+    for empty HTTP payloads. Guarding numeric literal types was also needed when the HTTP stack was loaded.
+    Both process environment options use introduction rules to avoid inferring that an unset value is a string.
+    Tree-sitter's public error match rule added 93 inferences to its typed client (2,040 to 2,133).
+
+- **Options stay lists** (2026-11-17 and 18, Apple M3 Max). Configuration uses introduction rules. Framing,
+  process and filesystem rules that typed clients use to recover payload types keep their pattern support.
+  `option.t` uses `[]` for absence and `[X]` for presence. Streaming readers share
+  `(io.result (option.t A))`, including the distinction between a parsed `[]` and EOF. The same client checks
+  took grammar from 18,360 to 17,145 inferences, JSON from 15,320 to 14,687 and HTTP request from 14,692 to
+  14,083. Grammar's six rules became two.
+  - **Chunk options and process streams introduced where expected.** Bare settings previously had several
+    possible types. Twenty bindings from typed producers take 12,516 inferences for I/O and 12,256 for process
+    streams. With bare literals and a wrong result type they reach the type error in 1,623 and 94,545
+    inferences. Both had exceeded the default limit.
+
 
 ### Kernel pins and reproducible stage 0
 
@@ -1367,6 +1503,13 @@ that. Its readings decided nothing below.
   go. The gain is uneven: `read.shen` loses 139 and the SQLite example 109, while `model.shen`, whose Datalog program
   names 57 relations and tags, loses 10 for a ten-line header, and each tool 3 to 10 for three to seven lines; they
   were converted for consistency.
+- **The port's sources as namespaces** (2026-11-14). `src/port/struct.shen` and `src/port/module.shen` were
+  packages, as `tokl.shen` compiles them under the bootstrap host, whose namespace extension, kernel 43.2's in
+  Shen/JIT 0.1 and 43.4's in Shen/Scheme 0.54, knows neither `export` nor `shadow`. `tokl.shen` now loads the
+  kernel's current extension first, renamed to `stage0.namespaces` as the lowerer checker already loads it, and
+  both files became namespaces whose headers `use` the prefixes they name, with fewer externals. Every generated
+  file is byte-identical under both hosts, so the image did not change. `tests/structs-client.shen` keeps its
+  `package`, which checks that `defstruct` works inside one.
 - **One datatype for each library, `<namespace>.t`** (2026-11-14). The libraries had 25 datatypes in 14 files, named
   by hand (`json-values`, `process-options`, `http-handler`) and kept global through `externals`, and the image had
   `isolate.types` and `channel.types`. Each namespace now has one `(datatype t ...)`, which it qualifies, so a library's
@@ -1428,6 +1571,26 @@ that. Its readings decided nothing below.
   neither host knows, and both make the same 54 files again. A function in a `package` of the port or the
   lowerer must not share its name with a system function of either host.
 
+- **The arities of the port primitives the lowerer calls** (2026-11-14, Apple M3 Max). A host without a newer
+  primitive's arity emits a curried `fn` call. Building that function value at runtime re-enters the lowerer
+  and resets its state mid-definition. `tokl.shen` supplies the arities, including those of the module build
+  helpers.
+- **The lowerer split into files** (2026-11-16, Apple M3 Max). Entry points, builders, normalization, inlining,
+  emission and register lowering became separate files. Compiling them separately broke cross-file arities
+  on the bootstrap host and prevented image construction. The Makefile instead joins them before compilation.
+  The sorted 247 lowered definitions agreed. Only the lowerer's three generated files changed order, and
+  both hosts produced the same hashes. The checker still calls normalization outside the main entry points,
+  so the inline tests of the lowerer's globals keep their fallbacks.
+- **The lowerer in the shen-jit.lower namespace** (2026-11-16, Apple M3 Max). Opcode names and kinds used as
+  data stay external, and names that collide with them or with a host system symbol stay qualified. For
+  example, Shen/Scheme treats `index`, `insert`, `abs` and `product` as system symbols and the earlier release
+  does not. Stage 0 loads the pinned namespace extension and uses `stage0.lower` for its copy. The namespace
+  conversion left generated KLambda identical under both hosts.
+- **Stage 0 reads KLambda as bytes** (2026-11-16, Apple M3 Max and Linux x86-64 CI). The lowerer's KLambda grew
+  from 82 to 148 KB. Reading it as a string and then recursing over its bytes exhausted memory in
+  `shen.str->bytes` on the earlier release at both 256 MB and 2 GB. Reading the byte list directly gave the
+  same forms in milliseconds. Stage 0 and the checker now pass with a 256 MB heap and agree under both hosts.
+
 ### Not tried yet
 
 - **Correctly rounded fractions and negative exponents.** They do not overflow, so they read as the kernel reads them, as under Shen/Scheme: `0.3` as `0.30000000000000004`, and `1e-300` as `1.0000000000000022e-300`. Measured on 2026-11-05, 59% of random fractions land on the nearest double, the worst 1 unit
@@ -1438,6 +1601,9 @@ that. Its readings decided nothing below.
   speed up the compiler compiling itself; and an audit of special cases against workloads outside the benchmarks.
 - Raw slots for 64-bit integers and unboxed doubles, SIMD, and SLJIT operations written from Shen. Declared
   signatures, so typed code can call installed procedures.
+  Typed code now keeps fixnums, words and floats in registers ("Floats in registers in typed definitions",
+  "Fixnums in word registers in typed definitions" and "64-bit words, and typed bodies inlined at any depth", under
+  "Modules and typed programs"), but not across calls: "Registers across calls of functions: not built", there too.
 
 ## Runtime, threads, platforms and usability
 
@@ -2204,6 +2370,23 @@ and blank lines.
   1,000,000 numbers took 29.5 against 35.4 with 4 isolates and 29.4 against 30.3 with 8, probably because copying
   smaller runs overlaps the isolates' work.
 
+### Typed isolates and channels (2026-11-18, Apple M3 Max, against the port before)
+
+- **Endpoints and reasons widened where expected.** The port's three widening rules, a receiver or a sender to a
+  `channel.endpoint` and a string to an `isolate.reason`, conclude in input mode, so they apply only where the
+  caller expects that type, as the libraries' outcome rules do ("Outcome rules that widen only where expected",
+  under the lowerer's "Declaration lookup and proof search"). A mixed list `[R S]` takes its element type from its
+  context, and `channel.close` still takes either endpoint. 300 fresh typed identity
+  functions after `grammar` took 59,400 inferences against 211,500, and the grammar client 18,299 against 48,722,
+  each counted from just before the typed source.
+- **Workers by name.** The spawn declarations gave the worker an arrow type, which accepted procedures the runtime
+  refuses and refused bare worker names; loading the typed isolate clients with checking on showed it.
+  `isolate.spawn` and `isolate.spawn-each` take an `(isolate.worker A)`, a name whose unary function's signature is
+  checked against the payload, and the rule leaves its conclusion open, so that a `let` can bind the worker before
+  the payload's type is known. It costs one inference more for each fresh definition, measured on 300 after `http`
+  or `grammar`, and the grammar client took 18,360 against 18,299. Fixtures refuse wrong payloads, closures,
+  function values and binary workers, and pass names through namespaces and local bindings.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on
@@ -2761,6 +2944,41 @@ what it returned into the reader: a 92-byte packet into a 16 KiB reader allocate
   The packet runs made 466 collections, 33% of the CPU, and now 23, 3.4%. Kept chunks alone left reading in place at
   89 ms a byte at a time, slower than framing's 29: the powers of two brought it to 13. Reading in place stays ahead
   of framing at every chunk size.
+
+### Library implementations checked with their types (2026-11-18, Apple M3 Max, macOS arm64)
+
+Across the migration, inline signatures and typed records replaced trusted declarations above the native and
+dynamic boundaries. Private match rules stayed out of client search. Standalone declarations fell from 337 after
+the first batch to 187. Of those, 39 cover primitives, generated endpoint accessors and foreign bindings. The
+remaining bodies could not be checked against the existing signatures without more changes. That includes 55
+numeric wrappers and `json.integer`, which reached the default inference limit.
+
+- **State and cleanup.** HTTP metadata distinguishes unknown lengths and unread bodies from empty ones. Buffered
+  readers keep a timeout until queued bytes have been consumed, then permit a retry. Buffered writers preserve
+  the progress on a failed flush through close. A file scope dispatches on the open result directly, avoiding
+  a continuation allocation between opening the file and entering the scope. Process children keep their
+  streams, handle, status and cached close result in named fields.
+- **Typechecking.** Each batch held its client inference counts. Representative counts at the time were 12,793
+  for grammar, 7,166 for HTTP requests, 3,652 for HTTP streams and 11,879 for process. Checking implementations
+  costs inferences at load time, including 19,563 for the buffered reader, 6,886 for the writer, 18,693 for the
+  head reader, 45,400 for response metadata before the shared response struct, and 49,720 for filesystem
+  operations with directories. Later batches held whole-process grammar and HTTP loads near 63.5 and 59.8 ms.
+  Loading `process/io` rose from 86.73 to 92.63 ms (15 alternating runs).
+- **Kept faster paths.** Medians of seven alternating runs on one executable and native adapter where used.
+  The head scanner's 8,000 captures took 29.1 to 23.4 ms at 1,024 bytes per chunk and 66.3 to 61.9 at 32 bytes.
+  A per-byte transition helper was slower at 38.3 and 76.3 ms. A writer's 80,000 small writes were about even
+  at 221 to 225 ms. Compacting took 231. Tree-sitter's typed tables cached row counts and reduced node/capture
+  scans from 9.35/2.94 ms to 7.02/2.16. Recomputing counts took 11.13/3.56. curl's 300,000 header lookups
+  dropped from 28.86 to 27.14 ms by writing only bytes that need folding. Filesystem, deadline, array and
+  process timings were close to their preceding batches.
+- **Set aside.** A typed JSON grammar met circular value dependencies. A token-only version passed the JSON
+  suite but added signatures and increased 200,000 token validations from 15.13 to 16.18 ms. Checking array
+  element access through byte conversions lost indexed word operations and took the float dot product from
+  7.4 to 13.4 ms. The checked HTTP encoder and token scanner were slower on the short response workload.
+  Typing the source lifecycle passed streaming checks but increased 160,000 one-chunk sends from 271.5 to
+  279.8 ms and 40,000 eight-chunk sends from 184.2 to 192.3. A list of a child's three endpoints increased
+  lookup time from 15.73 to 21.22 ms.
+
 
 ### Typed grammars (2026-11-08, M3 Max, macOS arm64, against the same grammar untyped)
 
@@ -3562,6 +3780,1036 @@ execution remains CI's responsibility; no new platform ABI or instruction was in
 - **A sampling profiler on Windows,** which could attribute about 6% of the kernel test suite that remains unexplained there.
 - **Other platforms:** Windows on arm64 (SLJIT supports it; no machine yet), other architectures, and a static musl build.
 - **Windows tests:** CLI cases for `\` paths and `PATH`, and non-ASCII text at the console.
+
+## Modules and typed programs
+
+Built from 2026-11-14 to 2026-11-19. Times are from an Apple M3 Max under macOS unless an entry names another machine;
+"the Ryzen VM" is the one described under "Terms used throughout", at the top. `make bench-numeric` runs a matrix
+product (matmul), the Mandelbrot set, the spectral norm, n-body and a grid relaxation (heat) in C, as boxed Shen, with
+registers written by hand and as a typed program, and a path tracer (the tracer) in C, with registers written by hand
+and as a typed program.
+
+### Modules (2026-11-14 to 19, Apple M3 Max)
+
+The loader accepts the batteries' descriptor shape and reads it without evaluation. It loads dependencies depth
+first, refuses cycles and marks a module loaded after its last source. Repository libraries and examples moved to
+descriptors so dependencies load before code that uses their namespaces or macros. Static builds can load the Shen
+parts and advertise the absence of FFI. Module sources suppress evaluation reports while preserving warnings and
+explicit output. Loading `io` went from 86 report lines to zero.
+
+- **Paths.** Explicit descriptors put their directory first for dependency lookup. The executable sets its default
+  roots each run since a saved image may have moved. A source's `cd` once redirected the next file open. The loader
+  now reads with an empty Shen home directory, restores the source's setting for evaluation and restores the
+  caller's at the end. Tests cover later sources and sibling dependencies after `cd` (2026-11-19).
+- **Rules scoped by the module graph.** A module checks against the image, its declared dependencies' public rules
+  and its own rules. Filtering preserves the kernel's registry order. Loading the kernel's 12 typed programs as
+  separate modules took 610,924 inferences and 87.0 ms against 1,830,950 and 122.6 as files in one process. The JSON
+  client took 10,488 and 9.0 ms in a module requiring JSON, against 84,916 and 11.6 at the top level with all
+  libraries loaded (best of four alternating runs).
+- **The rule index, on code built as modules.** After scoping, indexing reduced 612,101 to 474,054 inferences for
+  the 12 programs run separately, and 150 to 136 ms, close to the dispatcher's warm-up cost. The two programs
+  with many datatypes, `c-minus` and `interpreter`, improved by 2 to 3% (2026-11-16, best of three, load near 5).
+  Module scoping captured most of the benefit without the index.
+
+### Executables from a descriptor (2026-11-14 to 17)
+
+`build` uses the descriptor's `main` and defaults to sealing the dependency graph. Sealing is the closed-program
+default even where the measured gain was small. A build refuses modules already loaded in the starting image
+because they would skip compilation in the requested mode. Dependencies loaded during the same build can be shared.
+The loader restores the module path, hush and sealing before saving, so the program starts with its runtime paths
+and output. Stage 0 declares the arities of the port functions it calls to keep both bootstrap hosts in agreement.
+
+### Libraries looked for beside the executable (2026-11-16, Apple M3 Max)
+
+For relative adapter names that fail as written, the runtime tries again beside the executable. This replaces the
+proposed `build` option for setting globals before loading. A `source-deps` executable built from its descriptor
+finds its filesystem adapter when run from another directory. The preceding runtime raised `cannot find shen_fs_abi`.
+
+### Grammars in sealed programs (2026-11-16 and 17, Apple M3 Max)
+
+Grammar stubs must stay open until they install their loops. Sealing a stub caused both the first match and
+`grammar.finish` to fail on redefinition in a sealed build. The stub now installs with sealing temporarily off
+and the loop takes the sealing mode at compilation. A stale-stub fallback was unnecessary because the open stub
+is called by name. `sqlite-http` finishes grammars before starting its database isolate, which otherwise blocks
+program changes. Grammar tests and the sealed example builds exercise both paths.
+
+### Rejected: a module's arities recorded before its sources load (2026-11-16, Apple M3 Max)
+
+Scanning every source first would cost a second read and could miss macro-expanded definitions or names that
+depend on a namespace introduced by an earlier source. There were no calls through `fn` into later sources in the
+`source-deps` and `source-facts` examples. Ordering buffer's sources already reduced three million `copy!` calls
+from 0.236 to 0.088 s (2026-11-17), so the loader keeps its single read.
+
+### Typed modules (2026-11-17 and 19, Apple M3 Max)
+
+Sealing only the module gave optimized field reads, while sealing `numbers` gave register arithmetic.
+`(typed)` loads dependencies sealed and compiles the module under `(optimise +)`. Already-loaded dependencies
+keep their mode and the caller's settings come back. A failed typed load unseals its own definitions to permit
+retry. Tracking in the higher-level wrappers missed direct `shen-jit.install` calls. The shared runtime
+installation path records names before publishing, and the retry tests cover all six definition forms while
+keeping successfully loaded dependencies sealed.
+
+### Module budgets and published rules (2026-11-17 to 19, Apple M3 Max)
+
+- Each source starts its own inference count. Adding independent sources together had put `http/listener` and
+  `process/io` above two million inferences with early struct outcomes. A descriptor can set the source limit,
+  and caller counters and limits come back on success or failure.
+- The innermost loading module owns each datatype registered through `shen.rules->prolog`. The existing load stack
+  suffices after a nested load returns. A module publishes only its own rules that are still active at the end.
+  `include` changes a source's scope and failed loads publish no rules. The tests cover private rules,
+  nested loads and retries.
+- Move the 27 handwritten HTTP clauses and eight communication and pipeline clauses to their owning modules.
+  The rule-scope tests cover the resulting dependency boundaries.
+
+### Shared library defaults and declarations (2026-11-19, Apple M3 Max)
+
+Reuse `io.finish` for process and file cleanup, preserving the progress count on close failure after a successful
+transfer. Share HTTP limit builders while keeping validation at each entry point. Group equal numeric signatures
+in declaration order. Typed HTTP request, request metadata, streaming response and grammar clients each kept
+their earlier counts at 7,146, 3,400, 3,640 and 12,663 inferences on one executable.
+
+### Numbers by operator, not by subtype (2026-11-14 and 16, Apple M3 Max)
+
+`numbers` provides separate `fixnum` and `float` types with `fx` and `fl` operators. Distinct operators give
+arithmetic a single type. Loading the module added about 1% inferences to ten kernel typed programs in one
+process (1,838,779 to 1,860,901), with best-of-five times of 124.4 and 121.1 ms. Its prefixed operators and the
+type names the lowerer recognizes stay global after loading.
+
+- **Rejected: subtypes of `number`.** The ten programs took 2,430,349 inferences and 138.4 ms, against 1,838,779
+  and 124.4. In the n-body force function a chain of float bindings took 2,036,363 against 4,869 as `number`.
+  Ascriptions cut it to 13,505, while distinct operators took 5,885 without them.
+- **Rejected: rules typing ordinary sums.** A curried `(+ X Y)` or subtraction in a rule conclusion was mistaken
+  for a Prolog mode. The `shen.cons-form-respect-modes` override fixed that case but was unnecessary with
+  separate operators, whose bodies inline to the arithmetic the lowerer recognizes. See "Bytes counted in
+  fixnums" below for the later attempt to widen results and overload sums.
+
+### Floats, not reals (2026-11-16)
+
+- **Why.** The docs called a non-integer number a real, and so did the instructions, the native DSL and the C API
+  of release 0.8, while the type typed code writes is `float`, with `fl+`, `fx->fl`, `floats` and `shen-jit.float`,
+  and the kernel's reader parses one as `shen.<float>`. Two words for one thing confused a reader, and a double is
+  no real number anyway: it rounds, and has NaN and infinities.
+- **What.** "float" everywhere but this log's earlier entries and released sections of the changelog: the docs; the
+  instructions `real-number` to `word-from-real`, now `float-number` to `word-from-float`; the native DSL's `real`,
+  `real-box` and `return-real`, now `float`, `float-box` and `return-float`; the C API's `shen_is_real` and
+  `shen_make_real`, now `shen_is_float` and `shen_make_float`, in the same slots of the function table; the
+  runtime's own names, such as `T_FLOAT` and `float_place`; the heap type's name in the out-of-memory message; test
+  names, and the contract examples' and Shen/Scheme's results for them with them. Old names are not kept as
+  aliases: the libraries' moves into directories kept none either. Left as they were: other senses, `realloc`,
+  "real-time", `realpath`, a real server or clock, SQLite's REAL storage class, `(get-time real)`, which
+  Shen/Scheme accepts, and stlib's `real`, a complex number's real part.
+- **Checked.** Names only: the kernel's lowered code is the same. `make test-core`, `test-libs` and
+  `test-differential` pass; generated files match under the earlier release and Shen/Scheme.
+
+### Typed definitions compiled with their types (2026-11-14 and 16, Apple M3 Max)
+
+Under `optimise +`, the port runs the kernel's annotator on checked definitions after factorising and marks the
+body before lowering. Unmarked `type` syntax cannot authorize unchecked struct reads. Using the presence of
+`type` as the signal made an untyped reader crash when given an integer and changed the result of arithmetic
+on a hand-written ascription. The mark also excludes definitions emitted by macros or datatypes that did not
+themselves typecheck.
+
+- Strip annotation wrappers before the ordinary lowering recognizers. They had obscured a final `true` and
+  pushed small functions past the inlining limit. All 152 tested kernel definitions lowered identically with
+  and without annotations. Annotating the ten typed programs took 125.0 versus 120.5 ms without it (best of
+  five alternating runs).
+- Keep typed analyses off the untyped path. Applying them to 548 kernel definitions added about 27% to
+  lowering time (115–124 to 148–152 ms) and about 3% when loading Datalog.
+- Scope the marker only around definitions. Wrapping ordinary expressions in the restoring error handler
+  loses their backtrace. Annotations on shadowed variables cannot be trusted without checking their binding.
+
+### Floats in registers in typed definitions (2026-11-14, 15 and 16, Apple M3 Max, against the commit before)
+
+The third step towards typed programs: the lowerer keeps floats unboxed where the types say a parameter is one.
+
+- **What is unboxed.** A definition with annotations whose parameters include a `float`, or that has a float
+  literal, `shen-jit.f64` or `shen-jit.float`, is lowered first with its floats in the float registers hand-written
+  native code has: `float` parameters read with `float-number` on entry, arithmetic and comparisons of two floats,
+  reads and stores of floats in bytes, and `let`, `do` and `if` whose value is a float, each boxed only where it
+  goes into a slot. Its own sealed tail calls go back to a `loop` with `again`, the float arguments moved to their
+  parameters' registers after all are computed. About 230 lines of code in the lowerer, with no change to the JIT,
+  which already compiled those instructions for code written by hand.
+- **When it is kept.** Registers keep nothing across a function call or into a handler, so code with a `call`,
+  `call-sealed`, `call-value` or `push-handler` is lowered again as usual, but for calls on the way out ("Calls on
+  the way out of register code", below). So is code that computes nothing with a float in a register: a typed
+  `(map (/. X (* K X)) Xs)` only read `K` to box it again for the closure. Deciding from the code made rather than
+  from the source needs no second account of what inlining and the factoriser's jumps make of a definition; an
+  ineligible one is lowered twice. Running out of registers, and a loop value no register can take, raise
+  `no-register`, and only that makes the code again boxed; any other error raises, so that a bug in the lowerer
+  does not give boxed code quietly, only slower.
+- **Reads stay checked.** Every float read from a slot is `float-number`, which checks and converts, so the types
+  choose what goes to registers and never what memory is read. An untyped caller passing an integer for a `float`
+  gets it converted at entry, and a string raises there, as arithmetic on it would; a typed caller cannot. The
+  proposal had a `float` parameter read unchecked; a check per call costs nothing in a loop, which reads its
+  parameters once.
+- **Two floats or two fixnums.** Arithmetic and comparisons in registers take two floats or two fixnums
+  (`float-kind?`, the `float` walker and `into`). A mix is boxed, as `+` does it, and its result, if a float is
+  needed, read with `float-number`; a sum of fixnums stays fixnum arithmetic, checked. Typed code mixes kinds only
+  through `number`, as `float` and `fixnum` are no `number`, and the typed programs never do. Converting the other
+  operand to a double, or sending an integer operand of float arithmetic back through the float walker, would give
+  other results than untyped code: the float 9007199254740992 below the fixnum 9007199254740993 false for `<`; in
+  `(+ (fl->number X) (+ (fx->number A) (fx->number B)))`, the inner sum of two fixnums added as doubles, so 0.5 plus
+  2^53 + 1 plus 1 9007199254740992.0, where untyped code gives …994.0, and at the fixnum limit 2.3e18 where untyped
+  code raises integer overflow; and the same for a C function of doubles given `(+ P Q)` or `(* P Q)` of numbers
+  (2026-11-15 and 16). Tests cover all four relations in both orders, positive and negative precision boundaries,
+  fixnum limits, an operand known only as `number`, and the mixed sums and C calls, through `shen-jit.apply` rather
+  than inlined.
+- **A value's kind in one walk** (2026-11-16, load near 4). One `kind` gives float, word or slot in one walk, and
+  `float-kind?`, `word-kind?` and `kind-of` ask it; the tests for unboxing and for comparisons in registers ask it
+  once for each operand. **Rejected: the two predicates walking a `let` by asking `kind-of`** the bound value's
+  kind, which asks both of them again, so each level of `let`s nested in a value doubles the work, and inlined
+  calls' arguments are such `let`s: a float definition with d nested value `let`s took 0.25 ms to lower at d = 8,
+  3.1 at 12, 12 at 14, and 73% of lowering the tracer's `trace.samples` was in these functions. The typed code of
+  the 83 benchmark and test definitions is the same either way, but for variable names.
+- **float is a primitive.** `float` had a branch raising its error, a call, and a float literal, which kept it from
+  inlining, so every function converting an integer called it. `shen-jit.float` does the conversion in C, and in a
+  register `float-number` does it. The module defines `float` as it, which inlines where it is sealed.
+- **`flsqrt`** is a primitive, `shen-jit.sqrt`, `float-sqrt` in a register, so the n-body force function, which
+  called C's `sqrt` through the FFI, keeps its floats there.
+- **`shen-jit.float` inline.** The float operators pass each operand through `shen-jit.float`. A definition that
+  stays boxed, such as the spectral norm's row loop, which calls the element function, then called C for every
+  operand: 147 ms against 84.1 with the subtypes' `+` and `*`. Compiled code passes a float on with a type test
+  and leaves integers and errors to C: 94.0. The rest is that test per operand. Dropping `shen-jit.float` where the
+  operand is known to be a float would need the kinds of the variables inlining binds, in boxed code too; not
+  tried.
+- **Float literals inline outside stage 0.** A body with a float literal was never inlined, for stage 0's sake,
+  whose host may print the literal's last bits differently. Code compiled at run time has no such problem, and typed
+  helpers such as the spectral norm's matrix element have floats. The boxed numeric programs did not move (below).
+- **Measured** with `make bench-numeric`'s programs written as typed Shen, built with `shen-jit build`
+  (`tests/bench/numeric-typed.shenmod`), with the `fl` operators, `flsqrt` and `shen-jit.float` inline: best of
+  three alternating rounds, load near 3, in ms, every check equal to the last digit.
+
+  | Program | C | Boxed | Typed | Registers by hand |
+  | --- | --- | --- | --- | --- |
+  | matmul | 35.9 | 324.2 | 94.9 | 41.4 |
+  | mandelbrot | 14.0 | 76.9 | 23.1 | 15.4 |
+  | spectral | 7.0 | 122.3 | 94.0 | 13.1 |
+  | nbody | 1.0 | 35.4 | 15.7 | 1.5 |
+  | heat | 22.1 | 525.3 | 154.3 | 44.1 |
+
+  The matrix product's dot product, the Mandelbrot iteration and the grid's cells are register loops. What is left
+  against the hand-written versions is integer index arithmetic in tagged slots, with overflow checks, and the
+  loops around the inner one, which call it. The spectral norm's element function, 33 nodes with `fl` and `fx`
+  operators, is past the inlining limit, so the row loop calls it, and only the element is in registers; at a limit
+  of 48 for bodies of primitives it inlines, and its row loop takes 40.0 ms ("Up to 48 nodes", under the lowerer's
+  "Sealing and inlining"). With the subtypes' `+` and `*` (rejected, above) and C's `sqrt` through the FFI, best of
+  three alternating rounds at load near 4, with the boxed programs before and after this step:
+
+  | Program | C | Boxed, before | Boxed | Typed | Registers by hand |
+  | --- | --- | --- | --- | --- | --- |
+  | matmul | 36.5 | 321.4 | 327.2 | 95.4 | 43.0 |
+  | mandelbrot | 14.2 | 77.5 | 77.1 | 22.8 | 15.7 |
+  | spectral | 6.9 | 124.5 | 123.2 | 84.1 | 13.1 |
+  | nbody | 1.0 | 35.4 | 35.4 | 35.0 | 1.6 |
+  | heat | 22.4 | 524.8 | 528.2 | 157.1 | 44.0 |
+
+  Spectral took less there, as `+` and `*` passed no operand through `shen-jit.float`, and n-body far more, as its
+  force function called C and stayed boxed.
+- **Elsewhere** (`make bench` and `make bench-independent`, against the commit before, load average 2 to 4). The
+  suite's 67 benchmarks: geometric mean 1.00, each from 0.93 to 1.05, no result different. Startup 3.79 against
+  3.82 ms, medians of 40; the kernel's tests 182 ms on both; extension tests, the standard library and THORN within
+  1%. The contract examples, which mostly compile, took 14.24 against 14.17 ms (medians of 40) with each definition
+  walked once for type forms, and 14.71 against 14.42 walked twice, once to take them out and once for float
+  parameters. The executable is 18 KB larger.
+
+### Fixnums in word registers in typed definitions (2026-11-14, Apple M3 Max, against the commit before)
+
+Typed numeric loops were 2 to 10 times the hand-written register versions, with only their floats in registers:
+every index was a tagged fixnum in a slot.
+
+- **First, what words would gain.** The grid relaxation's cell loop written by hand, under the typed program's
+  outer loops: indices in slots as tagged fixnums 170 to 180 ms, in word registers 53, typed 165.
+- **Overflow.** Word arithmetic wraps where fixnums raise, so the JIT has three instructions, `fix+`, `fix-` and
+  `fix*`, that raise "integer overflow" for a result that is no fixnum: a range check, and for a product the 64-bit
+  overflow flag too. The lowerer keeps `fixnum` parameters, and `+`, `-`, `*` and the bit operations over two
+  fixnums, in word registers, beside the floats.
+- **What the checks cost.** The typed loop, copied and edited: 132 ms as lowered, 117 with its constant 0.25 read as
+  a constant rather than from a slot, 53 with no overflow checks at all, and 67 to 72 with only the loop counter's
+  checked. The last sum or difference of an index into bytes has no check: of two fixnums it cannot leave 64
+  bits, and one past the fixnum range is past the end of any bytes, which the access raises for; the message is
+  the access's rather than `integer overflow`. A product keeps its check, as it can wrap into range. `fix+` and
+  `fix-` test only the range, as fixnum operands cannot overflow 64 bits.
+- **Registers as a stack.** The n-body force function ran out of float registers once each store kept the registers
+  its inlined `nb.put` bound: registers taken by an expression's temporaries, by a statement, or by a value boxed
+  into a slot go back once it is done, and statements see through the `let`s an inlined body binds its
+  parameters with, so a stored float stays unboxed.
+- **Loop arguments straight into their registers** when no later argument reads that parameter: the matrix
+  product's accumulator had gone through a new register and a move each time round, 94 against 69 ms.
+- **Constants.** A number argument replaces its parameter in an inlined body, as an integer did, so the
+  constant of `(fl* 0.25 X)` is the code's and not a variable; `(shen-jit.float K)` of a literal folds; an inlined
+  body that is then a constant, with no parameter left, is that constant. The last of these also shortens the
+  kernel's own code at stage 0, where an inlined `(fail)` was loaded into a slot before being compared.
+- **Measured** with `make bench-numeric`, best of three alternating rounds, load near 4, in ms, every check equal
+  to the last digit; boxed programs unchanged.
+
+  | Program | C | Typed before | Typed | Registers by hand |
+  | --- | --- | --- | --- | --- |
+  | matmul | 37.5 | 96.6 | 55.8 | 44.3 |
+  | mandelbrot | 15.2 | 23.1 | 18.5 | 15.6 |
+  | spectral | 6.9 | 39.4 | 20.4 | 13.5 |
+  | nbody | 1.2 | 16.1 | 12.3 | 1.7 |
+  | heat | 22.8 | 154.9 | 51.7 | 44.5 |
+
+  `make bench`, three rounds: geomean 0.99, no result differences. `make bench-independent`, 7 rounds: every row
+  within 2%. The n-body force function is in registers but called once per pair, and its loop is not, which is
+  what stands between it and the hand-written version.
+
+### C functions of doubles called in registers, and registers across calls (2026-11-14 and 15, Apple M3 Max, against the commit before)
+
+- **Through the stub,** a foreign call in a typed loop cost about 15 ns: the loop stayed boxed, as it called a
+  function, and the stub converted each argument and boxed the result. 10 million calls of `sin` took 243 ms
+  against 44 in C; of C's `sqrt` 150 ms, against 6.4 for `flsqrt` in a register.
+- **Directly.** `lib/ffi.shen` marks a function of one to three doubles giving a double, neither blocking nor
+  variadic, with the property `shen-jit.foreign-floats`, and in typed code a sealed call of one is
+  `(float-call1 R F A)`, `float-call2` or `float-call3`: the JIT loads the address from the function in the cell,
+  found at the first call as the stub does (`ffi_address`), saves the registers C does not keep, and calls it with
+  the arguments in float registers. As it is a call to C, which keeps nothing of the program's, the definition
+  keeps its registers. `sin` 52 ms, `sqrt` 13.3. A direct call does not save `errno`; libm sets it seldom, and
+  saving it would cost another call.
+- **The claim is the procedure's** (2026-11-15). The property pairs it with the installed procedure, as a struct
+  reader's field does ("Struct fields read with no check in typed definitions", below): a property of the name
+  alone would have an ordinary function that replaced a foreign one, and was sealed, called as a native one.
+- **Registers across calls of functions: not built.** All guest code runs in one native frame, guest calls being
+  jumps with the guest frame pointer, so the words where the JIT saves raw registers around C are shared by
+  every function, and a callee would overwrite its caller's. Keeping them would mean saving them in the guest
+  frame, where the collector reads every slot as a value, a float as two fixnums, and working the memory caches
+  out again after each call. What it was to help went otherwise: the spectral norm's element now inlines, and
+  the n-body force function calls `flsqrt`. What is left of the n-body gap, about 30 ns a pair against 4 by
+  hand, is the call of the force function itself and its entry, which saving registers would not remove.
+
+### Struct fields read with no check in typed definitions (2026-11-14 and 15, Apple M3 Max, against the commit before)
+
+The fourth step towards typed programs: a call of a struct's reader that typechecked reads the field with no check.
+
+- **First, what it could gain.** A measurement-only build whose JIT left out the check of every `<-address` at a
+  constant index: 10,000 passes over 1,000 structs, reading four fields of each, 33.6 ms against 23.9 (best of
+  five, three alternating rounds). The check is the combined type and length test ("One test for a vector and its
+  length", under "Allocation, lists, vectors and strings"), a header load, a subtraction, a test and a branch for
+  each read.
+- **How.** `defstruct` records each reader's field's place as the property `shen-jit.struct.field`. While the
+  lowerer normalises an annotated definition, `shen-jit.lower.*typed*` is set, and it stays set in the inlined
+  body of a definition that was annotated too; a call of a sealed reader there becomes `(prim D shen-jit.field O
+  (const K))`. `shen-jit.field` follows `raise-cond` past the primitive table, as a primitive only the lowerer
+  makes: every analysis of `prim` in the JIT already covers it, where an instruction of its own would have needed
+  six places. The JIT makes it one load; the checker of hand-written code refuses it, having no arity for it.
+- **The claim is the procedure's** (2026-11-15). The property pairs the field's place with the installed procedure,
+  whose identity the lowerer checks, and struct expansion records the places after installing the readers, so even
+  a raw KL replacement invalidates the claim: one of the name alone would outlive a replaced and then sealed open
+  reader, and a reader returning 42 would still read field 7 in a typed caller. The annotations
+  follow the same rule and are published once the definition is installed, so a rejected redefinition does not mark
+  the old untyped body as checked or replace its recorded source. Saved-image tests compile fresh clients after a
+  reload and still read fields unchecked and call C directly.
+- **Not checked.** The proposal also refused datatype rules that conclude a struct type and checked the results
+  of untyped functions declared to return one. The owner decided against both: a program's rules and
+  declarations are its own claims. Untyped code passing a non-struct to a typed definition then reads the wrong
+  memory; `docs/modules.md` says so.
+- **Writes keep their check,** which is also what refuses a store into a vector shared between isolates; storing a
+  heap pointer there would leave other isolates holding one into a heap they cannot see.
+- **Measured** on the same loop written as typed Shen, its structs typed `fixnum`: 30.1 ms against 40.9 untyped,
+  best of five in three alternating rounds, about a quarter less. The vector of structs is read with
+  `<-vector`, whose index is a `number`, so the typed loop writes `(fx->number (fx+ I 1))`, the conversion
+  costing nothing.
+
+### Struct reads checked once per value, rejected for typed code (2026-11-16 and 17, Apple M3 Max at load 3.5 to 5.8, against the build without it)
+
+- **Why.** A typed definition reads a struct's field with no check, so untyped code that passes it something else
+  can crash it. Checking each read costs 0.25 ns a read, 40% on a loop that only reads fields. The question was
+  whether checking each value once, as `cons?` makes `hd` and `tl` free, would come close enough to drop the
+  unchecked read, and with it any trust in what untyped callers pass.
+- **The prototype.** A primitive, `shen-jit.struct-ref`, reads field K of a struct with tag T, testing that the
+  value is a vector longer than K whose element 0 is T; readers used it, typed and untyped. The JIT kept, per slot,
+  the tag that a read or a `shen-jit.tagged?` test had found, as it keeps known pairs, and through register code,
+  so that later reads from the slot were one load. Every case that crashed raised instead, a struct of another
+  kind too, and the suites passed but for the tests of the old code.
+- **Measured,** eight alternating rounds against the build without it. Typed: four fields of each of 1,000 structs,
+  10,000 times, +13% with fixnum fields and +15% with numbers; the typed loop over a buffer view +20%, and +25% with
+  its length read once; the typed list workloads, the numeric programs and the tracer unchanged. Untyped and sealed:
+  the four fields -16%, buffer building -5%, a view's length -15%, JSON and HTTP parsing -1 to -3%. Untyped and
+  open: buffer building +10 to +16%, a view's length +20%, JSON encoding +6%: a reader that is not inlined runs
+  its own body at every call, which now compared the tag as well, with nothing known across calls.
+- **Rejected:** typed code paid one check for each value where it paid none, all of the cost where it uses structs
+  most. Facts that end at a loop's head made the view loop check its view each round; a check before the loop
+  would recover that, but only the lowerer could place it, as it raises earlier, and a loop over many structs
+  still checks each. Typed code keeps the unchecked read; untyped callers check what they pass, in wrappers that
+  `docs/modules.md` describes.
+- **Also considered** (2026-11-16): checking a struct parameter's tag at a typed definition's entry. It would cost
+  once a call, but covers only structs passed directly, not those reached through a list or a field.
+- **Done for untyped code instead:** "Known struct lengths", under "Registers and caching", tests that the value is
+  a vector at least as long as its struct, without the tag, so that open code loses nothing.
+
+### Unboxing in typed code without its test, rejected (2026-11-17, Apple M3 Max at load near 3, against the build with it)
+
+- **Why.** A typed program is trusted to be what its types say, and the only tests of a type left in its
+  register code are where it takes a value from a slot: `float-number`, that it is a float, and `word-number`, that
+  it is a fixnum. The other tests there are what the types do not give: overflow, division by zero, a word too big
+  for a fixnum.
+- **Measured** with a build whose JIT left both tests out, `make bench-numeric`'s typed programs and the tracer,
+  twenty alternating rounds, medians, every check equal: matmul 42.30 -> 42.10 ms, mandelbrot 17.34 -> 16.84 with
+  minimums of 16.60 and 16.55, spectral 11.23 -> 11.09, n-body and heat unchanged, the tracer 411.1 -> 411.5. The
+  tests run where a value enters a definition or comes back from a call, not in its loops, so they stay.
+- **Found on the way:** without the tests the tracer crashed. Its untyped driver passes `(* 1.0 N)` to a float
+  parameter, which the reader makes an integer, and the test converts it, as `docs/modules.md` says.
+- **Checked at the same time:** one program built with and without `(typed)`. Typed, its typechecked definitions
+  and a library's (`buffer.index`) are compiled with their types, its struct read has no check and its loop is in
+  registers; untyped, none of them. `tests/cli.sh` builds both.
+
+### Tests that types prove, in typed code that calls functions (2026-11-17, Apple M3 Max at load near 3, against the build with them)
+
+- **Why.** A typed definition that calls a function keeps no registers, and the lowerer erases its types, so it
+  compiles as untyped code: its fixnum arithmetic tests both operands' tags, a list match tests `cons?` after
+  `= []` has failed, and a Boolean from a call is compared with `false`, then with `true`. The types prove all three.
+- **Workloads,** typed, built with `(typed)`, every list pattern testing `[]` first: `fib` 34; `tak` 24 16 8 ten
+  times; naive reverse of 300 numbers 600 times; a non-tail sum of 20,000, 1,500 times; merge sort of 20,000, 20
+  times; counting 24 symbols in 20,000, in a list of structs, 60 times; membership of 20,000 symbols, 300 times.
+- **Measured** with a JIT that left those tests out of these definitions alone, twenty alternating rounds, every
+  check equal, in two layouts and once with only the arithmetic's tests left out: `fib` 31.5 -> 29.0 ms, `tak`
+  48.5 -> 43.5, from the arithmetic alone; naive reverse, merge sort, counting and membership within 2%, and the
+  sum 2 to 6% slower in every run, also with only the arithmetic's tests left out, not looked into.
+- **Rejected:** leaving out the `cons?` and Boolean tests, which gain nothing. The arithmetic's tests gain 8 to 11%
+  on recursion over fixnums that calls functions, and nothing on lists; a fixnum operator in typed code compiled
+  without them would take a primitive of its own in the lowerer and the JIT. Not built.
+- **Fixnums in registers across calls** would remove little more for such code: a fixnum in a slot is the machine
+  word shifted by two, so its addition, subtraction and comparison need no untagging, and what registers would
+  save beyond the tag tests is reloading a slot. Floats are another matter, boxed at every call; not measured.
+
+### Calls on the way out of register code (2026-11-16, Apple M3 Max, against the commit before)
+
+- **Why.** A typed loop that checked its input with `(error "negative index ~A" I)` was boxed: the message is made
+  by calls, `shen.arg->str` among them, and code with any call went back to boxed code, as registers keep
+  nothing across one. Validation inside loops is ordinary code, and a typed program calling the untyped libraries
+  meets it too: `buffer.u8` raises so.
+- **What.** After a call, nothing needs the registers if every way on leaves the definition, by a return, a tail
+  call or `simple-error`, before it reads or writes one or goes back to a loop. The lowerer walks the code from each
+  call, following jumps, up to 4000 instructions, past which it takes the call to need them. The JIT needed nothing:
+  it keeps its own state across calls from the code it sees, and nothing reads a raw value after such a call. A
+  typed body whose code calls so is marked `calling` rather than `typed`, and inlines two levels deep, not at any
+  depth as a typed body that calls nothing does ("64-bit words, and typed bodies inlined at any depth", below): its
+  calls could reach it again, where a typed body that calls nothing cannot.
+- **Measured,** a typed loop of 50 million rounds with such a check, built as a typed program, three runs each: 0.35
+  -> 0.031 s. Of 126 typed definitions in the benchmarks and the tests, only the three new ones differ.
+- **Also looked at.** Of the numeric programs only `sn.power` is boxed, calling its row loop 40 times a run, which
+  costs nothing measurable.
+- Tests in `tests/typed.shen`: such a loop, its result and its message, and a helper raising so, inlined into a
+  loop that keeps its registers.
+
+### Typed access to memory and vectors, fixnum division, and inlining into typed loops (2026-11-14 and 16, Apple M3 Max, against the commit before)
+
+- **Typed access.** Every typed numeric program had declared the byte primitives itself, over a type of its own, and
+  wrapped vector indices in `fx->number`. `numbers` types `shen-jit.u8` to `shen-jit.f64!` over
+  `buffer.storage`, `lib/buffer.shen`'s name for a byte buffer or a pointer to memory, with fixnum offsets, and adds
+  `fx<-vector`, `fxvector->` and `fxlimit`; `memory` types `memory.alloc` as giving `buffer.storage`. Both namespaces
+  list `buffer.storage` as external: unlisted, it became `numbers.buffer.storage` and `memory.buffer.storage`, and
+  the benchmark failed to typecheck. Reads of integers at a fixnum index go to word registers as `word-load8` and
+  the others.
+- **`fxquotient` and `fxremainder`,** truncating as C does, over the primitives `shen-jit.quotient` and
+  `shen-jit.remainder`. In code with registers the primitives are boxed, as any other, with the same results and
+  errors, which `tests/typed.shen` checks. **Rejected** (2026-11-16): instructions of their own in word registers,
+  `fix-quotient` and `fix-remainder`, with SLJIT's signed divide and a slow path for a zero divisor and the overflow
+  of the least fixnum by -1: two opcodes, about 35 lines in the JIT and the lowerer, which no program or log entry
+  measured, as none of the typed programs divides fixnums in a loop.
+- **Inlining into typed loops.** The n-body force function is in registers but has `let`s, so it is no body of
+  primitives alone, and at 200 nodes past any limit: its loop called it once per pair and stayed boxed. A typed
+  definition whose code keeps values in registers, and so calls nothing, carries an inline body of up to 400
+  nodes, marked typed, which only a definition with `float` or `fixnum` parameters inlines. Each statement of an
+  inlined `do` gives its registers back once done, as that loop runs out of them if they are kept until the
+  outermost is done. Constant products fold, as sums do, so `(fx* 3 8)` in an inlined offset is 24.
+- **Measured** with `make bench-numeric`, typed, best of three alternating rounds, load near 3: nbody 12.5 -> 4.3 ms
+  (by hand 1.7, C 1.2), the others and every boxed program unchanged, every check equal. `make bench`: geomean
+  1.00, no result differences; `make bench-independent`: every row within 2%.
+
+### Loops inlined into typed loops (2026-11-14 and 16, Apple M3 Max)
+
+- **What.** Each numeric program's inner loop is a definition of its own, called once for each pass of the outer
+  loop, which then boxed what it passed and was given, and kept nothing in registers across the call. A typed
+  definition whose code is a loop, calling nothing else, carries `(Params Body loop Kinds)`, and a definition that
+  keeps registers inlines it, where it is sealed and two levels deep at most, as a loop of its own: the parameters
+  it changes get registers or slots of their own, its calls of itself go back to its head, and its other tail
+  positions give its value to a register, a slot, or nothing, and jump past it, or return when it is in tail
+  position. What it gives, a float, a fixnum or neither, comes from its exits. `shen.f-error`, where a partial
+  function's clauses end, stays a tail call at an exit, or a loop over a list would call. A definition that keeps
+  no registers in the end is normalised again without typed bodies or loops, which it would box. About 200 lines,
+  and the exit target in the emitter.
+- **A parameter's alias.** An argument waits when a later one reads its parameter's register through any variable,
+  as the loops of floats and fixnums in registers, above, do: a `let` of the parameter shares its register, so
+  were it to wait only for a later argument naming the parameter, `(let M N (f (fx- N 1) (fx+ Acc M)))` would add
+  N - 1, and summing 4 down to 1 would give 6.
+- **What they are worth** (2026-11-16, load near 4, against the build without them): built with `inline-of` giving
+  no loop form, five alternating rounds, medians, every check equal.
+
+  | Program | Loops inlined | Not inlined |
+  | --- | ---: | ---: |
+  | trace | 815 ms | 1260 |
+  | mandelbrot | 16.9 | 19.0 |
+  | spectral | 16.3 | 18.5 |
+  | matmul | 52.5 | 54.1 |
+  | heat | 51.0 | 51.7 |
+  | nbody | 2.0 | 2.0 |
+
+  The tracer, which nests its loops three deep, takes 55% longer without them, as its bounce and sample loops would
+  make calls and box what they pass, and spectral 13% longer. Kept.
+- **On x86-64,** see "Typed numeric programs on x86-64" below.
+- **A loop with an exit of its own** (`[exit ...]`), inlined where its result goes on to code after it, is lowered
+  with the loops around it hidden (`alone`, in `src/lowerer/registers.shen`), as a tail call in its body of an
+  enclosing loop's function, the definition itself included, would otherwise become `again` to that loop's head,
+  and the code after the inner loop be lost. `tests/typed/loops.shen` has the case (`loop-outer`, `loop-inner`).
+
+### Loop steps unchecked where they cannot go wrong (2026-11-14, 16 and 17, Apple M3 Max at load near 2 and the idle Ryzen VM, against the commit before)
+
+- **What.** Two sums of a fixnum variable P, as loops step their counters, are `word+`, with no overflow check:
+  - in the branch where a test found P below a fixnum E, P plus a constant that is not negative;
+  - in the arguments of a loop's own call that read or write bytes at P itself wherever they run, P plus a
+    fixnum, as such an access succeeds only for P from 0 to the length.
+
+  E, and what such a P is added to, must be exact (`exact?`), not possibly such a sum: a constant, a call's
+  result, a checked primitive's, a variable in a slot, or one in a register that no such sum, nor a bit operation
+  or shift of one, may have reached. A register that may hold one, a loop's parameter that an own call passes
+  such a value or a variable bound to one, carries the fact `[past W]` in the lowering's environment. A checked
+  primitive's value is a fixnum whatever it read, as such a sum stays below 2^62, so nothing computed from it
+  passes 64 bits unseen.
+- **Why it cannot go wrong.** P is a fixnum when either holds, so the sum is exact in 64 bits, and it cannot be
+  stepped so again until a test or an access finds it a fixnum once more, so nothing accumulates towards 2^63.
+  Without the exactness it would: a loop whose bound is its other parameter, stepped by such a sum, would have sums
+  of sums wrap 64 bits and come back as a fixnum, a wrong result where untyped code raises "integer overflow". For
+  the same reason `exact-in?` follows a let of a variable, which inlining `fx+` leaves in chains, as emission does
+  (`alias-of`): such a let shares the variable's register and its facts, so binding it afresh would take a sum over
+  it for an exact bound while its code is an unchecked `word+`; `tests/typed/loops.shen` has `loop-aliased`.
+  Past the greatest fixnum the value raises where it leaves the registers, as `word-box` checks ("the word ...
+  does not fit in an integer"), or at the access; comparisons see its exact value. A counter stepped past the
+  greatest fixnum thus raises later than untyped code would, or not at all if its loop then ends, and flows on as
+  its true value through arithmetic in registers, `fx->fl` and `shen-jit.s64!`, which stores it as the 64-bit
+  integer it is: `(fx- I N)` of one gave 90, and `fx->fl` its value, where untyped code raises at the step. The
+  "Typed programs" section of `docs/modules.md` lists both.
+- **P plus 1 alone** (2026-11-14, load 3 to 5, best of four alternating rounds, against a build without either
+  rule): spectral 20.4 -> 16.4 ms (by hand 14.0, C 7.3), its inner sum having no other check in its loop;
+  mandelbrot 17.4 in both, matmul 53.0 -> 52.8, heat 51.1 -> 51.4, n-body 4.3. Every check equal.
+- **Measured** with `make bench-numeric`'s typed programs on 2026-11-16, both rules against P plus 1 alone,
+  alternating rounds, medians, every check equal:
+
+  | Program | arm64 before | arm64 after | x86-64 before | x86-64 after |
+  | --- | ---: | ---: | ---: | ---: |
+  | matmul | 52.3 | 41.8 | 86.7 | 59.2 |
+  | heat | 51.1 | 44.0 | 71.0 | 59.7 |
+  | spectral | 16.4 | 16.4 | 40.6 | 40.1 |
+  | mandelbrot | 17.1 | 17.0 | 17.9 | 17.9 |
+  | nbody | 1.95 | 1.98 | 3.5 | 3.5 |
+
+  arm64 six rounds, x86-64 five. Both now match the hand-written versions on arm64 (matmul 42, heat 44), and on
+  x86-64 heat is faster than the hand-written one (70.8). The first rule alone gave heat its gain (50.8 -> 43.4)
+  but matmul 1%: its second index steps by a variable stride and is never tested, which the second rule covers.
+  The tracer is unchanged on arm64 (813 ms both) and too noisy on the VM to call.
+- Tests in `tests/typed.shen` pin down both rules, a counter stepped past the greatest fixnum that then ends its
+  loop, one returned, and an index stepped past it.
+
+### A shorter overflow test for a constant step: rejected (2026-11-16, Apple M3 Max, load near 5, against the commit before)
+
+- **Why it was tried.** A review of the work removed the overflow check from the steps of matmul's and
+  heat's inner loops by editing the lowered code: matmul 52.5 -> 42.7 ms and heat 51.6 -> 44.4, level with the
+  hand-written versions. `fix+` adds, shifts left and right by 2, compares and branches.
+- **What was tried.** For a constant step only one end of the range can be passed, so the sum shifted right by
+  61 is 1 above the greatest fixnum and -2 below the least: add, shift, compare, branch, one instruction fewer.
+- **Measured** with the same source under both JITs, six alternating rounds, medians: heat 50.6 -> 50.1 ms,
+  matmul 52.2 -> 52.4, spectral 16.25 -> 16.23, mandelbrot and n-body unchanged; every check equal. The check's
+  cost is not its instruction count, so the gain the review saw needs the check gone from the loop, which would
+  change when a program raises. Not adopted.
+- **Kept:** tests of a fixnum stepped by a constant up to and past both ends of the range, each way round, which
+  nothing tested before.
+
+### Products reused, rejected (2026-11-15 and 16, Apple M3 Max and the idle Ryzen VM, against the commit before)
+
+The n-body force between two bodies read and wrote their fields through `nb.get` and `nb.put`, each of which
+multiplied the body's index by 56, with an overflow check: 20 checked products for every pair, where the
+hand-written version computes each offset once.
+
+- **What was tried** (2026-11-15, load near 3). In code with registers, a product, quotient or remainder of fixnums
+  that a stretch of code computed more than once from the same values was computed once, into a word register of
+  its own, where it first ran; the later ones read that register. Values were the same when they were in the same
+  register, or bound to variables that were, as an inlined body's parameters are. The first one had to run before
+  any test in the stretch, so it ran before every other one, and nothing was moved: an overflow raised where it
+  did, after whatever ran before it. The stretches were the body, an inlined loop's body and each branch of an `if`
+  that never falls through. Four word registers were kept for the rest. Sums were left alone: an index's last sum
+  is one unchecked add, as cheap as reading a register.
+- **Measured** with `make bench-numeric`, typed, best of three alternating rounds: nbody 4.18 -> 2.03 ms (by hand
+  1.6, C 1.0), its 20 products down to 2; matmul, mandelbrot, spectral, heat and the tracer within 1%. Every check
+  equal. On x86-64 (best of three): nbody 5.8 -> 3.6 ms (by hand 3.1, C 1.8), the others and the tracer unchanged.
+- **Rejected with it: a branch giving its registers back when done,** for the other branch. It cost the typed
+  tracer 10% on x86-64 (1.42 -> 1.55 s, best of three, idle machine), and nothing on arm64: registers numbered anew
+  are placed worse among x86-64's few. **Not tried: computing a product where the stretch starts,** as a `let`
+  would. It would raise an overflow before a store or another error that comes first; moving it only past code that
+  cannot raise would leave the second body's products, as each read of its fields comes after a read of the
+  first's, which can raise.
+- **Rejected** (2026-11-16, load near 4). `src/lowerer/products.shen`, about 185 lines with its hooks (keys,
+  aliases, stretches and the `first` node), gained only on n-body, a gain seen only in a benchmark, and its compile
+  time grew with the square of nested tail `if`s. The typed n-body computes each body's offset once instead, in
+  `nb.pair` and `nb.move`, as its hand-written and C versions do: four alternating runs, 1.98 ms against 2.03 with
+  the products reused, and 4.2 ms for the old source without them; every check equal.
+- **Offsets stepped in the source** (2026-11-16, load near 3). At 1.27 times the hand-written version on arm64, all
+  of the rest was the offsets: `nb.pair` computed `I * 56` and `J * 56` for each pair, two checked products, about
+  20 of its 123 instructions, where the hand-written loops step byte offsets by 56 and C's compiler does the same
+  with its indices. The typed source steps them as the hand-written one does: `nb.forces`, `nb.with` and `nb.move`
+  count byte offsets by 56 up to the count times 56, and `nb.pair` takes the offsets. Alternating rounds, medians,
+  the check equal: arm64, ten rounds, 1.871 -> 1.590 ms, against 1.55 by hand; x86-64, seven, 3.257 -> 2.734.
+- **Hoisting and strength reduction, left** (2026-11-16). Doing that in the lowerer means hoisting `(fx* I 56)` out
+  of the inner loop and turning `(fx* J 56)` into a step. Both are checked products: hoisted, one would raise in a
+  loop that runs no rounds or a branch that never computes it, and a step raises at another round than the product
+  would. Doing it right needs bounds proved from the loop's tests or a computation that defers its raise, and
+  induction variables: machinery out of proportion, where the source can step offsets, as the benchmarks do. Float
+  arithmetic, which never raises but by `fl/`, could be hoisted safely, but no numeric program here has a
+  loop-invariant float expression its source does not already compute outside.
+
+### A typed path tracer, and what it needed (2026-11-14 and 16, Apple M3 Max, load 3 to 5, against the commit before)
+
+`tests/bench/trace-typed.shen` is the path tracer of `trace.shen` as typed Shen, giving the same image to the last
+bit, written as typed Shen is: loops as definitions calling themselves, a definition giving one value, so the
+nearest hit's distance and the drawn direction go through memory. Its random numbers' 64-bit state and its hash are
+words ("64-bit words", below), and a byte of the image comes from `fl->fx` ("Floats truncated to fixnums", below);
+the measurements before those entries are of 32-bit halves, as fixnums have 62 bits, and of a byte found by
+halving. `make bench-numeric` builds and runs it after the others.
+
+- **What it found.** Without what follows, it took 3.5 s, where the hand-written one takes 0.33 and C 0.22:
+  - A definition over memory with no `float` or `fixnum` parameter, as the random step is, never tried registers,
+    so it had no inline body, and its callers called it. Registers are tried for a typed definition with
+    `float` or `fixnum` anywhere among its annotations.
+  - The random step's 13 fixnum `let`s, inlined three times into one value, used up the 16 word registers, as an
+    expression's `let` kept its register until the statement around it was done; the bounce loop then compiled
+    boxed. A value that is a `let`, as an inlined body is, is computed into the first register free, and what
+    its variables took goes back. Moving the value down at each `let` instead added a move to every inlined
+    operator; reserving its register first used one more register for each level of nesting, and the bounce loop
+    ran out of floats.
+  - `shen-jit.shift-left` and `shift-right` were boxed primitive calls: by a constant count they are `word-sar`,
+    and for a shift left `word-shl` by the count and 2 more first, which drops what leaves the 62 bits.
+  - A definition calling one defined after it calls it, and two definitions calling each other are no loop, so the
+    tracer's bounce calls itself and defines its helpers first.
+- **Measured:** typed 0.80 s, by hand 0.33, C 0.22. The random numbers alone, 24.4 million of them, take 0.36 s as
+  32-bit halves, where a 64-bit word does each in a few instructions; without them the typed tracer would be near
+  0.45 s. The numeric programs: unchanged, every check equal. On x86-64, the same day: typed 1414 ms, by hand 568,
+  C 366 ("Typed numeric programs on x86-64", below).
+- **Calls to a later definition, and mutual recursion, left** (2026-11-16). A typed definition's callees typecheck
+  only once they are defined or declared, so in a typed program they come first; a declared forward call, or mutual
+  recursion, compiles as a sealed call bound at its first run, and is not inlined. Inlining it needs the program
+  compiled again once loaded. No typed program here has one.
+
+### Typed stores of integers from registers (2026-11-16, Apple M3 Max at load near 3 and the idle Ryzen VM, against the commit before)
+
+- **Why.** Before a type of 64-bit words, the tracer was to be measured with typed integer stores in registers,
+  which words would need anyway for their stores into bytes. Typed code kept doubles there, but a
+  `shen-jit.u32!` boxed its index and its value, each with a fixnum check, and took the primitive's boxed path,
+  which checked them again: the tracer's random numbers, kept as two 32-bit halves in bytes, make six a number.
+- **What.** Four instructions for the lowerer, `fix-store8`, `fix-store16`, `fix-store32` and `fix-store-s32`: as
+  the word stores, but a value the width does not hold raises "bytes: V does not fit" from a slow path, after the
+  buffer and index are checked, as the primitives check them in that order. `shen-jit.s64!` is `word-store64`, as
+  any fixnum fits. The lowerer stores a fixnum at a fixnum index, either a constant or not, so (`stored`, shared
+  with the doubles' stores), and a store for its value, the bytes, is the store and then them, so the tracer's
+  store of a store stays in registers. Doubles' stores in that position gain too.
+- **Measured,** alternating rounds, medians, checks equal: the tracer, arm64, eight rounds, 793 -> 729 ms; x86-64,
+  ten, 1481 -> 1316, minimums 1463 -> 1300. The numeric programs, which store doubles only, are unchanged. The
+  tracer by hand takes 339 to 351 ms on arm64, so its random numbers in halves still cost a good part of the rest.
+- Tests in `tests/typed.shen`: each width, for its effect and nested for its value, the instructions chosen, a
+  negative 32-bit value and the greatest fixnum in 64 bits, and the errors of a value that does not fit and of an
+  index past the end, compared with what the primitives say. `make test-core` passes on both machines.
+
+### The tracer's sample loop in registers, and constants folded, rejected (2026-11-16, Apple M3 Max at load near 2 and the idle Ryzen VM, against the commit before)
+
+- **Why.** `trace.samples` was boxed code calling `trace.path` for each sample, boxing its twelve floats. A probe in
+  the lowerer, recording why each typed definition fell back, found two causes in turn: `trace.path`, 480 nodes,
+  was over the 400 a typed body may have to get an inline form, and with a larger limit `trace.samples` then ran
+  out of the 48 float registers: its own floats, `trace.path`'s twelve parameters and two dozen `let`s, and
+  `trace.draw`'s, all live at once.
+- **What.** 64 float registers and typed bodies up to 800 nodes, two constants. A float register beyond the
+  machine's is a place in the one native frame each entry into native code makes, so the frame grows by 128
+  bytes, once, and code that uses fewer is unchanged. Of every typed definition in the benchmarks and the tests,
+  only `trace.samples` changes, 80 to 677 instructions.
+- **Measured,** alternating rounds, medians, the image's check equal: the tracer on arm64, seven rounds, 0.430 ->
+  0.414 s; on x86-64, seven, 0.703 -> 0.698, where its float registers mostly live in the frame. The numeric
+  programs are unchanged on x86-64, three rounds.
+- **Constant folding of words and floats, rejected.** The tracer computes its multiplier, `(word.+ (word.shl (word.of
+  625341585) 32) (word.of 1332534557))`, at each random number, two instructions, and its FNV prime at each pixel.
+  A word wider than a fixnum cannot be a constant of the code as the lowerer keeps them, so folding them needs a
+  constant of a new kind, and no typed program here has an operation on two float constants. Not worth the code.
+
+### The typed tracer's remaining gap (2026-11-16, Apple M3 Max at load near 2.5 and the idle Ryzen VM, against the commit before)
+
+- **Where it goes.** Profiled with `SHEN_JIT_PERF_MAP` and `sample`, at 128 samples a pixel: typed 3.15 s, by hand
+  2.75. The sphere loop takes about 1.9 s in both, and the draw loop 0.79 against 0.72; the code outside the inner
+  loops, run once a bounce or a sample, takes 0.44 s typed against 0.14 by hand. There, typed code has about twice
+  as many float registers as hand code has names, as each `let` and each loop's next value is a register of its
+  own where hand code writes a name again: the JIT, which places registers by how much they are used, not by
+  when they are live, keeps the per-bounce ones in the frame. A loop inlined with constant arguments, as the
+  nearest sphere's 0, 1e30 and -1 are, gets them through guest slots, read back with tag checks, as a `let` of a
+  constant is a slot in register code. The random state and a second result go through memory, `Tmp`, where
+  hand code keeps them in registers. Closing that needs places given by liveness, or a `let` and the loop
+  parameter it becomes sharing a register; not done.
+- **Constant offsets as word indices.** A read or store of a double at a constant offset, as `Tmp`'s, took the
+  tagged path, testing and untagging the constant at run time: the lowerer took only an index already in a
+  register as a word. Now any fixnum is. Of every typed definition in the benchmarks and the tests, only the
+  tracer's had such accesses. Its time is the same: 0.414 -> 0.412 s on arm64, six rounds, and 0.698 -> 0.700 on
+  x86-64, seven.
+- **The sphere test written as C writes it, rejected.** The typed source made a distance of 0 for a miss and then
+  tested it, eight instructions more on the commonest path; branching on the discriminant, as C and the hand
+  version do, makes the sphere loop the hand version's, instruction for instruction. 0.412 -> 0.402 s on arm64,
+  but 0.698 -> 0.706 on x86-64, seven rounds: a matter of where code lies more than of what it runs. The source
+  stays as it was.
+
+### Typed numeric programs on x86-64 (2026-11-14, the idle Ryzen VM, Linux, gcc 9.4)
+
+x86-64 has few integer registers to spare, so word registers there mostly live in the native frame. Two runs the same
+day, in ms, every check equal to the last digit. The first, best of two `make bench-numeric` runs, came after word
+registers and direct C calls; `make test-core`, `test-ffi` and `test-libs` passed there, and `make test-x86` under
+Rosetta. The second, best of three, came after typed access to memory, inlining into typed loops and loops inlined
+into loops, with "Typed before" the commit before the typed access to memory, timed with it; `make test-typed`
+passed there. C, boxed and hand-written times are the second run's.
+
+| Program | C | Boxed | Registers by hand | Typed, first run | Typed before | Typed |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| matmul | 41.1 | 420.8 | 44.9 | 88.3 | 88.0 | 86.6 |
+| mandelbrot | 13.3 | 98.9 | 18.3 | 21.5 | 21.4 | 17.8 |
+| spectral | 15.1 | 150.2 | 32.6 | 36.4 | 36.2 | 39.6 |
+| nbody | 1.8 | 59.2 | 3.0 | 19.8 | 9.2 | 5.8 |
+| heat | 32.6 | 668.0 | 70.8 | 83.2 | 82.6 | 71.0 |
+| trace | 366 | | 568 | | | 1414 |
+
+In the first run, whose boxed times were 411.1, 100.5, 150.9, 56.7 and 668.2 ms, typed took 2.9 to 8 times less time
+than boxed, as on arm64, and the matrix product stayed furthest from the hand-written version, twice its time, where
+on arm64 it was 1.3 times. In the second, mandelbrot is below the hand-written version and heat level with it; the
+spectral norm lost 9%, where on arm64 it gained a fifth, not looked into then: x86-64 has few registers for the inner
+loop that now sits inside the outer one. The tracer is 2.5 times the hand-written one, as against 2.4 on arm64. The
+entries below take the typed programs on x86-64 the rest of the way.
+
+### Loop arguments that cannot raise computed last (2026-11-16 and 17, the idle Ryzen VM and Apple M3 Max, against the commit before)
+
+- **Why.** On x86-64, typed matmul took 59 ms against 45 for the version written with registers by hand. Their
+  inner loops made the same loads, bounds tests, multiply and add, but the typed one computed the next indices
+  first, into two new word registers, as the sum after them still read the old ones, and moved them into place at
+  the end. That made six words in the loop, and x86-64 has four registers for them, so the end and the stride
+  stayed in the native frame: two more loads and three more moves in each iteration.
+- **What.** `again` orders a loop's arguments before `loop-args` computes them. One that cannot raise or write, a
+  variable, a constant, a sum, difference or product of floats, or a sum of fixnums that `word-op-of` leaves
+  unchecked, through the lets that inlining leaves, waits until no other argument reads its register, and is then
+  computed into it. The others keep their order, left to right, so nothing a program can see changes. matmul's
+  indices now step in place after the sum, as the hand-written loop's do, and its four words all have registers.
+- **Measured** on x86-64 with `make bench-numeric`'s typed programs, seven alternating rounds, medians, every
+  check equal: matmul 59.2 -> 46.8 ms, against 44.8 by hand; heat 59.6 -> 59.6, spectral 40.4 -> 40.5,
+  mandelbrot 17.9 -> 17.9, n-body 3.52 -> 3.47. The tracer's code is the same byte for byte. Every function of the
+  numeric programs whose code changed got smaller, `mat.rows` from 2,679 bytes to 2,620.
+- **On arm64,** with registers to spare, the moves are all it saves. Timed on 2026-11-17 on Apple M3 Max at load
+  near 2, against the build without it, thirty alternating rounds and twenty more with the code shifted by five
+  and by ten unrelated definitions compiled first, every check equal: spectral 11.66 -> 11.36 ms in all three,
+  matmul unchanged unshifted and 42.7 -> 43.2 shifted, the rest and the tracer unchanged. It stays.
+- **Left:** the typed loop's exit test still jumps over the exit to the body, so each iteration takes two jumps
+  where the hand-written one takes one; turning it round was tried and rejected, in the next entry.
+- Tests in `tests/typed.shen`: a strided dot product's loop has no `word-move` (two before), arguments that read
+  each other's registers in a cycle, fixnums and floats, and an effect in an argument that sees the counter as it
+  was.
+
+### A loop's exit after its body, rejected (2026-11-16 and 17, the idle Ryzen VM and Apple M3 Max at load near 2, against the build without it)
+
+- **Why.** A definition's clauses put a loop's exit first, `Acc where (fx>= AI End)`, and an `if` falls through
+  into its first branch, so the test jumped over the exit to the body and the body jumped back to the test: two
+  taken jumps each round, where the hand-written loop's test falls through into the body and jumps out only at
+  the end.
+- **What was tried.** In `shen-jit.lower.if`, an `if` in tail position whose first branch never went back to a
+  loop's head and whose second did, with a test that compared two fixnums, through the lets that inlining
+  leaves, was lowered as the `if` of the opposite comparison with its branches swapped. Its facts stayed the
+  same: the opposite comparison holding is the original failing, so the body still found the counter below the
+  end. Floats were left alone: the opposite of `<` is not its negation when one side is a NaN. matmul's inner
+  loop became the hand-written one's, instruction for instruction. About 30 lines.
+- **Measured** on x86-64 with `make bench-numeric`'s typed programs, seven alternating rounds, medians, every
+  check equal: matmul 46.9 -> 45.5 ms, against 44.8 by hand; heat 59.4 -> 54.2, against 70.8 by hand; spectral
+  40.2 -> 40.1, mandelbrot 17.9 -> 17.8, n-body 3.44 -> 3.47. The tracer, whose `trace.develop` and `trace.path`
+  changed, gave 1,522 -> 1,447 ms as medians and 1,417 -> 1,408 as minimums, within the VM's noise.
+- **On arm64 it lost.** On 2026-11-17, thirty alternating rounds against the build without it, and twenty more
+  with the code shifted by five and by ten unrelated definitions compiled first, every check equal, the same in
+  all three layouts: heat 43.7 -> 44.7 ms with it, spectral 11.08 -> 11.36, matmul 42.0 -> 42.6, n-body 1.71 ->
+  1.68, mandelbrot and the tracer unchanged. One taken jump fewer a round does not show on the M3, and the
+  turned-round code was slower on three of the five.
+- **Rejected:** 3% on one program on x86-64 against a loss on three on arm64 does not pay for its lines. The test
+  of a loop whose exit compares floats, with a NaN, which turned round would leave at once, stays.
+
+### Float division tested out of line (2026-11-16, the idle Ryzen VM and Apple M3 Max at load near 2.4, against the commit before)
+
+- **Why.** On x86-64, typed spectral took 39.5 ms against 33.1 written with registers by hand. Without the test
+  for a divisor of zero, which the lowerer put before each `float/`, it took 32.7. The test was `float-unless=`
+  against zero, which SLJIT makes on x86-64 as `cmpeqsd` and then `ucomisd` of the mask, with the raise inline
+  after it, so every division jumped over the raise. The hand-written version divides with no test.
+- **What.** A new instruction, `float-divide`, as `float/` but raising "division by zero" for a divisor of zero, out
+  of line, as `fix+` raises "integer overflow". Its test is for zero alone where that is one machine test, as on
+  arm64, and for zero or a NaN where SLJIT says it is not (`sljit_cmp_info`), as on x86-64, which is `ucomisd`
+  and `je`; the slow path sends a NaN back to divide. Only the lowerer uses the instruction: the checker of code
+  written by hand has no form for it, as for `fix+`.
+- **Measured** with `make bench-numeric`'s typed programs, alternating rounds, medians, every check equal. On
+  x86-64, seven rounds: spectral 40.4 -> 32.3 ms, now faster than by hand; n-body 3.46 -> 3.34; matmul, mandelbrot
+  and the tracer unchanged. On arm64, ten rounds: spectral 15.64 -> 15.54, n-body 1.89 -> 1.86, the rest unchanged.
+- **Heat moved with where things lie, not with this.** On x86-64 heat went 54.4 -> 59.7, though it divides
+  nowhere and its code is the same instruction for instruction. In this build alone it takes 54.4 or 59.8 by what
+  ran before it: 54.4 after matmul, 59.8 when only mandelbrot, spectral or n-body did, whatever its code's
+  alignment, so it is where its data lies. arm64's heat did not move.
+- Tests in `tests/typed.shen`: a quotient uses `float-divide` and no `float-unless=`, and a divisor of zero, of
+  either sign, raises as `/` does while a NaN divides, which also runs the slow path's way back on x86-64; those
+  pass there and here.
+
+### x86-64 float registers written whole (2026-11-16, the idle Ryzen VM, against the commit before)
+
+- **Why.** Making a constant flag of an inlined loop a constant (the next entry) took typed spectral on x86-64 from
+  32.4 to 59.9 ms, with shorter code. Two SSE instructions write only the low half of a register and so wait for
+  whatever last wrote it: `cvtsi2sd`, and `movsd` between registers, which SLJIT uses for every copy, such as a
+  division's dividend into its destination. With the flag's test gone, the round's first `cvtsi2sd` wrote the
+  register that held the last round's quotient, and every round waited for the division before.
+- **What.** SLJIT copies one float register to another with `movaps` (a patch in `vendor/sljit`, recorded in its
+  `UPSTREAM.md`), and the JIT clears a register with `pxor` before `cvtsi2sd` (`convert_word`), in register code and
+  in the boxed path's conversions. arm64's instructions write the whole register, so nothing changes there.
+- **Measured** on x86-64, seven alternating rounds, every check equal. Typed: mandelbrot 17.86 -> 13.87 ms, against
+  13.3 in C; spectral 32.49 -> 25.12; n-body 3.34 -> 3.26; matmul and heat unchanged. The tracer, twelve rounds:
+  medians 1530 and 1501 ms, minimums 1430 and 1458, within its spread. Untyped boxed code within 2%, but n-body
+  59.9 -> 56.6.
+- `make test-core` passes on the VM and here.
+
+### A constant flag of an inlined loop made a constant (2026-11-16, Apple M3 Max at load near 3 and the idle Ryzen VM, against the commit before)
+
+- **Why.** On arm64, typed spectral took 15.4 ms against 12.9 to 13.7 written with registers by hand. `sn.at-a-t`
+  calls `sn.times` with `false`, then `true`, and the loops inlined from it still loaded that flag from a slot and
+  tested it against both Booleans each round. Written as two row loops, as the hand-written version is, it took
+  13.8.
+- **What.** In `inline-loop`, a parameter that every call of the loop's function passes on as it is, never
+  rebound, and that the call gives `true` or `false`, is that constant in the loop's KLambda before it is
+  normalised, but for the loop's calls of itself, which go on passing the parameter. `norm` makes an `if` of a
+  literal Boolean its branch. A loop inlined into this one then gets the constant as its own argument, and so on.
+  Only the Booleans, so that no constant can be taken for a variable.
+- **Measured,** alternating rounds, medians, every check equal. arm64, ten rounds: spectral 15.39 -> 13.96 ms, the
+  rest unchanged. x86-64, seven rounds, with the float registers written whole (previous entry): spectral 25.12 ->
+  21.91; heat 59.8 -> 54.7, its swing with where things lie; the rest unchanged.
+- Tests in `tests/typed.shen`: a loop inlined twice with constant flags has no `jump-if-false` left, and one that
+  flips its flag each round keeps it.
+
+### Numeric compilation as a library, tried twice and not adopted (2026-11-15, Apple M3 Max and the Ryzen VM, against the typed path of the same day)
+
+Two attempts moved the typed numeric optimizations out of the lowerer into `lib/numeric-compiler.shen`.
+
+- **The whole optimizer as a library.**
+  - A module opted in with `(compiler numeric-compiler.compile)`. Executables left the compiler out through a
+    new `(build-requires ...)` and about 260 lines of C in `image.c` that copy only what the program still reaches.
+  - It made the same code for the 113 definitions compared. Runtimes were equal within noise on the M3 and the
+    Ryzen VM; the tracer was 2.6% slower there, with overlapping ranges.
+  - The lowerer fell from 2,459 to 1,388 lines, but the library had 1,466, so about 400 lines more in all. The
+    library kept its own copy of the emitter's walk over expressions, as merging it back would have needed an
+    extension point in the emitter for each kind of expression. It also called about 50 of the lowerer's
+    internal functions.
+  - The default executable shrank from 1,684,552 to 1,616,848 bytes, but the numeric programs grew from
+    1,944,128 to 2,030,160, and building them took twice as long: 26 to 56 ms for the numeric programs on the M3.
+- **A small explicit library.**
+  - `define-numeric`, a definition form of its own, was typechecked with `float` and `fixnum` erased to `number`.
+    Entry guards sent other arguments to an ordinary fallback, and a two-process build wrote the compiled code
+    to a file, so that executables never loaded the compiler. It had 594 lines.
+  - It had no loop inlining, product reuse or C calls in registers. Only 14 of the 26 numeric definitions and 7
+    of the 16 tracer definitions qualified, and the programs ran 1.48 to 4.60 times as long, medians of seven
+    rounds in milliseconds:
+
+    | Program | Typed path | Explicit library |
+    | --- | ---: | ---: |
+    | matmul | 48.356 | 110.398 |
+    | mandelbrot | 16.601 | 27.615 |
+    | spectral | 15.606 | 23.101 |
+    | nbody | 1.920 | 8.825 |
+    | heat | 49.939 | 128.957 |
+    | trace | 772.542 | 3370.692 |
+
+- **Why neither was adopted.** The trouble with the lowerer was how it was organized, not where it lived. A
+  library needs a way to select the compiler, image machinery to keep it out of executables, and the lowerer's
+  internals as its interface, and its emitter cannot call back into the core's. The lowerer's split into files
+  gives the separation without any of that ("The lowerer split into files", under "Kernel pins and reproducible
+  stage 0").
+- The small library's edge cases found one difference in the typed path: `(= X X)` is false in typed code
+  when X is a NaN, and true in ordinary code, where a NaN equals itself when both sides are the same object.
+  A float in a register has no identity, so the typed path cannot match that cheaply.
+
+### Arrays of doubles, and doubles read at an index of doubles (2026-11-16, Apple M3 Max at load near 2.5 and the idle Ryzen VM, against the commit before)
+
+- **Why.** Typed code over doubles indexes bytes with `(fx* I 8)`, a checked product, ten instructions on arm64, for
+  each access; that was what kept typed spectral behind the hand-written version on arm64. Arrays of doubles
+  and of 64-bit words were to be ergonomic, each in a namespace of its own; this is the first.
+- **What.**
+  - Two instructions, `float-load-index` and `float-store-index`, read and write the double at an index of
+    doubles: the check compares the index with the length in doubles, and the access scales it. A buffer that a
+    loop reaches only so keeps that length, `length >> 3`, worked out on the way in, as kept memory keeps a
+    limit for a width; one reached both ways takes the general path. The slow path tells the index of bytes, as
+    an access at that index would have, or the element's when that is past 64 bits.
+  - The lowerer reads and writes a double at X times 8, X a fixnum, so (`scaled-index?`), through the lets of
+    inlining. Not at X shifted left by 3, which keeps 62 bits where the access would not. An X whose product
+    would overflow raises as an index past the end, as typed code already does for an index of bytes.
+  - `lib/floats.shen`, module `floats`, in namespace `floats`: `floats.t`, a byte buffer as doubles, with `new`,
+    `get`, `set`, `length`, `of-list`, `to-list`, `bytes` and `of-bytes`, each small enough to inline. It shadows
+    `get`, `set` and `length`, so a namespace that imports them reads `(get V I)`; nothing is global.
+- **Measured** with `make bench-numeric`'s typed programs, which already read `(shen-jit.f64 V (fx* J 8))`,
+  alternating rounds, medians, every check equal. arm64, ten rounds: spectral 14.04 -> 11.05 ms, now faster than by
+  hand (12.9 to 13.7); the rest unchanged. x86-64, seven: spectral 21.83 -> 20.70; heat 54.7 -> 59.8, its swing
+  with where things lie; the tracer, whose rendering is the same code, within its spread.
+- Tests in `tests/typed.shen`: scaled reads in a loop and out of one, stores, an index past either end, which
+  says what untyped code says, one past 64 bits, and a typed module over `floats` with its names imported.
+  `make test-core` passes on both machines.
+
+### 64-bit words, and typed bodies inlined at any depth (2026-11-16, Apple M3 Max at load near 2 and the idle Ryzen VM, against the commit before)
+
+- **Why.** Typed code had fixnums of 62 bits, overflow checked, so the tracer computed its xorshift64* random numbers
+  and its FNV-1a hash as 32-bit halves in bytes, much of its time. Words were to be ergonomic, in a
+  namespace of their own, and to stay in registers: they exist to compute, and leave as bytes or a fixnum.
+- **A word boxed as 8 bytes.** A boxed word is a byte buffer of 8, little-endian, so equality, hashing, printing
+  and images take it as they take bytes, and `word.get` and `word.set` are a load and a store. A heap type
+  of its own was weighed and left: all it would save is the box, which typed code makes only where a word leaves
+  its registers, and that is rare. Untyped code allocates for each operation.
+- **What.**
+  - One primitive, `shen-jit.word-op`, its operation named by a symbol, `wof`, `w+`, `wshr` and so on, so the port
+    adds one name, not twenty. `lib/word.shen`, module `word`, defines each function as one call of it, small
+    enough to inline anywhere; `word.set` is a copy of 8 bytes, `(shen-jit.copy-bytes B I W 0 8)`. Its namespace
+    shadows `+`, `-`, `*`, the comparisons, `get` and `set`, so a namespace that imports them reads `(+ A B)`.
+  - In the lowerer, a third kind, `bits`, a 64-bit word in a word register, beside `word`, a fixnum there: a
+    `word.t` parameter is read with `word-load64`, each operation is the word instruction that hand-written code
+    has, a comparison a `word-unless` jump, `word.to-fixnum` is `fix+` of the word and 0, which checks it, and a
+    word leaves as 8 new bytes, `shen-jit.bytes` and `word-store64`. No instruction is new.
+  - **Typed bodies at any depth.** The tracer rewritten with words was slower, 0.896 s against 0.725 on arm64:
+    `trace.path` had gone back to boxed code. Its `rnd.next`, a typed body with `let`s, now lay three levels below
+    it, past the inline depth of two, so it stayed a call, and code with a call keeps nothing in registers. A
+    typed body exists only where its own code calls nothing, and inlines only into code that keeps registers;
+    where it is sealed it cannot be redefined and was made after all it calls, so inlining it at any depth copies
+    no more than its own code held, and no cycle can form. Sealed typed bodies inline at any depth; loops stay
+    two levels deep. Of the typed benchmarks, only `trace.path` and n-body's `nb.steps` change (19 -> 228
+    instructions, 1.666 -> 1.672 ms over fifteen alternating rounds, the same); untyped code, the kernel's
+    lowered code among it, does not.
+  - The tracer keeps its random state and its hash as words.
+- **Measured,** alternating rounds, medians, the image's check equal: the tracer, arm64, five rounds, 0.73 -> 0.42 s,
+  against 0.34 to 0.35 by hand and 0.22 in C; x86-64, seven, 1.40 -> 0.71, against 0.55 by hand and 0.37 in C. The
+  numeric programs are unchanged on arm64, five rounds.
+- Tests: `tests/typed/words.shen`, a typed module over `word`, checked in `tests/typed.shen` against values worked
+  out apart: xorshift64* and its float, FNV-1a of "hello", a word stored and an unsigned comparison, the
+  instructions chosen and no `shen-jit.word-op` left in the loops, the same results untyped, and a helper of a
+  helper three levels into a loop, which keeps registers only with the depth rule. `make test-differential`
+  runs the primitive with the others: 21954798 checks.
+
+### Arrays of words, read by element (2026-11-16, Apple M3 Max, on one build)
+
+- **Why.** Arrays of 64-bit words were asked for with arrays of doubles: hash tables, bit sets and random states
+  keep words in arrays, and reading one at `(fx* I 8)` costs a checked product each time.
+- **What.** `lib/words.shen`, module `words`, in namespace `words`, as `floats` is: `words.t`, a byte buffer as
+  words, with `new`, `get`, `set`, `length`, `of-list`, `to-list`, `bytes` and `of-bytes`. Two lowered-only
+  instructions, `word-load-index` and `word-store-index`, read and write the word at an index of words, as
+  `float-load-index` does doubles, with the same check against the length in elements and the same kept length
+  in a loop. The lowerer takes `wget`, `shen-jit.s64!` and the 8-byte copy of `word.set` at X times 8 so.
+  `words.get` and `words.set` call the primitives themselves: written over `word.get`, the product was bound to
+  a variable by inlining before the access, which then read at it.
+- **Measured.** A typed loop xoring a million words, 200 times, on one build: 56 ms by element against 109 at the
+  product, `(word.get V (fx* I 8))`.
+- Tests in `tests/typed.shen`: a fold and a stepping loop over an array, their instructions, no product and no
+  primitive left, the same results untyped, and an index past the end, typed and untyped.
+
+### Floats truncated to fixnums (2026-11-16, Apple M3 Max, against the commit before)
+
+- **Why.** `numbers` had no conversion from a float to a fixnum, so the typed tracer found each byte of its image
+  by halving, eight compares, where C truncates; numeric code that bins, indexes a grid or makes a pixel needs one.
+- **What.** A primitive, `shen-jit.truncate`: a number truncated towards zero, a fixnum as it is, and a float
+  outside the fixnums, a NaN or an infinity among them, raising "integer overflow". `numbers` defines `fl->fx` as
+  it, beside `fx->fl`. In registers it is a lowered-only instruction, `fix-from-float`: two float compares with
+  the least fixnum and 2^61, which a NaN fails, a branch not taken to an out-of-line raise, then the conversion.
+  One compare of the magnitude would have refused the least fixnum, which then needed its own slow path. Not
+  folded when constant, as that would raise while compiling.
+- **Measured.** The tracer's bytes are made once a pixel, so its time is the same, 0.42 s on arm64, and its image's
+  check too; the source is shorter.
+- Tests in `tests/typed.shen`, in registers and through the primitive: truncation of positive and negative floats,
+  the least fixnum, a pixel's byte, and the raises for 1e300, 2^61, a NaN and a symbol; and in
+  `tests/kl/eval-cases.kl`.
+
+### Bytes counted in fixnums, and typed loops over buffer views in registers (2026-11-16 and 17, Apple M3 Max)
+
+Byte indices, lengths and limits use `fixnum` across the library boundaries that process them. They had used
+`number`, so a fractional byte index could typecheck and fail at runtime. Typed callers also boxed their
+loop counters and converted them at every access.
+
+- **Rejected: implicit subtyping and ordinary sums.** Widening `fixnum` to `number` increased the kernel's
+  12-program inference total from 1,853,050 to 2,136,098 and the time from 120 to 131 ms. Library clients
+  rose 7 to 26%. Widening floats too took 2,419,146 and 143 ms. Adding rules for sums, differences and products
+  gave each open binding two proofs. Four sums took 62,792 inferences and eight took over two minutes.
+  Guarding widening and excluding literals and sums kept the search manageable at 2,120,930 inferences,
+  but early sums still inferred as `number`. Distinct operators require no change to rule priority in the kernel.
+- **Kept: the typed buffer view.** Typed checks and accessors load before their consumers. Three million
+  `copy!` calls took 0.088 s against 0.104 on main and 0.236 with accessors loaded late. Encoding 360 KB of JSON
+  took 0.153 s against 0.20 on main and 0.29 with late accessors. Register lowering picks up typed numeric
+  fields and `bytes-length`, infers the kind of a branch whose sibling raises, and boxes error arguments
+  before formatting. Inlining the pointer tag test also avoids a C call on every access.
+- **Measured against the preceding build.** Over 100 scans of a 1 MiB view, three alternating rounds went
+  from 1.32–1.33 to 0.37 s with length saved, and 1.97–2.02 to 0.62 s with length read each round. Direct
+  storage access stayed at 0.042 s. Typechecking the accessors increased buffer load time from 16.8 to 20.0 ms
+  and client inferences by 3 to 8%. Numeric results and timings held, independent workloads stayed within
+  2%, and all 21,956,280 differential checks passed.
+- **Boundaries left in place.** A call to the shared storage check kept readers boxed; their hot path tests
+  storage directly. Raising through a helper also prevented loop lowering, so the accessors raise inline.
+  A typed `cond` failed on both hosts, so the storage check uses nested `if`s. Hoisting repeated view checks
+  remains an option because the fields are immutable and the loop does not call out.
+
+### Literals by expected kind, and `fx=` (2026-11-18, Apple M3 Max, on one executable)
+
+- **What.** The `fixnum` and `float` rules for a literal ("Numbers by operator, not by subtype", above) apply only
+  where that kind is expected, and an open literal follows the kernel's `number` rule, so a `let` that binds a
+  literal before its use writes `(fixnum 1)` or `(float 1.5)`. **Rejected: the rules applying where no type is
+  expected too,** which make an integer a `fixnum` as well as a `number`, so that a type error after open integer
+  payloads is searched for once for each choice. The filesystem copy counters take their type from a constructor
+  typed to give a vector of fixnums (the typed filesystem client 6,738 inferences), the HTTP head scanner's state
+  from a local type ascription, and the I/O guide writes `(type [] io.buffer-options)` for an empty options binding.
+  `fx=` gives both its operands an expected `fixnum`, where `=` and `element?` infer their arguments from left to
+  right.
+- **Measured.** With `result` and `numbers` loaded, six and eight rejected literal bindings took 6,725 and 10,517
+  inferences against 133,150 and 686,302; twenty report their error after 50,405 with `numbers` and 74,563 with
+  HTTP's server stack, where both reached the default limit. The grammar client took 12,663 against 12,793 and the
+  HTTP request client 7,146 against 7,166.
+- **The head scanner's state.** 8,000 HTTP head captures in 1,024- and 32-byte chunks: the state expression passed as
+  an argument took 24.21 and 62.65 ms against 22.96 and 61.39, and typing the existing local binding 23.04 and
+  61.06 against 23.05 and 61.40 (seven alternated runs). With `fx=` (11 alternated runs), a typed helper for the next
+  state took 27.15 and 65.92, the state as the recursive call's first argument 23.99 and 63.04, and the local
+  ascription 23.27 and 62.12, which stays.
+
+### A result library, and `let-ok` over `bind` (2026-11-16 to 18, Apple M3 Max)
+
+`result.let-ok` expands to `bind` with a typed continuation. Library-specific result types are synonyms for
+`result.t` with their own error types. Standalone `declare` must spell the expanded type because it runs
+before synonym expansion. The constructor and search decisions are recorded under "Managed structs".
+
+- **Rejected: results as lists.** The list proposal preserved untyped matches and took I/O clients within
+  5% of their old inference counts. It retained two-way rules, allocated two cons cells for one payload and
+  exposed the three-element type's unification with an arrow.
+- **Measured with list outcomes.** Over four alternating rounds a 1 KiB response sent to memory cost
+  1,108–1,135 ns before and 1,118–1,133 with `bind`. Sealed, it cost 1,054–1,078 and 1,067–1,093.
+  A 50-chunk response took 23.7–24.0 to 24.1–24.8 µs open, and 21.4–22.2 to 21.7–21.8 sealed.
+  Sealing lets the continuation inline where it is applied.
+
+### Left rules guarded by an occurs test, tried and left for later (2026-11-16, Apple M3 Max)
+
+Two-way result rules multiplied retries on malformed typed clients. An occurs guard cut the HTTP and two JSON
+cases from 13.7 million, 21.0 million and over 200 million inferences to 10,408, 13,462 and 51,647.
+Equality rejected nested patterns and a cut did not stop earlier structural alternatives. Generic rules
+reduced 35 clauses to seven and the `interpreter` client, after loading I/O libraries, from 787,654 to 455,535
+inferences (359,479 with no left rules). A kernel `lr-rule` guard reduced the 12-program total from
+1,853,050 to 1,533,113. Set aside because guards removed valid proofs involving expression premises,
+open subjects or a user rule reading the hypotheses with `ctxt`.
+
+### A subprocess's failure as one error (2026-11-16 and 18, Apple M3 Max)
+
+`process` uses `(:result.err (@p Error Reports))`. An early failure has an empty list and a single-child
+operation has one report, so typed clients can use `result.let-ok` throughout. Keeping the partial result
+alone would require a value for launch failures. Putting the reports in `io.error` would make a general I/O
+type carry process-specific data. The process and Tree-sitter application tests cover the new shape.
+
+### What modules and typed programs cost outside typed code (2026-11-17, Apple M3 Max, against main)
+
+- **Image and startup.** The image is 1,339,584 bytes against 1,179,472 (+14%), most of it the lowerer, whose
+  code is 458 KB against 200. A script of one expression starts in 4.57 ms against 4.43 (40 runs, three sets,
+  medians).
+- **Loading `buffer`** takes 18.8 ms against 10.8 (15 runs, three sets, medians), 8.4 of them for `numbers`, its
+  declarations and datatype, which `buffer` requires for its typed checks; the HTTP stack 99 against 88 (from the
+  review). Untyped callers gain nothing from the types: `buffer.u8` loaded `tc-` runs as fast, and its gain over
+  main comes from the checks written out in it. Not done: a typed buffer as a module of its own, or a cheaper
+  `declare`, more machinery than the 8 ms.
+- **Left as small.** A typed definition that calls a function other than on its way out is lowered with
+  registers, refused, and lowered again boxed: 150 of them load in 18.0 ms against 16.2 typed `number` (from the
+  review), about 12 µs each. `let-ok` when not sealed makes a closure at each step and calls `bind` behind its
+  inlining test: a chain of three, 10 million times, 166 ms against 92 for the old inline `io.let-ok`, and 105
+  sealed, a few ns a step beside the system calls such chains wait on. Applying the lambda in place there would
+  copy it into both the inlined body and the call behind the test, at each step of a chain, so a chain would
+  grow exponentially without a limit on size.
 
 ## C FFI
 

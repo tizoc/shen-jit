@@ -13,7 +13,7 @@ Install Tree-sitter's development package, version 0.25 or later, then build the
 
 ```sh
 make tree-sitter
-build/shen-jit eval -l lib/ffi.shen -l lib/buffer.shen -l lib/tree-sitter.shen -l program.shen
+build/shen-jit eval -m tree-sitter -l program.shen
 ```
 
 `pkg-config` finds an installed runtime. Alternatively, set `TREE_SITTER_CFLAGS` and `TREE_SITTER_LIBS`,
@@ -48,12 +48,12 @@ or C++ compiler; follow that grammar's build instructions. Distribute the chosen
 and their licenses with applications. Grammars are native executable code.
 
 Loading the facade never invokes a compiler. It searches `./build/`, `./lib/` and the current
-directory for `shen-tree-sitter.so` and `.dll`. Set `treesitter.*adapter-files*` before loading to
+directory for `shen-tree-sitter.so` and `.dll`, then the same from the executable's directory. Set `treesitter.*adapter-files*` before loading to
 use another location. The adapter ABI is 1. Fully static executables cannot load native bindings.
 
 ## Languages and parsing
 
-`(treesitter.load-language Name Files Entry)` returns `[ok Language]` or `[error Error]`. Name is a
+`(treesitter.load-language Name Files Entry)` returns `(:result.ok Language)` or `(:result.err Error)`. Name is a
 display string, Files is a nonempty list of shared-library paths to try, and Entry is the grammar's
 zero-argument C entry name. Missing libraries/symbols, null languages and incompatible grammar ABIs
 are structured errors. Load a language once and reuse it across files.
@@ -73,7 +73,7 @@ The language retains a reloadable FFI entry, with the grammar library kept loade
 does not retain a native pointer in a saved image. A restored image needs compatible libraries at
 its configured paths; every operation resolves its entry again and checks ABI compatibility.
 
-`(treesitter.parse Language Input Options)` returns `[ok Snapshot]` or `[error Error]`. Input is a
+`(treesitter.parse Language Input Options)` returns `(:result.ok Snapshot)` or `(:result.err Error)`. Input is a
 [byte view](buffers.md), including subviews and views over sized foreign memory. Parsing is UTF-8;
 NUL and malformed text are length-counted input, and can produce syntax-error nodes. No text decoding
 or newline normalization happens before parsing. Syntax errors return trees, not parse failures.
@@ -100,7 +100,7 @@ Keep each ID with its snapshot; a numeric ID alone cannot identify its owner.
 | `treesitter.child-by-field Snapshot ID Name` | First child with that field, or 0 |
 | `treesitter.kind Snapshot ID` | Grammar node kind, such as `"identifier"` |
 | `treesitter.field Snapshot ID` | Field linking this node to its parent; `""` when absent |
-| `treesitter.named?`, `missing?`, `error?`, `has-error?`, `extra?` | Flags, each taking Snapshot and ID |
+| `treesitter.named?`, `missing?`, `node-error?`, `has-error?`, `extra?` | Flags, each taking Snapshot and ID |
 | `treesitter.start-byte`, `end-byte` | Half-open byte range |
 | `treesitter.start-point`, `end-point` | `[Row Column]`, both zero-based; columns count bytes |
 | `treesitter.text Snapshot ID` | Copied source string for the range |
@@ -184,8 +184,9 @@ have no upstream progress callback, so the deadline cannot preempt those calls. 
 cross-thread cancellation API yet. The budget covers native analysis; Shen input normalization and
 managed result conversion/collection are outside its timed phase.
 
-Error accessors are `treesitter.error-operation`, `error-domain`, `error-code`, `error-offset`,
-`error-resource` and `error-message`. Domains are `foreign`, `native`, `language`, `query`, `predicate`,
+Use `treesitter.error?` to recognize an error value and a labelled pattern such as
+`(:treesitter.error operation <- Op ...)` to match it. Error accessors are `treesitter.error-operation`,
+`error-domain`, `error-code`, `error-offset`, `error-resource` and `error-message`. Domains are `foreign`, `native`, `language`, `query`, `predicate`,
 `limit` and `timeout`. Query error codes are upstream `TSQueryError` categories; offsets are bytes in
 the query, starting at zero. A language error's code records its rejected ABI when available.
 

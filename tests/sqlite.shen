@@ -55,8 +55,8 @@
 (sqlite-test.check "an integer" 42 (freeze (sqlite-test.round-trip 42)))
 (sqlite-test.check "a negative one" -42 (freeze (sqlite-test.round-trip -42)))
 (sqlite-test.check "a large one" 2305843009213693951 (freeze (sqlite-test.round-trip 2305843009213693951)))
-(sqlite-test.check "a real" 1.5 (freeze (sqlite-test.round-trip 1.5)))
-(sqlite-test.check "a real with no fraction" 7 (freeze (sqlite-test.round-trip (* 3.5 2))))
+(sqlite-test.check "a float" 1.5 (freeze (sqlite-test.round-trip 1.5)))
+(sqlite-test.check "a float with no fraction" 7 (freeze (sqlite-test.round-trip (* 3.5 2))))
 (sqlite-test.check "binding preserves integer and real storage classes"
   [["integer" "real" "real"]]
   (freeze (sqlite.query (db) "SELECT typeof(?), typeof(?), typeof(?)" [7 (+ 0.5 0.5) 1.5])))

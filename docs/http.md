@@ -5,26 +5,29 @@ The optional HTTP libraries implement a bounded HTTP/1.1 subset over our [I/O re
 are written in Shen, using byte views and the existing socket FFI. No kernel streams or C HTTP parser
 are involved.
 
-- [lib/http-request.shen](../lib/http-request.shen) parses complete request heads and reads bounded bodies.
-- [lib/http-response.shen](../lib/http-response.shen) encodes owned final-response bytes.
-- [lib/http-server.shen](../lib/http-server.shen) serves sequential requests on an owned connection under explicit bounds.
+- [lib/http/request.shen](../lib/http/request.shen) parses complete request heads and reads bounded bodies.
+- [lib/http/response.shen](../lib/http/response.shen) encodes owned final-response bytes.
+- [lib/http/server.shen](../lib/http/server.shen) serves sequential requests on an owned connection under explicit bounds.
 
-Pure parsing, memory bodies and encoding need `buffer.shen`, `io.shen`, [`grammar.shen`](grammar.md),
-`http-head.shen`, `http-request.shen` and `http-response.shen`; they also work in static builds. Load libraries with
-`(tc -)` before checking clients with `(tc +)`. Native serving additionally needs `ffi.shen`,
-`socket.shen`, `deadline.shen`, `clock.shen`, `io-socket.shen` and `http-server.shen`.
+Pure parsing, memory bodies and encoding need the module `http/response`, which loads `buffer`, `io`,
+[`grammar`](grammar.md), `http` and `http/request` first; they also work in static builds. Typed clients can
+load after them with `(tc +)`. Native serving needs the module `http/server`.
+
+Use `http.request.t` for chunk options and
+`http.response.t` for framing and response options. The server installs connection options
+in `http.server.t`, and the listener installs listener options and handler rules in
+`http.listener.t`. Each datatype can be selected with `include` and `preclude`.
 
 ## Parsing a complete head
 
 ```shen
 (let Head (buffer.from-string
             "POST /echo?q=%20 HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Content-Length: 3c#13;c#10;c#13;c#10;")
-     Result (http.parse-request Head 1024)
-     Request (hd (tl Result))
-  [(http.method Request) (http.target Request) (http.content-length Request)])
+  (result.let-ok Request (http.parse-request Head 1024)
+    [(http.method Request) (http.target Request) (http.content-length Request)]))
 ```
 
-This returns `[POST /echo?q=%20 3]`. Normal programs must match `[ok Request]` / `[error Error]`
+This returns `[POST /echo?q=%20 3]`. Normal programs must match `(:result.ok Request)` / `(:result.err Error)`
 before extracting a successful value. The input must contain exactly one complete head, including its
 final CRLFCRLF, with no body/trailing bytes. A logical subview works; metadata owns its strings and does
 not retain a mutable caller alias.
@@ -46,14 +49,18 @@ progress is zero. Invalid view/limit arguments and unexpected failures raise.
 
 `http.read-request Reader HeadLimit BodyLimit` reads a head from a reader as it arrives, without framing it
 first: the request line, the fields and the blank line are parsed in place, in the reader's buffer, with
-[a grammar](grammar.md#reading-as-input-arrives), and the body's bytes stay in the reader. It gives what
-`http.parse-request` gives for the same head, `[eof]` when the input ended before a head, and 431 for a head
-past HeadLimit, which must fit the reader's capacity. Outcomes use `(grammar.read-result http.request)`:
-`[ok Request]`, `[eof]` or `[error Error]`.
+[a grammar](grammar.md#reading-as-input-arrives), and the body's bytes stay in the reader.
+The return type is `(io.result (option.t http.request))`. A complete head gives `(:result.ok [Request])`,
+clean EOF gives `(:result.ok [])`, and errors give `(:result.err Error)` with the same statuses as
+`http.parse-request`. A head past HeadLimit gives 431. HeadLimit must fit the reader's capacity.
 
 The request type is opaque. Reading a body returns a new complete request; it does not mutate a parsed
 request or its metadata. Method and target remain case-sensitive. Targets are retained without percent
 decoding, path normalization or routing interpretation.
+
+In typed configurations, `http.from-chunk-option` and `http.from-response-option` return
+`http.option` for use with the server APIs. Settings written directly in a server option list
+are checked against that list's expected type.
 
 ## Supported syntax and framing policy
 
@@ -91,22 +98,22 @@ No close-delimited request body is inferred, and malformed framing is never repa
 ## Bounded bodies
 
 `http.body-reader Reader Request` borrows the same reader that produced the head.
-`http.read-body B` returns `[ok CompleteRequest]` or `[error Error]`. For fixed framing it allocates the
+`http.read-body B` returns `(:result.ok CompleteRequest)` or `(:result.err Error)`. For fixed framing it allocates the
 already bounded Content-Length once and fills it through short reads; zero length needs no transport probe.
 For chunked framing it checks each hexadecimal size against the remaining decoded-body bound before
 allocating that chunk, and appends payloads to bounded geometric storage. The next
 request or other following bytes remain unread. Returned body bytes are owned and can contain NUL or 255.
 
 ```shen
-(let Request (hd (tl (http.parse-request
-                (buffer.from-string "POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Content-Length: 3c#13;c#10;c#13;c#10;") 3)))
+(let Head (buffer.from-string "POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Content-Length: 3c#13;c#10;c#13;c#10;")
      E (io.input-buffer (buffer.from-string "abcNEXT"))
      R (io.reader E [[chunk-size 1]])
-     B (http.body-reader R Request)
-     Complete (hd (tl (http.read-body B)))
-     Remaining (hd (tl (io.read-all R 4)))
+     Result (result.let-ok Q (http.parse-request Head 3)
+                           Complete (http.read-body (http.body-reader R Q))
+                           Remaining (io.read-all R 4)
+              [(buffer.string (http.body Complete)) (buffer.string Remaining)])
      _ (io.close E)
-  [(buffer.string (http.body Complete)) (buffer.string Remaining)])
+  Result)
 ```
 
 This returns `[abc NEXT]`. A body reader remembers its first result, including failure, so repeated calls
@@ -127,14 +134,15 @@ an accessor only on the completed request; original wire headers are retained, w
 Content-Length field. `http.chunked?` remains true on that completed request.
 
 ```shen
-(let Q (hd (tl (http.parse-request
-                 (buffer.from-string "PUT / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Transfer-Encoding: chunkedc#13;c#10;c#13;c#10;") 16)))
+(let Head (buffer.from-string "PUT / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Transfer-Encoding: chunkedc#13;c#10;c#13;c#10;")
      E (io.input-buffer (buffer.from-string "3;note=yesc#13;c#10;abcc#13;c#10;0c#13;c#10;X-Check: okc#13;c#10;c#13;c#10;NEXT"))
      R (io.reader E [])
-     Full (hd (tl (http.read-body (http.body-reader R Q))))
-     Tail (hd (tl (io.read-all R 4)))
+     Result (result.let-ok Q (http.parse-request Head 16)
+                           Full (http.read-body (http.body-reader R Q))
+                           Tail (io.read-all R 4)
+              [(buffer.string (http.body Full)) (http.trailers Full) (buffer.string Tail)])
      _ (io.close E)
-  [(buffer.string (http.body Full)) (http.trailers Full) (buffer.string Tail)])
+  Result)
 ```
 
 This yields body `abc`, trailer `[["x-check" "ok"]]` and remainder `NEXT`. Sizes use overflow-checked hex;
@@ -178,10 +186,10 @@ alive and stable until encoding. `http.encode-response Request Response HeadLimi
 the description and returns independent wire bytes. All validation happens before any network write.
 
 ```shen
-(let Request (hd (tl (http.parse-request
-                (buffer.from-string "HEAD / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;") 0)))
+(let Head (buffer.from-string "HEAD / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;")
      Response (http.response 200 [["Content-Type" "text/plain"]] (buffer.from-string "hello"))
-  (buffer.string (http.encode-response Request Response 4096 1024)))
+  (result.let-ok Request (http.parse-request Head 0)
+    (buffer.string (http.encode-response Request Response 4096 1024))))
 ```
 
 This encodes a five-byte representation's Content-Length and sends no body bytes because the method is
@@ -207,8 +215,8 @@ If a usable clock is unavailable the driver omits it.
 `http.serve-one Endpoint Handler Options` adopts a valid owned socket endpoint. Handler receives one
 complete request and returns an `http.response`. It can perform application work but must not write
 response bytes itself. The driver reads the full bounded body before calling it, writes one final response,
-and closes on every exit. Clean EOF before a head returns `[ok 0]`; a successful response returns `[ok WireBytes]`.
-Rejections remain `[error Error]` even when an error response was sent successfully.
+and closes on every exit. Clean EOF before a head returns `(:result.ok 0)`; a successful response returns `(:result.ok WireBytes)`.
+Rejections remain `(:result.err Error)` even when an error response was sent successfully.
 
 | Option | Default |
 | --- | --- |
@@ -246,9 +254,7 @@ when rejection closes with unread native input; error-response delivery is best 
 methods, and lets the encoder implement HEAD. Load the native libraries and run one connection:
 
 ```sh
-shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
-  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/grammar.shen \
-  -l lib/http-head.shen -l lib/http-request.shen -l lib/http-response.shen -l lib/http-server.shen \
+shen-jit eval -m http/server \
   -l tools/http-echo.shen -l one-request.shen
 ```
 
@@ -273,7 +279,7 @@ It retains one bounded reader across messages, so pipelined bytes survive withou
 message boundaries. The full bounded request body is decoded before each handler call; there is no
 unread-body drain policy or concurrent dispatch within a connection. Fixed and
 [streaming responses](http-streaming.md) are both accepted. Clean EOF and successful connection completion
-return `[ok TotalWireBytes]`; any failure ends the connection and returns `[error Error]`.
+return `(:result.ok TotalWireBytes)`; any failure ends the connection and returns `(:result.err Error)`.
 
 | Additional option | Default | Meaning |
 | --- | --- | --- |

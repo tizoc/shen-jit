@@ -7,12 +7,12 @@
          N (io.min 3 (shen-jit.bytes-length Bytes))
          _ (shen-jit.copy-bytes (buffer.owner Output) At Bytes 0 N)
          _ (address-> State 0 (+ At N))
-      [written N]))
+      (:result.ok N)))
 
 (define curl-stream.close
   State Fail ->
     (do (address-> State 1 (+ (<-address State 1) 1))
-        (if Fail [error (io.native-error close fixture 19 "sink" "close failed")] [ok])))
+        (if Fail (:result.err (io.native-error close fixture 19 "sink" "close failed")) (:result.ok []))))
 
 (define curl-stream.short-sink
   State Output ->
@@ -24,11 +24,11 @@
     (let At (<-address State 0)
          N (io.min (- Limit At) (shen-jit.bytes-length Bytes))
       (if (= N 0)
-          (cond ((= Mode zero) [written 0])
+          (cond ((= Mode zero) (:result.ok 0))
                 ((= Mode throw) (error "sink threw"))
-                ((= Mode malformed) [written 999999])
-                (true [error (io.native-error write fixture 17 "sink" "sink failed")]))
-          (do (address-> State 0 (+ At N)) [written N]))))
+                ((= Mode malformed) (:result.ok 999999))
+                (true (:result.err (io.native-error write fixture 17 "sink" "sink failed"))))
+          (do (address-> State 0 (+ At N)) (:result.ok N)))))
 
 (define curl-stream.failing-sink
   State Limit Mode CloseFail ->
@@ -74,7 +74,7 @@
      State (io.record [0 0])
      Sink (curl-stream.failing-sink State 137 error true)
      Error (curl-test.error (curl.request-with-sink C "GET" (curl-test.url "/binary") [] (buffer.new 0)
-                             (/. Head [ok Sink]) [[proxy ""]]))
+                             (/. Head (:result.ok Sink)) [[proxy ""]]))
      Again (curl-test.ok (curl-test.get C "/binary" []))
      _ (curl.close C)
   (do (curl-test.check "owned sink closes after failure" 1 (freeze (<-address State 1)))
@@ -88,7 +88,7 @@
      State (io.record [0 0])
      Sink (curl-stream.failing-sink State 2048 error true)
      Error (curl-test.error (curl.request-with-sink C "GET" (curl-test.url "/binary") [] (buffer.new 0)
-                             (/. Head [ok Sink]) [[proxy ""]]))
+                             (/. Head (:result.ok Sink)) [[proxy ""]]))
      _ (curl.close C)
   (do (curl-test.check "close failure after successful body" 19 (freeze (io.error-code Error)))
       (curl-test.check "close failure keeps total written" 1024 (freeze (io.error-progress Error)))
@@ -106,7 +106,7 @@
      State (io.record [0 0])
      Sink (curl-stream.failing-sink State 4096 error false)
      Opened (io.record [0 []])
-     Open (/. Head (do (address-> Opened 0 (+ (<-address Opened 0) 1)) (address-> Opened 1 Head) [ok Sink]))
+     Open (/. Head (do (address-> Opened 0 (+ (<-address Opened 0) 1)) (address-> Opened 1 Head) (:result.ok Sink)))
      R (curl-test.ok (curl.request-with-sink C "GET" (curl-test.url "/redirect") [] (buffer.new 0) Open
                       [[proxy ""] [redirect-limit 2]]))
      _ (curl.close C)
@@ -126,7 +126,7 @@
      Limit (curl-test.error (curl.request-to C "GET" (curl-test.url "/binary") [] (buffer.new 0) Sink
                              [[proxy ""] [body-limit 16]]))
      Rejected (curl-test.error (curl.request-with-sink C "GET" (curl-test.url "/error") [] (buffer.new 0)
-                                (/. Head [error (io.native-error download http (curl.status Head) "URL" "rejected")])
+                                (/. Head (:result.err (io.native-error download http (curl.status Head) "URL" "rejected")))
                                 [[proxy ""]]))
      Throw (curl-test.error (curl.request-with-sink C "GET" (curl-test.url "/binary") [] (buffer.new 0)
                              (/. Head (error "opener threw")) [[proxy ""]]))
@@ -146,7 +146,7 @@
      State (io.record [0 0])
      Sink (curl-stream.failing-sink State 0 error false)
      R (curl-test.ok (curl.request-with-sink C "HEAD" (curl-test.url "/binary") [] (buffer.new 0)
-                      (/. Head [ok Sink]) [[proxy ""] [body-limit 0]]))
+                      (/. Head (:result.ok Sink)) [[proxy ""] [body-limit 0]]))
      _ (curl.close C)
   (do (curl-test.check "empty body still opens and closes sink" 1 (freeze (<-address State 1)))
       (curl-test.check "empty streamed body has length zero" 0 (freeze (curl.body-length R)))

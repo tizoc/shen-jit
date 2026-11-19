@@ -2,10 +2,11 @@
 \\ Load ffi/socket/buffer/io/deadline/clock/io-socket/http-head first. This sends no HTTP response.
 
 (shen.x.namespace http-head
+  (import result ok err)
   (use clock)
   (use http)
   (use io)
-  (externals [eof http-head ok])
+  (externals [http-head])
 
 (define capture
   E Limit Milliseconds ->
@@ -17,8 +18,8 @@
           (capture-result (http.read-head-until F D))))))
 
 (define capture-result
-  [head V] -> [ok V]
-  [error Error] -> [error Error]
-  [eof] -> [error (io.error http-head "HTTP head" "connection ended before a head")])
+  (:ok [V]) -> (:ok V)
+  (:err Error) -> (:err Error)
+  (:ok []) -> (:err (io.error http-head "HTTP head" "connection ended before a head")))
 
 )

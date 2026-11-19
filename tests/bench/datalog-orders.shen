@@ -1,6 +1,6 @@
 \* What the order of a rule's atoms costs, under fixed plans and plans made from sizes as it runs.
    Each program comes in more than one order: the same rules with the atoms in another order.
-   Usage: shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/bench/datalog.shen -l tests/bench/datalog-orders.shen -e '(do.run chain-a true)' *\
+   Usage: shen-jit eval -m datalog -l tests/bench/datalog.shen -l tests/bench/datalog-orders.shen -e '(do.run chain-a true)' *\
 
 \* A chain of joins where one relation is small, written from either end. *\
 (define do.chain-items

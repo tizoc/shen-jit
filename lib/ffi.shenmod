@@ -1,0 +1,4 @@
+(shen.module
+  (version 1)
+  (name ffi)
+  (sources tc- "ffi.shen"))

@@ -19,7 +19,7 @@
 (buffer-test.check "empty at the end" ""
   (freeze (buffer.string (buffer.slice (buffer.from-string "abc") 3 0))))
 (buffer-test.raises "negative size" (freeze (buffer.new -1)))
-(buffer-test.raises "real size" (freeze (buffer.new (+ 0.5 0.5))))
+(buffer-test.raises "float size" (freeze (buffer.new (+ 0.5 0.5))))
 (buffer-test.raises "wrong storage" (freeze (buffer.wrap "abc")))
 (buffer-test.check "not a view" false (freeze (buffer.view? (absvector 0))))
 (buffer-test.raises "not a view operation" (freeze (buffer.length [])))
@@ -32,7 +32,7 @@
       (buffer-test.raises "parent bound" (freeze (buffer.slice V 1 3)))
       (buffer-test.raises "view read bound" (freeze (buffer.u8 V 3)))
       (buffer-test.raises "negative index" (freeze (buffer.u8 V -1)))
-      (buffer-test.raises "integral real index" (freeze (buffer.u8 V (+ 0.5 0.5))))
+      (buffer-test.raises "integral float index" (freeze (buffer.u8 V (+ 0.5 0.5))))
       (buffer-test.raises "negative count" (freeze (buffer.slice V 0 -1)))
       (buffer-test.raises "count overflow" (freeze (buffer.slice V 1 2305843009213693951)))
       (buffer-test.raises "invalid byte" (freeze (buffer.u8! V 1 256)))
@@ -78,7 +78,7 @@
       (buffer-test.raises "failed capture" (freeze (cursor.string C 6)))
       (buffer-test.raises "failed skip" (freeze (cursor.skip C 6)))
       (buffer-test.raises "failed seek" (freeze (cursor.seek C 7)))
-      (buffer-test.raises "real skip" (freeze (cursor.skip C (+ 0.5 0.5))))
+      (buffer-test.raises "float skip" (freeze (cursor.skip C (+ 0.5 0.5))))
       (buffer-test.check "failed movement leaves position" 1 (freeze (cursor.position C)))
       (let Fork (cursor.fork C)
         (do (cursor.skip Fork 2)
@@ -107,5 +107,15 @@
               (freeze (buffer.string (buffer.slice (buffer.slice (buffer.wrap Owner) 1 6) Start Count))))
             (buffer-test.subranges Owner Start (+ Count 1)))))
 (buffer-test.subranges (shen-jit.string->bytes "!abcdef?") 0 0)
+
+\\ buffer.shen's operations call the typed checks of a file read before them, so each call knows
+\\ the arity of what it calls and tests nothing for it.
+(define buffer-test.tests-arity?
+  [shen-jit.arity? | _] -> true
+  [X | Y] -> (or (buffer-test.tests-arity? X) (buffer-test.tests-arity? Y))
+  _ -> false)
+(buffer-test.check "calls of the checks know their arities" [false false false false]
+  (freeze (map (/. F (buffer-test.tests-arity? (shen-jit.code F)))
+               [buffer.slice buffer.copy! buffer.append! buffer.append-byte!])))
 
 (output "~A passed, ~A failed~%" (value buffer-test.*passed*) (value buffer-test.*failed*))

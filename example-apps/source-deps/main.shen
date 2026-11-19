@@ -1,6 +1,3 @@
-(let Quiet (hush?)
-     _ (hush +)
-     _ (load "example-apps/source-deps/load.shen")
-  (set *hush* Quiet))
+(module.load "example-apps/source-deps/source-deps.shenmod")
 
 (source-deps.entry)

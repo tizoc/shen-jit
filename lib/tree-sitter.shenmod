@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name tree-sitter)
+  (requires ffi buffer result)
+  (sources tc- "tree-sitter.shen" tc+ "tree-sitter-typed.shen"))

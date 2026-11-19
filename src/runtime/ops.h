@@ -31,27 +31,27 @@
     X(OP_INLINE, "inline", 2)                 \
     X(OP_LOOP, "loop", 1)                     \
     X(OP_AGAIN, "again", 1)                   \
-    X(OP_REAL_NUMBER, "real-number", 2)       \
-    X(OP_REAL_BOX, "real-box", 2)             \
-    X(OP_REAL_MOVE, "real-move", 2)           \
-    X(OP_REAL_NEG, "real-neg", 2)             \
-    X(OP_REAL_ABS, "real-abs", 2)             \
-    X(OP_REAL_SQRT, "real-sqrt", 2)           \
-    X(OP_REAL_ADD, "real+", 3)                \
-    X(OP_REAL_SUB, "real-", 3)                \
-    X(OP_REAL_MUL, "real*", 3)                \
-    X(OP_REAL_DIV, "real/", 3)                \
-    X(OP_REAL_UNLESS_LT, "real-unless<", 3)   \
-    X(OP_REAL_UNLESS_GT, "real-unless>", 3)   \
-    X(OP_REAL_UNLESS_LE, "real-unless<=", 3)  \
-    X(OP_REAL_UNLESS_GE, "real-unless>=", 3)  \
-    X(OP_REAL_UNLESS_EQ, "real-unless=", 3)   \
-    X(OP_REAL_LOAD, "real-load", 3)           \
-    X(OP_REAL_STORE, "real-store", 3)         \
-    X(OP_REAL_LOAD_AT, "real-load-at", 3)     \
-    X(OP_REAL_STORE_AT, "real-store-at", 3)   \
-    X(OP_REAL_FROM_WORD, "real-from-word", 2) \
-    X(OP_WORD_FROM_REAL, "word-from-real", 2) \
+    X(OP_FLOAT_NUMBER, "float-number", 2)       \
+    X(OP_FLOAT_BOX, "float-box", 2)             \
+    X(OP_FLOAT_MOVE, "float-move", 2)           \
+    X(OP_FLOAT_NEG, "float-neg", 2)             \
+    X(OP_FLOAT_ABS, "float-abs", 2)             \
+    X(OP_FLOAT_SQRT, "float-sqrt", 2)           \
+    X(OP_FLOAT_ADD, "float+", 3)                \
+    X(OP_FLOAT_SUB, "float-", 3)                \
+    X(OP_FLOAT_MUL, "float*", 3)                \
+    X(OP_FLOAT_DIV, "float/", 3)                \
+    X(OP_FLOAT_UNLESS_LT, "float-unless<", 3)   \
+    X(OP_FLOAT_UNLESS_GT, "float-unless>", 3)   \
+    X(OP_FLOAT_UNLESS_LE, "float-unless<=", 3)  \
+    X(OP_FLOAT_UNLESS_GE, "float-unless>=", 3)  \
+    X(OP_FLOAT_UNLESS_EQ, "float-unless=", 3)   \
+    X(OP_FLOAT_LOAD, "float-load", 3)           \
+    X(OP_FLOAT_STORE, "float-store", 3)         \
+    X(OP_FLOAT_LOAD_AT, "float-load-at", 3)     \
+    X(OP_FLOAT_STORE_AT, "float-store-at", 3)   \
+    X(OP_FLOAT_FROM_WORD, "float-from-word", 2) \
+    X(OP_WORD_FROM_FLOAT, "word-from-float", 2) \
     X(OP_WORD_NUMBER, "word-number", 2)       \
     X(OP_WORD_BOX, "word-box", 2)             \
     X(OP_WORD_MOVE, "word-move", 2)           \
@@ -83,7 +83,23 @@
     X(OP_WORD_STORE8, "word-store8", 3)       \
     X(OP_WORD_STORE16, "word-store16", 3)     \
     X(OP_WORD_STORE32, "word-store32", 3)     \
-    X(OP_WORD_STORE64, "word-store64", 3)
+    X(OP_WORD_STORE64, "word-store64", 3)     \
+    X(OP_FIX_ADD, "fix+", 3)                  \
+    X(OP_FIX_SUB, "fix-", 3)                  \
+    X(OP_FIX_MUL, "fix*", 3)                  \
+    X(OP_FLOAT_CALL1, "float-call1", 3)         \
+    X(OP_FLOAT_CALL2, "float-call2", 4)         \
+    X(OP_FLOAT_CALL3, "float-call3", 5)         \
+    X(OP_FLOAT_DIVIDE, "float-divide", 3)       \
+    X(OP_FLOAT_LOAD_INDEX, "float-load-index", 3) \
+    X(OP_FLOAT_STORE_INDEX, "float-store-index", 3) \
+    X(OP_FIX_STORE8, "fix-store8", 3)         \
+    X(OP_FIX_STORE16, "fix-store16", 3)       \
+    X(OP_FIX_STORE32, "fix-store32", 3)       \
+    X(OP_FIX_STORE_S32, "fix-store-s32", 3)   \
+    X(OP_FIX_FROM_FLOAT, "fix-from-float", 2) \
+    X(OP_WORD_LOAD_INDEX, "word-load-index", 3) \
+    X(OP_WORD_STORE_INDEX, "word-store-index", 3)
 
 enum {
 #define SJ_OP_ENUM(op, name, n) op,
@@ -100,35 +116,35 @@ static inline size_t insn_length(const uint32_t *p)
         SJ_OPCODES(SJ_OP_FIXED)
 #undef SJ_OP_FIXED
     };
-    if (p[0] == OP_CLOSURE || p[0] == OP_PRIM || p[0] == OP_REAL_LOAD || p[0] == OP_REAL_STORE)
+    if (p[0] == OP_CLOSURE || p[0] == OP_PRIM || p[0] == OP_FLOAT_LOAD || p[0] == OP_FLOAT_STORE)
         return 4 + p[3];
     return 1 + fixed[p[0]];
 }
 
 /* The registers of code written by hand (docs/bytecode.md). */
-#define REAL_REGISTERS 48
+#define FLOAT_REGISTERS 64
 #define WORD_REGISTERS 16
 
 /* What each operand of the instructions on them is: s a slot written, o a slot or constant read,
-   r a real register, w a word register written, W a word register or constant read, l a label jumped
+   r a float register, w a word register written, W a word register or constant read, l a label jumped
    to on a test, h a loop's head, which defines a label, b a label jumped back to.
-   real-load and real-store are laid out as prim is, with the real register first. */
+   float-load and float-store are laid out as prim is, with the float register first. */
 static inline const char *raw_kinds(unsigned op)
 {
     switch (op) {
     case OP_LOOP: return "h";
     case OP_AGAIN: return "b";
-    case OP_REAL_NUMBER: return "ro";
-    case OP_REAL_BOX: return "sr";
-    case OP_REAL_MOVE: case OP_REAL_NEG: case OP_REAL_ABS: case OP_REAL_SQRT: return "rr";
-    case OP_REAL_ADD: case OP_REAL_SUB: case OP_REAL_MUL: case OP_REAL_DIV: return "rrr";
-    case OP_REAL_UNLESS_LT: case OP_REAL_UNLESS_GT: case OP_REAL_UNLESS_LE: case OP_REAL_UNLESS_GE:
-    case OP_REAL_UNLESS_EQ: return "rrl";
-    case OP_REAL_LOAD: case OP_REAL_STORE: return "r";
-    case OP_REAL_LOAD_AT: return "roW";
-    case OP_REAL_STORE_AT: return "oWr";
-    case OP_REAL_FROM_WORD: return "rW";
-    case OP_WORD_FROM_REAL: return "wr";
+    case OP_FLOAT_NUMBER: return "ro";
+    case OP_FLOAT_BOX: return "sr";
+    case OP_FLOAT_MOVE: case OP_FLOAT_NEG: case OP_FLOAT_ABS: case OP_FLOAT_SQRT: return "rr";
+    case OP_FLOAT_ADD: case OP_FLOAT_SUB: case OP_FLOAT_MUL: case OP_FLOAT_DIV: case OP_FLOAT_DIVIDE: return "rrr";
+    case OP_FLOAT_UNLESS_LT: case OP_FLOAT_UNLESS_GT: case OP_FLOAT_UNLESS_LE: case OP_FLOAT_UNLESS_GE:
+    case OP_FLOAT_UNLESS_EQ: return "rrl";
+    case OP_FLOAT_LOAD: case OP_FLOAT_STORE: return "r";
+    case OP_FLOAT_LOAD_AT: case OP_FLOAT_LOAD_INDEX: return "roW";
+    case OP_FLOAT_STORE_AT: case OP_FLOAT_STORE_INDEX: return "oWr";
+    case OP_FLOAT_FROM_WORD: return "rW";
+    case OP_WORD_FROM_FLOAT: return "wr";
     case OP_WORD_NUMBER: return "wo";
     case OP_WORD_BOX: return "sW";
     case OP_WORD_MOVE: return "wW";
@@ -138,8 +154,15 @@ static inline const char *raw_kinds(unsigned op)
     case OP_WORD_UNLESS_EQ: case OP_WORD_UNLESS_ULT: case OP_WORD_UNLESS_UGT: case OP_WORD_UNLESS_ULE:
     case OP_WORD_UNLESS_UGE: return "WWl";
     case OP_WORD_LOAD8: case OP_WORD_LOAD16: case OP_WORD_LOAD32: case OP_WORD_LOAD_S32: case OP_WORD_LOAD64:
+    case OP_WORD_LOAD_INDEX:
         return "woW";
-    case OP_WORD_STORE8: case OP_WORD_STORE16: case OP_WORD_STORE32: case OP_WORD_STORE64: return "oWW";
+    case OP_WORD_STORE8: case OP_WORD_STORE16: case OP_WORD_STORE32: case OP_WORD_STORE64: case OP_WORD_STORE_INDEX:
+    case OP_FIX_STORE8: case OP_FIX_STORE16: case OP_FIX_STORE32: case OP_FIX_STORE_S32: return "oWW";
+    case OP_FIX_ADD: case OP_FIX_SUB: case OP_FIX_MUL: return "wWW";
+    case OP_FIX_FROM_FLOAT: return "wr";
+    case OP_FLOAT_CALL1: return "rfr";
+    case OP_FLOAT_CALL2: return "rfrr";
+    case OP_FLOAT_CALL3: return "rfrrr";
     default: return NULL;
     }
 }
@@ -182,7 +205,7 @@ static inline size_t bytecode_unpack(const uint8_t *in, size_t n, uint32_t *w)
 }
 
 /* Primitive operands index the primitive table (prims.c, same order);
-   raise-cond follows it. */
+   raise-cond and shen-jit.field, which only the lowerer emits, follow it. */
 enum Prim {
     P_ADD, P_SUB, P_MUL, P_DIV, P_LT, P_GT, P_LE, P_GE, P_EQ, P_NUMBERP,
     P_CONS, P_HD, P_TL, P_CONSP, P_CN, P_POS, P_TLSTR, P_STR, P_STRINGP,
@@ -200,7 +223,7 @@ enum Prim {
     P_DICT_FIND, P_DICT_PUT, P_DICT_REMOVE, P_DICT_ENTRIES, /* native dictionaries */
     P_TAGGEDP, /* shen-jit.tagged?: an absvector whose element 0 is a given symbol */
     P_SEALEDP, /* shen-jit.sealed?: whether calls to a name may be sealed */
-    P_SEALING, /* shen-jit.sealing: turns sealing of new definitions on or off */
+    P_SEALING, /* shen-jit.sealing: turns sealing of new definitions on or off, or unseals a name */
     P_INLINE_BODY, /* shen-jit.inline-body: (Params Body) of a small definition, or [] */
     P_VECTORP, /* shen-jit.vector?: the kernel's vector?, without its trap-error */
     P_ABSVECTOR3, /* shen-jit.absvector3: a new absvector of three given values */
@@ -238,9 +261,19 @@ enum Prim {
     P_FUNCTION,  /* shen-jit.function: the procedure a name has now, inline (jit.c) */
     P_APPLY,     /* shen-jit.apply: calls a name's procedure, or a procedure, with a list */
     P_ISOLATE,   /* shen-jit.isolate: spawning, channels, monitors and kill (isolate.c) */
+    P_FLOAT,     /* shen-jit.float: a number as a float, which the lowerer reads into a float register */
+    P_SQRT,      /* shen-jit.sqrt: a number's square root, a float; float-sqrt in a float register */
+    P_QUOTIENT, P_REMAINDER, /* shen-jit.quotient and remainder: of two fixnums, truncating */
+    P_WORD_OP,   /* shen-jit.word-op: 64-bit words, boxed as 8 bytes (lib/word.shen) */
+    P_TRUNCATE,  /* shen-jit.truncate: a number truncated to a fixnum; fix-from-float in registers */
+    P_STRUCT_REF, /* shen-jit.struct-ref: a struct's field, the struct tested once for a slot (jit.c) */
     P_COUNT
 };
 #define PRIM_RAISE_COND P_COUNT
+/* (prim D shen-jit.field O (const K)): element K of the vector in O, read with no check, where
+   typechecked code calls a struct's reader (docs/bytecode.md). Not a function, and the checker of
+   hand-written code refuses it; with a K that is not a constant, it reads as <-address does. */
+#define PRIM_FIELD (P_COUNT + 1)
 
 bool sj_equal_at(V a, V b, unsigned depth);
 /* Keep the ordinary entry in the caller: no extra out-of-line wrapper before

@@ -14,12 +14,12 @@ checkout's own workflow, and git ignores it.
 | Path | Contents |
 | --- | --- |
 | `src/runtime/` | The C runtime: values and objects, collector, image, primitives, reader, loader, JIT, profiler, and the executable (`main.c`) |
-| `src/lowerer/` | The lowerer (`lower.shen`) and the stage 0 tools; see [src/lowerer/README.md](src/lowerer/README.md) |
-| `src/port/` | Port code: overrides, the `shen-jit.*` functions, and the `defstruct` source extension |
+| `src/lowerer/` | The lowerer, `lower.shen` and the files its header lists, and the stage 0 tools; see [src/lowerer/README.md](src/lowerer/README.md) |
+| `src/port/` | Port code: overrides, the `shen-jit.*` functions, the `defstruct` source extension and the module loader |
 | `docs/` | The guide's source, and how it works |
 | `site/` | What renders the guide: pandoc's template and a filter |
 | `include/` | `shen.h`, for C written for Shen |
-| `lib/` | Libraries that are not in the default image, loaded on request: `native.shen`, native code written by hand and the rules bytecode is checked against, `ffi.shen`, calling C, and `memory.shen`, `mmap.shen`, `sqlite.shen` and `socket.shen` over it, `handle.shen`, which releases memory once nothing reaches it, `datalog.shen`, relations and recursive rules, over `native.shen`, `buffer.shen` and `cursor.shen`, views over bytes, `grammar.shen`, parsers over those, I/O over those (`io.shen`, `io-file.shen`, `io-socket.shen`, `frame.shen`, `deadline.shen` and `clock.shen`), HTTP/1.1 over that (`http-*.shen`), `json.shen`, and `parallel.shen`, a map over isolates |
+| `lib/` | Libraries that are not in the default image, loaded on request as modules, each described by a `.shenmod` file beside it ([docs/modules.md](docs/modules.md)): `native.shen`, native code written by hand and the rules bytecode is checked against, `ffi.shen`, calling C, and `memory.shen`, `mmap.shen`, `sqlite.shen` and `socket.shen` over it, `handle.shen`, which releases memory once nothing reaches it, `datalog.shen`, relations and recursive rules, over `native.shen`, `buffer.shen`, with `buffer-view.shen`, its struct, and `buffer-typed.shen`, its typed checks, and `cursor.shen`, views over bytes, `grammar.shen`, parsers over those, I/O over those (`io/`, `frame.shen`, `deadline.shen` and `clock.shen`), with its results from `result.shen`, HTTP/1.1 over that (`http/`), `json.shen`, `parallel.shen`, a map over isolates, `numbers.shen`, fixnum and float types for typed code, `floats.shen`, arrays of doubles over it, `word.shen`, 64-bit words for it, and `words.shen`, arrays of them |
 | `tools/` | Scripts: `stlib.shen` writes the executable of `make stlib`, `ci-deps.sh` fetches the kernel, the earlier release that builds this one and Shen/Scheme, `package.sh` makes a release archive, `release-notes.sh` prints a version's section of the changelog, `tree-sitter-deps.sh` fetches the pinned Tree-sitter runtime and C grammar, and `buffer-parsers.shen`, `frame-echo.shen`, `http-echo.shen`, `http-head-capture.shen`, `fs-copy.shen`, `process-filter.shen` and `curl-fetch.shen` are small examples over the libraries |
 | `example-apps/` | Runnable applications built over the public libraries, each with its own README and independent test: `sqlite-http` over HTTP and SQLite, `depends` over Datalog, `source-facts`, C source facts from Tree-sitter, and `source-deps`, those facts in Datalog |
 | `assets/` | The logos and icons |
@@ -32,7 +32,7 @@ C API. `make curl` builds it; `lib/build-curl.sh` also builds it from a binary r
 `lib/fs.shen` adds paths, metadata, bounded traversal, temporary files and replacement over the I/O
 library. `make fs` builds its platform-layout adapter, `lib/fs.c`, with only the system C library.
 
-`lib/process.shen` and `lib/process-io.shen` add child processes, bounded pipe I/O and pipelines.
+`lib/process/` adds child processes, bounded pipe I/O and pipelines.
 `make process` builds their adapter; `make test-process` needs a C compiler and Python 3. Static Linux
 runs the pure checks and skips native work before compiling adapters or starting child fixtures.
 
@@ -49,8 +49,10 @@ the pinned runtime/C grammar for tests; loading or testing never downloads them 
 - Niklaus Wirth's rule applies: "Generate good code for the frequent case; don't optimize the exceptional case."
   A pathological case must work correctly, but it doesn't need to be fast, and it doesn't get complexity or size.
 - Libraries outside the default image go in `lib/`, and scripts in `tools/`.
-- A library's datatype rules are one `(datatype t ...)`, which its namespace makes `<namespace>.t`. In a namespace
-  spread over several files it goes in the file the others load first, as a second `t` would replace it.
+- Keep handwritten datatype rules with the module that provides their API. Use a distinct name
+  when modules share a namespace, such as `io.file.t` or `http.request.t`, since a second
+  definition under the same name replaces the first. Each library outcome family has its own datatype. Typed structs and
+  members declared with `struct.union` have separate generated datatypes.
 - The standard library (stlib) stays out of the default image: `make stlib` builds an executable with it,
   from the kernel's `klambda/stlib.kl`.
 
@@ -66,7 +68,7 @@ A commit message says what changed and what it measured.
 - Shen/Scheme can be the host too, with `BOOTSTRAP`, and must keep making the same generated files, which CI's `shen-scheme-host` job checks. The host need not move with each release: move it in `tools/ci-deps.sh` only when the lowerer needs what a newer one has.
 - `make guide` needs pandoc, and so do `make dist` and `make test-linux`, as a source tarball carries the guide rendered.
 - `make` misses an edit made in the same second as the last build, since their times tie: any source file, not only
-  `src/lowerer/lower.shen`. After scripted edits, `sleep 1; touch FILE` before rebuilding.
+  the lowerer's. After scripted edits, `sleep 1; touch FILE` before rebuilding.
 
 ## Testing
 
@@ -77,16 +79,18 @@ Run what the change can break, and nothing more: CI runs everything on every pus
 | The runtime, the JIT, the lowerer, the port, `vendor/` or the generated files | `make test-core` (about 20 s) |
 | The C API (`include/shen.h`, `src/runtime/ffi.c`), images or isolates, which libraries and their adapters use too | `make test-core test-libs` |
 | `lib/native.shen` | `make test-native test-datalog` |
+| `lib/numbers.shen`, which `buffer`, `memory` and `socket` require | `make test-typed test-libs` |
+| `lib/floats.shen`, `lib/word.shen`, `lib/words.shen` | `make test-typed` |
 | `lib/ffi.shen` | `make test-ffi test-libs` |
-| A library others load: `buffer`, `io`, `io-file`, `grammar`, `json`, `memory`, `socket`, `deadline`, `clock` or `fs` | `make test-libs` (about 30 s) |
-| `datalog`, `http-*`, `process*`, `tree-sitter`, `curl`, `parallel` | `make test-datalog`, `test-http`, `test-process`, `test-tree-sitter`, `test-curl`, `test-parallel` |
+| A library others load: `buffer`, `result`, `io`, `io/file`, `grammar`, `json`, `memory`, `socket`, `deadline`, `clock` or `fs` | `make test-libs` (about 30 s) |
+| `datalog`, `http`, `http/*`, `process`, `process/io`, `tree-sitter`, `curl`, `parallel` | `make test-datalog`, `test-http`, `test-process`, `test-tree-sitter`, `test-curl`, `test-parallel` |
 | `frame`; `cursor`; `mmap`, `handle`, `sqlite` | `make test-io`; `test-buffer`; `test-ffi`, and `test-http` for `sqlite` |
 | An application in `example-apps/` | `test-http` for `sqlite-http`, `test-datalog` for `depends` and `source-deps`, `test-tree-sitter` for `source-facts` |
 | A test, `Makefile`, `tools/` or CI | What the edit touches |
 | Documentation only | Nothing; `make guide` if a rendered page's layout changed, and the examples you changed |
 
 `make test-core` is `test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn
-test-native test-ffi test-overrides test-structs test-isolates`, and `make test-libs` is `test-buffer test-json test-io test-fs test-process
+test-native test-ffi test-overrides test-structs test-isolates test-modules test-typed`, and `make test-libs` is `test-buffer test-json test-io test-fs test-process
 test-tree-sitter test-http test-datalog test-curl test-namespaces test-parallel`.
 
 Keep each suite fast. A check that needs a collection at every allocation, a long wait or a large input goes in a
@@ -144,7 +148,7 @@ x86-64, and runs the fast suites on them. GC stress, the sanitizers and the muta
 - Run `make bench` when a change can affect code beyond its target, such as branch shapes on common paths.
 - Check that a gain holds outside the benchmarks: `make bench-independent` times workloads never used for tuning, which mostly load, compile and typecheck code, and THORN, which mostly runs. A benchmark gain that does not
   show there, or a loss there, is fitting the benchmarks or a cost in compile time.
-- For real arithmetic and raw registers, `make bench-numeric` runs five programs in C, in boxed Shen and with registers, and a path tracer in C and with registers. Each prints a check, which must agree to the last digit.
+- For float arithmetic and raw registers, `make bench-numeric` runs five programs in C, in boxed Shen, with registers and built as a typed program, and a path tracer in C, with registers and built as a typed program. Each prints a check, which must agree to the last digit.
 - Some rows move with where code and data lie, not with what they run: `vector create (big)` with the heap pointer's parity, and `list traversal`, `match vector`, `symbol? (true)`, `shen.sysfunc?` and
   `captured-unary-ordinary` with what else the process compiled. Before acting on a slower row, time it alone; if a change alters branch shapes, also time it with the code shifted by a few unrelated definitions compiled first.
 - To profile on macOS, run with `SHEN_JIT_PERF_MAP=1`, sample the process with `sample PID SECONDS`, and resolve JIT addresses against `/tmp/perf-PID.map`. `SHEN_JIT_PROFILE` uses SIGPROF, whose samples land where system calls

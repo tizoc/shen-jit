@@ -6,11 +6,11 @@
   Name false -> (do (output "FAIL ~A~%" Name) (set sd-test.failed (+ (value sd-test.failed) 1))))
 
 (define sd-test.ok
-  [ok X] -> X
+  (:result.ok X) -> X
   X -> (error "source-deps test: ~S" X))
 
 (define sd-test.domain
-  [error E] -> (io.error-domain E)
+  (:result.err E) -> (io.error-domain E)
   _ -> unexpected-success)
 
 (define sd-test.read
@@ -48,7 +48,7 @@
 
 (define sd-test.analyze-records
   Records Query ->
-    (io.let-ok Data (sd-test.read (sd-test.lines Records) 3 (source-deps.limits))
+    (result.let-ok Data (sd-test.read (sd-test.lines Records) 3 (source-deps.limits))
       (source-deps.analyze Data Query)))
 
 (set sd-test.records

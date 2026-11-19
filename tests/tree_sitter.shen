@@ -1,3 +1,5 @@
+(load "tests/result_helpers.shen")
+
 (let T (value ts-test.snapshot)
   (do (ts-test.check "language ABI" (= (treesitter.language-version (value ts-test.language)) 15))
       (ts-test.check "language name" (= (treesitter.language-name (value ts-test.language)) "C"))
@@ -35,7 +37,7 @@
   (do (ts-test.check "missing tokens retained" (ts-test.any Missing (/. ID (treesitter.missing? Missing ID))))
       (ts-test.check "syntax errors are trees" (treesitter.has-error? Invalid 1))
       (ts-test.check "ERROR kind table"
-        (ts-test.any Invalid (/. ID (and (treesitter.error? Invalid ID)
+        (ts-test.any Invalid (/. ID (and (treesitter.node-error? Invalid ID)
                                        (= (treesitter.kind Invalid ID) "ERROR")))))
       (ts-test.check "NUL source is length counted" (= (buffer.length (treesitter.source Nul)) 13))))
 
@@ -76,7 +78,7 @@
              [[input-limit 6] [node-limit (treesitter.node-count First)]])
      Captured (ts-test.ok (ts-test.query "int x;" "(identifier) @one @two"
                           [[capture-limit 2] [match-limit 1]]))
-  (do (ts-test.check "inclusive source and node limits" (= (hd Exact) ok))
+  (do (ts-test.check "inclusive source and node limits" (result.ok? Exact))
       (ts-test.check "multiple captures in one match"
         (and (= (treesitter.capture-count Captured) 2) (= (treesitter.match-count Captured) 1)))
       (ts-test.check "repeated capture node identity"
@@ -88,7 +90,7 @@
 (map (/. Query (ts-test.check Query (= (ts-test.error-domain (ts-test.query "int x;" Query [])) query)))
   ["(" "(nonexistent_node) @x" "(declaration wrong_field: (identifier))"])
 (let R (ts-test.query "int x;" "(not_a_kind)" [])
-     E (hd (tl R))
+     E (fixture.failure R)
   (do (ts-test.check "query error category" (= (treesitter.error-code E) 2))
       (ts-test.check "query error byte offset" (= (treesitter.error-offset E) 1))))
 (map (/. Query (ts-test.check "predicates are never silently ignored"

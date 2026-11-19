@@ -43,11 +43,8 @@ def checks(result):
 
 
 def command(executable, adapter):
-    args = [str(executable), 'eval']
-    for name in ['ffi', 'socket', 'buffer', 'io', 'io-file', 'deadline', 'clock']:
-        args += ['-l', f'lib/{name}.shen']
-    return args + ['-s', 'process.*adapter-files*', '[' + string(adapter) + ']',
-                   '-l', 'lib/process.shen', '-l', 'lib/process-io.shen']
+    return [str(executable), 'eval', '-m', 'socket', '-s', 'process.*adapter-files*', '[' + string(adapter) + ']',
+            '-m', 'process/io', '-l', 'tests/result_helpers.shen']
 
 
 def oracle(root, data):
@@ -101,8 +98,8 @@ def documentation(args, helper, root):
     check = '(let Filter (example.filter ' + string(helper) + ' ["echo"]) '
     check += 'Pipeline (example.pipeline ' + string(helper) + ' ["echo"]) '
     check += '(if (and (example.success? Filter) '
-    check += '(= (buffer.string (process.output-bytes (hd (tl Filter)))) "hello") '
-    check += '(= (buffer.string (process.output-bytes (hd (tl (hd (tl Pipeline)))))) "pipeline bytes")) '
+    check += '(= (buffer.string (process.output-bytes (fixture.success Filter))) "hello") '
+    check += '(= (buffer.string (process.output-bytes (hd (tl (fixture.success Pipeline))))) "pipeline bytes")) '
     check += '(do (output "3 passed, 0 failed~%") true) (error "process reference examples failed")))'
     checks(run(args + ['-l', str(source), '-e', check]))
 
@@ -112,18 +109,18 @@ def filter_application(executable, args, helper, root):
     output.write_bytes(b'old output')
     command_line = ['tools/process-filter.shen', root / 'large-input.bin', output, helper, 'echo']
     argv = '[' + ' '.join(map(string, command_line)) + ']'
-    base = args + ['-l', 'lib/fs.shen']
-    result = run(base + ['-s', '*argv*', argv, '-l', 'tools/process-filter.shen'],
+    base = args
+    result = run(base + ['-s', '*argv*', argv, '-m', 'tools/process-filter.shenmod'],
                  env={'SHEN_JIT_SEMISPACE': '4M', 'SHEN_JIT_MAX_HEAP': '16M'})
     assert 'Filtered 2097152 bytes' in result.stdout, result.stdout[-3000:]
     assert output.read_bytes() == (root / 'large-input.bin').read_bytes()
     before = output.read_bytes()
     command_line = ['tools/process-filter.shen', root / 'input.bin', output, helper, 'fail-filter']
     argv = '[' + ' '.join(map(string, command_line)) + ']'
-    result = subprocess.run(base + ['-s', '*argv*', argv, '-l', 'tools/process-filter.shen'],
+    result = subprocess.run(base + ['-s', '*argv*', argv, '-m', 'tools/process-filter.shenmod'],
                             cwd=ROOT, stdin=subprocess.DEVNULL, capture_output=True, text=True,
                             errors='backslashreplace', timeout=30)
-    assert 'child finished with [exited 17]' in result.stdout + result.stderr, (result.stdout[-2000:], result.stderr)
+    assert 'child exited with code 17' in result.stdout + result.stderr, (result.stdout[-2000:], result.stderr)
     assert output.read_bytes() == before, 'failed filter replaced the destination'
     assert not any(p.name.startswith('.shen-') for p in root.iterdir())
     print('4 passed, 0 failed (bounded filter application and safe replacement)', flush=True)
@@ -133,11 +130,11 @@ def saved_image(executable, args, root):
     image = root / 'process.img'
     run([str(executable), '--save', str(image)] + args[1:] + [
         '-l', 'tests/process_gc_helpers.shen',
-        '-e', '(do (set process-image.child (hd (tl (process.spawn (value process-test.helper) ["exit" "0"] '
-              '[[stdin pipe] [stdout pipe] [stderr pipe]])))) true)',
+        '-e', '(do (set process-image.child (fixture.success (process.spawn (value process-test.helper) ["exit" "0"] '
+              '[[stdin pipe] [stdout pipe] [stderr pipe]]))) true)',
         '-e', '(process.wait (value process-image.child) 2000)',
-        '-e', '(do (set process-image.report (hd (tl (process.run (value process-test.helper) '
-              '["echo"] (buffer.from-string "saved") [])))) true)',
+        '-e', '(do (set process-image.report (fixture.success (process.run (value process-test.helper) '
+              '["echo"] (buffer.from-string "saved") []))) true)',
     ])
     env = {'SHEN_JIT_IMAGE': str(image)}
     restored = run([str(executable), 'eval', '-e',

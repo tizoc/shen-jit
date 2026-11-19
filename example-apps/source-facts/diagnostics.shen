@@ -21,7 +21,7 @@
   T Input ->
     (treesitter.fold
       (/. State ID
-        (if (or (treesitter.error? T ID) (treesitter.missing? T ID))
+        (if (or (treesitter.node-error? T ID) (treesitter.missing? T ID))
             (do (if (< (<-address State 0) 8)
                     (address-> State 1 [(diagnostic T Input ID) | (<-address State 1)]) true)
                 (address-> State 0 (+ (<-address State 0) 1))

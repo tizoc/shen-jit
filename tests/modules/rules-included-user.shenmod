@@ -1,0 +1,1 @@
+(shen.module (version 1) (name rules-included-user) (requires rules-included) (sources tc+ "rules-late.shen"))

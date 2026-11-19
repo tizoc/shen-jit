@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name http/server)
+  (requires ffi buffer io deadline clock grammar io/socket http/response result)
+  (sources tc- "server.shen" tc+ "server-typed.shen"))

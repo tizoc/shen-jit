@@ -5,10 +5,10 @@ SHEN=$1
 dir=$(mktemp -d)
 trap 'curl_test_status=$?; if [ "$curl_test_status" -ne 0 ]; then cat "$dir"/*.out 2>/dev/null; fi; rm -rf "$dir"' EXIT
 if command -v cygpath > /dev/null; then dir=$(cygpath -m "$dir"); fi
-"$SHEN" eval -l lib/ffi.shen -l lib/buffer.shen -l lib/io.shen -l lib/curl.shen \
+"$SHEN" eval -m curl \
   -l tests/curl_pure.shen > "$dir/pure.out" 2>&1
 grep '^[0-9]* passed' "$dir/pure.out" | awk '{ print } END { exit !/ 0 failed/ }'
-"$SHEN" eval -l lib/ffi.shen \
+"$SHEN" eval -m ffi \
   -e '(shen-jit.library curl-probe ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])' \
   -e '(define-foreign curl-probe.abs curl-probe "abs" (int32) --> int32)' \
   -e '(output "curl shared: ~A~%"

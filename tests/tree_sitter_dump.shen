@@ -2,7 +2,7 @@
   T ID ->
     (+ (if (treesitter.named? T ID) 1 0)
        (+ (if (treesitter.missing? T ID) 2 0)
-          (+ (if (treesitter.error? T ID) 4 0)
+          (+ (if (treesitter.node-error? T ID) 4 0)
              (+ (if (treesitter.has-error? T ID) 8 0) (if (treesitter.extra? T ID) 16 0))))))
 
 (define ts-test.dump-node

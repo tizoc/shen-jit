@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name frame-echo)
+  (requires frame io/socket)
+  (sources tc- "frame-echo.shen"))

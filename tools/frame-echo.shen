@@ -1,10 +1,12 @@
 \\ One connected client, bounded frames, one flushed reply per frame.
-\\ Load ffi.shen, socket.shen, buffer.shen, io.shen, io-socket.shen and frame.shen first.
+\\ tools/frame-echo.shenmod loads what it needs.
 
 (shen.x.namespace frame-echo
+  (import frame frame)
+  (import result ok err)
   (use frame)
   (use io)
-  (externals [accepted eof frame frame.limit ok])
+  (externals [frame.limit])
 
 (define serve
   E Limit ->
@@ -19,17 +21,17 @@
   F W Limit Count -> (next F W Limit Count (frame.next F)))
 
 (define next
-  _ _ _ Count [eof] -> [ok Count]
-  _ _ _ _ [error Error] -> [error Error]
-  F W Limit Count [frame Tag Payload] ->
+  _ _ _ Count (:ok []) -> (:ok Count)
+  _ _ _ _ (:err Error) -> (:err Error)
+  F W Limit Count (:ok [(:frame Tag Payload)]) ->
     (written F W Limit Count (io.write W (frame.encode Tag Payload Limit))))
 
 (define written
-  _ _ _ _ [error Error _] -> [error Error]
-  F W Limit Count [accepted _] -> (flushed F W Limit Count (io.flush W)))
+  _ _ _ _ (:err Error) -> (:err Error)
+  F W Limit Count (:ok _) -> (flushed F W Limit Count (io.flush W)))
 
 (define flushed
-  _ _ _ _ [error Error _] -> [error Error]
-  F W Limit Count [ok _] -> (loop F W Limit (+ Count 1)))
+  _ _ _ _ (:err Error) -> (:err Error)
+  F W Limit Count (:ok _) -> (loop F W Limit (+ Count 1)))
 
 )

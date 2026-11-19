@@ -19,9 +19,9 @@ fi
 # in the tarball, and the example applications and tests, to run or read beside them.
 cp -R lib include guide example-apps tests "build/$name/"
 mkdir "build/$name/tools"
-cp tools/curl-fetch.shen "build/$name/tools/"
-cp tools/fs-copy.shen "build/$name/tools/"
-cp tools/process-filter.shen "build/$name/tools/"
+cp tools/curl-fetch.shen tools/curl-fetch.shenmod "build/$name/tools/"
+cp tools/fs-copy.shen tools/fs-copy.shenmod "build/$name/tools/"
+cp tools/process-filter.shen tools/process-filter.shenmod "build/$name/tools/"
 cp tools/tree-sitter-deps.sh "build/$name/tools/"
 cp LICENSE "build/$name/LICENSE.txt"
 cp LICENSE-shen-kernel.txt "build/$name/LICENSE-shen-kernel.txt"

@@ -1,0 +1,4 @@
+(shen.module
+  (version 1)
+  (name numbers)
+  (sources tc- "numbers.shen" tc+ "numbers-typed.shen"))

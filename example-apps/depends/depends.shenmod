@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name depends)
+  (requires datalog io/file)
+  (main depends.main)
+  (sources tc- "main.shen"))

@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name http)
+  (requires buffer io deadline result)
+  (sources tc- "http/head.shen" tc+ "http/head-typed.shen"))

@@ -2,7 +2,7 @@
 \\ until asked for, and needs nothing else loaded, though what it wraps comes from a library such
 \\ as lib/memory.shen or lib/mmap.shen:
 \\
-\\   shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l lib/handle.shen -l program.shen
+\\   shen-jit eval -m memory -m handle -l program.shen
 \\
 \\ (let H (handle.wrap (memory.alloc 4096) (/. M (memory.free M)))
 \\   (shen-jit.f64! H 0 1.5))

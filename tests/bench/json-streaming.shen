@@ -1,8 +1,8 @@
 \\ A JSON value arriving in chunks, decoded by restarting, after framing it, or by reading it from
-\\ a reader as it arrives. Load buffer.shen, io.shen, grammar.shen and json.shen first;
+\\ a reader as it arrives. Load the json module first;
 \\ SHEN_JIT_STATS=1 adds the collections at exit:
 \\
-\\   shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -l lib/json.shen \\
+\\   shen-jit eval -m json \\
 \\     -l tests/bench/json-streaming.shen -e '(stream.run restart string 65536 1)'
 \\
 \\ Strategy is restart, frame or read, Kind string (a string of N letters) or api (N objects), and
@@ -32,37 +32,48 @@
          E (io.endpoint "chunks" read (buffer.length V)
              (/. Out (let At (<-address State 0)
                           N (stream.min Chunk (stream.min (shen-jit.bytes-length Out) (- (buffer.length V) At)))
-                       (if (= N 0) [eof]
+                       (if (= N 0) (:result.ok [])
                            (do (shen-jit.copy-bytes Out 0 (buffer.owner V) (+ (buffer.offset V) At) N)
-                               (address-> State 0 (+ At N)) [read N]))))
-             (function io.no-write) (freeze [ok]))
+                               (address-> State 0 (+ At N)) (:result.ok [N])))))
+             (function io.no-write) (freeze (:result.ok [])))
       (io.reader E [])))
 
+(define stream.chunk?
+  (:result.ok [_]) -> true
+  _ -> false)
+
 \\ Restart: after each chunk, decode all that has arrived; an error at its end means not yet.
+(define stream.append-chunk
+  B (:result.ok [V]) -> (buffer.append! B V)
+  B _ -> B)
+
 (define stream.restart
   R B Attempts Decoded ->
     (let Chunk (io.read-chunk R)
-         _ (if (= (hd Chunk) chunk) (buffer.append! B (hd (tl Chunk))) B)
+         _ (stream.append-chunk B Chunk)
          Have (buffer.builder-length B)
          Prefix (buffer.slice (stream.contents B) 0 Have)
          Result (trap-error [ok (json.decode Prefix [])] (/. E [error (error-to-string E)]))
-      (if (and (= (hd Result) error) (stream.at-end? (hd (tl Result)) Have) (= (hd Chunk) chunk))
+      (if (and (= (hd Result) error) (stream.at-end? (hd (tl Result)) Have) (stream.chunk? Chunk))
           (stream.restart R B (+ Attempts 1) (+ Decoded Have))
           [(+ Attempts 1) (+ Decoded Have) (hd Result)])))
 
 \\ The bytes a builder holds, without finishing it.
 (define stream.contents
-  B -> (buffer.builder-state.storage B))
+  B -> (buffer.builder-view B))
 
 (define stream.at-end?
   Message Now -> (= Message (make-string "json: byte ~A: unexpected end" Now)))
 
 \\ Frame: scan only the bytes that arrived for the newline that ends a value, then decode once.
 (define stream.frame
-  R B Scanned ->
-    (let Some (io.peek-some R)
-         V (hd (tl Some))
-         Line (stream.newline (buffer.owner V) (buffer.offset V) (buffer.end V))
+  R B Scanned -> (stream.frame-step R B Scanned (io.peek-some R)))
+
+(define stream.frame-step
+  _ _ Scanned (:result.ok []) -> [1 Scanned eof]
+  _ _ Scanned (:result.err _) -> [1 Scanned error]
+  R B Scanned (:result.ok [V]) ->
+    (let Line (stream.newline (buffer.owner V) (buffer.offset V) (buffer.end V))
       (if (< Line 0)
           (do (buffer.append! B V) (io.consume R (buffer.length V))
               (stream.frame R B (+ Scanned (buffer.length V))))
@@ -75,7 +86,12 @@
 
 \\ Read: json.read, which reads the value as it arrives, in place.
 (define stream.read
-  R -> (let Result (json.read R []) [1 (io.position R) (hd Result)]))
+  R -> (let Result (json.read R []) [1 (io.position R) (stream.outcome Result)]))
+
+(define stream.outcome
+  (:result.ok [_]) -> ok
+  (:result.ok []) -> eof
+  (:result.err _) -> error)
 
 (define stream.newline
   _ At At -> -1

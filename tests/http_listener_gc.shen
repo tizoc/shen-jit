@@ -9,7 +9,7 @@
      Result (http.run S)
      Reply (socket.recv-string C 4096)
      _ (socket.close C)
-  (if (and (= Result [ok]) (= (http.state S) stopped) (= (hd (http.stats S)) 0)
+  (if (and (= Result (:result.ok [])) (= (http.state S) stopped) (= (hd (http.stats S)) 0)
            (= (shen-jit.bytes->string (shen-jit.string->bytes Reply) 0 12) "HTTP/1.1 200"))
       (output "listener gc ok~%")
       (error "listener failed under GC stress")))

@@ -32,6 +32,11 @@
   (freeze (let R (struct-test.cell.make "text" [a b]) [(struct-test.cell.key R) (struct-test.cell.value R)])))
 (struct-test.check "predicate is safe on other values" [false false false false false false false false]
   (freeze (map (fn struct-test.cell?) [1 "x" a [] [a] (absvector 0) (vector 0) (@p 1 2)])))
+(struct-test.check "a reader of what is no vector raises" [error "<-address: 1 is not an absvector"]
+  (freeze (struct-test.cell.key 1)))
+(struct-test.check "and of a vector shorter than its struct, though the field is in it"
+  [error "struct: <<x y>> is shorter than its struct"]
+  (freeze (struct-test.cell.key (address-> (address-> (absvector 2) 0 x) 1 y))))
 (struct-test.check "default printer" "#<struct-test.cell key: a value: c#34;textc#34;>"
   (freeze (make-string "~S" (struct-test.cell.make a "text"))))
 (struct-test.check "default printer nests and prints empty structs" "[#<struct-test.cell key: #<struct-test.empty> value: [1 2]>]"
@@ -173,8 +178,37 @@
   (freeze (struct-test.refused-typed? "(defstruct struct-test.untyped-tc x)")))
 (struct-test.check "every field typed, or none" true
   (freeze (struct-test.refused? "(defstruct struct-test.mixed (x : number) y)")))
-(struct-test.check "no type variables" true
-  (freeze (struct-test.refused? "(defstruct struct-test.poly (x : A))")))
+(struct-test.check "a field's variables are parameters" [true true]
+  (freeze [(struct-test.refused? "(defstruct struct-test.poly (x : A))")
+           (struct-test.refused? "(defstruct (struct-test.poly A) (x : B))")]))
+(struct-test.check "parameters are distinct variables" [true true true]
+  (freeze [(struct-test.refused? "(defstruct (struct-test.poly (A * A)) (x : A))")
+           (struct-test.refused? "(defstruct (struct-test.poly a) (x : a))")
+           (struct-test.refused? "(defstruct (struct-test.poly) (x : number))")]))
+(struct-test.check "a struct with parameters needs field types" true
+  (freeze (struct-test.refused? "(defstruct (struct-test.poly A) x)")))
+(struct-test.check "type parameters" [5 "a" [[struct-test.box number] symbol false]]
+  (freeze [(struct-test.box.value (struct-test.box-bump (struct-test.box.make 4)))
+           (struct-test.pair.first (struct-test.swap (struct-test.pair.make 1 "a")))
+           (map (/. S (shen.typecheck (hd (read-from-string S)) (protect A)))
+                ["(struct-test.box-bump (struct-test.box.make 1))"
+                 "(struct-test.pair.first (struct-test.swap (struct-test.pair.make 1 a)))"
+                 "(struct-test.box.value-> (struct-test.box.make 1) a)"])]))
+(struct-test.check "a union with parameters" ["3" "not positive"]
+  (freeze (map (/. N (struct-test.shown (struct-test.bind (struct-test.positive N)
+                                                           (/. X (struct-test.ok.make (+ X 1))))))
+               [2 0])))
+(struct-test.check "product arguments in a union member" "second"
+  (freeze (struct-test.product-second (struct-test.pair.make 1 "second"))))
+(struct-test.check "a struct's two parameters use a product argument" true
+  (freeze (struct-test.refused? "(defstruct (struct-test.bad A B) (left : A) (right : B))")))
+(struct-test.check "a union's members take its parameters" [true true]
+  (freeze [(struct-test.refused? "(struct.union (struct-test.loose (E * A)) struct-test.ok)")
+           (struct-test.refused? "(struct.union (struct-test.loose A) (struct-test.ok B))")]))
+(struct-test.check "a union's two parameters use a product argument" true
+  (freeze (struct-test.refused? "(struct.union (struct-test.loose A B) (struct-test.ok A))")))
+(struct-test.check "changed parameters are an incompatible layout" true
+  (freeze (struct-test.refused? "(defstruct (struct-test.box (A * B)) (mutable value : A))")))
 (struct-test.check "a changed type is an incompatible layout" true
   (freeze (struct-test.refused? "(defstruct struct-test.declared (name : symbol) (mutable count : number))")))
 (struct-test.check "an identical typed declaration reloads" "again"
@@ -228,6 +262,11 @@
                       (/. E true))))
 (struct-test.check "unknown struct after :" true
   (freeze (struct-test.refused? "(define struct-test.bad (:struct-test.nothing x <- X) -> X)")))
+(struct-test.check "unknown positional constructor fails while reading a definition"
+  [error "unknown struct type: struct-test.nothing"]
+  (freeze (read-from-string "(define struct-test.bad X -> (:struct-test.nothing X))")))
+(struct-test.check "unknown positional pattern fails while reading a definition" true
+  (freeze (struct-test.refused? "(define struct-test.bad (:struct-test.nothing X) -> X)")))
 (struct-test.check "typed colon construction and matching" [6 true]
   (freeze [(struct-test.tmatch-x (struct-test.tcolon 5))
            (struct-test.tvertical? (struct-test.tseg.make (struct-test.tcolon 1) (struct-test.tcolon 1)))]))
@@ -342,6 +381,83 @@
       (let R (struct-test.review-dotted.row.make 1 2)
         [(struct-test.review-dotted.row.left.x R)
          (struct-test.review-dotted.row.right.x R)]))))
+
+(struct-test.check "anonymous constructors, patterns and saved records" [[1 2] [saved 23] [3 4]]
+  (freeze [(struct-test.unpack (:struct-test.positional 1 2))
+           (struct-test.unpack (value struct-test.saved-positional))
+           (struct-test.unpack ((fn struct-test.positional.make) 3 4))]))
+(struct-test.check "anonymous nested patterns and repeated variables" [[5 8] true false false]
+  (freeze [(struct-test.nested (:struct-test.positional [5 6] (:struct-test.positional 7 8)))
+           (struct-test.same-fields? (:struct-test.positional 2 2))
+           (struct-test.same-fields? (:struct-test.positional 2 3))
+           (struct-test.same-fields? (:struct-test.positional-other 2 2))]))
+(struct-test.check "anonymous values evaluate once in source order" [[1 2] [1 2]]
+  (freeze (let _ (set struct-test.*order* [])
+               R (:struct-test.positional (struct-test.mark 1) (struct-test.mark 2))
+            [(struct-test.unpack R) (value struct-test.*order*)])))
+(struct-test.check "anonymous printer" "#<struct-test.positional 1 2>"
+  (freeze (make-string "~S" (:struct-test.positional 1 2))))
+(struct-test.check "anonymous namespace aliases and struct.make" 7
+  (freeze (struct-test.anonymous-client.sample)))
+(struct-test.check "anonymous typed fields and unions" [true "7" "no"]
+  (freeze [(= (struct-test.anonymous-swap (:struct-test.anonymous-pair 1 "x"))
+              (:struct-test.anonymous-pair "x" 1))
+           (struct-test.shown (:struct-test.ok 7))
+           (struct-test.shown (:struct-test.err "no"))]))
+(struct-test.check "anonymous fields have no public label accessor" -1
+  (freeze (arity struct-test.positional._)))
+(struct-test.check "anonymous identical redeclaration preserves its tag" true
+  (freeze (do (struct-test.install "(defstruct struct-test.positional _ _)")
+              (struct-test.positional? (value struct-test.saved-positional)))))
+(struct-test.check "anonymous fields reject labels before checking arity"
+  [error "struct struct-test.positional: anonymous fields require positional values: (field <- 1)"]
+  (freeze (read-from-string "(:struct-test.positional field <- 1)")))
+(struct-test.check "anonymous patterns reject omitted fields before checking arity"
+  [error "struct struct-test.positional: anonymous fields require positional values: (...)"]
+  (freeze (read-from-string "(define struct-test.bad (:struct-test.positional ...) -> 1)")))
+(struct-test.check "anonymous fields report a missing positional value"
+  [error "struct struct-test.positional: expected one value per anonymous field: (1)"]
+  (freeze (read-from-string "(:struct-test.positional 1)")))
+(struct-test.check "anonymous malformed declarations and uses are refused" true
+  (freeze (not (element? false (map (fn struct-test.refused?)
+    ["(defstruct struct-test.mixed _ named)"
+     "(defstruct struct-test.mixed named _)"
+     "(defstruct struct-test.mutable-anonymous (mutable _))"
+     "(defstruct struct-test.mutable-anonymous (mutable _ : number))"
+     "(defstruct struct-test.partial-types (_ : number) _)"
+     "(defstruct struct-test.positional _)"
+     "(defstruct struct-test.positional first second)"
+     "(:struct-test.positional 1 2 3)"
+     "(:struct-test.positional 1 ...)"
+     "(:struct-test.positional 1 <-)"
+     "(shen.x.namespace struct-test.private-anonymous (use struct-test.anonymous => a) (define f X -> (a.pair.%field1 X)))"])))))
+
+(struct-test.check "infer a list of ok and err constructors" 10
+  (freeze (struct-test.mixed-count 3)))
+
+(datatype struct-test.field-fact
+  _______________________________
+  struct-test.three : number;)
+
+(struct-test.check "constructor rules with built-in type theory disabled"
+  [struct-test.circle struct-test.shape struct-test.tempty]
+  (freeze (shen-jit.finally
+    (freeze (do (enable-type-theory -)
+                [(shen.typecheck [struct-test.circle.%make struct-test.three] struct-test.circle)
+                 (shen.typecheck [struct-test.circle.%make struct-test.three] struct-test.shape)
+                 (shen.typecheck [struct-test.tempty.%make] struct-test.tempty)]))
+    (freeze (enable-type-theory +)))))
+
+(struct-test.check "missing and replaced constructor signatures still admit members"
+  [struct-test.shape struct-test.shape]
+  (freeze (let Signatures (value shen.*sigf*)
+               Query (freeze (shen.typecheck [struct-test.circle.%make 1] struct-test.shape))
+            (shen-jit.finally
+              (freeze (do (set shen.*sigf* (shen.unassoc struct-test.circle.%make Signatures))
+                          (let Missing (thaw Query)
+                            (do (declare struct-test.circle.%make [string --> string])
+                                [Missing (thaw Query)]))))
+              (freeze (set shen.*sigf* Signatures))))))
 
 (output "~A passed, ~A failed (structs)~%" (value struct-test.*passed*) (value struct-test.*failed*))
 (if (= (value struct-test.*failed*) 0) true (simple-error "struct checks failed"))

@@ -21,7 +21,7 @@
   (define length Text -> (bytes.size (bytes.from-string Text)))
   (define first-byte Text -> (c.read (c.new (from-string Text))))
   (define round-trip Text -> (json.stringify (json.parse Text []) []))
-  (define result -> [ok (first-byte "A")])
+  (define result -> (:ok (first-byte "A")))
 
   (defgrammar <digit> B where (and (>= B 48) (<= B 57));)
   (with-externals [require]

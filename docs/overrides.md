@@ -1,9 +1,9 @@
 # Kernel overrides
 
-Every kernel function that Shen/JIT replaces, in `src/port/shen-jit.kl`, and why. Stage 0 leaves out a kernel `defun` that the port also defines. Nothing
+Every kernel function that Shen/JIT replaces, in `src/port/`, and why. Stage 0 leaves out a kernel `defun` that the port also defines. Nothing
 is overridden just because another port does it: each entry was measured, and [development-log.md](development-log.md) has the numbers. Keep this current with each change.
 
-`make test-overrides` runs each of them beside the kernel's definition, from the KLambda, over generated values, except for `shen.read-evaluate-print`, `shen.toplevel-display-exception` and `shen.x.launcher.main`, which `tests/cli.sh` covers, and `eval`, `shen.execute-store-arity`, `update-lambda-table` and `shen.update-lambda-table/precompiled`, which change the program, as a check must not. Where they differ on purpose, `o.known` in `tests/overrides.shen` says how and why.
+`make test-overrides` runs each of them beside the kernel's definition, from the KLambda, over generated values, except for `shen.read-evaluate-print`, `shen.toplevel-display-exception` and the launcher's `shen.x.launcher.main`, `shen.x.launcher.eval-command-h`, `shen.x.launcher.help-text`, `shen.x.launcher.script-command` and `shen.x.launcher.launch-shen`, which `tests/cli.sh` covers; `shen.rules->prolog`, whose module ownership behavior `tests/modules.shen` covers; `shen.work-through`, which typechecks and evaluates, as `tests/typed.shen` and the kernel's tests run it; and `eval`, `shen.execute-store-arity`, `update-lambda-table` and `shen.update-lambda-table/precompiled`, which change the program, as a check must not. Where they differ on purpose, `o.known` in `tests/overrides.shen` says how and why.
 
 ## Also overridden by Shen/Scheme
 
@@ -35,6 +35,7 @@ The kernel's `shen.prolog-vector` makes an absvector of `(prolog-memory N)` word
 
 | Function | Why |
 | --- | --- |
+| `shen.rules->prolog` | Records a successfully compiled datatype as belonging to the module whose sources are loading, including redefinitions on retry; `include` does not transfer ownership. Covered by `tests/modules.shen` |
 | `shen.lazyderef` | `shen-jit.deref`, inline along a chain of variables, of which nearly every one is a single step |
 | `shen.lzy=`, `shen.lzy=!` | A unifier that keeps a trail of the variables it bound, with no closures, and no `=` on two lists in `shen.lzy=!`. `tests/prolog-unify.shen` checks them against the kernel's |
 | `<-vector` | The kernel's body is over the inliner's limit of 15 nodes. Split into `<-vector` and `shen-jit.vector-element`, both inline, so a failing `<-address` happens in the caller, where a quiet handler catches it with a jump. Same checks, order and messages |
@@ -59,10 +60,15 @@ The kernel's `shen.prolog-vector` makes an absvector of `(prolog-memory N)` word
 | `shen-jit.eval-kl` | Returns anything but a list as itself, without lowering it: `load` evaluates what each `define` returns, `(fn F)`'s printer, which compiled a throwaway expression per definition. Refuses in an isolate |
 | `shen.<atom>` | Tries the number rules only when the first byte is a digit, `-`, `+` or `.`, the only bytes any of them can start with |
 | `shen.record-kl` | Puts a name without a `shen.source` property straight on `shen.*userdefs*`, instead of an `adjoin` over every definition |
-| `shen.shendef->kldef-h`, `shen.record-and-evaluate` | Evaluate what `define` produced factorised, keeping `ps` as written: as with `(factorise +)`, a shared guard runs once and a vector's first element may be read early ([semantics.md](semantics.md), section 10) |
-| `shen.compute-integer`, `shen.compute-fraction-h`, `shen.compute-E` | Number reading as Shen/Scheme reads numbers: `8.0` reads as the integer 8, and literals beyond the fixnum range become the nearest real instead of overflowing ([semantics.md](semantics.md), section 3) |
+| `shen.shendef->kldef-h`, `shen.record-and-evaluate` | Evaluate what `define` produced factorised, keeping `ps` as written: as with `(factorise +)`, a shared guard runs once and a vector's first element may be read early ([semantics.md](semantics.md), section 10). Under `(optimise +)`, the definition `shen.work-through` has just typechecked is evaluated with the kernel's type annotations |
+| `shen.compute-integer`, `shen.compute-fraction-h`, `shen.compute-E` | Number reading as Shen/Scheme reads numbers: `8.0` reads as the integer 8, and literals beyond the fixnum range become the nearest float instead of overflowing ([semantics.md](semantics.md), section 3) |
 | `shen.read-evaluate-print`, `shen-jit.repl-read` | Backtraces, ending the process at end of input, and each input starting at a load depth of 0, as a load that raised leaves it as it was |
 | `shen.x.launcher.main` | Exit status 1 after an error or an unknown argument |
+| `shen.x.launcher.eval-command-h` | `-m NAME` or `--module NAME` loads a module (docs/modules.md) |
+| `shen.x.launcher.help-text` | Lists `-m`, `script` taking a descriptor, and `build` |
+| `shen.x.launcher.script-command` | `script FILE.shenmod` loads that module (docs/modules.md) |
+| `shen.x.launcher.launch-shen` | A `build` command, which makes an executable from a module's descriptor |
+| `shen.work-through` | Names the definition it evaluates after typechecking it, so that under `(optimise +)` `shen.record-and-evaluate` compiles it with the kernel's type annotations, and only it. Suppresses inferred type reports when evaluating module sources |
 
 ## Candidates found by profiling
 

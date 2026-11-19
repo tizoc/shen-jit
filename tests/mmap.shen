@@ -155,10 +155,10 @@
 (mmap.close (mmap.create (value path) 4))
 (mmap-test.check "which can then be replaced" 4 (freeze (length (read-file-as-bytelist (value path)))))
 
-(mmap-test.check "a size that is a real leaves the file and closes what it opened"
+(mmap-test.check "a size that is a float leaves the file and closes what it opened"
   [true [1 2 3] true]
   (freeze
-    (let Path (mmap-test.write-file "mmap-test-real-size.bin" [1 2 3])
+    (let Path (mmap-test.write-file "mmap-test-float-size.bin" [1 2 3])
          Before (mmap.open Path 0)
          _ (mmap.c-close Before)
          Raised (trap-error (do (mmap.create Path (+ 0.5 0.5)) false) (/. E true))

@@ -1,4 +1,6 @@
-\\ JSON values read from an I/O reader at every chunk size. Load buffer.shen, io.shen, grammar.shen and json.shen.
+(load "tests/result_helpers.shen")
+
+\\ JSON values read from an I/O reader at every chunk size. Load the json module first.
 (set json-stream.passed 0)
 (set json-stream.failed 0)
 
@@ -17,15 +19,19 @@
         (/. Out (let At (<-address State 0)
                      N (io.min Step (io.min (shen-jit.bytes-length Out) (- (buffer.length Wire) At)))
                   (if (= N 0)
-                      [eof]
+                      (:result.ok [])
                       (do (shen-jit.copy-bytes Out 0 (buffer.owner Wire) (+ (buffer.offset Wire) At) N)
                           (address-> State 0 (+ At N))
-                          [read N]))))
-        (function io.no-write) (freeze [ok]))))
+                          (:result.ok [N])))))
+        (function io.no-write) (freeze (:result.ok [])))))
 
 (define json-stream.values
   R Acc -> (let Got (trap-error (json.read R []) (/. E [raised (error-to-string E)]))
-             (if (= (hd Got) ok) (json-stream.values R [(hd (tl Got)) | Acc]) [(reverse Acc) Got])))
+             (json-stream.next Got R Acc)))
+
+(define json-stream.next
+  (:result.ok [Value]) R Acc -> (json-stream.values R [Value | Acc])
+  Terminal _ Acc -> [(reverse Acc) Terminal])
 
 (define json-stream.read
   Text Step -> (json-stream.values (io.reader (json-stream.feed (buffer.from-string Text) Step) []) []))
@@ -49,13 +55,13 @@
 
 (let Docs (value json-stream.docs)
      Text (json-stream.join Docs)
-     Expected [(map (/. D (json.parse D [])) Docs) [eof]]
+     Expected [(map (/. D (json.parse D [])) Docs) (:result.ok [])]
   (json-stream.check "every chunk size gives the complete decoder's values" true
     (freeze (json-stream.all? (/. Step (= (json-stream.read Text Step) Expected))
                     (json-stream.steps 1 (shen-jit.bytes-length (shen-jit.string->bytes Text)))))))
 
-(json-stream.check "only whitespace is eof" [[] [eof]] (freeze (json-stream.read " c#10; " 1)))
-(json-stream.check "a number that ends with the input" [[[number "12"]] [eof]] (freeze (json-stream.read "12" 1)))
+(json-stream.check "only whitespace is eof" [[] (:result.ok [])] (freeze (json-stream.read " c#10; " 1)))
+(json-stream.check "a number that ends with the input" [[[number "12"]] (:result.ok [])] (freeze (json-stream.read "12" 1)))
 (json-stream.check "a syntax error at its place in the stream" [[[[number "1"]]] [raised "json: byte 8: expected value"]]
   (freeze (json-stream.read "[1]  [3,, 4]" 2)))
 (json-stream.check "a value the input cut" [[[[number "1"]]] [raised "json: byte 9: input ended"]]
@@ -67,10 +73,10 @@
                       (/. E [raised (error-to-string E)]))))
 (let R (io.reader (json-stream.feed (buffer.from-string "{c#34;ac#34;:1}c#10;rest") 3) [])
      First (json.read R [])
-  (json-stream.check "what follows a value stays unread" [[ok [object ["a" [number "1"]]]] "c#10;rest"]
-    (freeze [First (buffer.string (hd (tl (io.read-all R 100))))])))
+  (json-stream.check "what follows a value stays unread" [(:result.ok [[object ["a" [number "1"]]]]) "c#10;rest"]
+    (freeze [First (buffer.string (fixture.success (io.read-all R 100)))])))
 
-(json-stream.check "closing quote needs no further read" [[ok "x"] 1]
+(json-stream.check "closing quote needs no further read" [(:result.ok ["x"]) 1]
   (freeze
     (let Calls (io.record [0])
          Wire (buffer.from-string "c#34;xc#34;")
@@ -80,10 +86,10 @@
                     _ (address-> Calls 0 (+ N 1))
                  (if (= N 0)
                      (do (shen-jit.copy-bytes B 0 (buffer.owner Wire) 0 3)
-                         [read 3])
-                     [error (io.error read "complete string"
-                                      "unnecessary read")])))
-             (function io.no-write) (freeze [ok]))
+                         (:result.ok [3]))
+                     (:result.err (io.error read "complete string"
+                                      "unnecessary read")))))
+             (function io.no-write) (freeze (:result.ok [])))
          Got (json.read (io.reader E []) [])
          _ (io.close E)
       [Got (<-address Calls 0)])))

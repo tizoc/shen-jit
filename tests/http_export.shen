@@ -1,3 +1,5 @@
+(load "tests/result_helpers.shen")
+
 \\ The actual SQLite export through the public sender: bounded batches and cleanup on every exit.
 (set export-test.passed 0)
 (set export-test.failed 0)
@@ -11,8 +13,8 @@
               (output "FAIL ~A: wanted ~S, got ~S~%" Name Expected Actual)))))
 
 (define export-test.request
-  Method -> (hd (tl (http.parse-request
-                     (buffer.from-string (make-string "~A / HTTP/1.1c#13;c#10;Host: localc#13;c#10;c#13;c#10;" Method)) 65536))))
+  Method -> (fixture.success (http.parse-request
+                     (buffer.from-string (make-string "~A / HTTP/1.1c#13;c#10;Host: localc#13;c#10;c#13;c#10;" Method)) 65536)))
 
 (define export-test.send
   Method Maximum D ->
@@ -26,13 +28,13 @@
       [Result Out (http.source-close (http.response-source Response))]))
 
 (define export-test.body
-  [[ok N] Out _] ->
+  [(:result.ok N) Out _] ->
     (let E (io.input-buffer (buffer.slice Out 0 N))
          R (io.reader E [[chunk-size 7]])
          _ (http.read-head (http.head-reader R 1024))
-         Q (hd (tl (http.parse-request
-                    (buffer.from-string "POST / HTTP/1.1c#13;c#10;Host: localc#13;c#10;Transfer-Encoding: chunkedc#13;c#10;c#13;c#10;") 65536)))
-         Full (hd (tl (http.read-body (http.body-reader R Q))))
+         Q (fixture.success (http.parse-request
+                    (buffer.from-string "POST / HTTP/1.1c#13;c#10;Host: localc#13;c#10;Transfer-Encoding: chunkedc#13;c#10;c#13;c#10;") 65536))
+         Full (fixture.success (http.read-body (http.body-reader R Q)))
          _ (io.close E)
       (buffer.string (http.body Full))))
 
@@ -58,7 +60,7 @@
 (counter-app.initialize (value export-test.path))
 (let Sent (export-test.send "GET" 16 (deadline.after (freeze 0) 1000))
   (do (export-test.check "empty export" "" (freeze (export-test.body Sent)))
-      (export-test.check "empty export source closed" [ok] (freeze (hd (tl (tl Sent)))))))
+      (export-test.check "empty export source closed" (:result.ok []) (freeze (hd (tl (tl Sent)))))))
 
 (sqlite.with-database (value export-test.path) (/. Db (export-test.seed Db 0)))
 (let Expected (sqlite.with-database (value export-test.path)
@@ -68,7 +70,7 @@
          (let Sent (export-test.send "GET" Maximum (deadline.after (freeze 0) 1000))
            (do (export-test.check "all rows survive arbitrary chunk boundaries" Expected
                  (freeze (export-test.body Sent)))
-               (export-test.check "successful export closes its database/statement" [ok]
+               (export-test.check "successful export closes its database/statement" (:result.ok [])
                  (freeze (hd (tl (tl Sent))))))))
     [1 7 31 4096 16384 65536]))
 
@@ -78,12 +80,12 @@
              (sqlite.run Db "INSERT INTO counters VALUES (?, ?)" ["a" 1])
              (sqlite.run Db "INSERT INTO counters VALUES (?, ?)" [(export-test.long-name) 2]))))
 (let Sent (export-test.send "HEAD" 16384 (deadline.after (freeze 0) 1000))
-  (export-test.check "HEAD closes without encoding or stepping invalid rows" ok (freeze (hd (hd Sent)))))
+  (export-test.check "HEAD closes without encoding or stepping invalid rows" true (freeze (result.ok? (hd Sent)))))
 (let Sent (export-test.send "GET" 16384 (deadline.after (freeze 0) 1000))
      Result (hd Sent)
   (do (export-test.check "invalid row fails before headers" [application 0]
-        (freeze [(io.error-domain (hd (tl Result))) (io.error-progress (hd (tl Result)))]))
-      (export-test.check "row failure still closes database and statement" [ok]
+        (freeze [(io.error-domain (fixture.failure Result)) (io.error-progress (fixture.failure Result))]))
+      (export-test.check "row failure still closes database and statement" (:result.ok [])
         (freeze (hd (tl (tl Sent)))))))
 
 (sqlite.with-database (value export-test.path)
@@ -91,10 +93,10 @@
 (let Time (io.record [0])
      D (deadline.after (freeze (let N (<-address Time 0) _ (address-> Time 0 (+ N 1)) N)) 8)
      Sent (export-test.send "GET" 16384 D)
-     Error (hd (tl (hd Sent)))
+     Error (fixture.failure (hd Sent))
   (do (export-test.check "batch construction observes its total deadline" [timeout 0]
         (freeze [(io.error-domain Error) (io.error-progress Error)]))
-      (export-test.check "expired batch closes database and statement" [ok]
+      (export-test.check "expired batch closes database and statement" (:result.ok [])
         (freeze (hd (tl (tl Sent)))))))
 
 (output "~A passed, ~A failed~%" (value export-test.passed) (value export-test.failed))

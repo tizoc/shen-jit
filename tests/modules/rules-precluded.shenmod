@@ -1,0 +1,1 @@
+(shen.module (version 1) (name rules-precluded) (requires rules-base) (sources tc+ "rules-preclude.shen" "rules-after.shen"))

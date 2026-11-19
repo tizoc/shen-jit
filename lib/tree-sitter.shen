@@ -1,18 +1,20 @@
-\\ Tree-sitter complete-input snapshots and structural queries. Load after ffi.shen and buffer.shen.
+\\ Tree-sitter complete-input snapshots and structural queries. Module tree-sitter.
 \\ Native trees are closed before returning; snapshots own managed source, records and name tables.
 
 (shen.x.namespace treesitter
   (use buffer)
+  (use result)
+  (import result ok err)
   (use shen-jit)
   (import struct defstruct)
   (externals [capture-limit define-foreign define-foreign-procedure input-limit load-language
-    match-limit native node-limit ok parse pointer predicate query query-limit result-limit timeout
-    treesitter-error uint32])
+    match-limit native node-limit parse pointer predicate query query-limit result-limit timeout
+    uint32])
   (export *adapter-files* capture-count capture-match capture-name capture-node capture-pattern
     child-by-field children end-byte end-point treesitter.error => error error-code error-domain
     error-message error-offset error-operation error-resource error? extra? field first-child
     fold has-error? kind treesitter.language => language language-name language-version
-    treesitter.load-language => load-language match-count missing? named? next-sibling node-count
+    treesitter.load-language => load-language match-count missing? named? next-sibling node-count node-error?
     option parent treesitter.parse => parse treesitter.query => query result root snapshot source
     start-byte start-point text)
 
@@ -59,26 +61,13 @@
   [File | Rest] -> [(text-argument File) | (files Rest)]
   _ -> (error "treesitter: grammar files must be a list of strings"))
 
-(define treesitter.error
-  Op Domain Code Offset Resource Message -> [treesitter-error Op Domain Code Offset Resource Message])
-
-(define error-operation
-  [treesitter-error Op _ _ _ _ _] -> Op)
-
-(define error-domain
-  [treesitter-error _ Domain _ _ _ _] -> Domain)
-
-(define error-code
-  [treesitter-error _ _ Code _ _ _] -> Code)
-
-(define error-offset
-  [treesitter-error _ _ _ Offset _ _] -> Offset)
-
-(define error-resource
-  [treesitter-error _ _ _ _ Resource _] -> Resource)
-
-(define error-message
-  [treesitter-error _ _ _ _ _ Message] -> Message)
+(defstruct treesitter.error
+  (operation : symbol)
+  (domain : symbol)
+  (code : number)
+  (offset : fixnum)
+  (resource : string)
+  (message : string))
 
 (define domain
   1 -> native
@@ -90,19 +79,21 @@
 
 (define native-error
   Op Resource Raw ->
-    [error (treesitter.error Op (domain (<-address Raw 0)) (<-address Raw 1)
-                            (<-address Raw 2) Resource (<-address Raw 3))])
+    (:err (treesitter.error Op (domain (<-address Raw 0)) (<-address Raw 1)
+                            (<-address Raw 2) Resource (<-address Raw 3))))
 
 (define foreign-error
   Op Resource Exception ->
-    [error (treesitter.error Op foreign 0 0 Resource (error-to-string Exception))])
+    (:err (treesitter.error Op foreign 0 0 Resource (error-to-string Exception))))
 
 \\ A language stores its FFI entry name, not a native address. It reopens correctly in saved images,
 \\ and crosses to isolates, which call the entry by its name, as they cannot evaluate.
-(defstruct lang
-  name
-  entry
-  version)
+(defstruct treesitter.language
+  (name : string)
+  (entry : symbol)
+  (version : number))
+
+(preclude [treesitter.language.%match])
 
 (define treesitter.load-language
   Name Files Entry ->
@@ -117,21 +108,9 @@
         (do (abi)
             (let Raw (c-language (shen-jit.apply Function []))
               (if (number? Raw)
-                  [ok (lang.make Name Function Raw)]
+                  (:ok (language.make Name Function Raw))
                   (native-error load-language Name Raw))))
         (/. X (foreign-error load-language Name X)))))
-
-(define language-check
-  Language ->
-    (if (lang? Language)
-        Language
-        (error "treesitter: not a language")))
-
-(define language-name
-  Language -> (lang.name (language-check Language)))
-
-(define language-version
-  Language -> (lang.version (language-check Language)))
 
 (define treesitter.limit
   N Maximum Positive ->
@@ -180,217 +159,86 @@
 
 (defstruct snapshot
   (printer show-snapshot)
-  language
-  raw)
+  (language : string)
+  (source-bytes : buffer.storage)
+  (nodes : buffer.storage)
+  (node-count : fixnum)
+  (kinds : name-table)
+  (fields : name-table)
+  (captures : buffer.storage)
+  (capture-count : fixnum)
+  (capture-names : name-table)
+  (matches : number))
+
+(preclude [snapshot.%match])
+
+\\ Decode the fixed native result once and keep the managed byte and name tables.
+(define read-snapshot
+  Name Raw ->
+    (let Nodes (<-address Raw 1)
+         Captures (<-address Raw 4)
+      (:snapshot
+        language <- Name
+        source-bytes <- (<-address Raw 0)
+        nodes <- Nodes
+        node-count <- (fxquotient (shen-jit.bytes-length Nodes) 48)
+        kinds <- (<-address Raw 2)
+        fields <- (<-address Raw 3)
+        captures <- Captures
+        capture-count <- (fxquotient (shen-jit.bytes-length Captures) 16)
+        capture-names <- (<-address Raw 5)
+        matches <- (<-address Raw 6))))
+
+\\ Names remain in the zero-based vector the native adapter populated with strings.
+(define name-at
+  Table Index -> (<-address Table Index))
+
+(declare name-at [name-table --> [fixnum --> string]])
 
 (define analyze
   Language Input Query Config ->
     (let Name (language-name Language)
          N (buffer.length Input)
       (cond ((> N (<-address Config 0))
-              [error (treesitter.error parse limit 0 0 Name "source exceeds input byte limit")])
+              (:err (treesitter.error parse limit 0 0 Name "source exceeds input byte limit")))
             ((and (string? Query) (> (byte-length Query) (<-address Config 6)))
-              [error (treesitter.error query limit 0 0 Name "query exceeds query byte limit")])
+              (:err (treesitter.error query limit 0 0 Name "query exceeds query byte limit")))
             (true
               (let View (if (shen-jit.pointer? (buffer.owner Input))
                             (buffer.wrap (buffer.bytes Input)) Input)
                    Op (if (= Query []) parse query)
                 (trap-error
                   (do (abi)
-                      (let Raw (c-parse (shen-jit.apply (lang.entry Language) [])
+                      (let Raw (c-parse (shen-jit.apply (language.entry Language) [])
                                   (record [(buffer.owner View) (buffer.offset View)
                                                       N Query Config]))
                         (if (number? (<-address Raw 0))
                             (native-error Op Name Raw)
-                            [ok (snapshot.make Name Raw)])))
+                            (:ok (read-snapshot Name Raw)))))
                   (/. X (foreign-error Op Name X))))))))
 
-(define snapshot-check
-  Snapshot ->
-    (if (snapshot? Snapshot)
-        (snapshot.raw Snapshot)
-        (error "treesitter: not a snapshot")))
-
-(define node-count
-  Snapshot -> (/ (shen-jit.bytes-length (<-address (snapshot-check Snapshot) 1)) 48))
-
-(define root
-  Snapshot -> (do (snapshot-check Snapshot) 1))
-
-(define node-word
-  Snapshot Node Field ->
-    (let Raw (snapshot-check Snapshot)
-         ID (buffer.index Node)
-         Count (/ (shen-jit.bytes-length (<-address Raw 1)) 48)
-      (if (and (> ID 0) (<= ID Count))
-          (shen-jit.u32 (<-address Raw 1) (+ (* (- ID 1) 48) (* Field 4)))
-          (error "treesitter: node ~A is outside this snapshot" ID))))
-
-(define parent
-  Snapshot Node -> (node-word Snapshot Node 0))
-
-(define first-child
-  Snapshot Node -> (node-word Snapshot Node 1))
-
-(define next-sibling
-  Snapshot Node -> (node-word Snapshot Node 2))
-
-(define kind
-  Snapshot Node ->
-    (<-address (<-address (snapshot-check Snapshot) 2) (node-word Snapshot Node 3)))
-
-(define field
-  Snapshot Node ->
-    (<-address (<-address (snapshot-check Snapshot) 3) (node-word Snapshot Node 4)))
-
-(define flag?
-  Snapshot Node Mask -> (not (= (shen-jit.bit-and (node-word Snapshot Node 5) Mask) 0)))
-
-(define named?
-  Snapshot Node -> (flag? Snapshot Node 1))
-
-(define missing?
-  Snapshot Node -> (flag? Snapshot Node 2))
-
-(define error?
-  Snapshot Node -> (flag? Snapshot Node 4))
-
-(define has-error?
-  Snapshot Node -> (flag? Snapshot Node 8))
-
-(define extra?
-  Snapshot Node -> (flag? Snapshot Node 16))
-
-(define start-byte
-  Snapshot Node -> (node-word Snapshot Node 6))
-
-(define end-byte
-  Snapshot Node -> (node-word Snapshot Node 7))
-
-(define start-point
-  Snapshot Node -> [(node-word Snapshot Node 8) (node-word Snapshot Node 9)])
-
-(define end-point
-  Snapshot Node -> [(node-word Snapshot Node 10) (node-word Snapshot Node 11)])
-
-(define source
-  Snapshot -> (buffer.wrap (buffer.bytes (buffer.wrap (<-address (snapshot-check Snapshot) 0)))))
-
-(define text
-  Snapshot Node ->
-    (let Start (start-byte Snapshot Node)
-         End (end-byte Snapshot Node)
-      (shen-jit.bytes->string (<-address (snapshot-check Snapshot) 0) Start (- End Start))))
-
-(define children
-  Snapshot Node -> (siblings Snapshot (first-child Snapshot Node) []))
-
-(define siblings
-  _ 0 Acc -> (reverse Acc)
-  Snapshot Node Acc -> (siblings Snapshot (next-sibling Snapshot Node) [Node | Acc]))
-
-(define child-by-field
-  Snapshot Node Field -> (find-field Snapshot (first-child Snapshot Node) Field))
-
-(define find-field
-  _ 0 _ -> 0
-  Snapshot Node Field ->
-    (if (= (field Snapshot Node) Field)
-        Node
-        (find-field Snapshot (next-sibling Snapshot Node) Field)))
-
-(define fold
-  F Acc Snapshot -> (fold-loop F Acc Snapshot 1 (node-count Snapshot)))
-
-(define fold-loop
-  _ Acc _ At End -> Acc where (> At End)
-  F Acc Snapshot At End -> (fold-loop F (F Acc At) Snapshot (+ At 1) End))
-
-\\ Captures are in match order; IDs within each snapshot are one-based, patterns are zero-based.
-(define capture-count
-  Snapshot -> (/ (shen-jit.bytes-length (<-address (snapshot-check Snapshot) 4)) 16))
-
-(define match-count
-  Snapshot -> (<-address (snapshot-check Snapshot) 6))
-
-(define capture-word
-  Snapshot Capture Field ->
-    (let Raw (snapshot-check Snapshot)
-         ID (buffer.index Capture)
-         Count (/ (shen-jit.bytes-length (<-address Raw 4)) 16)
-      (if (and (> ID 0) (<= ID Count))
-          (shen-jit.u32 (<-address Raw 4) (+ (* (- ID 1) 16) (* Field 4)))
-          (error "treesitter: capture ~A is outside this snapshot" ID))))
-
-(define capture-match
-  Snapshot Capture -> (capture-word Snapshot Capture 0))
-
-(define capture-pattern
-  Snapshot Capture -> (capture-word Snapshot Capture 1))
-
-(define capture-name
-  Snapshot Capture ->
-    (<-address (<-address (snapshot-check Snapshot) 5)
-               (capture-word Snapshot Capture 2)))
-
-(define capture-node
-  Snapshot Capture -> (capture-word Snapshot Capture 3))
+\\ A result, (result A), is (result.t (treesitter.error * A)), which the library declares in the long
+\\ form, as declare keeps a type as it is written.
+(synonyms (result A) (result.t (treesitter.error * A)))
 
 (datatype t
-  X : A;
-  ============================
-  [ok X] : (result A);
+  if (element? Key [input-limit result-limit query-limit])
+  Key : symbol; N : fixnum;
+  ____________________________
+  [Key N] : option;
 
-  E : treesitter.error;
-  ============================
-  [error E] : (result A);
-
+  if (element? Key [node-limit capture-limit match-limit timeout])
   Key : symbol; N : number;
-  ============================
+  ____________________________
   [Key N] : option;)
 
 (declare treesitter.load-language
-  [string --> [[list string] --> [string --> [result treesitter.language]]]])
-(declare language-name [treesitter.language --> string])
-(declare language-version [treesitter.language --> number])
+  [string --> [[list string] --> [string --> [result.t [treesitter.error * treesitter.language]]]]])
 (declare treesitter.parse
   [treesitter.language --> [buffer.view --> [[list option] -->
-    [result snapshot]]]])
+    [result.t [treesitter.error * snapshot]]]]])
 (declare treesitter.query
   [treesitter.language --> [buffer.view --> [string --> [[list option] -->
-    [result snapshot]]]]])
-(declare node-count [snapshot --> number])
-(declare root [snapshot --> number])
-(declare parent [snapshot --> [number --> number]])
-(declare first-child [snapshot --> [number --> number]])
-(declare next-sibling [snapshot --> [number --> number]])
-(declare kind [snapshot --> [number --> string]])
-(declare field [snapshot --> [number --> string]])
-(declare named? [snapshot --> [number --> boolean]])
-(declare missing? [snapshot --> [number --> boolean]])
-(declare error? [snapshot --> [number --> boolean]])
-(declare has-error? [snapshot --> [number --> boolean]])
-(declare extra? [snapshot --> [number --> boolean]])
-(declare start-byte [snapshot --> [number --> number]])
-(declare end-byte [snapshot --> [number --> number]])
-(declare start-point [snapshot --> [number --> [list number]]])
-(declare end-point [snapshot --> [number --> [list number]]])
-(declare source [snapshot --> buffer.view])
-(declare text [snapshot --> [number --> string]])
-(declare children [snapshot --> [number --> [list number]]])
-(declare child-by-field [snapshot --> [number --> [string --> number]]])
-(declare fold [[A --> [number --> A]] --> [A --> [snapshot --> A]]])
-(declare capture-count [snapshot --> number])
-(declare match-count [snapshot --> number])
-(declare capture-match [snapshot --> [number --> number]])
-(declare capture-pattern [snapshot --> [number --> number]])
-(declare capture-name [snapshot --> [number --> string]])
-(declare capture-node [snapshot --> [number --> number]])
-(declare error-operation [treesitter.error --> symbol])
-(declare error-domain [treesitter.error --> symbol])
-(declare error-code [treesitter.error --> number])
-(declare error-offset [treesitter.error --> number])
-(declare error-resource [treesitter.error --> string])
-(declare error-message [treesitter.error --> string])
+    [result.t [treesitter.error * snapshot]]]]]])
 
 )

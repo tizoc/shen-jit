@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name socket)
+  (requires ffi numbers)
+  (sources tc- "socket.shen"))

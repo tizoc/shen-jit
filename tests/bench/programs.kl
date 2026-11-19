@@ -38,6 +38,6 @@
 
 (defun not-boolean () (if 1 a b))
 
-(defun add-real () (+ 1 (/ 1 2)))
+(defun add-float () (+ 1 (/ 1 2)))
 
 (defun overflow () (+ 2305843009213693951 1))
