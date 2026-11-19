@@ -9,7 +9,7 @@
   (use grammar)
   (import struct defstruct)
   (import layout write-layout defflags flag-bits)
-  (externals [defgrammar u16-be <end> <e>])
+  (externals [defgrammar u16-be <end> <e> skip])
   (shadow listen release)
   (export peer make-peer listen connect state send recv-into shutdown-write poll
           listener make-listener listener-poll accept connection-index connection-state
@@ -850,7 +850,7 @@
   2 4 (u16-be Size) (where (fx> Size 0)) (<options> (smaller Mss Size)) := <options>;   \\ Maximum segment size.
   3 3 _ (<options> Mss) := <options>;                                    \\ Window scale.
   4 2 (<options> Mss) := <options>;                                      \\ SACK permitted.
-  Kind Length (where (and (fx> Kind 4) (fx>= Length 2))) (wire.<bytes> (fx- Length 2)) (<options> Mss)
+  Kind Length (where (and (fx> Kind 4) (fx>= Length 2))) (skip (fx- Length 2)) (<options> Mss)
     := <options>;)
 
 \\ Compile the rules' loops now, while the module loads, so that a saved program carries them.

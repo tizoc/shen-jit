@@ -8,7 +8,7 @@
   (use grammar)
   (import struct defstruct)
   (import layout write-layout)
-  (externals [defgrammar <end>])
+  (externals [defgrammar <end> skip])
   (export host make configure-static poll ingress next-deadline
           host.device host.link-local host.global host.local-state host.global-state
           host.preferred-until host.valid-until host.router host.router-until
@@ -213,7 +213,7 @@
 (defgrammar <options> {==> boolean}
   <end> := true;
   Kind Units (where (and (fx> Units 0) (or (not (or (= Kind 1) (= Kind 2))) (= Units 1))))
-    (wire.<bytes> (fx- (fx* 8 Units) 2)) <options> := true;)
+    (skip (fx- (fx* 8 Units) 2)) <options> := true;)
 
 (grammar.finish)
 

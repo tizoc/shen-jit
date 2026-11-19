@@ -9,7 +9,7 @@
   (use grammar)
   (import struct defstruct)
   (import layout write-layout)
-  (externals [defgrammar u32-be <end> require])
+  (externals [defgrammar u32-be <end> require skip])
   (export client make poll maintain
           client.state client.address client.mask client.gateway client.dns
           client.deadline client.expires selecting requesting bound renewing rebinding expired)
@@ -113,14 +113,14 @@
   53 1 Kind (require (<options> (options.kind-> O Kind)) "malformed options") := <options>;      \\ Message type.
   54 4 (u32-be IP) (require (<options> (options.server-> O IP)) "malformed options") := <options>;   \\ Server.
   1 4 (u32-be Mask) (require (<options> (options.mask-> O Mask)) "malformed options") := <options>;  \\ Subnet mask.
-  3 Length (where (fx>= Length 4)) (u32-be IP) (wire.<bytes> (fx- Length 4))                       \\ Routers,
+  3 Length (where (fx>= Length 4)) (u32-be IP) (skip (fx- Length 4))                       \\ Routers,
     (require (<options> (options.gateway-> O IP)) "malformed options") := <options>;               \\ the first.
-  6 Length (where (fx>= Length 4)) (u32-be IP) (wire.<bytes> (fx- Length 4))                       \\ DNS servers,
+  6 Length (where (fx>= Length 4)) (u32-be IP) (skip (fx- Length 4))                       \\ DNS servers,
     (require (<options> (options.dns-> O IP)) "malformed options") := <options>;                   \\ the first.
   51 4 (u32-be Seconds) (require (<options> (options.lease-> O Seconds)) "malformed options") := <options>;
   58 4 (u32-be Seconds) (require (<options> (options.renew-> O Seconds)) "malformed options") := <options>;
   59 4 (u32-be Seconds) (require (<options> (options.rebind-> O Seconds)) "malformed options") := <options>;
-  _ Length (wire.<bytes> Length) (require (<options> O) "malformed options") := <options>;          \\ Others.
+  _ Length (skip Length) (require (<options> O) "malformed options") := <options>;          \\ Others.
   <end> := false;)
 
 (grammar.finish)

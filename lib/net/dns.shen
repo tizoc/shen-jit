@@ -8,7 +8,7 @@
   (use grammar)
   (import struct defstruct)
   (import layout write-layout)
-  (externals [defgrammar])
+  (externals [defgrammar skip])
   (export resolver make start poll
           resolver.state resolver.ip resolver.ttl resolver.deadline
           idle pending resolved not-found failed)
@@ -53,7 +53,7 @@
 (defgrammar (<name> Compressed) {boolean ==> fixnum}
   0 := 0;
   Head (where (and Compressed (fx>= Head 192))) _ := 0;
-  Length (where (fx<= Length 63)) (wire.<bytes> Length) (<name> Compressed) := 0;)
+  Length (where (fx<= Length 63)) (skip Length) (<name> Compressed) := 0;)
 
 (grammar.finish)
 

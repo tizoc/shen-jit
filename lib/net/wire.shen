@@ -3,9 +3,7 @@
 \\ (wire.ipv4.protocol B I) is the read of byte I+9 that one would write by hand. See lib/layout.shen.
 (shen.x.namespace net-wire
   (use buffer)
-  (use grammar)
   (import layout deflayout)
-  (externals [defgrammar <e>])
 
 \\ RFC 791.
 (deflayout ipv4
@@ -135,11 +133,4 @@
   (hardware-length 8) (protocol-length 8) (operation 16)
   (sender-hardware 48) (sender-protocol 32)
   (target-hardware 48) (target-protocol 32))
-
-\\ N bytes of anything: the rest of an option, or a label, whose length came before it.
-(defgrammar (<bytes> N) {fixnum ==> fixnum}
-  (where (= N 0)) := 0;
-  (where (fx> N 0)) _ (<bytes> (fx- N 1)) := 0;)
-
-(grammar.finish)
 )
