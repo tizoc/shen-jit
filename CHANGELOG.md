@@ -5,6 +5,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.9] - 2026-11-19
+
 ### Added
 
 - `buffer.u16-be`, `buffer.u32-be`, `buffer.u16-be->`, and `buffer.u32-be->` read and store checked
@@ -95,7 +97,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
-- Use `buffer.u8->` for byte stores and `buffer.copy-into!` for in-place copies.
+- Moved to the Shen kernel 43.7, from 43.6.
+- `buffer.u8!` and `buffer.copy!` are now `buffer.u8->` and `buffer.copy-into!`, and the old names are gone.
 - A closure can capture up to 4096 values, up from 256, with the same bytecode and native instructions for existing closures.
 - Each library in `lib/` is a module, with a `.shenmod` descriptor beside it, so `-m http/server` loads the HTTP
   server and everything it needs. Libraries of several files moved into directories: `lib/io/` (`io`, `io/file`,
@@ -652,7 +655,8 @@ All notable changes to this project are documented in this file. The format is b
 
 - Initial release
 
-[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.8...HEAD
+[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.9...HEAD
+[0.9]: https://github.com/tizoc/shen-jit/compare/v0.8...v0.9
 [0.8]: https://github.com/tizoc/shen-jit/compare/v0.7...v0.8
 [0.7]: https://github.com/tizoc/shen-jit/compare/v0.6...v0.7
 [0.6]: https://github.com/tizoc/shen-jit/compare/v0.5...v0.6
