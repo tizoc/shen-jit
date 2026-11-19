@@ -1,5 +1,6 @@
 #!/bin/sh
-# Typed grammars refuse what does not typecheck, and say where; their rules read from a reader.
+# Typed grammars refuse what does not typecheck, and say where; their rules read from a reader,
+# and compile once in a sealed program.
 set -eu
 SHEN=$1
 dir=$(mktemp -d)
@@ -77,6 +78,55 @@ cat > "$dir/two-grammars.shenmod" <<'EOF'
 EOF
 "$SHEN" eval -m "$dir/two-grammars.shenmod" > "$dir/two.out" 2>&1
 [ "$(grep -c '^[1-9][0-9]* passed, 0 failed$' "$dir/two.out")" = 2 ] || { cat "$dir/two.out"; exit 1; }
+passed=$((passed + 1))
+
+# A built typed program is sealed, and its rules compile once, at their first call: the native
+# code it compiles is the same for 10 parses as for 1000.
+cat > "$dir/once.shen" <<'EOF'
+(defgrammar <once.digit> {==> fixnum} B := (fx- B 48) where (and (fx>= B 48) (fx<= B 57));)
+(defgrammar (<once.number> Acc) {fixnum ==> fixnum}
+  <once.digit> (<once.number> (fx+ (fx* 10 Acc) <once.digit>)) := <once.number>;
+  <once.digit> := (fx+ (fx* 10 Acc) <once.digit>);)
+(define once.parses
+  {fixnum --> buffer.view --> fixnum --> fixnum}
+  0 _ Acc -> Acc
+  K V Acc -> (once.parses (fx- K 1) V (if (<once.number>.match? 0 V)
+                                          (fx+ Acc (<once.number>.parse 0 V (/. At Message -1)))
+                                          Acc)))
+EOF
+cat > "$dir/once-main.shen" <<'EOF'
+(define once.main
+  -> (output "~A~%" (once.parses (hd (read-from-string (hd (tl (value *argv*))))) (buffer.from-string "123") 0)))
+EOF
+cat > "$dir/once.shenmod" <<'EOF'
+(shen.module (version 1) (name once) (requires grammar) (typed) (main once.main)
+  (sources tc+ "once.shen" tc- "once-main.shen"))
+EOF
+"$SHEN" build "$dir/once.shenmod" -o "$dir/once" > "$dir/once-build.out" 2>&1 || { cat "$dir/once-build.out"; exit 1; }
+compiled() {
+  SHEN_JIT_STATS=1 "$dir/once" "$1" > "$dir/once.out" 2>&1 && grep -qxF "$2" "$dir/once.out" ||
+    { cat "$dir/once.out" >&2; exit 1; }
+  sed -n 's/.*native code: \([0-9]*\) code objects compiled.*/\1/p' "$dir/once.out"
+}
+few=$(compiled 10 1230) && many=$(compiled 1000 123000) || exit 1
+[ -n "$few" ] && [ "$few" = "$many" ] || {
+  echo "FAIL a sealed typed rule compiled again: $few code objects for 10 parses, $many for 1000"; exit 1; }
+passed=$((passed + 1))
+
+# A typed source can call (grammar.finish) as it loads, sealed, and the rules it prepared read.
+printf '(grammar.finish)\n' > "$dir/finish.shen"
+cat > "$dir/finish-main.shen" <<'EOF'
+(define finish.main
+  -> (output "read: ~S~%" (grammar.read (<once.number> 0) (io.reader (io.input-buffer (buffer.from-string "123")) [])
+                                        (/. P M [fail P M]))))
+EOF
+cat > "$dir/finish.shenmod" <<'EOF'
+(shen.module (version 1) (name finish) (requires grammar) (typed) (main finish.main)
+  (sources tc+ "once.shen" "finish.shen" tc- "finish-main.shen"))
+EOF
+"$SHEN" build "$dir/finish.shenmod" -o "$dir/finish" > "$dir/finish-build.out" 2>&1 || { cat "$dir/finish-build.out"; exit 1; }
+"$dir/finish" > "$dir/finish.out" 2>&1 && grep -qxF 'read: #<result.ok [123]>' "$dir/finish.out" ||
+  { cat "$dir/finish.out"; exit 1; }
 passed=$((passed + 1))
 
 # One ordinary typed load after grammar must fit all 300 declarations in the default budget.

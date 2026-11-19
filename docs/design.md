@@ -510,7 +510,10 @@ which compiles the loops still pending and prepares the streaming variants of th
 reads name; an image saved after it carries them made. In an isolate, a loop or variant never
 made is refused, saying to call it. The stub that stands for a loop until then is defined with
 sealing off, as the loop replaces it, so code compiled against it reaches the loop by name; the
-loop is sealed if sealing is on when it is made.
+loop is sealed if sealing is on when it is made. A typed rule and a read variant have stubs of the
+same kind. A typed rule's is defined before `<rule>.parse` and the other functions typed code
+calls it through: compiled first, while sealing is on, they would bind the stub at their first
+call and keep calling it, as a sealed call to a function not defined yet does.
 
 A function goes to an isolate by its name, a published symbol, and the isolate gets it with
 `fn`; what `fn` makes is a closure in a heap, which does not cross. A foreign function found at

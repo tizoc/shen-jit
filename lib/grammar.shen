@@ -142,8 +142,9 @@
                                 Rules))])
          _ (put Name code Def)
          _ (restream Name)
+         _ (if (tc?) (stub Name Name Def) skip)
          Checked (if (empty? Sig) [] (typed Name Params Sig Rules))
-      (if (tc?) (do (stub Name Name Def) (if (empty? Sig) Name Checked)) Def)))
+      (if (tc?) (if (empty? Sig) Name Checked) Def)))
 
 \\ Typed grammars. A signature, {T1 --> T2 ==> B}, gives the parameters' types and the value's,
 \\ and is read as its symbols. What an alternative names, it gives to a function annotated with
@@ -151,7 +152,8 @@
 \\ arguments; the loader checks it under (tc +). A rule cannot be checked itself, as values pass
 \\ through the state, so under (tc +) every rule is defined as a stub, which the loader does not
 \\ see, and compiled at its first call, as a loop is. Typed code parses with <rule>.parse and
-\\ <rule>.match?.
+\\ <rule>.match?. The stub is made before them, as they call it: a call compiled while sealing is
+\\ on to a function not defined yet binds what is there at its first call, and keeps it.
 
 (define signed
   Name Params [X | Body] -> (signature Name Params Body []) where (= X (intern "{"))
@@ -329,6 +331,8 @@
           Reads (pending reads)
           _ (put pending reads (keep-if (/. R (not (trap-error (do (prepare R) true) (/. E false)))) Reads))
        true))
+
+(declare finish [--> boolean])
 
 (define keep-if
   _ [] -> []
@@ -881,6 +885,7 @@
          (if (empty? Code) (trap-error (get F loop) (/. E [])) Code)))
 
 \\ F's streaming variant, defined as a stub that compiles it at its first call, again if F changed.
+\\ The variant replaces the stub, which is defined with sealing off, as a loop's is.
 (define stream
   F -> (let G (intern (cn (str F) "/stream"))
             Def (source F)
@@ -891,7 +896,8 @@
                        _ (shen.store-arity G (length Params))
                        _ (put G made-from Def)
                        _ (put G stream-of F)
-                    (eval (append [define G | Params] [-> [compile-stream G F (list Params)]]))))
+                    (unsealed (freeze (eval (append [define G | Params]
+                                                    [-> [compile-stream G F (list Params)]]))))))
          G))
 
 \\ A rule redefined after a streaming read: its variant, which its callers' variants call by

@@ -3907,6 +3907,31 @@ and the loop takes the sealing mode at compilation. A stale-stub fallback was un
 is called by name. `sqlite-http` finishes grammars before starting its database isolate, which otherwise blocks
 program changes. Grammar tests and the sealed example builds exercise both paths.
 
+### Typed rules compiled once in sealed programs (2026-11-19, Apple M3 Max, against main)
+
+Not every caller called the open stub by name. A typed rule's `<rule>.parse`, `.match?` and `.read` were defined
+before the rule's stub, and while sealing is on, a call to a function not defined yet is sealed and binds at its
+first call to what is there: the stub. They kept calling it after it had installed the rule, so a typed rule in a
+program that `shen-jit build` made compiled again at every parse, unless `(grammar.finish)` had made it before the
+program was saved. Nothing failed. The stub is defined before them now.
+
+- **Numbers:** a built program parsing `"123"` with `(<number> 0)`, from grammar.md's Types section, compiled 1,206
+  code objects for 1,000 parses, 999 of them the rule again, and 20,000 parses took 1.74 to 1.94 s, about 90 µs
+  each, three runs. Now it compiles 207, the stub, the rule and the compiler's own functions, once, and 2,000,000
+  parses take 0.05 to 0.06 s, about 30 ns each, as with `(grammar.finish)` as it loads, which leaves 9 to compile.
+  A program parsing TCP options with a typed grammar compiled one rule 4,156 times, and took 265 s against 0.36 s.
+- **Read variants:** `(grammar.finish)` called while sealing is on, as a sealed source loads, defined each read
+  variant's stub sealed, so the variant could not replace it, and the first `grammar.read` failed with "`<rule>/stream`
+  is sealed and cannot be redefined". That stub is defined with sealing off, as a loop's is. `grammar.finish` is
+  declared `(--> boolean)`, so a typed source can call it.
+- **Not added:** a stub that compiles only while its rule is pending, and otherwise calls what replaced it, which
+  would cap the cost of any caller still bound to a stub at a call through `fn`. The one left is untyped code, loaded
+  sealed before a rule's source, that calls the rule by name, and a `(grammar.finish)` before its first call binds it
+  to the rule. The fallback would turn the next such bug from a count that a test checks into a slower call.
+- **Checked:** `tests/grammar_typed.sh` builds a sealed typed program and requires as many code objects compiled for 10
+  parses as for 1,000, 250 for both, against 259 and 1,249 before, and one that calls `(grammar.finish)` from its
+  typed source and reads.
+
 ### Rejected: a module's arities recorded before its sources load (2026-11-16, Apple M3 Max)
 
 Scanning every source first would cost a second read and could miss macro-expanded definitions or names that

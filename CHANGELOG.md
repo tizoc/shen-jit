@@ -10,6 +10,11 @@ All notable changes to this project are documented in this file. The format is b
 - In a typed program, a sealed call of a function of no arguments that is not inlined, such as one written before
   the function's definition, or of a C function of no arguments, compiles: it failed with "partial function
   shen-jit.lower.float-call", and asked on standard input whether to track it.
+- In a program built with `shen-jit build`, a typed grammar rule compiles once, at its first call. It compiled again
+  at every parse, and ran hundreds of times slower, unless `(grammar.finish)` had made it before the program was saved.
+- `(grammar.finish)` has a type, `(--> boolean)`, so a typed source can call it as it loads. Called while sealing is
+  on, as a sealed build loads, it no longer makes the first `grammar.read` of a rule fail with "`<rule>/stream` is
+  sealed and cannot be redefined".
 
 ## [0.10] - 2026-11-19
 
