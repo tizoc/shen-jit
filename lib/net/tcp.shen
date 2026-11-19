@@ -454,8 +454,8 @@
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> buffer.view}
   P B At Left Right ->
     (let Next (peer.recv-next P)
-      (do (buffer.u32-be-> B At (seq-number (seq-add Next Left)))
-          (buffer.u32-be-> B (fx+ At 4) (seq-number (seq-add Next Right))))))
+      (write-layout wire.tcp-sack-block B At
+        (left (seq-number (seq-add Next Left))) (right (seq-number (seq-add Next Right))))))
 
 (define write-sack-runs
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
@@ -466,7 +466,7 @@
            true
              (let End (sack-run-end P Tail (fx+ I 1) Limit)
                (if (= I Skip) (write-sack-runs P B At Tail End Limit Skip Used Max)
-                   (do (write-sack-block P B (fx+ At (fx* Used 8)) I End)
+                   (do (write-sack-block P B (fx+ At (fx* Used (wire.tcp-sack-block.size))) I End)
                        (write-sack-runs P B At Tail End Limit Skip (fx+ Used 1) Max))))))
 
 (define write-sack
@@ -474,22 +474,22 @@
   P B At ->
     (let Tail (receive-tail P)
          Limit (receive-limit P (window P))
-         Max (smaller 4 (fxquotient (fx- (peer.path-mtu P) (fx+ (minimum-header P) 4)) 8))
+         Max (smaller 4 (fxquotient (fx- (peer.path-mtu P) (fx+ (minimum-header P) (wire.tcp-sack-option.size)))
+                                    (wire.tcp-sack-block.size)))
          Recent (seq-distance (seq-of (peer.rx-sack-recent P)) (peer.recv-next P))
          First (if (and (fx>= (peer.rx-sack-recent P) 0)
                         (fx< Recent Limit) (receive-marked? P Tail Recent))
                    (sack-run-start P Tail Recent) (type -1 fixnum))
-         Blocks (fx+ At 4)
+         Blocks (fx+ At (wire.tcp-sack-option.size))
          Used (if (fx>= First 0)
                   (do (write-sack-block P B Blocks First (sack-run-end P Tail (fx+ First 1) Limit))
                       (type 1 fixnum))
                   (type 0 fixnum))
          N (write-sack-runs P B Blocks Tail 0 Limit First Used Max)
-         Size (fx* N 8)
+         Size (fx* N (wire.tcp-sack-block.size))
       (if (= N 0) 0
-          (do (buffer.u16-be-> B At 257) \\ Two NOPs align the block edges.
-              (buffer.u16-be-> B (fx+ At 2) (fx+ 1282 Size))
-              (fx+ Size 4)))))
+          (do (write-layout wire.tcp-sack-option B At (no-ops 257) (kind 5) (length (fx+ Size 2)))
+              (fx+ Size (wire.tcp-sack-option.size))))))
 
 (define wants-sack?
   {peer --> boolean}
@@ -499,32 +499,32 @@
   {peer --> boolean}
   P -> (fx>= (peer.path-mtu P) (fx+ (minimum-header P) 12)))
 
+\\ A SYN's options, a word each: SACK permitted, the size, and the window scale. A path with room for
+\\ SACK has room for all three.
 (define write-syn-options
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum}
   P B At Flags ->
-    (let Sack (and (sack-capable? P) (or (= Flags (flag-bits control syn)) (peer.sack-enabled P)))
+    (let Room (fx- (peer.path-mtu P) (minimum-header P))
+         Sack (and (sack-capable? P) (or (= Flags (flag-bits control syn)) (peer.sack-enabled P)))
          Scale (and (sack-capable? P)
                     (if (= Flags (flag-bits control syn)) (fx> (peer.window-scale P) 0)
                         (fx>= (peer.remote-scale P) 0)))
-         N (if Sack (let _ (buffer.u32-be-> B At 67239936) (type 4 fixnum)) (type 0 fixnum))
-         M (fx+ At N)
-      (if (fx>= (peer.path-mtu P) (fx+ (minimum-header P) 4))
-          (do (buffer.u16-be-> B M 516)
-              (buffer.u16-be-> B (fx+ M 2) (smaller (peer.capacity P) (fx- (peer.path-mtu P) (minimum-header P))))
-              \\ The padding after SACK-Permitted must stay traversable.
-              (if Sack (buffer.u16-be-> B (fx+ At 2) 257) B)
+         M (if Sack (fx+ At (wire.tcp-sack-permitted-option.size)) At)
+         End (if Scale (fx+ M 8) (fx+ M 4))
+      (if (fx< Room (wire.tcp-mss-option.size)) 0
+          (do (if Sack (write-layout wire.tcp-sack-permitted-option B At (kind 4) (length 2) (no-ops 257)) B)
+              (write-layout wire.tcp-mss-option B M (kind 2) (length 4) (segment-size (smaller (peer.capacity P) Room)))
               (if Scale
-                  (let Pos (fx+ M 4)
-                    (do (buffer.u32-be-> B Pos (fx+ 50528256 (fx* (peer.window-scale P) 256)))
-                        (fx+ N 8)))
-                  (fx+ N 4)))
-          N)))
+                  (write-layout wire.tcp-scale-option B (fx+ M (wire.tcp-mss-option.size))
+                    (kind 3) (length 3) (shift (peer.window-scale P)))
+                  B)
+              (fx- End At)))))
 
 (define write-options
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum}
   P B I Flags ->
-    (cases (flag? Flags (flag-bits control syn)) (write-syn-options P B (fx+ I 20) Flags)
-           (and (= Flags (flag-bits control ack)) (wants-sack? P)) (write-sack P B (fx+ I 20))
+    (cases (flag? Flags (flag-bits control syn)) (write-syn-options P B (fx+ I (wire.tcp.size)) Flags)
+           (and (= Flags (flag-bits control ack)) (wants-sack? P)) (write-sack P B (fx+ I (wire.tcp.size)))
            true 0))
 
 (define advertised-window
@@ -1090,8 +1090,8 @@
   {peer --> buffer.view --> fixnum --> fixnum --> seq --> boolean}
   _ _ I I _ -> true
   P B I End Una ->
-    (let Left (seq-distance (seq-of (buffer.u32-be B I)) Una)
-         Right (seq-distance (seq-of (buffer.u32-be B (fx+ I 4))) Una)
+    (let Left (seq-distance (seq-of (wire.tcp-sack-block.left B I)) Una)
+         Right (seq-distance (seq-of (wire.tcp-sack-block.right B I)) Una)
          Capacity (peer.capacity P)
       (do (if (and (fx> Left 0) (fx< Left Right) (fx<= Right (peer.tx-flight P)))
               (do (write-sack-marks (peer.tx-sacked P) (wrap-offset (fx+ (peer.tx-head P) Left) Capacity)
@@ -1099,7 +1099,7 @@
                   (peer.tx-sack-high-> P (larger (peer.tx-sack-high P) Right))
                   true)
               false)
-          (read-sack-blocks P B (fx+ I 8) End Una))))
+          (read-sack-blocks P B (fx+ I (wire.tcp-sack-block.size)) End Una))))
 
 (define accept-sack
   {peer --> segment --> seq --> seq --> boolean}

@@ -40,6 +40,25 @@
   (data-offset 4) (reserved 4) (flags 8) (window 16)
   (checksum 16) (urgent 16))
 
+\\ TCP's options as this stack writes them, each a word: RFC 9293's maximum segment size, RFC 7323's
+\\ window scale, followed by the end of the list, and RFC 2018's SACK permitted and SACK blocks, which
+\\ two no-ops (1 and 1, together 257) pad.
+(deflayout tcp-mss-option
+  (kind 8) (length 8) (segment-size 16))
+
+(deflayout tcp-scale-option
+  (kind 8) (length 8) (shift 8) (_ 8))
+
+(deflayout tcp-sack-permitted-option
+  (kind 8) (length 8) (no-ops 16))
+
+(deflayout tcp-sack-option
+  (no-ops 16) (kind 8) (length 8))
+
+(deflayout tcp-sack-block
+  (left 32)
+  (right 32))
+
 \\ RFC 792 and RFC 4443: the common part, and an echo's or a neighbor message's next word.
 (deflayout icmp
   (type 8) (code 8) (checksum 16)

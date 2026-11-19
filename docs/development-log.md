@@ -3849,6 +3849,23 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   The TCP connections took 365.3 to 366.3 ms and 365.0 to 366.1 in two runs, UDP 38.0 to 38.3, and the TUN and
   TAP suites used no heap words. The options' and names' bytes are passed with `main`'s `(skip N)`, so
   `lib/net/wire.shen` declares formats only.
+- TCP's options grammar checked a segment's options and found the size, and a walk written by hand read
+  them again, three times for a SYN and once for every ACK with SACK on. The grammar now stores what each
+  option offers in the segment it passes to the rest of the list, and the walk is gone; neighbor
+  discovery's grammar stores the link-layer addresses its walk had found. TCP connections 366.9 to 368.3
+  and 367.1 to 366.6 ms, at a load of 4. No test reached the default size a SYN gets when it offers none,
+  536 bytes, which only a sized table can show, as an ordinary peer's own is 536 too: the interface suite
+  checks it now, and its target counts its eight reports, as a failure in any but the last was hidden.
+- TCP's options and SACK blocks are written from layouts with `write-layout`, where they were numbers
+  such as 50528256 and 1282 packing kinds, lengths and no-ops: the same bytes, 365.3 to 365.5 ms. TCP reads
+  and writes no packet bytes by hand now; DHCP's request options are the last in `lib/net`. A field named
+  `size` collided with the layout's length, which `deflayout` now refuses, on `main`.
+- **Rejected: a grammar item for effects, to write a list of options as a repetition.** TCP's, DHCP's and
+  neighbor discovery's option grammars all pass a record to the rest of the list, `(<options> (update R
+  V))`, which costs nothing. A repetition computes no values, so it would need an item that runs an
+  expression, and a typed rule still needs a value for each alternative: `(do (update R V)) := true` is as
+  long as what it replaces. DHCP's `require` on each option comes from its policy of passing over a known
+  option of the wrong length, which makes its catch-all overlap the known ones.
 
 ### Dual-stack networking and SLAAC (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
 
