@@ -87,6 +87,9 @@ All notable changes to this project are documented in this file. The format is b
   `result.let-ok`, which chains them as `let` binds values, pass an error on as it is, and `result.bind` raises
   given anything but a result; a namespace imports `let-ok` to write it as it is. In typed code, a chain gives a
   value of another type than the results it reads.
+- `(json.from-null)` and `(json.empty-object)` give a `json.value` to typed code that binds these values
+  before their consumer supplies a type. Use them for early bindings of `null` and `[object]`. The
+  literals still work where `json.value` is expected.
 
 ### Changed
 

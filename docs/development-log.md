@@ -3228,9 +3228,10 @@ execution remains CI's responsibility; no new platform ABI or instruction was in
 
 ### JSON literal inference (2026-11-19, Apple M3 Max, macOS arm64)
 
-Bare Booleans and null gained a second type while their bindings were open, multiplying the combinations a later
-JSON object had to check. Booleans widen to `json.value` only where it is expected. Null literals and patterns
-also use the expected type. `json.from-null` supplies a JSON type for early bindings.
+Bare Booleans, null and empty objects gained a second type while their bindings were open, multiplying the
+combinations a later JSON object had to check. Booleans widen where `json.value` is expected. Bare null and
+`[object]` use the same expected type, with `json.from-null` and `json.empty-object` for early bindings.
+Nonempty object construction and member-list patterns retain their inference rules.
 
 With the same executable, resetting the count after loading `json`:
 
@@ -3245,9 +3246,15 @@ With the same executable, resetting the count after loading `json`:
 | 8 null fields | Limit | 4,025 |
 | 16 null fields | Limit | 10,305 |
 | Rejected chain with 12 bare nulls | Limit | 33,019 |
+| 4 empty object fields | 59,382 | 1,941 |
+| 6 empty object fields | 337,029 | 2,895 |
+| 8 empty object fields | Limit | 4,025 |
+| 16 empty object fields | Limit | 10,305 |
+| Rejected chain with 12 bare empty objects | Limit | 38,497 |
 
-The after counts for successful null objects use `json.from-null`. The JSON tests round-trip both eight-field
-objects and cover direct null literals and patterns. The growth test checks the rejected chain.
+The successful null and empty-object counts use the typed constructors. The JSON tests round-trip eight-field
+objects and cover direct literals and object and null patterns. The growth test checks both rejected chains.
+Eight nonempty object fields still took 13,049 inferences after guarding the empty literal.
 
 ### JSON values and chunked HTTP bodies (2026-11-07, M3 Max, macOS arm64)
 

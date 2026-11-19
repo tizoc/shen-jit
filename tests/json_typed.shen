@@ -45,13 +45,35 @@
                [object ["a" null] ["b" null] ["c" null] ["d" null]
                        ["e" null] ["f" null] ["g" null] ["h" null]]))))
 
+(define json-typed.rebuild-object
+  {json.value --> json.value}
+  [object | Members] -> [object | Members]
+  Value -> Value)
+
+(define json-typed.empty-objects
+  {--> boolean}
+  -> (let A (json.empty-object)
+          B (json.empty-object)
+          C (json.empty-object)
+          D (json.empty-object)
+          E (json.empty-object)
+          F (json.empty-object)
+          G (json.empty-object)
+          H (json.empty-object)
+          Text (json.stringify
+                 [object ["a" A] ["b" B] ["c" C] ["d" D] ["e" E] ["f" F] ["g" G] ["h" H]] [])
+       (and (= (json.stringify (json-typed.rebuild-object [object]) []) "{}")
+            (= (json-typed.rebuild-object (json.parse Text []))
+               [object ["a" [object]] ["b" [object]] ["c" [object]] ["d" [object]]
+                       ["e" [object]] ["f" [object]] ["g" [object]] ["h" [object]]]))))
+
 (define json-typed.run
   {--> boolean}
   -> (let Value [object ["name" "Shen"] ["values" [true null [number "-0"]]]]
           Wire (json.encode Value [[byte-limit 1024]])
           Parsed (json.decode Wire [[depth-limit 8]])
        (and (json-typed.builder) (json-typed.boolean-fields)
-            (json-typed.null-fields)
+            (json-typed.null-fields) (json-typed.empty-objects)
             (= (json.stringify Parsed []) (json.stringify Value []))
             (= (json.integer (json.number "42")) 42)
             (json-typed.read) (json-typed.parts))))

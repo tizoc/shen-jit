@@ -11,7 +11,7 @@
   (use shen-jit)
   (externals [? at byte-limit defgrammar depth-limit object require span text])
   (shadow <e> read value)
-  (export from-string from-number from-array from-null array decode encode integer json.number => number
+  (export from-string from-number from-array from-null empty-object array decode encode integer json.number => number
     json.string => string option parse read stringify value object null)
 
 (define scan-fail
@@ -399,9 +399,18 @@
   ===========================
   [Key Value] : member;
 
+  \\ [object] also has a list type. Introduce it only when the caller expects JSON.
+  ___________________________
+  [object] : (- value);
+
+  if (not (empty? Members))
   Members : (list member);
-  ===========================
+  ___________________________
   [object | Members] : value;
+
+  Members : (list member) >> Goal;
+  ___________________________
+  [object | Members] : value >> Goal;
 
   N : fixnum;
   ___________________________
