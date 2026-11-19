@@ -21,6 +21,7 @@
   (mutable remote-port : fixnum)
   (tx : buffer.view)
   (rx : buffer.view)
+  (rx-present : buffer.view)
   (mss : fixnum)
   (capacity : fixnum)
   (mutable phase : symbol)
@@ -40,6 +41,8 @@
   (mutable recv-next : fixnum)
   (mutable rx-start : fixnum)
   (mutable rx-length : fixnum)
+  (mutable rx-pending : fixnum)
+  (mutable rx-fin : fixnum)
   (mutable recv-eof : boolean)
   (mutable ack-needed : boolean)
   (mutable wait-until : fixnum))
@@ -68,6 +71,7 @@
         remote-port <- RemotePort
         tx <- (buffer.new Capacity)
         rx <- (buffer.new Capacity)
+        rx-present <- (buffer.new Mss)
         mss <- Mss
         capacity <- Capacity
         phase <- closed
@@ -87,6 +91,8 @@
         recv-next <- 0
         rx-start <- 0
         rx-length <- 0
+        rx-pending <- 0
+        rx-fin <- -1
         recv-eof <- false
         ack-needed <- false
         wait-until <- 0)))
@@ -120,6 +126,13 @@
   {fixnum --> fixnum --> boolean}
   Flags Bit -> (not (= (shen-jit.bit-and Flags Bit) 0)))
 
+(define clear-presence
+  {buffer.view --> fixnum --> boolean}
+  _ 0 -> true
+  Map N -> (let I (fx- N 1)
+             (do (buffer.u8-> Map I 0)
+                 (clear-presence Map I))))
+
 (define begin
   {peer --> fixnum --> symbol --> boolean}
   P Seq Phase ->
@@ -139,6 +152,9 @@
               (peer.send-mss-> P (peer.mss P))
               (peer.recv-next-> P 0)
               (peer.rx-start-> P 0)
+              (if (fx> (peer.rx-pending P) 0) (clear-presence (peer.rx-present P) (peer.mss P)) true)
+              (peer.rx-pending-> P 0)
+              (peer.rx-fin-> P -1)
               (peer.recv-eof-> P false)
               (peer.ack-needed-> P false)
               (peer.phase-> P Phase)
@@ -164,6 +180,7 @@
 
 (define window
   {peer --> fixnum}
+  \\ Pending bytes already occupy their own positions inside this sequence interval.
   P -> (fx- (peer.capacity P) (peer.rx-length P)))
 
 (define wrap-offset
@@ -470,30 +487,91 @@
         (acknowledge-data P Seq Ack Window Now)
         (acknowledge-control P Seq Ack Window Now)))
 
+(define presence-mask
+  {fixnum --> fixnum}
+  At -> (shen-jit.shift-left 1 (shen-jit.bit-and At 7)))
+
+\\ Store the first byte received at each position and count only newly marked bytes.
+(define store-missing
+  {buffer.view --> buffer.view --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
+  _ _ _ _ _ _ 0 Added -> Added
+  Rx Map B Start At Capacity N Added ->
+    (let I (shen-jit.shift-right At 3)
+         Bits (buffer.u8 Map I)
+         Mask (presence-mask At)
+         Next (wrap-offset (fx+ At 1) Capacity)
+         Fresh (= (shen-jit.bit-and Bits Mask) 0)
+      (do (if Fresh
+              (do (buffer.u8-> Rx At (buffer.u8 B Start))
+                  (buffer.u8-> Map I (shen-jit.bit-or Bits Mask)))
+              Rx)
+          (store-missing Rx Map B (fx+ Start 1) Next Capacity (fx- N 1)
+                         (if Fresh (fx+ Added 1) Added)))))
+
+\\ Contiguous bytes are already at the end of the readable data in the same ring.
+(define promote-contiguous
+  {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
+  _ _ _ 0 Count -> Count
+  Map At Capacity Limit Count ->
+    (let I (shen-jit.shift-right At 3)
+         Bits (buffer.u8 Map I)
+         Mask (presence-mask At)
+      (if (= (shen-jit.bit-and Bits Mask) 0) Count
+          (do (buffer.u8-> Map I (shen-jit.bit-xor Bits Mask))
+              (promote-contiguous Map (wrap-offset (fx+ At 1) Capacity) Capacity
+                                  (fx- Limit 1) (fx+ Count 1))))))
+
+(define advance-receive
+  {peer --> fixnum --> boolean}
+  P N -> (do (peer.rx-length-> P (fx+ (peer.rx-length P) N))
+             (peer.recv-next-> P (seq-add (peer.recv-next P) N))
+             true))
+
 (define receive-bytes
-  {peer --> buffer.view --> fixnum --> fixnum --> boolean}
-  P B Start N ->
+  {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  P B Start Offset N Limit ->
     (let Rx (peer.rx P)
-         Count (peer.rx-length P)
          Capacity (peer.capacity P)
-         At (wrap-offset (fx+ (peer.rx-start P) Count) Capacity)
-      (do (copy-into-ring Rx At Capacity B Start N)
-          (peer.rx-length-> P (fx+ Count N))
-          (peer.recv-next-> P (seq-add (peer.recv-next P) N))
-          (peer.ack-needed-> P true)
-          true)))
+         Tail (wrap-offset (fx+ (peer.rx-start P) (peer.rx-length P)) Capacity)
+         Pending (peer.rx-pending P)
+      (if (and (= Offset 0) (= Pending 0))
+          (do (copy-into-ring Rx Tail Capacity B Start N)
+              (advance-receive P N))
+          (let Map (peer.rx-present P)
+               At (wrap-offset (fx+ Tail Offset) Capacity)
+               Added (store-missing Rx Map B Start At Capacity N 0)
+            (if (= Offset 0)
+                (let Ready (promote-contiguous Map Tail Capacity Limit 0)
+                  (do (peer.rx-pending-> P (fx- (fx+ Pending Added) Ready))
+                      (advance-receive P Ready)))
+                (do (peer.rx-pending-> P (fx+ Pending Added)) true))))))
 
 (define receive-fin
   {peer --> fixnum --> boolean}
   P Now ->
     (let Phase (state P)
       (do (peer.recv-eof-> P true)
+          (peer.rx-fin-> P -1)
           (peer.recv-next-> P (seq-add (peer.recv-next P) 1))
           (peer.ack-needed-> P true)
           (cases (= Phase established) (do (peer.phase-> P close-wait) true)
                  (= Phase fin-wait-1) (do (peer.phase-> P closing) true)
                  (= Phase fin-wait-2) (enter-time-wait P Now)
                  true true))))
+
+(define receive-text
+  {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> fixnum --> fixnum --> boolean}
+  P B Start Offset N Fin Window Now ->
+    (let End (fx+ Offset N)
+         Next (peer.recv-next P)
+         _ (if (and Fin (fx< End Window) (fx< (peer.rx-fin P) 0))
+               (peer.rx-fin-> P (seq-add Next End)) P)
+         Final (peer.rx-fin P)
+         Limit (if (fx< Final 0) Window (smaller Window (seq-distance Final Next)))
+         Count (smaller N (fx- Limit Offset))
+      (do (peer.ack-needed-> P true)
+          (if (fx> Count 0) (receive-bytes P B Start Offset Count Limit) true)
+          (if (= Final (peer.recv-next P)) (receive-fin P Now) true))))
 
 (define answer-duplicate
   {peer --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
@@ -509,26 +587,25 @@
 (define receive-connected
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
   P B Start N Flags Seq Ack Win Now ->
-    \\ A retransmission may overlap already delivered bytes after resegmentation.
     (let Next (peer.recv-next P)
          Window (window P)
+         Ahead (seq-distance Seq Next)
          Skip (seq-distance Next Seq)
          Fin (flag? Flags 1)
          Span (if Fin (fx+ N 1) N)
-         Contiguous (or (= Skip 0) (fx< Skip Span))
+         Overlap (fx< Skip Span)
+         Acceptable (or (= Ahead 0) Overlap (fx< Ahead Window))
       (cases (= (state P) time-wait) (answer-duplicate P Flags Seq N Now)
              (flag? Flags 4) (if (= Seq Next) (stop-peer P reset) false)
              (flag? Flags 2) (answer-duplicate P Flags Seq N Now)
              (or (not (flag? Flags 16)) (seq-after? Ack (peer.send-next P))) false
+             (not Acceptable) (answer-duplicate P Flags Seq N Now)
              true
-               (do (if (or Contiguous (fx< (seq-distance Seq Next) Window))
-                       (acknowledge P Seq Ack Win Now) false)
-                   (if (and Contiguous (fx> Span 0) (not (peer.recv-eof P)))
-                       (let Count (fx- N Skip)
-                            Accepted (smaller Count Window)
-                         (do (peer.ack-needed-> P true)
-                             (if (fx> Accepted 0) (receive-bytes P B (fx+ Start Skip) Accepted) true)
-                             (if (and Fin (fx< Count Window)) (receive-fin P Now) true)))
+               (do (acknowledge P Seq Ack Win Now)
+                   (if (and (fx> Span 0) (not (peer.recv-eof P)))
+                       (if Overlap
+                           (receive-text P B (fx+ Start Skip) 0 (fx- N Skip) Fin Window Now)
+                           (receive-text P B Start Ahead N Fin Window Now))
                        (answer-duplicate P Flags Seq N Now))))))
 
 (define receive-opening

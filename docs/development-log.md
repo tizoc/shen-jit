@@ -3803,6 +3803,19 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   check has passed. On the `net-dsl` branch, TCP's lossy run 170.8–171.2 against 162.0–162.8 ms, its UDP echo
   22.4–22.5 against 21.6–21.7.
 
+### Bounded out-of-order TCP receive (2026-11-19, Apple M3 Max and Linux in Docker Desktop)
+
+- A preallocated bitmap marks out-of-order bytes in the existing receive ring, one bit per byte.
+  The ACK holds at the missing byte and the receive window preserves its right edge. Filling a gap
+  makes the contiguous suffix readable and advances the cumulative ACK over it. An early FIN
+  takes effect once the preceding bytes are contiguous.
+- In-memory tests reordered across sequence and ring wrap, clipped to the window edge, and
+  checked overlapping retransmissions and listener reuse after a reset. In the middle-segment
+  loss test the cumulative ACK canceled retransmission of the retained suffix.
+- The direct probe measured zero Shen heap words across 16 reordered connections, 16 middle-segment
+  losses, and 131,124 TCP bytes on eight Linux connections through the shared TUN interface.
+  The allocating control used five words. The 4,000-connection stress run added zero collections.
+
 ### Bounded TCP sliding window (2026-11-19, Apple M3 Max and Linux in Docker Desktop)
 
 - Each peer now reserves eight MSS worth of bytes in each circular buffer. Cumulative ACKs

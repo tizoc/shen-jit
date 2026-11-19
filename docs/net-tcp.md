@@ -28,6 +28,7 @@ writes and partial reads with the same preallocated buffers.
 
 The MTU must be at least 41. Each peer reserves two circular byte buffers of
 `8 × min(536, Mtu - 40)` bytes each, up to 4,288 bytes for sending and 4,288 for receiving.
+The receive ring has one presence bit per byte, using up to 536 additional bytes per peer.
 The sender limits in-flight bytes by the advertised receive window and segments writes at the
 negotiated MSS. The link reserves `Slots × Mtu` packet bytes in each direction, plus fixed queue
 metadata. Reuse device handles, peer state, application buffers and a non-allocating clock for an
@@ -35,11 +36,16 @@ allocation-free typed loop.
 
 The peers start a retransmission timer when a segment is queued onto the link. The timeout starts at one second,
 doubles on each retry up to 60 seconds, and the peer enters `tcp.timed-out` when the sixth retry expires.
-A cumulative ACK advances the send buffer across 32-bit sequence wrap. On timeout, the sender
-replays outstanding bytes from the oldest unacknowledged byte, within the current window. The
-receiver discards data ahead of a gap and trims duplicate prefixes from overlapping
-retransmissions. One byte can probe a zero window and recover a lost window update. The clock
-makes these transitions reproducible. [TCP sequence numbers and windows](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.4)
+A cumulative ACK advances the send buffer across 32-bit sequence wrap. The receiver retains
+in-window bytes ahead of a gap in the same ring and keeps the ACK at the next missing byte.
+An overlapping segment preserves bytes already received. When the gap closes, the entire
+contiguous range becomes readable and the ACK advances across it. An early FIN takes effect
+once all preceding bytes arrive.
+
+On timeout, the sender replays outstanding bytes from the oldest unacknowledged byte, within
+the current window. A cumulative ACK can cancel the rest of the replay. One byte can probe a
+zero window and recover a lost window update. The clock makes these transitions reproducible.
+[TCP incoming segment processing](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.10.7.4)
 
 ## Byte stream
 
@@ -75,10 +81,11 @@ clients to retry. An accepted connection retains its slot until released. Tokens
 and reuse of a slot gives the next connection a fresh token. Access through a released token raises.
 
 `make test-net-tcp` builds a typed executable and checks independent SYN bytes, segmentation at
-the peer's MSS, cumulative ACKs, ring and sequence wraparound, dropped data and ACKs, and
-overlapping retransmissions. It also checks zero-window probes, FIN retransmission, listener
-capacity and reuse, and output rotation. The allocation regression runs 3,000 typed connections
-under allocation stress, with a warmup-only baseline and an allocating positive control.
+the peer's MSS, cumulative ACKs, and reordering across ring and sequence wraparound. It also
+checks loss and overlapping retransmissions, clipping at the receive window edge, out-of-order
+FIN, zero-window probes, and reuse of a listener slot that held staged data at reset.
+The allocation regression runs 4,000 typed connections under allocation stress, with a
+warmup-only baseline and an allocating positive control.
 
 ## Simulated throughput
 
