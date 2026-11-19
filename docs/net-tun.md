@@ -125,3 +125,44 @@ so both DNS and HTTP exercise gateway resolution. [DHCP](https://www.rfc-editor.
 The TAP test uses four 128 KiB TCP slots. Each slot reserves 311,296 bytes for the
 send and receive buffers and three bitmaps, plus fixed metadata. The two links
 reserve 48,224 packet bytes and the four ARP pending queues reserve 24,000 more.
+
+
+## Dual-stack interfaces
+
+IPv6 uses the same packet link, TCP table, listener ports, and UDP bindings as IPv4.
+During setup, use `net-ndp.make Device Mac IdHigh IdLow Slots` to create the IPv6 host.
+The two ID words form a 64-bit interface identifier. Supply a stable, locally unique
+identifier. Use MAC zero and zero neighbor slots for TUN. Use the Ethernet adapter's
+MAC and a positive number of neighbor slots for TAP.
+
+For a static address, configure the address using `net-ndp.configure-static Host Address`
+before polling. The Ethernet adapter treats that address's /64 as on link. For SLAAC,
+the host solicits router advertisements and uses one advertised autonomous /64
+prefix and one default router. Both the link-local and global addresses pass duplicate
+address detection before use. The host tracks preferred and valid address lifetimes
+and removes expired addresses from transport use. [IPv6 Neighbor Discovery](https://www.rfc-editor.org/rfc/rfc4861.html), [IPv6 address autoconfiguration](https://www.rfc-editor.org/rfc/rfc4862.html)
+
+Call `net-interface.enable-ipv6 Interface Host` once during setup. For TAP, also call
+`net-ethernet.enable-ipv6 Ethernet Host` with the same host. Afterwards use the usual
+poll operations and deadlines. Neighbor entries reserve four pending packets each
+and stop retrying after three seconds. Ethernet sends IPv6 multicast using the
+destination's corresponding Ethernet multicast address.
+
+| Operation | Meaning |
+| --- | --- |
+| `net-ipv6.make-address A B C D` | Construct an address from four unsigned 32-bit words, in network order. |
+| `net-ndp.host.link-local Host`, `net-ndp.host.global Host` | Borrow the host's address records. Check `net-ndp.local-ready?` or `net-ndp.global-ready?` before using them. Copy an address if it must survive host reconfiguration. |
+| `net-interface.connect6 Interface IP Port`, `net-stream.connect6 Stream IP Port` | Open TCP using a usable source address selected for the destination's scope. Existing TCP accept, read, write, and shutdown operations work for both families. |
+| `net-interface.udp-send6 Interface LocalPort IP Port Payload Count` | Send unicast IPv6 over the selected binding. Returns `net-interface.no-address` while no usable address is available for the destination's scope. |
+| `udp.recv-info.family Info`, `udp.recv-info.source6 Info`, `udp.recv-info.destination6 Info` | Read the family (4 or 6) and the reusable source and destination address records for an IPv6 datagram. Consume or copy these records before reusing `Info`. |
+
+IPv6 uses a minimum link MTU of 1,280 bytes. The host processes the IPv6 base header
+with TCP, UDP, or ICMPv6. It handles ICMPv6 echo and neighbor discovery, sends port
+unreachable errors, and applies validated Packet Too Big messages to TCP. Extension
+headers and IPv6 fragment reassembly remain outside this implementation. [IPv6 specification](https://www.rfc-editor.org/rfc/rfc8200.html), [ICMPv6](https://www.rfc-editor.org/rfc/rfc4443.html)
+
+The Linux integration tests run IPv4 and IPv6 TCP, UDP, and ping through each device.
+They also open an outbound IPv6 TCP stream. The TAP fixture sends a router
+advertisement, observes neighbor solicitations in both directions, and uses the
+advertised router for an off-link UDP exchange. Allocation measurement starts
+before duplicate address detection and ends after the streams and datagrams finish.

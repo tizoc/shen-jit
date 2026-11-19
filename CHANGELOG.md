@@ -39,6 +39,9 @@ All notable changes to this project are documented in this file. The format is b
 - `net/ethernet` adds IPv4 routing and ARP over Linux TAP. `net/dhcp`, `net/dns`, and `net/stream` support address
   acquisition and renewal, DNS A lookups, and application streams. The Linux tests exercise outbound HTTP and
   verify zero Shen heap allocations after setup on both transports.
+- The shared interface supports IPv4 and IPv6 TCP and UDP on the same ports and bounded queues. IPv6 adds
+  ICMPv6 echo, UDP port errors, TCP path MTU updates, neighbor discovery, and SLAAC. Linux TUN and TAP tests
+  cover both families and measure the Shen heap across address discovery and transport.
 
 ### Changed
 

@@ -19,3 +19,7 @@
 (define net-host-test.main
   -> (let Args (tl (value *argv*))
        (if (= (hd (tl Args)) "tap") (net-host-test.tap (hd Args)) (net-host-test.tun (hd Args)))))
+
+(define net-dual-test.main
+  -> (let Args (tl (value *argv*))
+       (if (= (hd (tl Args)) "tap") (net-dual-test.tap (hd Args)) (net-dual-test.tun (hd Args)))))

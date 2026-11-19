@@ -1,6 +1,6 @@
 (shen.module
   (version 1)
   (name net/stream)
-  (requires net/interface)
+  (requires net/interface net/ipv6)
   (typed)
   (sources tc+ "stream.shen"))

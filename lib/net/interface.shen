@@ -1,18 +1,26 @@
-\\ One IPv4 ingress owner for TCP, UDP, and ICMP echo.
+\\ One IP ingress owner for TCP, UDP, and ICMP.
 (shen.x.namespace net-interface
   (use buffer)
   (use net-ipv4)
+  (use net-ipv6)
+  (use net-ndp)
+  (use shen-jit)
   (use net-fragments)
   (use net-link)
   (use tcp)
   (use udp)
   (import struct defstruct)
   (export interface interface.listener make make-host make-host-sized connect poll next-deadline
-          udp-binding udp-send udp-recv-into udp-dropped)
+          enable-ipv6 connect6 udp-send6 no-address udp-binding udp-send udp-recv-into udp-dropped)
+
+(defstruct ipv6-state
+  (ndp : net-ndp.host)
+  (remote : net-ipv6.address))
 
 (defstruct interface
   (device : net-link.device)
   (ip : fixnum)
+  (mutable ipv6 : (list ipv6-state))
   (fragments : net-fragments.table)
   (listener : tcp.listener)
   (tcp-ports : (list fixnum))
@@ -24,6 +32,7 @@
     (:interface
       device <- D
       ip <- IP
+      ipv6 <- []
       fragments <- (net-fragments.make 2 (net-link.mtu D))
       listener <- (tcp.make-listener D IP TcpPort TcpSlots InitialSequence)
       tcp-ports <- [TcpPort]
@@ -66,6 +75,7 @@
         (:interface
           device <- D
           ip <- IP
+          ipv6 <- []
           fragments <- (net-fragments.make 2 (net-link.mtu D))
           listener <- L
           tcp-ports <- TcpPorts
@@ -74,6 +84,31 @@
 (define connect
   {interface --> fixnum --> fixnum --> fixnum}
   F IP Port -> (tcp.table-connect (interface.listener F) (interface.tcp-ports F) IP Port))
+
+(define enable-ipv6
+  {interface --> net-ndp.host --> boolean}
+  F H ->
+    (if (and (= (interface.ipv6 F) []) (= (interface.device F) (net-ndp.host.device H)))
+        (do (interface.ipv6-> F
+              [(:ipv6-state
+                 ndp <- H
+                 remote <- (net-ipv6.make-address 0 0 0 0))])
+            true)
+        (error "net/interface: enable IPv6 once on the interface device")))
+
+(define open-ipv6
+  {interface --> (list ipv6-state) --> net-ipv6.address --> fixnum --> fixnum}
+  _ [] _ _ -> 0
+  F [S] Destination Port ->
+    (let Source (net-ndp.source-address (ipv6-state.ndp S) Destination
+                                        (net-link.now (interface.device F)))
+      (if (net-ipv6.unicast? Source)
+          (tcp.table-connect6 (interface.listener F) (interface.tcp-ports F) Source Destination Port)
+          0)))
+
+(define connect6
+  {interface --> net-ipv6.address --> fixnum --> fixnum}
+  F Destination Port -> (open-ipv6 F (interface.ipv6 F) Destination Port))
 
 (define find-binding
   {(list udp.inbox) --> fixnum --> udp.inbox}
@@ -92,6 +127,22 @@
 (define udp-send
   {interface --> fixnum --> fixnum --> buffer.view --> fixnum --> symbol}
   F IP Port Payload Count -> (udp.send (udp.inbox.peer (default-udp (interface.udp-bindings F))) IP Port Payload Count))
+
+(define send-ipv6
+  {(list ipv6-state) --> interface --> fixnum --> net-ipv6.address --> fixnum --> buffer.view -->
+   fixnum --> symbol}
+  [] _ _ _ _ _ _ -> no-address
+  [S] F LocalPort Destination Port Payload Count ->
+    (let Source (net-ndp.source-address (ipv6-state.ndp S) Destination
+                                        (net-link.now (interface.device F)))
+      (if (net-ipv6.unicast? Source)
+          (udp.send6 (udp.inbox.peer (udp-binding F LocalPort)) Source Destination Port Payload Count)
+          no-address)))
+
+(define udp-send6
+  {interface --> fixnum --> net-ipv6.address --> fixnum --> buffer.view --> fixnum --> symbol}
+  F LocalPort Destination Port Payload Count ->
+    (send-ipv6 (interface.ipv6 F) F LocalPort Destination Port Payload Count))
 
 (define udp-recv-into
   {interface --> buffer.view --> udp.recv-info --> symbol}
@@ -189,7 +240,7 @@
         (udp.inbox-ingress-broadcast Q B I N)
         (dhcp-broadcast Rest B I N)))
 
-(define ingress
+(define ingress4
   {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   F B I N Now ->
     (and (net-ipv4.valid-header? B I N)
@@ -204,6 +255,111 @@
                          Count (net-fragments.receive T B I N Now)
                       (and (fx> Count 0) (dispatch F (net-fragments.packet T) 0 Count Now)))
                   true (dispatch F B I N Now)))))
+
+(define smaller
+  {fixnum --> fixnum --> fixnum}
+  A B -> (if (fx< A B) A B))
+
+(define earlier
+  {fixnum --> fixnum --> fixnum}
+  A B -> (if (or (fx< A 0) (and (fx>= B 0) (fx< B A))) B A))
+
+(define emit-icmp6
+  {interface --> net-ipv6.address --> net-ipv6.address --> buffer.view --> fixnum -->
+   fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  F Source Remote B Start Bytes Type Detail Now ->
+    (let D (interface.device F)
+         Tx (net-link.device.tx D)
+         Count (fx+ Bytes 48)
+      (if (and (not (net-link.full? Tx)) (fx<= Count (net-link.mtu D)))
+          (let Out (net-link.ring.data Tx)
+               At (net-link.tail-offset Tx)
+               ICMP (fx+ At 40)
+            (do (net-ipv6.write-header Out At Count 58 64 Source Remote)
+                (buffer.u32-be-> Out ICMP (shen-jit.shift-left Type 16))
+                (buffer.u32-be-> Out (fx+ ICMP 4) Detail)
+                (buffer.copy-into! Out (fx+ ICMP 8) B Start Bytes)
+                (buffer.u16-be-> Out (fx+ ICMP 2) (net-ipv6.transport-checksum Out At 58 (fx+ Bytes 8)))
+                (net-link.publish Tx Count (net-link.delivery D Now))))
+          false)))
+
+(define icmp6
+  {interface --> net-ipv6.address --> net-ipv6.address --> buffer.view --> fixnum -->
+   fixnum --> fixnum --> boolean}
+  F Local Remote B I N Now ->
+    (and (fx>= N 48) (= (net-ipv6.transport-checksum B I 58 (fx- N 40)) 0)
+         (let Type (buffer.u16-be B (fx+ I 40))
+           (cases (= Type 32768)
+                    (emit-icmp6 F Local Remote B (fx+ I 48) (fx- N 48)
+                                 33024 (buffer.u32-be B (fx+ I 44)) Now)
+                  (= Type 512)
+                    (tcp.path-mtu6 (interface.listener F) B (fx+ I 48) (fx- N 48)
+                                   (buffer.u32-be B (fx+ I 44)) Now Local)
+                  true false))))
+
+(define udp-ingress6
+  {interface --> (list udp.inbox) --> fixnum --> net-ipv6.address --> net-ipv6.address -->
+   buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  F [] _ Local Remote B I N Now ->
+    (and (udp.valid-datagram6? B I N)
+         (emit-icmp6 F Local Remote B I (smaller N 1232) 260 0 Now))
+  F [Q | Rest] Port Local Remote B I N Now ->
+    (if (= (udp.peer.port (udp.inbox.peer Q)) Port)
+        (udp.inbox-ingress6 Q B I N)
+        (udp-ingress6 F Rest Port Local Remote B I N Now)))
+
+(define dispatch6
+  {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  F S Local B I N Now ->
+    (let Remote (net-ipv6.read-address (ipv6-state.remote S) B (fx+ I 8))
+         Proto (buffer.u8 B (fx+ I 6))
+      (and (net-ipv6.unicast? Remote)
+           (cases (and (= Proto 6) (fx>= N 60))
+                    (tcp.table-ingress6 (interface.listener F) B I N Now
+                                        (list-has-port? (interface.tcp-ports F) (buffer.u16-be B (fx+ I 42))) Local)
+                  (and (= Proto 17) (fx>= N 48))
+                    (udp-ingress6 F (interface.udp-bindings F) (buffer.u16-be B (fx+ I 42))
+                                  Local Remote B I N Now)
+                  (= Proto 58) (icmp6 F Local Remote B I N Now)
+                  true false))))
+
+(define ingress6
+  {interface --> (list ipv6-state) --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  _ [] _ _ _ _ -> false
+  F [S] B I N Now ->
+    (and (net-ipv6.valid-header? B I N)
+         (let H (ipv6-state.ndp S)
+              Local (net-ndp.host.link-local H)
+              Global (net-ndp.host.global H)
+              At (fx+ I 24)
+           (or (net-ndp.ingress H B I N Now)
+               (cases (and (net-ndp.local-ready? H) (net-ipv6.address-at? Local B At))
+                        (dispatch6 F S Local B I N Now)
+                      (and (net-ndp.global-ready? H Now) (net-ipv6.address-at? Global B At))
+                        (dispatch6 F S Global B I N Now)
+                      true false)))))
+
+(define ingress
+  {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  F B I N Now ->
+    (and (fx> N 0)
+         (if (= (shen-jit.shift-right (buffer.u8 B I) 4) 6)
+             (ingress6 F (interface.ipv6 F) B I N Now)
+             (ingress4 F B I N Now))))
+
+(define ipv6-poll
+  {(list ipv6-state) --> tcp.listener --> fixnum --> boolean}
+  [] _ _ -> false
+  [S] L Now ->
+    (let H (ipv6-state.ndp S)
+      (do (net-ndp.poll H Now)
+          (tcp.expire-addresses6 L (net-ndp.host.link-local H) (net-ndp.local-ready? H)
+                                  (net-ndp.host.global H) (net-ndp.global-ready? H Now)))))
+
+(define ipv6-deadline
+  {(list ipv6-state) --> fixnum --> fixnum}
+  [] _ -> -1
+  [S] Now -> (net-ndp.next-deadline (ipv6-state.ndp S) Now))
 
 (define receive-ready
   {interface --> net-link.ring --> fixnum --> fixnum --> fixnum --> fixnum}
@@ -221,7 +377,8 @@
     (let D (interface.device F)
          Now (net-link.now D)
          Count (receive-ready F (net-link.device.rx D) Now (buffer.index Budget) 0)
-      (do (tcp.listener-transmit (interface.listener F) Now)
+      (do (ipv6-poll (interface.ipv6 F) (interface.listener F) Now)
+          (tcp.listener-transmit (interface.listener F) Now)
           Count)))
 
 \\ Absolute milliseconds, or -1 when only external I/O can make progress.
@@ -231,7 +388,7 @@
             Now (net-link.now D)
             Rx (net-link.head-deadline (net-link.device.rx D))
             Tcp (tcp.listener-deadline (interface.listener F) Now)
-         (if (or (fx< Rx 0) (and (fx>= Tcp 0) (fx< Tcp Rx))) Tcp Rx)))
+         (earlier (ipv6-deadline (interface.ipv6 F) Now) (earlier Rx Tcp))))
 
-(preclude [interface.%match])
+(preclude [interface.%match ipv6-state.%match])
 )

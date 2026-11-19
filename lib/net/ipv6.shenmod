@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name net/ipv6)
+  (requires net/ipv4)
+  (typed)
+  (sources tc+ "ipv6.shen"))

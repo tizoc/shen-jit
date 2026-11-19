@@ -1,0 +1,532 @@
+\\ IPv6 neighbor discovery and one autonomous /64 prefix per link.
+(shen.x.namespace net-ndp
+  (use buffer)
+  (use net-link)
+  (use net-ipv6)
+  (use shen-jit)
+  (import struct defstruct)
+  (export host make configure-static poll ingress next-deadline
+          host.device host.link-local host.global host.local-state host.global-state
+          host.preferred-until host.valid-until host.router host.router-until
+          tentative usable duplicate absent local-ready? global-ready? source-address
+          neighbor neighbor.mac neighbor.pending neighbor-at neighbor-ready? host.slots host.mac route)
+
+(defstruct neighbor
+  (ip : net-ipv6.address)
+  (pending : net-link.ring)
+  (mutable mac : fixnum)
+  (mutable expires : fixnum)
+  (mutable probe-at : fixnum))
+
+(defstruct host
+  (device : net-link.device)
+  (mac : fixnum)
+  (link-local : net-ipv6.address)
+  (global : net-ipv6.address)
+  (prefix : net-ipv6.address)
+  (router : net-ipv6.address)
+  (unspecified : net-ipv6.address)
+  (all-nodes : net-ipv6.address)
+  (all-routers : net-ipv6.address)
+  (group : net-ipv6.address)
+  (source : net-ipv6.address)
+  (destination : net-ipv6.address)
+  (target : net-ipv6.address)
+  (hop : net-ipv6.address)
+  (neighbors : (vector neighbor))
+  (slots : fixnum)
+  (mutable local-state : symbol)
+  (mutable global-state : symbol)
+  (mutable local-at : fixnum)
+  (mutable global-at : fixnum)
+  (mutable static : boolean)
+  (mutable rs-at : fixnum)
+  (mutable rs-left : fixnum)
+  (mutable prefix-until : fixnum)
+  (mutable router-until : fixnum)
+  (mutable preferred-until : fixnum)
+  (mutable valid-until : fixnum))
+
+(define blank-address
+  {--> net-ipv6.address}
+  -> (net-ipv6.make-address 0 0 0 0))
+
+(define init-neighbors
+  {(vector neighbor) --> fixnum --> fixnum --> (vector neighbor)}
+  V 0 _ -> V
+  V I Mtu ->
+    (let N (:neighbor
+              ip <- (blank-address)
+              pending <- (net-link.make-ring 4 Mtu)
+              mac <- 0
+              expires <- 0
+              probe-at <- 0)
+      (init-neighbors (fxvector-> V I N) (fx- I 1) Mtu)))
+
+(define make
+  {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> host}
+  D Mac IdHigh IdLow Slots ->
+    (let Mtu (net-link.mtu D)
+      (if (and (fx>= Mtu 1280) (fx>= Slots 0) (fx<= Slots 256)
+               (fx>= Mac 0) (fx<= Mac 281474976710655)
+               (= (shen-jit.bit-and Mac 1099511627776) 0)
+               (or (= Mac 0) (fx> Slots 0))
+               (not (and (= IdHigh 0) (= IdLow 0))))
+          (:host
+            device <- D
+            mac <- Mac
+            link-local <- (net-ipv6.make-address 4269801472 0 IdHigh IdLow)
+            global <- (blank-address)
+            prefix <- (blank-address)
+            router <- (blank-address)
+            unspecified <- (blank-address)
+            all-nodes <- (net-ipv6.make-address 4278321152 0 0 1)
+            all-routers <- (net-ipv6.make-address 4278321152 0 0 2)
+            group <- (blank-address)
+            source <- (blank-address)
+            destination <- (blank-address)
+            target <- (blank-address)
+            hop <- (blank-address)
+            neighbors <- (init-neighbors (vector (fx->number Slots)) Slots Mtu)
+            slots <- Slots
+            local-state <- tentative
+            global-state <- absent
+            local-at <- -1
+            global-at <- -1
+            static <- false
+            rs-at <- 0
+            rs-left <- 3
+            prefix-until <- 0
+            router-until <- 0
+            preferred-until <- 0
+            valid-until <- 0)
+          (error "IPv6: invalid interface identifier, MAC, neighbor capacity, or link MTU"))))
+
+(define configure-static
+  {host --> net-ipv6.address --> boolean}
+  H Address ->
+    (if (and (net-ipv6.unicast? Address) (not (net-ipv6.link-local? Address)))
+        (do (net-ipv6.copy-address (host.global H) Address)
+            (host.global-state-> H tentative)
+            (host.global-at-> H -1)
+            (host.static-> H true)
+            (host.rs-left-> H 0)
+            true)
+        (error "IPv6: need a non-link-local unicast address")))
+
+(define local-ready?
+  {host --> boolean}
+  H -> (= (host.local-state H) usable))
+
+(define global-ready?
+  {host --> fixnum --> boolean}
+  H Now -> (and (not (= (host.local-state H) duplicate))
+                (= (host.global-state H) usable) (or (host.static H) (fx< Now (host.valid-until H)))))
+
+(define source-address
+  {host --> net-ipv6.address --> fixnum --> net-ipv6.address}
+  H Destination Now ->
+    (cases (net-ipv6.link-local? Destination)
+             (if (local-ready? H) (host.link-local H) (host.unspecified H))
+           (global-ready? H Now) (host.global H)
+           true (host.unspecified H)))
+
+(define neighbor-at
+  {host --> fixnum --> neighbor}
+  H I -> (fx<-vector (host.neighbors H) I))
+
+(define neighbor-ready?
+  {neighbor --> fixnum --> boolean}
+  N Now -> (and (fx> (neighbor.mac N) 0) (fx< Now (neighbor.expires N))
+                (net-link.ready? (neighbor.pending N) 0)))
+
+(define find
+  {host --> net-ipv6.address --> fixnum --> fixnum}
+  _ _ 0 -> 0
+  H IP I -> (if (net-ipv6.same? IP (neighbor.ip (neighbor-at H I))) I (find H IP (fx- I 1))))
+
+(define free-queue
+  {net-link.ring --> boolean}
+  R -> (if (net-link.ready? R 0) (do (net-link.consume R) (free-queue R)) true))
+
+(define find-available
+  {host --> fixnum --> fixnum --> fixnum --> fixnum}
+  _ _ 0 Best -> Best
+  H Now I Best ->
+    (let N (neighbor-at H I)
+      (cases (fx<= (neighbor.expires N) Now) I
+             (and (fx> (neighbor.mac N) 0) (not (net-link.ready? (neighbor.pending N) 0))
+                  (or (= Best 0) (fx< (neighbor.expires N) (neighbor.expires (neighbor-at H Best)))))
+               (find-available H Now (fx- I 1) I)
+             true (find-available H Now (fx- I 1) Best))))
+
+(define claim
+  {host --> net-ipv6.address --> fixnum --> fixnum}
+  H IP Now ->
+    (let Old (find H IP (host.slots H))
+         Index (if (= Old 0) (find-available H Now (host.slots H) 0) Old)
+      (if (= Index 0) 0
+          (let N (neighbor-at H Index)
+            (do (if (or (= Old 0) (fx<= (neighbor.expires N) Now))
+                    (do (free-queue (neighbor.pending N))
+                        (net-ipv6.copy-address (neighbor.ip N) IP)
+                        (neighbor.mac-> N 0)
+                        (neighbor.expires-> N (fx+ Now 3000))
+                        (neighbor.probe-at-> N Now)
+                        true)
+                    true)
+                Index)))))
+
+(define same-prefix?
+  {net-ipv6.address --> net-ipv6.address --> boolean}
+  A B -> (and (= (net-ipv6.address.a A) (net-ipv6.address.a B))
+              (= (net-ipv6.address.b A) (net-ipv6.address.b B))))
+
+(define route
+  {host --> buffer.view --> fixnum --> fixnum --> fixnum}
+  H B I Now ->
+    (let IP (net-ipv6.read-address (host.hop H) B I)
+      (cases (not (net-ipv6.unicast? IP)) 0
+             (or (net-ipv6.link-local? IP)
+                 (and (host.static H) (same-prefix? IP (host.global H)))
+                 (and (fx< Now (host.prefix-until H)) (same-prefix? IP (host.prefix H))))
+               (claim H IP Now)
+             (fx< Now (host.router-until H)) (claim H (host.router H) Now)
+             true 0)))
+
+(define mac-at
+  {buffer.view --> fixnum --> fixnum}
+  B I -> (fx+ (shen-jit.shift-left (buffer.u16-be B I) 32) (buffer.u32-be B (fx+ I 2))))
+
+(define valid-mac?
+  {fixnum --> boolean}
+  Mac -> (and (fx> Mac 0) (= (shen-jit.bit-and Mac 1099511627776) 0)))
+
+(define write-option
+  {buffer.view --> fixnum --> fixnum --> fixnum --> buffer.view}
+  B I Kind Mac ->
+    (do (buffer.u16-be-> B I (fx+ (fx* Kind 256) 1))
+        (buffer.u16-be-> B (fx+ I 2) (shen-jit.shift-right Mac 32))
+        (buffer.u32-be-> B (fx+ I 4) (shen-jit.bit-and Mac 4294967295))))
+
+(define options-valid?
+  {buffer.view --> fixnum --> fixnum --> boolean}
+  B At End ->
+    (or (= At End)
+        (and (fx<= (fx+ At 2) End)
+             (let Kind (buffer.u8 B At)
+                  Bytes (fx* 8 (buffer.u8 B (fx+ At 1)))
+               (and (fx> Bytes 0) (fx<= (fx+ At Bytes) End)
+                    (or (not (or (= Kind 1) (= Kind 2))) (= Bytes 8))
+                    (options-valid? B (fx+ At Bytes) End))))))
+
+(define option-offset
+  {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
+  B At End Kind ->
+    (if (= At End) -1
+        (let Bytes (fx* 8 (buffer.u8 B (fx+ At 1)))
+          (if (= (buffer.u8 B At) Kind) At
+              (option-offset B (fx+ At Bytes) End Kind)))))
+
+(define option-mac
+  {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
+  B At End Kind ->
+    (let I (option-offset B At End Kind)
+      (if (and (fx>= I 0) (= (buffer.u8 B (fx+ I 1)) 1))
+          (let Mac (mac-at B (fx+ I 2)) (if (valid-mac? Mac) Mac (type 0 fixnum)))
+          0)))
+
+(define set-neighbor
+  {neighbor --> fixnum --> fixnum --> boolean}
+  N Mac Now ->
+    (do (neighbor.mac-> N Mac)
+        (neighbor.expires-> N (fx+ Now 30000))
+        true))
+
+(define learn
+  {host --> net-ipv6.address --> fixnum --> fixnum --> boolean}
+  H IP Mac Now ->
+    (and (valid-mac? Mac)
+         (let I (claim H IP Now)
+           (and (fx> I 0) (set-neighbor (neighbor-at H I) Mac Now)))))
+
+(define advertise-neighbor
+  {host --> net-ipv6.address --> fixnum --> fixnum --> fixnum --> boolean}
+  H IP Mac Flags Now ->
+    (and (valid-mac? Mac)
+         (let I (find H IP (host.slots H))
+           (and (fx> I 0)
+                (let N (neighbor-at H I)
+                     Old (neighbor.mac N)
+                  (and (or (= Old 0) (= Old Mac)
+                           (not (= (shen-jit.bit-and Flags 536870912) 0)))
+                       (set-neighbor N Mac Now)))))))
+
+(define emit
+  {host --> net-ipv6.address --> net-ipv6.address --> net-ipv6.address -->
+   fixnum --> fixnum --> fixnum --> boolean}
+  H Source Destination Target Kind Flags Now ->
+    (let D (host.device H)
+         Tx (net-link.device.tx D)
+         Mac (host.mac H)
+      (if (net-link.full? Tx) false
+          (let B (net-link.ring.data Tx)
+               At (net-link.tail-offset Tx)
+               Body (fx+ At 40)
+               Base (if (= Kind 133) (type 8 fixnum) (type 24 fixnum))
+               IncludeMac (and (fx> Mac 0) (not (net-ipv6.unspecified? Source)))
+               N (if IncludeMac (fx+ Base 8) Base)
+               Count (fx+ N 40)
+            (do (net-ipv6.write-header B At Count 58 255 Source Destination)
+                (buffer.u32-be-> B Body (shen-jit.shift-left Kind 24))
+                (buffer.u32-be-> B (fx+ Body 4) Flags)
+                (if (= Kind 133) B (net-ipv6.write-address B (fx+ Body 8) Target))
+                (if IncludeMac (write-option B (fx+ Body Base) (if (= Kind 136) 2 1) Mac) B)
+                (buffer.u16-be-> B (fx+ Body 2) (net-ipv6.transport-checksum B At 58 N))
+                (net-link.publish Tx Count (net-link.delivery D Now)))))))
+
+(define duplicate-if-probing
+  {host --> net-ipv6.address --> boolean}
+  H Target ->
+    (cases (and (= (host.local-state H) tentative) (net-ipv6.same? Target (host.link-local H)))
+             (do (host.local-state-> H duplicate) true)
+           (and (= (host.global-state H) tentative) (net-ipv6.same? Target (host.global H)))
+             (do (host.global-state-> H duplicate) true)
+           true false))
+
+(define local-target?
+  {host --> net-ipv6.address --> fixnum --> boolean}
+  H Target Now ->
+    (or (and (local-ready? H) (net-ipv6.same? Target (host.link-local H)))
+        (and (global-ready? H Now) (net-ipv6.same? Target (host.global H)))))
+
+(define neighbor-solicitation
+  {host --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  H B Body End Now ->
+    (let Source (host.source H)
+         Destination (host.destination H)
+         Target (net-ipv6.read-address (host.target H) B (fx+ Body 8))
+         Opt (fx+ Body 24)
+         Dad (net-ipv6.unspecified? Source)
+      (and (net-ipv6.unicast? Target)
+           (options-valid? B Opt End)
+           (if Dad
+               (and (net-ipv6.solicited-node? Destination Target)
+                    (fx< (option-offset B Opt End 1) 0))
+               (and (net-ipv6.unicast? Source)
+                    (or (net-ipv6.same? Destination Target)
+                        (net-ipv6.solicited-node? Destination Target))))
+           (or (and Dad (duplicate-if-probing H Target))
+               (and (local-target? H Target Now)
+                    (do (if Dad false (learn H Source (option-mac B Opt End 1) Now))
+                        (if Dad (emit H Target (host.all-nodes H) Target 136 536870912 Now)
+                            (emit H Target Source Target 136 1610612736 Now))))))))
+
+(define neighbor-advertisement
+  {host --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  H B Body End Now ->
+    (let Source (host.source H)
+         Target (net-ipv6.read-address (host.target H) B (fx+ Body 8))
+         Flags (buffer.u32-be B (fx+ Body 4))
+         Opt (fx+ Body 24)
+      (and (net-ipv6.unicast? Source) (net-ipv6.unicast? Target)
+           (or (local-target? H (host.destination H) Now)
+               (and (net-ipv6.same? (host.destination H) (host.all-nodes H))
+                    (= (shen-jit.bit-and Flags 1073741824) 0))
+               (and (= (host.local-state H) tentative)
+                    (net-ipv6.same? (host.destination H) (host.link-local H)))
+               (and (= (host.global-state H) tentative)
+                    (net-ipv6.same? (host.destination H) (host.global H))))
+           (options-valid? B Opt End)
+           (or (duplicate-if-probing H Target)
+               (advertise-neighbor H Target (option-mac B Opt End 2) Flags Now)))))
+
+\\ Apply the unauthenticated-advertisement lifetime rule from RFC 4862.
+(define refreshed-valid
+  {fixnum --> fixnum --> fixnum --> fixnum}
+  Old New Now ->
+    (cases (or (fx> New 7200000) (fx> (fx+ Now New) Old)) (fx+ Now New)
+           (fx<= Old (fx+ Now 7200000)) Old
+           true (fx+ Now 7200000)))
+
+(define set-prefix
+  {host --> buffer.view --> fixnum --> fixnum --> boolean}
+  H B At Now ->
+    (let P (net-ipv6.read-address (host.target H) B (fx+ At 16))
+         Flags (buffer.u8 B (fx+ At 3))
+         Valid (fx* (buffer.u32-be B (fx+ At 4)) 1000)
+         Preferred (fx* (buffer.u32-be B (fx+ At 8)) 1000)
+         Global (host.global H)
+         Known (same-prefix? Global P)
+         CanReplace (or (= (host.global-state H) absent) (fx<= (host.valid-until H) Now))
+      (if (and (= (buffer.u8 B (fx+ At 2)) 64)
+               (net-ipv6.unicast? P) (not (net-ipv6.link-local? P)))
+          (do (if (and (not (= (shen-jit.bit-and Flags 128) 0))
+                       (or (fx<= (host.prefix-until H) Now) (same-prefix? P (host.prefix H))))
+                  (do (net-ipv6.copy-address (host.prefix H) P)
+                      (host.prefix-until-> H (fx+ Now Valid))
+                      true)
+                  false)
+              (if (and (not (host.static H)) (not (= (host.local-state H) duplicate))
+                       (not (= (shen-jit.bit-and Flags 64) 0))
+                       (fx<= Preferred Valid) (or (and CanReplace (fx> Valid 0)) Known))
+                  (let Until (if CanReplace (fx+ Now Valid) (refreshed-valid (host.valid-until H) Valid Now))
+                       Expires (fx+ Now Preferred)
+                    (do (if CanReplace
+                            (do (net-ipv6.compose-prefix Global P (host.link-local H))
+                                (host.global-state-> H tentative)
+                                (host.global-at-> H -1)
+                                true)
+                            true)
+                        (host.valid-until-> H Until)
+                        (host.preferred-until-> H (if (fx< Expires Until) Expires Until))
+                        true))
+                  false))
+          false)))
+
+(define prefixes
+  {host --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  H B I End Now ->
+    (if (= I End) true
+        (let N (buffer.u8 B (fx+ I 1))
+          (do (if (and (= (buffer.u8 B I) 3) (= N 4)) (set-prefix H B I Now) false)
+              (prefixes H B (fx+ I (fx* 8 N)) End Now)))))
+
+(define router-advertisement
+  {host --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  H B Body End Now ->
+    (let Source (host.source H)
+         Destination (host.destination H)
+         Opt (fx+ Body 16)
+         Span (fx* (buffer.u16-be B (fx+ Body 6)) 1000)
+      (and (net-ipv6.link-local? Source)
+           (or (net-ipv6.same? Destination (host.all-nodes H)) (local-target? H Destination Now))
+           (options-valid? B Opt End)
+           (do (if (or (net-ipv6.same? Source (host.router H)) (fx<= (host.router-until H) Now))
+                   (do (net-ipv6.copy-address (host.router H) Source)
+                       (host.router-until-> H (fx+ Now Span))
+                       (learn H Source (option-mac B Opt End 1) Now))
+                   false)
+               (prefixes H B Opt End Now)
+               (if (or (fx> (host.router-until H) Now) (fx> (host.valid-until H) Now))
+                   (host.rs-left-> H 0) H)
+               true))))
+
+(define ingress
+  {host --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  H B I N Now ->
+    (let Body (fx+ I 40)
+         End (fx+ I N)
+      (and (fx>= N 48)
+           (net-ipv6.valid-header? B I N)
+           (= (buffer.u8 B (fx+ I 6)) 58)
+           (= (buffer.u8 B (fx+ I 7)) 255)
+           (= (buffer.u8 B (fx+ Body 1)) 0)
+           (= (net-ipv6.transport-checksum B I 58 (fx- N 40)) 0)
+           (let Kind (buffer.u8 B Body)
+             (do (net-ipv6.read-address (host.source H) B (fx+ I 8))
+                 (net-ipv6.read-address (host.destination H) B (fx+ I 24))
+                 (cases (and (= Kind 134) (fx>= N 56)) (router-advertisement H B Body End Now)
+                        (and (= Kind 135) (fx>= N 64)) (neighbor-solicitation H B Body End Now)
+                        (and (= Kind 136) (fx>= N 64)) (neighbor-advertisement H B Body End Now)
+                        true false))))))
+
+(define drive-dad
+  {host --> net-ipv6.address --> fixnum --> fixnum --> fixnum}
+  H Address At Now ->
+    (if (fx< At 0)
+        (if (emit H (host.unspecified H) (net-ipv6.solicited-node (host.group H) Address)
+                  Address 135 0 Now)
+            (fx+ Now 1000) At)
+        At))
+
+(define dad
+  {host --> fixnum --> boolean}
+  H Now ->
+    (do (if (= (host.local-state H) tentative)
+            (let At (host.local-at H)
+              (if (and (fx>= At 0) (fx>= Now At))
+                  (host.local-state-> H usable)
+                  (host.local-at-> H (drive-dad H (host.link-local H) At Now))))
+            H)
+        (if (and (not (host.static H)) (not (= (host.global-state H) absent))
+                 (fx>= Now (host.valid-until H)))
+            (host.global-state-> H absent)
+            (if (= (host.global-state H) tentative)
+                (let At (host.global-at H)
+                  (if (and (fx>= At 0) (fx>= Now At))
+                      (host.global-state-> H usable)
+                      (host.global-at-> H (drive-dad H (host.global H) At Now))))
+                H))
+        true))
+
+(define neighbor-probes
+  {host --> fixnum --> fixnum --> boolean}
+  _ 0 _ -> true
+  H I Now ->
+    (let N (neighbor-at H I)
+         Q (neighbor.pending N)
+         Address (neighbor.ip N)
+      (do (if (net-link.ready? Q 0)
+              (cases (fx<= (neighbor.expires N) Now) (free-queue Q)
+                     (and (= (neighbor.mac N) 0) (fx<= (neighbor.probe-at N) Now) (local-ready? H))
+                       (and (emit H (host.link-local H)
+                                  (net-ipv6.solicited-node (host.group H) Address) Address 135 0 Now)
+                            (do (neighbor.probe-at-> N (fx+ Now 1000)) true))
+                     true false)
+              false)
+          (neighbor-probes H (fx- I 1) Now))))
+
+(define poll
+  {host --> fixnum --> boolean}
+  H Now ->
+    (do (dad H Now)
+        (if (and (fx> (host.rs-left H) 0) (local-ready? H) (fx>= Now (host.rs-at H))
+                 (emit H (host.link-local H) (host.all-routers H) (host.unspecified H) 133 0 Now))
+            (do (host.rs-left-> H (fx- (host.rs-left H) 1))
+                (host.rs-at-> H (fx+ Now 4000)))
+            H)
+        (neighbor-probes H (host.slots H) Now)))
+
+(define earlier
+  {fixnum --> fixnum --> fixnum}
+  A B -> (if (or (fx< A 0) (and (fx>= B 0) (fx< B A))) B A))
+
+(define due
+  {fixnum --> fixnum --> boolean --> fixnum}
+  At Now Free ->
+    (if Free (if (fx< At Now) Now At) (type -1 fixnum)))
+
+(define probe-deadline
+  {host --> fixnum --> fixnum --> boolean --> fixnum --> fixnum}
+  _ 0 _ _ At -> At
+  H I Now Free At ->
+    (let N (neighbor-at H I)
+         Next (if (net-link.ready? (neighbor.pending N) 0)
+                  (earlier (neighbor.expires N)
+                           (if (and (= (neighbor.mac N) 0) (local-ready? H))
+                               (due (neighbor.probe-at N) Now Free) (type -1 fixnum)))
+                  (type -1 fixnum))
+      (probe-deadline H (fx- I 1) Now Free (earlier At Next))))
+
+(define dad-deadline
+  {symbol --> fixnum --> fixnum --> boolean --> fixnum}
+  State At Now Free ->
+    (if (= State tentative)
+        (if (fx>= At 0) At (due At Now Free))
+        -1))
+
+(define next-deadline
+  {host --> fixnum --> fixnum}
+  H Now ->
+    (let Free (not (net-link.full? (net-link.device.tx (host.device H))))
+         Local (dad-deadline (host.local-state H) (host.local-at H) Now Free)
+         Global (dad-deadline (host.global-state H) (host.global-at H) Now Free)
+         Rs (if (and (fx> (host.rs-left H) 0) (local-ready? H))
+                (due (host.rs-at H) Now Free) (type -1 fixnum))
+         Lifetime (if (and (not (host.static H)) (not (= (host.global-state H) absent)))
+                      (host.valid-until H) (type -1 fixnum))
+      (probe-deadline H (host.slots H) Now Free (earlier (earlier Local Global) (earlier Rs Lifetime)))))
+
+(preclude [host.%match neighbor.%match])
+)

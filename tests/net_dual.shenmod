@@ -1,0 +1,7 @@
+(shen.module
+  (version 1)
+  (name net-dual-test)
+  (requires net/tun net/ethernet net/stream net/ipv6 net/ndp)
+  (typed)
+  (main net-dual-test.main)
+  (sources tc- "net_tun_native.shen" tc+ "net_dual.shen"))

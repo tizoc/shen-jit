@@ -1,6 +1,6 @@
 (shen.module
   (version 1)
   (name net/ethernet)
-  (requires net/link net/routes)
+  (requires net/link net/routes net/ndp net/ipv6)
   (typed)
   (sources tc+ "ethernet.shen"))

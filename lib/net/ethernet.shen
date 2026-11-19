@@ -1,12 +1,14 @@
-\\ IPv4 over Ethernet. ARP resolution owns a bounded pending queue per neighbor.
+\\ IPv4 and IPv6 over Ethernet, with fixed queues for pending address resolution.
 (shen.x.namespace net-ethernet
   (use buffer)
   (use net-link)
   (use net-ipv4)
+  (use net-ipv6)
+  (use net-ndp)
   (use net-routes)
   (use shen-jit)
   (import struct defstruct)
-  (export adapter make configure pump next-deadline hardware adapter.dropped)
+  (export adapter make configure enable-ipv6 pump next-deadline hardware adapter.dropped)
 
 (defstruct neighbor
   (pending : net-link.ring)
@@ -22,6 +24,9 @@
   (neighbors : (vector neighbor))
   (slots : fixnum)
   (mutable ip : fixnum)
+  (mutable ipv6 : (list net-ndp.host))
+  (mutable next6 : fixnum)
+  (mutable ipv6-first : boolean)
   (mutable routes : (list net-routes.route))
   (mutable next : fixnum)
   (mutable dropped : fixnum))
@@ -75,10 +80,24 @@
             neighbors <- (setup (vector (fx->number Slots)) Slots Mtu)
             slots <- Slots
             ip <- IP
+            ipv6 <- []
+            next6 <- 1
+            ipv6-first <- false
             routes <- Routes
             next <- 1
             dropped <- 0)
           (error "net/ethernet: invalid address, MTU, or neighbor capacity"))))
+
+(define enable-ipv6
+  {adapter --> net-ndp.host --> boolean}
+  A H ->
+    (let Cable (adapter.packets A)
+         Interface (net-ndp.host.device H)
+      (if (and (= (adapter.ipv6 A) []) (= (adapter.mac A) (net-ndp.host.mac H))
+               (= (net-link.device.tx Cable) (net-link.device.rx Interface))
+               (= (net-link.device.rx Cable) (net-link.device.tx Interface)))
+          (do (adapter.ipv6-> A [H]) true)
+          (error "net/ethernet: enable IPv6 once with this MAC and the opposite IP link device"))))
 
 (define neighbor-at
   {adapter --> fixnum --> neighbor}
@@ -210,12 +229,11 @@
                        true false)))))
 
 (define receive-ip
-  {adapter --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
-  A B I N Now ->
+  {adapter --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  A B I N Count Now ->
     (let D (adapter.packets A)
          Tx (net-link.device.tx D)
-         Count (buffer.u16-be B (fx+ I 2))
-      (and (fx>= Count 20) (fx<= Count N) (fx<= Count (net-link.mtu D))
+      (and (fx<= Count N) (fx<= Count (net-link.mtu D))
            (if (net-link.full? Tx) (do (note-drop A) false)
                (do (buffer.copy-into! (net-link.ring.data Tx) (net-link.tail-offset Tx) B I Count)
                    (net-link.publish Tx Count (net-link.delivery D Now)))))))
@@ -226,11 +244,20 @@
     (and (fx>= N 14)
          (let Dst (read-mac B I)
               Kind (buffer.u16-be B (fx+ I 12))
-           (and (or (= Dst (adapter.mac A)) (= Dst 281474976710655))
-                (cases (= Kind 2054) (arp-input A B I N Now)
-                       (and (= Kind 2048) (fx>= N 34))
-                         (receive-ip A B (fx+ I 14) (fx- N 14) Now)
-                       true false)))))
+              IP (fx+ I 14)
+              Ours (= Dst (adapter.mac A))
+              Broadcast (= Dst 281474976710655)
+           (cases (and (= Kind 2054) (or Ours Broadcast)) (arp-input A B I N Now)
+                  (and (= Kind 2048) (fx>= N 34) (or Ours Broadcast)
+                       (= (shen-jit.shift-right (buffer.u8 B IP) 4) 4))
+                    (let Count (buffer.u16-be B (fx+ IP 2))
+                      (and (fx>= Count 20) (receive-ip A B IP (fx- N 14) Count Now)))
+                  (and (= Kind 34525) (fx>= N 54) (not (= (adapter.ipv6 A) []))
+                       (= (shen-jit.shift-right (buffer.u8 B IP) 4) 6)
+                       (or Ours (and (= (buffer.u8 B (fx+ IP 24)) 255)
+                                     (= Dst (net-ipv6.multicast-mac-at B (fx+ IP 24))))))
+                    (receive-ip A B IP (fx- N 14) (fx+ 40 (buffer.u16-be B (fx+ IP 4))) Now)
+                  true false))))
 
 (define rx-frames
   {adapter --> net-link.ring --> fixnum --> fixnum --> fixnum --> fixnum}
@@ -243,8 +270,8 @@
         Done))
 
 (define send-ip
-  {adapter --> net-link.ring --> fixnum --> fixnum --> boolean}
-  A R Mac Now ->
+  {adapter --> net-link.ring --> fixnum --> fixnum --> fixnum --> boolean}
+  A R Mac Kind Now ->
     (let D (adapter.frames A)
          Tx (net-link.device.tx D)
       (if (net-link.full? Tx) false
@@ -253,7 +280,7 @@
                N (net-link.head-length R)
                Len (fx+ N 14)
                Wire (if (fx>= Len 60) Len (type 60 fixnum))
-            (do (ethernet-header A B At Mac 2048)
+            (do (ethernet-header A B At Mac Kind)
                 (buffer.copy-into! B (fx+ At 14) (net-link.ring.data R) (net-link.head-offset R) N)
                 (pad B (fx+ At Len) (fx+ At Wire))
                 (net-link.publish Tx Wire (net-link.delivery D Now)))))))
@@ -267,21 +294,47 @@
                                 (net-link.ring.data R) (net-link.head-offset R) N)
               (net-link.publish Q N 0)))))
 
-(define emit-ip
+(define emit-ipv4
   {adapter --> net-link.ring --> fixnum --> boolean}
   A R Now ->
     (if (fx< (net-link.head-length R) 20) (note-drop A)
         (let Dst (buffer.u32-be (net-link.ring.data R) (fx+ (net-link.head-offset R) 16))
              Hop (net-routes.lookup (adapter.routes A) Dst)
-          (cases (= Dst 4294967295) (send-ip A R 281474976710655 Now)
+          (cases (= Dst 4294967295) (send-ip A R 281474976710655 2048 Now)
                  (= Hop 0) (note-drop A)
                  true (let I (claim A Hop Now)
                          (if (= I 0) (note-drop A)
                              (let N (neighbor-at A I)
                                   Q (neighbor.pending N)
                                (if (and (fx> (neighbor.mac N) 0) (not (net-link.ready? Q 0)))
-                                   (send-ip A R (neighbor.mac N) Now)
+                                   (send-ip A R (neighbor.mac N) 2048 Now)
                                    (stash A R Q)))))))))
+
+(define emit-ipv6
+  {adapter --> (list net-ndp.host) --> net-link.ring --> fixnum --> boolean}
+  A [] _ _ -> (note-drop A)
+  A [H] R Now ->
+    (if (fx< (net-link.head-length R) 40) (note-drop A)
+        (let B (net-link.ring.data R)
+             At (fx+ (net-link.head-offset R) 24)
+          (if (= (buffer.u8 B At) 255)
+              (send-ip A R (net-ipv6.multicast-mac-at B At) 34525 Now)
+              (let I (net-ndp.route H B At Now)
+                (if (= I 0) (note-drop A)
+                    (let N (net-ndp.neighbor-at H I)
+                         Q (net-ndp.neighbor.pending N)
+                      (if (and (fx> (net-ndp.neighbor.mac N) 0) (not (net-link.ready? Q 0)))
+                          (send-ip A R (net-ndp.neighbor.mac N) 34525 Now)
+                          (stash A R Q)))))))))
+
+(define emit-ip
+  {adapter --> net-link.ring --> fixnum --> boolean}
+  A R Now ->
+    (if (= (net-link.head-length R) 0) (note-drop A)
+        (let Version (shen-jit.shift-right (buffer.u8 (net-link.ring.data R) (net-link.head-offset R)) 4)
+          (cases (= Version 4) (emit-ipv4 A R Now)
+                 (= Version 6) (emit-ipv6 A (adapter.ipv6 A) R Now)
+                 true (note-drop A)))))
 
 (define tx-packets
   {adapter --> net-link.ring --> fixnum --> fixnum --> fixnum --> fixnum}
@@ -302,7 +355,7 @@
     (let Q (neighbor.pending N)
       (cases (not (net-link.ready? Q 0)) false
              (fx<= (neighbor.expires N) Now) (do (clear-neighbor N) (note-drop A))
-             (fx> (neighbor.mac N) 0) (and (send-ip A Q (neighbor.mac N) Now) (net-link.consume Q))
+             (fx> (neighbor.mac N) 0) (and (send-ip A Q (neighbor.mac N) 2048 Now) (net-link.consume Q))
              (fx<= (neighbor.request-at N) Now)
                (and (arp A (neighbor.ip N) 0 281474976710655 1 Now)
                     (do (neighbor.request-at-> N (fx+ Now 1000)) true))
@@ -319,14 +372,49 @@
               (drain A Now Next (fx- Left 1) (fx- Budget 1) (fx+ Done 1)))
           (drain A Now Next (fx- Left 1) Budget Done))))
 
+(define drain6
+  {adapter --> net-ndp.host --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
+  _ _ _ _ 0 _ Done -> Done
+  _ _ _ _ _ 0 Done -> Done
+  A H Now I Left Budget Done ->
+    (let N (net-ndp.neighbor-at H I)
+         Next (if (= I (net-ndp.host.slots H)) (type 1 fixnum) (fx+ I 1))
+         Pending (net-ndp.neighbor.pending N)
+      (if (and (net-ndp.neighbor-ready? N Now) (send-ip A Pending (net-ndp.neighbor.mac N) 34525 Now))
+          (do (net-link.consume Pending)
+              (adapter.next6-> A Next)
+              (drain6 A H Now Next (fx- Left 1) (fx- Budget 1) (fx+ Done 1)))
+          (drain6 A H Now Next (fx- Left 1) Budget Done))))
+
+(define drain-ipv6
+  {adapter --> (list net-ndp.host) --> fixnum --> fixnum --> fixnum}
+  _ [] _ _ -> 0
+  A [H] Now Budget -> (drain6 A H Now (adapter.next6 A) (net-ndp.host.slots H) Budget 0))
+
+\\ Alternate resolved ARP and NDP queues when the frame ring has limited space.
+(define drain-pending
+  {adapter --> fixnum --> fixnum --> fixnum}
+  A Now Budget ->
+    (let V6 (adapter.ipv6 A)
+         First (adapter.ipv6-first A)
+         Next (adapter.next A)
+         Slots (adapter.slots A)
+      (cases (= V6 []) (drain A Now Next Slots Budget 0)
+             First (let Six (drain-ipv6 A V6 Now Budget)
+                         Four (drain A Now Next Slots Budget 0)
+                       (do (adapter.ipv6-first-> A false) (fx+ Six Four)))
+             true (let Four (drain A Now Next Slots Budget 0)
+                        Six (drain-ipv6 A V6 Now Budget)
+                      (do (adapter.ipv6-first-> A true) (fx+ Four Six))))))
+
 (define pump
   {adapter --> fixnum --> fixnum}
   A Budget ->
     (let Now (net-link.now (adapter.frames A))
          Limit (buffer.index Budget)
          Received (rx-frames A (net-link.device.rx (adapter.frames A)) Now Limit 0)
+         Sent (drain-pending A Now Limit)
          Queued (tx-packets A (net-link.device.rx (adapter.packets A)) Now Limit 0)
-         Sent (drain A Now (adapter.next A) (adapter.slots A) Limit 0)
       (fx+ (fx+ Received Queued) Sent)))
 
 (define earlier
@@ -345,6 +433,18 @@
                  (type -1 fixnum))
       (neighbor-deadline A Now Free (fx- I 1) (earlier At Due))))
 
+(define pending-ipv6?
+  {net-ndp.host --> fixnum --> fixnum --> boolean}
+  _ 0 _ -> false
+  H I Now ->
+    (or (net-ndp.neighbor-ready? (net-ndp.neighbor-at H I) Now)
+        (pending-ipv6? H (fx- I 1) Now)))
+
+(define ready6?
+  {(list net-ndp.host) --> fixnum --> boolean}
+  [] _ -> false
+  [H] Now -> (pending-ipv6? H (net-ndp.host.slots H) Now))
+
 (define next-deadline
   {adapter --> fixnum}
   A ->
@@ -353,7 +453,8 @@
          Rx (net-link.head-deadline (net-link.device.rx Frames))
          Free (not (net-link.full? (net-link.device.tx Frames)))
          Tx (if Free (net-link.head-deadline (net-link.device.rx (adapter.packets A))) (type -1 fixnum))
-      (neighbor-deadline A Now Free (adapter.slots A) (earlier Rx Tx))))
+      (if (and Free (ready6? (adapter.ipv6 A) Now)) (earlier (earlier Rx Tx) Now)
+          (neighbor-deadline A Now Free (adapter.slots A) (earlier Rx Tx)))))
 
 (preclude [neighbor.%match adapter.%match])
 )

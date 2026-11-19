@@ -4,11 +4,12 @@
   (use shen-jit)
   (use net-link)
   (use net-ipv4)
+  (use net-ipv6)
   (import struct defstruct)
   (shadow bind)
-  (export link device peer peer.port recv-info recv-info.source recv-info.port recv-info.length
+  (export link device peer peer.port recv-info recv-info.source recv-info.family recv-info.source6 recv-info.destination6 recv-info.port recv-info.length
           make-link left right ipv4 bind make-recv-info packet-send packet-recv-into
-          send recv-into echo-step
+          send send6 recv-into echo-step valid-datagram6? inbox-ingress6
           sent would-block too-large received empty budget-exhausted too-small
           inbox inbox.peer inbox.dropped make-inbox inbox-ingress inbox-recv-into inbox-ready? inbox-discard inbox-ingress-broadcast valid-datagram? write-packet)
 
@@ -21,6 +22,9 @@
 
 (defstruct recv-info
   (mutable source : fixnum)
+  (mutable family : fixnum)
+  (source6 : net-ipv6.address)
+  (destination6 : net-ipv6.address)
   (mutable port : fixnum)
   (mutable length : fixnum))
 
@@ -78,6 +82,9 @@
   ->
     (:recv-info
       source <- 0
+      family <- 0
+      source6 <- (net-ipv6.make-address 0 0 0 0)
+      destination6 <- (net-ipv6.make-address 0 0 0 0)
       port <- 0
       length <- 0))
 
@@ -121,6 +128,46 @@
              true (let Delivery (net-link.delivery D (net-link.now D))
                     (do (queue-datagram P IP Port Payload 0 N Delivery) sent)))))
 
+(define send6
+  {peer --> net-ipv6.address --> net-ipv6.address --> fixnum --> buffer.view --> fixnum --> symbol}
+  P Source Destination Port Payload Count ->
+    (let N (buffer.index Count)
+         _ (buffer.range (buffer.length Payload) 0 N)
+         D (peer.device P)
+         Tx (net-link.device.tx D)
+         UdpBytes (fx+ N 8)
+         Size (fx+ N 48)
+      (cases (not (and (net-ipv6.unicast? Source) (net-ipv6.unicast? Destination) (port? Port)
+                       (fx>= (net-link.mtu D) 1280))) (error "udp: invalid IPv6 endpoints or MTU")
+             (fx> Size (net-link.mtu D)) too-large
+             (net-link.full? Tx) would-block
+             true (let Delivery (net-link.delivery D (net-link.now D))
+                       B (net-link.ring.data Tx)
+                       I (net-link.tail-offset Tx)
+                       T (fx+ I 40)
+                    (do (net-ipv6.write-header B I Size 17 64 Source Destination)
+                        (buffer.u16-be-> B T (peer.port P))
+                        (buffer.u16-be-> B (fx+ T 2) Port)
+                        (buffer.u16-be-> B (fx+ T 4) UdpBytes)
+                        (buffer.u16-be-> B (fx+ T 6) 0)
+                        (buffer.copy-into! B (fx+ T 8) Payload 0 N)
+                        (let Sum (net-ipv6.transport-checksum B I 17 UdpBytes)
+                          (buffer.u16-be-> B (fx+ T 6) (if (= Sum 0) 65535 Sum)))
+                        (net-link.publish Tx Size Delivery)
+                        sent)))))
+
+(define valid-datagram6?
+  {buffer.view --> fixnum --> fixnum --> boolean}
+  B I N ->
+    (and (fx>= N 48)
+         (net-ipv6.valid-header? B I N)
+         (= (buffer.u8 B (fx+ I 6)) 17)
+         (port? (buffer.u16-be B (fx+ I 40)))
+         (port? (buffer.u16-be B (fx+ I 42)))
+         (= (buffer.u16-be B (fx+ I 44)) (fx- N 40))
+         (not (= (buffer.u16-be B (fx+ I 46)) 0))
+         (= (net-ipv6.transport-checksum B I 17 (fx- N 40)) 0)))
+
 \\ Length checks precede reading the transport header.
 (define valid-datagram?
   {buffer.view --> fixnum --> fixnum --> boolean}
@@ -144,11 +191,17 @@
 (define receive-datagram
   {net-link.ring --> buffer.view --> fixnum --> fixnum --> buffer.view --> recv-info --> symbol}
   R B I N Out Info ->
-    (let Count (fx- N 28)
+    (let V4 (= (shen-jit.shift-right (buffer.u8 B I) 4) 4)
+         T (fx+ I (if V4 20 40))
+         Count (fx- N (if V4 28 48))
       (if (fx> Count (buffer.length Out)) too-small
-          (do (buffer.copy-into! Out 0 B (fx+ I 28) Count)
-              (recv-info.source-> Info (buffer.u32-be B (fx+ I 12)))
-              (recv-info.port-> Info (buffer.u16-be B (fx+ I 20)))
+          (do (buffer.copy-into! Out 0 B (fx+ T 8) Count)
+              (recv-info.family-> Info (if V4 4 6))
+              (if V4 (recv-info.source-> Info (buffer.u32-be B (fx+ I 12)))
+                  (do (net-ipv6.read-address (recv-info.source6 Info) B (fx+ I 8))
+                      (net-ipv6.read-address (recv-info.destination6 Info) B (fx+ I 24))
+                      (recv-info.source-> Info 0)))
+              (recv-info.port-> Info (buffer.u16-be B T))
               (recv-info.length-> Info Count)
               (net-link.consume R)
               received))))
@@ -221,6 +274,12 @@
 (define inbox-ingress
   {inbox --> buffer.view --> fixnum --> fixnum --> boolean}
   Q B I N -> (and (accept? (inbox.peer Q) B I N) (store-inbox Q B I N)))
+
+(define inbox-ingress6
+  {inbox --> buffer.view --> fixnum --> fixnum --> boolean}
+  Q B I N ->
+    (and (valid-datagram6? B I N) (= (buffer.u16-be B (fx+ I 42)) (peer.port (inbox.peer Q)))
+         (store-inbox Q B I N)))
 
 (define inbox-ingress-broadcast
   {inbox --> buffer.view --> fixnum --> fixnum --> boolean}

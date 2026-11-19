@@ -383,7 +383,7 @@ test-isolates-stress: $(BUILD)/shen-jit
 	SHEN_JIT_GC_STRESS=1 $(BUILD)/shen-jit eval -l tests/isolates.shen | $(FFI_RESULT)
 
 # Every library's suite, without the collections test-lib-stress adds (about 30 s).
-test-libs: test-buffer test-layout test-json test-io test-net-udp test-net-tcp test-net-interface test-net-clients test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces \
+test-libs: test-buffer test-layout test-json test-io test-net-udp test-net-tcp test-net-interface test-net-clients test-net-ipv6 test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces \
   test-parallel
 
 .PHONY: test-isolates test-isolates-stress test-parallel
@@ -502,6 +502,11 @@ test-net-interface: $(BUILD)/shen-jit
 test-net-clients: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -m tests/net_clients.shenmod -e '(net-clients-test.run)' | $(FFI_RESULT)
 
+# Portable dual-stack transport and IPv6 address discovery checks.
+.PHONY: test-net-ipv6
+test-net-ipv6: $(BUILD)/shen-jit
+	$(BUILD)/shen-jit eval -m tests/net_ipv6.shenmod -e '(net-ipv6-test.run)' | $(FFI_RESULT)
+
 # Optional Linux integration. Run test-net-tun inside a disposable network namespace.
 .PHONY: tun test-net-tun test-net-tap
 tun: $(BUILD)/shen-tun.so
@@ -516,11 +521,13 @@ $(BUILD)/shen-test-tun.so: tests/net_tun_probe.c $(RUNTIME_HDR) | $(BUILD)
 test-net-tun test-net-tap: test-net-device-build
 	python3 tests/net_tun.py $(abspath $(BUILD)/net-tun-test) $(@:test-net-%=%)
 	python3 tests/net_host.py $(abspath $(BUILD)/net-host-test) $(@:test-net-%=%)
+	python3 tests/net_dual.py $(abspath $(BUILD)/net-dual-test) $(@:test-net-%=%)
 
 .PHONY: test-net-device-build
 test-net-device-build: $(BUILD)/shen-jit $(BUILD)/shen-tun.so $(BUILD)/shen-test-tun.so
 	$(SHEN_JIT) build tests/net_tun.shenmod -o $(BUILD)/net-tun-test
 	$(SHEN_JIT) build tests/net_host.shenmod -o $(BUILD)/net-host-test
+	$(SHEN_JIT) build tests/net_dual.shenmod -o $(BUILD)/net-dual-test
 
 # Complete request parsing, bounded bodies, response streams and persistent connections.
 test-http: $(BUILD)/shen-jit

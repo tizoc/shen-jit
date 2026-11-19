@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name net/ndp)
+  (requires net/ipv6 net/link)
+  (typed)
+  (sources tc+ "ndp.shen"))

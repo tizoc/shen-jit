@@ -2,10 +2,11 @@
 (shen.x.namespace net-stream
   (use buffer)
   (use net-interface)
+  (use net-ipv6)
   (use tcp)
   (import struct defstruct)
   (shadow abort release)
-  (export stream-handle make connect accept state readable? writable? read-into write-from
+  (export stream-handle make connect connect6 accept state readable? writable? read-into write-from
           shutdown-write abort release)
 
 (defstruct stream-handle
@@ -28,6 +29,13 @@
   S IP Port ->
     (and (= (stream-handle.token S) 0)
          (let T (net-interface.connect (stream-handle.interface S) IP Port)
+           (and (fx> T 0) (do (stream-handle.token-> S T) true)))))
+
+(define connect6
+  {stream-handle --> net-ipv6.address --> fixnum --> boolean}
+  S IP Port ->
+    (and (= (stream-handle.token S) 0)
+         (let T (net-interface.connect6 (stream-handle.interface S) IP Port)
            (and (fx> T 0) (do (stream-handle.token-> S T) true)))))
 
 (define accept

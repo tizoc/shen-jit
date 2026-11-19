@@ -3803,6 +3803,22 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   check has passed. On the `net-dsl` branch, TCP's lossy run 170.8–171.2 against 162.0–162.8 ms, its UDP echo
   22.4–22.5 against 21.6–21.7.
 
+### Dual-stack networking and SLAAC (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
+
+- Shared the TCP table and UDP bindings across IPv4 and IPv6. IPv6 adds mandatory
+  UDP checksums, ICMPv6 echo and port errors, and validated TCP Packet Too Big
+  feedback. Packet buffers and addresses are allocated at setup.
+- Added bounded NDP, link-local and global duplicate address detection, router
+  solicitation, a SLAAC /64 and lifetime tracking. The portable suite exercises
+  a conflicting advertisement, an invalid router hop limit, IPv6 path MTU
+  reduction to 1,280 bytes, deprecation and expiry.
+- TUN and TAP each echoed 39,019 TCP bytes and four UDP datagrams, answered ping
+  for both families, and opened an outbound IPv6 stream. TAP additionally resolved
+  neighbors in both directions and sent an off-link IPv6 datagram through its
+  advertised router. The direct probe read zero Shen heap words after setup on
+  both devices, with a five-word positive control. IPv4's 128 KiB benchmark
+  stayed at 63, 630 and 3,150 ms at simulated RTTs of 2, 20 and 100 ms.
+
 ### IPv4 kernel test coverage (2026-11-19, Linux x86-64 in Docker Desktop)
 
 - Added the portable DHCP and DNS suite to the release matrix and a Linux TUN

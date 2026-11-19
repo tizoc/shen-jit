@@ -3,7 +3,7 @@
   (use buffer)
   (use shen-jit)
   (export address unicast? write-header valid? valid-header? fragmented?
-          packet-checksum transport-checksum)
+          packet-checksum transport-checksum sum16 checksum)
 
 (define octet
   {fixnum --> fixnum}

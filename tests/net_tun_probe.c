@@ -33,7 +33,8 @@ shen_value shen_test_tun_words(shen_vm *api, shen_value *args)
 shen_value shen_test_tun_notify(shen_vm *api, shen_value *args)
 {
     (void)api;
-    puts(shen_fixnum(args[0]) == 0 ? "TUN ready" : "UDP queue full");
+    int64_t event = shen_fixnum(args[0]);
+    puts(event == 0 ? "TUN ready" : event == 1 ? "UDP queue full" : "IPv6 ready");
     fflush(stdout);
     return SHEN_TRUE;
 }
