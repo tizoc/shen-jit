@@ -10,7 +10,7 @@
           make-link left right ipv4 bind make-recv-info packet-send packet-recv-into
           send recv-into echo-step
           sent would-block too-large received empty budget-exhausted too-small
-          inbox inbox.peer inbox.dropped make-inbox inbox-ingress inbox-recv-into inbox-ready?)
+          inbox inbox.peer inbox.dropped make-inbox inbox-ingress inbox-recv-into inbox-ready? valid-datagram? write-packet)
 
 (synonyms link net-link.link device net-link.device)
 
@@ -122,17 +122,24 @@
                     (do (queue-datagram P IP Port Payload 0 N Delivery) sent)))))
 
 \\ Length checks precede reading the transport header.
+(define valid-datagram?
+  {buffer.view --> fixnum --> fixnum --> boolean}
+  B I N ->
+    (and (fx>= N 28)
+         (net-ipv4.valid? B I N 17)
+         (net-ipv4.unicast? (buffer.u32-be B (fx+ I 12)))
+         (port? (buffer.u16-be B (fx+ I 20)))
+         (port? (buffer.u16-be B (fx+ I 22)))
+         (= (buffer.u16-be B (fx+ I 24)) (fx- N 20))
+         (or (= (buffer.u16-be B (fx+ I 26)) 0) (= (udp-checksum B I (fx- N 20)) 0))))
+
 (define accept?
   {peer --> buffer.view --> fixnum --> fixnum --> boolean}
   P B I N ->
     (and (fx>= N 28)
-         (net-ipv4.valid? B I N 17)
          (= (buffer.u32-be B (fx+ I 16)) (peer.ip P))
-         (net-ipv4.unicast? (buffer.u32-be B (fx+ I 12)))
-         (port? (buffer.u16-be B (fx+ I 20)))
          (= (buffer.u16-be B (fx+ I 22)) (peer.port P))
-         (= (buffer.u16-be B (fx+ I 24)) (fx- N 20))
-         (or (= (buffer.u16-be B (fx+ I 26)) 0) (= (udp-checksum B I (fx- N 20)) 0))))
+         (valid-datagram? B I N)))
 
 (define receive-datagram
   {net-link.ring --> buffer.view --> fixnum --> fixnum --> buffer.view --> recv-info --> symbol}

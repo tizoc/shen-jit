@@ -2,16 +2,18 @@
 (shen.x.namespace net-interface
   (use buffer)
   (use net-ipv4)
+  (use net-fragments)
   (use net-link)
   (use tcp)
   (use udp)
   (import struct defstruct)
-  (export interface interface.listener make make-host connect poll next-deadline
+  (export interface interface.listener make make-host make-host-sized connect poll next-deadline
           udp-binding udp-send udp-recv-into udp-dropped)
 
 (defstruct interface
   (device : net-link.device)
   (ip : fixnum)
+  (fragments : net-fragments.table)
   (listener : tcp.listener)
   (tcp-ports : (list fixnum))
   (udp-bindings : (list udp.inbox)))
@@ -22,6 +24,7 @@
     (:interface
       device <- D
       ip <- IP
+      fragments <- (net-fragments.make 2 (net-link.mtu D))
       listener <- (tcp.make-listener D IP TcpPort TcpSlots InitialSequence)
       tcp-ports <- [TcpPort]
       udp-bindings <- [(udp.make-inbox D IP UdpPort UdpSlots)]))
@@ -47,12 +50,24 @@
   {net-link.device --> fixnum --> (list fixnum) --> fixnum --> fixnum --> fixnum -->
    (list fixnum) --> fixnum --> interface}
   D IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots ->
+    (new-host D IP TcpPorts (tcp.make-table D IP TcpSlots Key0 Key1) UdpPorts UdpSlots))
+
+(define make-host-sized
+  {net-link.device --> fixnum --> (list fixnum) --> fixnum --> fixnum --> fixnum -->
+   (list fixnum) --> fixnum --> fixnum --> interface}
+  D IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots Bytes ->
+    (new-host D IP TcpPorts (tcp.make-table-sized D IP TcpSlots Key0 Key1 Bytes) UdpPorts UdpSlots))
+
+(define new-host
+  {net-link.device --> fixnum --> (list fixnum) --> tcp.listener --> (list fixnum) --> fixnum --> interface}
+  D IP TcpPorts L UdpPorts UdpSlots ->
     (do (check-ports TcpPorts)
         (check-ports UdpPorts)
         (:interface
           device <- D
           ip <- IP
-          listener <- (tcp.make-table D IP TcpSlots Key0 Key1)
+          fragments <- (net-fragments.make 2 (net-link.mtu D))
+          listener <- L
           tcp-ports <- TcpPorts
           udp-bindings <- (bind-udp D IP UdpPorts UdpSlots))))
 
@@ -111,26 +126,72 @@
                 (net-link.publish Tx N (net-link.delivery D Now))))
           false)))
 
+(define unreachable
+  {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  F B I N Code Now ->
+    (let D (interface.device F)
+         Tx (net-link.device.tx D)
+         Quote (if (fx< N 28) N (type 28 fixnum))
+         Count (fx+ Quote 28)
+      (if (and (fx<= Count (net-link.mtu D)) (not (net-link.full? Tx)))
+          (let Out (net-link.ring.data Tx)
+               At (net-link.tail-offset Tx)
+               Body (fx+ At 20)
+            (do (net-ipv4.write-header Out At Count 1 (interface.ip F) (buffer.u32-be B (fx+ I 12)))
+                (buffer.u16-be-> Out Body (fx+ 768 Code))
+                (buffer.u16-be-> Out (fx+ Body 2) 0)
+                (buffer.u32-be-> Out (fx+ Body 4) 0)
+                (buffer.copy-into! Out (fx+ Body 8) B I Quote)
+                (buffer.u16-be-> Out (fx+ Body 2) (net-ipv4.packet-checksum Out Body (fx+ Quote 8)))
+                (net-link.publish Tx Count (net-link.delivery D Now))))
+          false)))
+
 (define udp-ingress
-  {(list udp.inbox) --> fixnum --> buffer.view --> fixnum --> fixnum --> boolean}
-  [] _ _ _ _ -> false
-  [Q | Rest] Port B I N ->
+  {interface --> (list udp.inbox) --> fixnum --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  F [] _ B I N Now ->
+    (and (udp.valid-datagram? B I N) (unreachable F B I N 3 Now))
+  F [Q | Rest] Port B I N Now ->
     (if (= (udp.peer.port (udp.inbox.peer Q)) Port)
         (udp.inbox-ingress Q B I N)
-        (udp-ingress Rest Port B I N)))
+        (udp-ingress F Rest Port B I N Now)))
+
+(define icmp-ingress
+  {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  F B I N Now ->
+    (if (fx< N 28) false
+        (let Code (buffer.u16-be B (fx+ I 20))
+          (cases (= Code 2048) (echo-request F B I N Now)
+                 (and (= Code 772) (fx>= N 56)
+                      (= (net-ipv4.packet-checksum B (fx+ I 20) (fx- N 20)) 0))
+                   (tcp.path-mtu (interface.listener F) B (fx+ I 28) (fx- N 28)
+                                 (buffer.u16-be B (fx+ I 26)) Now)
+                 true false))))
+
+(define dispatch
+  {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  F B I N Now ->
+    (let Proto (buffer.u8 B (fx+ I 9))
+      (cases (= Proto 6)
+               (and (fx>= N 40)
+                    (tcp.table-ingress (interface.listener F) B I N Now
+                                       (list-has-port? (interface.tcp-ports F) (buffer.u16-be B (fx+ I 22)))))
+             (= Proto 17)
+               (and (fx>= N 28)
+                    (udp-ingress F (interface.udp-bindings F) (buffer.u16-be B (fx+ I 22)) B I N Now))
+             (= Proto 1) (icmp-ingress F B I N Now)
+             true (unreachable F B I N 2 Now))))
 
 (define ingress
   {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   F B I N Now ->
-    (if (fx< N 20) false
-        (let Proto (buffer.u8 B (fx+ I 9))
-          (cases (and (= Proto 6) (fx>= N 40))
-                   (tcp.table-ingress (interface.listener F) B I N Now
-                                      (list-has-port? (interface.tcp-ports F) (buffer.u16-be B (fx+ I 22))))
-                 (and (= Proto 17) (fx>= N 28))
-                   (udp-ingress (interface.udp-bindings F) (buffer.u16-be B (fx+ I 22)) B I N)
-                 (= Proto 1) (echo-request F B I N Now)
-                 true false))))
+    (and (net-ipv4.valid-header? B I N)
+         (= (buffer.u32-be B (fx+ I 16)) (interface.ip F))
+         (net-ipv4.unicast? (buffer.u32-be B (fx+ I 12)))
+         (if (net-ipv4.fragmented? B I)
+             (let T (interface.fragments F)
+                  Count (net-fragments.receive T B I N Now)
+               (and (fx> Count 0) (dispatch F (net-fragments.packet T) 0 Count Now)))
+             (dispatch F B I N Now))))
 
 (define receive-ready
   {interface --> net-link.ring --> fixnum --> fixnum --> fixnum --> fixnum}

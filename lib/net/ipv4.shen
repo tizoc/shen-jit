@@ -2,7 +2,8 @@
 (shen.x.namespace net-ipv4
   (use buffer)
   (use shen-jit)
-  (export address unicast? write-header valid? packet-checksum transport-checksum)
+  (export address unicast? write-header valid? valid-header? fragmented?
+          packet-checksum transport-checksum)
 
 (define octet
   {fixnum --> fixnum}
@@ -57,13 +58,24 @@
         (buffer.u32-be-> B (fx+ I 16) Dst)
         (buffer.u16-be-> B (fx+ I 10) (packet-checksum B I 20))))
 
-(define valid?
-  {buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
-  B I N Proto ->
+(define valid-header?
+  {buffer.view --> fixnum --> fixnum --> boolean}
+  B I N ->
     (and (fx>= N 20)
          (= (buffer.u8 B I) 69)
          (= (buffer.u16-be B (fx+ I 2)) N)
-         (= (shen-jit.bit-and (buffer.u16-be B (fx+ I 6)) 49151) 0)
-         (= (buffer.u8 B (fx+ I 9)) Proto)
+         (fx> (buffer.u8 B (fx+ I 8)) 0)
+         (= (shen-jit.bit-and (buffer.u16-be B (fx+ I 6)) 32768) 0)
          (= (packet-checksum B I 20) 0)))
+
+(define fragmented?
+  {buffer.view --> fixnum --> boolean}
+  B I -> (not (= (shen-jit.bit-and (buffer.u16-be B (fx+ I 6)) 16383) 0)))
+
+(define valid?
+  {buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  B I N Proto ->
+    (and (valid-header? B I N)
+         (not (fragmented? B I))
+         (= (buffer.u8 B (fx+ I 9)) Proto)))
 )

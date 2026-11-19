@@ -3803,6 +3803,16 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   check has passed. On the `net-dsl` branch, TCP's lossy run 170.8–171.2 against 162.0–162.8 ms, its UDP echo
   22.4–22.5 against 21.6–21.7.
 
+### IPv4 wire interoperability (2026-11-19, macOS arm64)
+
+- Added bounded fragment reassembly, ICMP unreachable replies, TCP closed-port resets
+  and an application abort operation. ICMP fragmentation-needed messages reduce a
+  matching TCP flow's segment size after validating the quoted sequence.
+- Configurable TCP windows negotiate scaling. A 100,000-byte transfer filled a receive
+  buffer without application reads. The path MTU fixture reduced a 1,500-byte packet
+  to 600 bytes and observed the repair before the timeout. Fragment fixtures cover
+  reordering and overlap rejection. UDP, TCP and interface suites passed.
+
 ### Shared IPv4 endpoint table (2026-11-19, macOS arm64)
 
 - Multiple listener ports and outbound connects share the same bounded TCP slots. Bindings

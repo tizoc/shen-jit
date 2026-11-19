@@ -91,13 +91,13 @@
   Mtu ->
     (let F (setup Mtu)
          C (pair.client F)
-         Packet (buffer.new 44)
-         Expected (fill (buffer.new 44) 0
-                     [69 0 0 44 0 0 64 0 64 6 182 200 192 0 2 1 192 0 2 2
-                      48 57 0 7 255 255 255 254 0 0 0 0 96 2 2 192 228 217 0 0 4 2 0 0])
+         Packet (buffer.new 48)
+         Expected (fill (buffer.new 48) 0
+                     [69 0 0 48 0 0 64 0 64 6 182 196 192 0 2 1 192 0 2 2
+                      48 57 0 7 255 255 255 254 0 0 0 0 112 2 2 192 209 120 0 0 4 2 1 1 2 4 0 88])
       (and (expect (tcp.connect C 4294967294) "queue SYN")
            (expect (= (tcp.poll C 0) 0) "poll with zero ingress budget")
-           (expect (= (net-link.packet-recv-into (pair.right F) Packet) 44) "SYN wire length")
+           (expect (= (net-link.packet-recv-into (pair.right F) Packet) 48) "SYN wire length")
            (expect (buffer.equal? Packet Expected) "independent SYN fixture"))))
 
 \\ The malformed fixture has a valid checksum, so the option parser must reject it.
@@ -107,7 +107,7 @@
     (let F (setup Mtu)
          C (pair.client F) S (pair.server F)
          Left (pair.left F) Right (pair.right F)
-         Syn (buffer.new 44)
+         Syn (buffer.new 48)
          Malformed (fill (buffer.new 48) 0
                       [69 0 0 48 0 0 64 0 64 6 182 196 192 0 2 1 192 0 2 2
                        48 57 0 7 255 255 255 254 0 0 0 0 112 194 0 88 213 120 0 0 2 1 0 2 1 4 2 0])
@@ -117,7 +117,7 @@
       (do (expect (tcp.listen S 100) "listen for SYN with options")
           (expect (tcp.connect C 4294967294) "start client for option fixtures")
           (tcp.poll C 2)
-          (expect (= (net-link.packet-recv-into Right Syn) 44) "replace ordinary SYN")
+          (expect (= (net-link.packet-recv-into Right Syn) 48) "replace ordinary SYN")
           (expect (= (net-link.packet-send Left Malformed 48) net-link.sent) "queue malformed option")
           (expect (= (tcp.poll S 2) 1) "examine malformed option")
           (expect (= (tcp.state S) tcp.listen-state) "reject malformed option")
@@ -125,8 +125,8 @@
           (checksum-segment Valid 28)
           (expect (= (net-link.packet-send Left Valid 48) net-link.sent) "queue SYN with options")
           (tcp.poll S 2)
-          (expect (= (net-link.packet-recv-into Left Syn) 40) "SYN-ACK omits SACK when the SYN did not offer it")
-          (expect (= (net-link.packet-send Right Syn 40) net-link.sent) "deliver legacy SYN-ACK")
+          (expect (= (net-link.packet-recv-into Left Syn) 44) "SYN-ACK omits SACK when the SYN did not offer it")
+          (expect (= (net-link.packet-send Right Syn 44) net-link.sent) "deliver legacy SYN-ACK")
           (tcp.poll C 2)
           (tcp.poll S 2)
           (expect (= (tcp.state S) tcp.established) "complete handshake with inbound SYN options")
@@ -604,11 +604,11 @@
   Mtu ->
     (let F (setup Mtu)
          C (pair.client F) S (pair.server F)
-         Syn (buffer.new 44)
+         Syn (buffer.new 48)
       (do (expect (tcp.listen S 100) "listen after SYN loss")
           (expect (tcp.connect C 4294967294) "queue the original SYN")
           (tcp.poll C 0)
-          (expect (= (net-link.packet-recv-into (pair.right F) Syn) 44) "drop the original SYN")
+          (expect (= (net-link.packet-recv-into (pair.right F) Syn) 48) "drop the original SYN")
           (advance F 1000)
           (tcp.poll C 0)
           (advance F 50)
@@ -658,13 +658,13 @@
       (do (expect (tcp.listen S 100) "listen for SACK negotiation")
           (expect (tcp.connect C 4294967150) "open near sequence wrap")
           (tcp.poll C 0)
-          (expect (= (net-link.packet-recv-into R Wire) 44) "capture SYN with options")
+          (expect (= (net-link.packet-recv-into R Wire) 48) "capture SYN with options")
           (expect (= (buffer.u16-be Wire 40) 1026) "SYN carries SACK-Permitted")
-          (expect (= (net-link.packet-send L Wire 44) net-link.sent) "deliver the offer")
+          (expect (= (net-link.packet-send L Wire 48) net-link.sent) "deliver the offer")
           (tcp.poll S 2)
-          (expect (= (net-link.packet-recv-into L Wire) 44) "capture SYN-ACK with options")
+          (expect (= (net-link.packet-recv-into L Wire) 48) "capture SYN-ACK with options")
           (expect (= (buffer.u16-be Wire 40) 1026) "SYN-ACK carries SACK-Permitted")
-          (expect (= (net-link.packet-send R Wire 44) net-link.sent) "deliver the reply")
+          (expect (= (net-link.packet-send R Wire 48) net-link.sent) "deliver the reply")
           (tcp.poll C 2)
           (tcp.poll S 2)
           (expect (and (= (tcp.state C) tcp.established) (= (tcp.state S) tcp.established))
@@ -1157,7 +1157,7 @@
          L (tcp.make-listener (net-link.right Link) B 7 2 100)
          First (tcp.make-peer Left A 12345 B 7)
          Second (tcp.make-peer Left A 12346 B 7)
-         Wire (buffer.new 44)
+         Wire (buffer.new 48)
       (do (expect (tcp.connect First 71) "first SYN")
           (tcp.poll First 0)
           (tcp.listener-poll L 2)
@@ -1167,13 +1167,13 @@
           (fxvector-> Time 1 1000)
           (tcp.listener-poll L 0)
           (tcp.listener-poll L 0)
-          (expect (= (net-link.packet-recv-into Left Wire) 44) "drain the full output ring")
+          (expect (= (net-link.packet-recv-into Left Wire) 48) "drain the full output ring")
           (expect (= (buffer.u16-be Wire 22) 12345) "first SYN-ACK")
           (tcp.listener-poll L 0)
-          (expect (= (net-link.packet-recv-into Left Wire) 44) "waiting peer gets next output slot")
+          (expect (= (net-link.packet-recv-into Left Wire) 48) "waiting peer gets next output slot")
           (expect (= (buffer.u16-be Wire 22) 12346) "blocked polls preserve send rotation")
           (tcp.listener-poll L 0)
-          (expect (= (net-link.packet-recv-into Left Wire) 44) "first peer still retransmits")
+          (expect (= (net-link.packet-recv-into Left Wire) 48) "first peer still retransmits")
           (expect (= (buffer.u16-be Wire 22) 12345) "first SYN-ACK retry"))))
 
 (define discard-syn-acks
@@ -1182,7 +1182,7 @@
   [Now | Rest] Time L D Wire ->
     (do (fxvector-> Time 1 Now)
         (tcp.listener-poll L 2)
-        (expect (= (net-link.packet-recv-into D Wire) 44) "discard a SYN-ACK before accepting")
+        (expect (= (net-link.packet-recv-into D Wire) 48) "discard a SYN-ACK before accepting")
         (expect (= (tcp.accept L) 0) "unacknowledged SYN-ACK does not create a lease")
         (discard-syn-acks Rest Time L D Wire)))
 
@@ -1197,7 +1197,7 @@
          L (tcp.make-listener (net-link.right Link) B 7 1 100)
          First (tcp.make-peer Left A 12345 B 7)
          Second (tcp.make-peer Left A 12346 B 7)
-         Wire (buffer.new 44)
+         Wire (buffer.new 48)
       (do (expect (tcp.connect First 71) "SYN that stalls during handshake")
           (tcp.poll First 0)
           (discard-syn-acks [0 1000 3000 7000 15000 31000 63000] Time L Left Wire)

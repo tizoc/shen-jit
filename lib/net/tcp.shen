@@ -9,7 +9,8 @@
   (export peer make-peer listen connect state send recv-into shutdown-write poll
           listener make-listener listener-poll accept connection-index connection-state
           listener-ingress listener-transmit make-table table-ingress table-connect accept-on
-          listener-deadline connection-readable? connection-writable?
+          listener-deadline connection-readable? connection-writable? connection-abort
+          make-table-sized path-mtu
           connection-send connection-recv-into connection-shutdown-write release
           closed listen-state syn-sent syn-received established close-wait fin-wait-1 fin-wait-2
           closing last-ack time-wait timed-out reset)
@@ -27,6 +28,11 @@
   (tx-repaired : buffer.view)
   (mss : fixnum)
   (capacity : fixnum)
+  (map-bytes : fixnum)
+  (window-scale : fixnum)
+  (mutable remote-scale : fixnum)
+  (mutable path-mtu : fixnum)
+  (mutable aborting : boolean)
   (mutable phase : symbol)
   (mutable send-next : fixnum)
   (mutable tx-flags : fixnum)
@@ -84,10 +90,15 @@
   {net-link.device --> fixnum}
   D -> (smaller 536 (fx- (net-link.mtu D) 40)))
 
+(define scale-for
+  {fixnum --> fixnum --> fixnum}
+  Capacity Shift ->
+    (if (fx<= Capacity 65535) Shift (scale-for (shen-jit.shift-right Capacity 1) (fx+ Shift 1))))
+
 (define new-peer
-  {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> peer}
-  D LocalIP LocalPort RemoteIP RemotePort Mss ->
-    (let Capacity (fx* Mss 8)
+  {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> peer}
+  D LocalIP LocalPort RemoteIP RemotePort Mss Capacity ->
+    (let MapBytes (fxquotient (fx+ Capacity 7) 8)
       (:peer
         device <- D
         local-ip <- LocalIP
@@ -96,11 +107,16 @@
         remote-port <- RemotePort
         tx <- (buffer.new Capacity)
         rx <- (buffer.new Capacity)
-        rx-present <- (buffer.new Mss)
-        tx-sacked <- (buffer.new Mss)
-        tx-repaired <- (buffer.new Mss)
+        rx-present <- (buffer.new MapBytes)
+        tx-sacked <- (buffer.new MapBytes)
+        tx-repaired <- (buffer.new MapBytes)
         mss <- Mss
         capacity <- Capacity
+        map-bytes <- MapBytes
+        window-scale <- (scale-for Capacity 0)
+        remote-scale <- -1
+        path-mtu <- (net-link.mtu D)
+        aborting <- false
         phase <- closed
         send-next <- 0
         tx-flags <- 0
@@ -147,7 +163,7 @@
   D LocalIP LocalPort RemoteIP RemotePort ->
     (let Mss (peer-mss D)
       (if (and (endpoint? LocalIP LocalPort) (endpoint? RemoteIP RemotePort) (fx> Mss 0))
-          (new-peer D LocalIP LocalPort RemoteIP RemotePort Mss)
+          (new-peer D LocalIP LocalPort RemoteIP RemotePort Mss (fx* Mss 8))
           (error "tcp: need two unicast endpoints and an MTU of at least 41"))))
 
 (define state
@@ -189,7 +205,7 @@
 (define clear-sack
   {peer --> boolean}
   P -> (if (fx> (peer.tx-sack-high P) 0)
-           (do (clear-presence (peer.tx-sacked P) (peer.mss P))
+           (do (clear-presence (peer.tx-sacked P) (peer.map-bytes P))
                (peer.tx-sack-high-> P 0)
                true)
            true))
@@ -200,7 +216,7 @@
 
 (define clear-sack-recovery
   {peer --> boolean}
-  P -> (do (if (sack-recovering? P) (clear-presence (peer.tx-repaired P) (peer.mss P)) true)
+  P -> (do (if (sack-recovering? P) (clear-presence (peer.tx-repaired P) (peer.map-bytes P)) true)
            (peer.sack-loss-end-> P 0)
            (peer.sack-next-repair-> P -1)
            (peer.sack-pipe-> P 0)
@@ -241,10 +257,13 @@
               (peer.ca-acked-> P 0)
               (peer.recovery-bytes-> P 0)
               (peer.remote-window-> P 0)
+              (peer.remote-scale-> P -1)
+              (peer.path-mtu-> P (net-link.mtu (peer.device P)))
+              (peer.aborting-> P false)
               (peer.send-mss-> P (peer.mss P))
               (peer.recv-next-> P 0)
               (peer.rx-start-> P 0)
-              (if (fx> (peer.rx-pending P) 0) (clear-presence (peer.rx-present P) (peer.mss P)) true)
+              (if (fx> (peer.rx-pending P) 0) (clear-presence (peer.rx-present P) (peer.map-bytes P)) true)
               (peer.rx-pending-> P 0)
               (peer.rx-fin-> P -1)
               (peer.recv-eof-> P false)
@@ -398,7 +417,7 @@
   P B At ->
     (let Tail (receive-tail P)
          Limit (receive-limit P (window P))
-         Max (smaller 4 (fxquotient (fx- (net-link.mtu (peer.device P)) 44) 8))
+         Max (smaller 4 (fxquotient (fx- (peer.path-mtu P) 44) 8))
          Recent (seq-distance (peer.rx-sack-recent P) (peer.recv-next P))
          First (if (and (fx>= (peer.rx-sack-recent P) 0)
                         (fx< Recent Limit) (receive-marked? P Tail Recent))
@@ -423,13 +442,41 @@
   {peer --> boolean}
   P -> (fx>= (net-link.mtu (peer.device P)) 52))
 
+(define write-syn-options
+  {peer --> buffer.view --> fixnum --> fixnum --> fixnum}
+  P B At Flags ->
+    (let Sack (and (sack-capable? P) (or (= Flags 2) (peer.sack-enabled P)))
+         Scale (and (fx>= (peer.path-mtu P) 52)
+                    (if (= Flags 2) (fx> (peer.window-scale P) 0)
+                        (fx>= (peer.remote-scale P) 0)))
+         N (if Sack (let _ (buffer.u32-be-> B At 67239936) (type 4 fixnum)) (type 0 fixnum))
+         M (fx+ At N)
+      (if (fx>= (peer.path-mtu P) 44)
+          (do (buffer.u16-be-> B M 516)
+              (buffer.u16-be-> B (fx+ M 2) (smaller (peer.capacity P) (fx- (peer.path-mtu P) 40)))
+              \\ The padding after SACK-Permitted must stay traversable.
+              (if Sack (buffer.u16-be-> B (fx+ At 2) 257) B)
+              (if Scale
+                  (let Pos (fx+ M 4)
+                    (do (buffer.u32-be-> B Pos (fx+ 50528256 (fx* (peer.window-scale P) 256)))
+                        (fx+ N 8)))
+                  (fx+ N 4)))
+          N)))
+
 (define write-options
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum}
   P B I Flags ->
-    (cases (and (flag? Flags 2) (sack-capable? P) (or (= Flags 2) (peer.sack-enabled P)))
-             (do (buffer.u32-be-> B (fx+ I 40) 67239936) 4) \\ SACK-Permitted, EOL, padding.
+    (cases (flag? Flags 2) (write-syn-options P B (fx+ I 40) Flags)
            (and (= Flags 16) (wants-sack? P)) (write-sack P B (fx+ I 40))
            true 0))
+
+(define advertised-window
+  {peer --> fixnum --> fixnum}
+  P Flags ->
+    (let Space (window P)
+         Shift (if (or (flag? Flags 2) (fx< (peer.remote-scale P) 0))
+                   (type 0 fixnum) (peer.window-scale P))
+      (smaller 65535 (shen-jit.shift-right Space Shift))))
 
 (define write-segment
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> buffer.view}
@@ -440,7 +487,7 @@
         (buffer.u32-be-> B (fx+ I 24) Seq)
         (buffer.u32-be-> B (fx+ I 28) (if (flag? Flags 16) (peer.recv-next P) 0))
         (buffer.u16-be-> B (fx+ I 32) (fx+ (fx+ 20480 (fx* Options 1024)) Flags))
-        (buffer.u16-be-> B (fx+ I 34) (window P))
+        (buffer.u16-be-> B (fx+ I 34) (advertised-window P Flags))
         (buffer.u16-be-> B (fx+ I 36) 0)
         (buffer.u16-be-> B (fx+ I 38) 0)
         (if (= Count 0) B
@@ -718,6 +765,9 @@
          Control (not (= (peer.tx-flags P) 0))
       (cases (and Expired (fx>= (peer.tx-retries P) 6)) (do (stop-peer P timed-out) false)
              (net-link.full? R) false
+             (peer.aborting P) (do (emit-segment P R Now 20 (peer.send-next P) 0 0)
+                                   (peer.aborting-> P false)
+                                   (stop-peer P reset))
              (and Control (or (fx< Due 0) Expired)) (send-control P R Now)
              true (or (and (not Control) (flush-data P R Now Expired))
                       (and (or (peer.ack-needed P) (fx> (peer.rx-duplicate-acks P) 0))
@@ -739,6 +789,7 @@
                  true (let N (buffer.u8 B (fx+ I 1))
                          (cases (or (fx< N 2) (fx> N (fx- End I))) -1
                                 (and (= Kind 4) (not (= N 2))) -1
+                                (and (= Kind 3) (not (= N 3))) -1
                                 (not (= Kind 2)) (options B (fx+ I N) End Mss)
                                 (not (= N 4)) -1
                                 true (let Advertised (buffer.u16-be B (fx+ I 2))
@@ -1115,7 +1166,10 @@
          Overlap (fx< Skip Span)
          Acceptable (or (= Ahead 0) Overlap (fx< Ahead Window))
       (cases (= (state P) time-wait) (answer-duplicate P Flags Seq N Now)
-             (flag? Flags 4) (if (= Seq Next) (stop-peer P reset) false)
+             (flag? Flags 4)
+               (cases (= Seq Next) (stop-peer P reset)
+                      Acceptable (do (peer.ack-needed-> P true) true)
+                      true false)
              (flag? Flags 2) (answer-duplicate P Flags Seq N Now)
              (or (not (flag? Flags 16)) (seq-after? Ack (peer.send-next P))) false
              (not Acceptable) (answer-duplicate P Flags Seq N Now)
@@ -1129,13 +1183,20 @@
                        (answer-duplicate P Flags Seq N Now))))))
 
 (define receive-opening
-  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
-  P Flags Seq Ack Win N Mss Now Sacked ->
+  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum -->
+   boolean --> boolean}
+  P Flags Seq Ack Win N Mss Now Scale Sacked ->
     (let Phase (state P)
-      (cases (and (= Phase listen-state) (= Flags 2) (= N 0))
+      (cases (and (= Phase syn-sent) (flag? Flags 4) (flag? Flags 16) (acknowledge? P Ack))
+               (stop-peer P reset)
+             (and (= Phase listen-state) (= Flags 2) (= N 0))
                (do (peer.recv-next-> P (seq-add Seq 1))
                    (remember-window P Seq Ack Win)
                    (peer.send-mss-> P Mss)
+                   (peer.remote-scale-> P
+                     (if (and (fx>= (peer.path-mtu P) 52)
+                              (or (= Phase listen-state) (fx> (peer.window-scale P) 0)))
+                         Scale (type -1 fixnum)))
                    (peer.sack-enabled-> P Sacked)
                    (peer.phase-> P syn-received)
                    (queue-control P 18))
@@ -1143,6 +1204,10 @@
                (do (peer.recv-next-> P (seq-add Seq 1))
                    (remember-window P Seq Ack Win)
                    (peer.send-mss-> P Mss)
+                   (peer.remote-scale-> P
+                     (if (and (fx>= (peer.path-mtu P) 52)
+                              (or (= Phase listen-state) (fx> (peer.window-scale P) 0)))
+                         Scale (type -1 fixnum)))
                    (peer.sack-enabled-> P Sacked)
                    (peer.tx-flags-> P 0)
                    (finish-syn P Now)
@@ -1150,6 +1215,12 @@
                    (peer.ack-needed-> P true)
                    true)
              true false)))
+
+(define read-scale
+  {buffer.view --> fixnum --> fixnum --> fixnum}
+  B Options End ->
+    (let At (option-offset B Options End 3)
+      (if (fx< At 0) -1 (smaller 14 (buffer.u8 B (fx+ At 2))))))
 
 (define terminal?
   {peer --> boolean}
@@ -1169,17 +1240,23 @@
              N (fx- Count H)
              Options (fx+ I 40)
              Mss (options B Options Start (peer.mss P))
+             Shift (larger 0 (peer.remote-scale P))
           (cases (fx< Mss 0) false
                  (or (= Phase listen-state) (= Phase syn-sent))
-                   (receive-opening P Flags Seq Ack Win N Mss Now
+                   (receive-opening P Flags Seq Ack Win N
+                                    (if (fx< (option-offset B Options Start 2) 0) (smaller Mss 536) Mss)
+                                    Now (read-scale B Options Start)
                                     (and (sack-capable? P) (fx>= (option-offset B Options Start 4) 0)))
+                 (and (= Phase syn-received) (flag? Flags 4) (= Seq (peer.recv-next P)))
+                   (stop-peer P reset)
                  (and (= Phase syn-received)
                       (not (and (= Seq (peer.recv-next P)) (flag? Flags 16) (acknowledge? P Ack))))
                    (if (and (= Flags 2) (= (seq-add Seq 1) (peer.recv-next P))
                             (fx>= (peer.tx-due P) 0))
                        (do (peer.tx-due-> P Now) true)
                        false)
-                 true (receive-connected P B Options Start N Flags Seq Ack Win Now)))))
+                 true (receive-connected P B Options Start N Flags Seq Ack
+                                         (shen-jit.shift-left Win Shift) Now)))))
 
 (define receive-segment
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
@@ -1244,30 +1321,38 @@
   (mutable next-accept : fixnum))
 
 (define initialise-slots
-  {(vector listener-slot) --> net-link.device --> fixnum --> fixnum --> fixnum --> fixnum -->
+  {(vector listener-slot) --> net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum -->
    (vector listener-slot)}
-  Slots _ _ _ _ 0 -> Slots
-  Slots D IP Port Mss I ->
+  Slots _ _ _ _ _ 0 -> Slots
+  Slots D IP Port Mss Capacity I ->
     (let Slot (:listener-slot
                  index <- I
-                 peer <- (new-peer D IP Port 0 0 Mss)
+                 peer <- (new-peer D IP Port 0 0 Mss Capacity)
                  token <- I
                  lease <- vacant)
       (do (fxvector-> Slots I Slot)
-          (initialise-slots Slots D IP Port Mss (fx- I 1)))))
+          (initialise-slots Slots D IP Port Mss Capacity (fx- I 1)))))
 
 (define make-listener
   {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
-  D IP Port Slots Initial -> (new-table D IP Port Slots Initial 0 0))
+  D IP Port Slots Initial -> (new-table D IP Port Slots Initial 0 0 0))
 
 (define make-table
   {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
-  D IP Slots Key0 Key1 -> (new-table D IP 0 Slots 0 Key0 Key1))
+  D IP Slots Key0 Key1 -> (new-table D IP 0 Slots 0 Key0 Key1 0))
+
+(define make-table-sized
+  {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
+  D IP Slots Key0 Key1 Bytes ->
+    (if (and (fx>= Bytes 1) (fx<= Bytes 1048576))
+        (new-table D IP 0 Slots 0 Key0 Key1 Bytes)
+        (error "tcp: window must be in 1..1048576 bytes")))
 
 (define new-table
-  {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
-  D IP Port Slots Initial Key0 Key1 ->
-    (let Mss (peer-mss D)
+  {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
+  D IP Port Slots Initial Key0 Key1 Bytes ->
+    (let Mss (if (= Bytes 0) (peer-mss D) (smaller Bytes (fx- (net-link.mtu D) 40)))
+         Capacity (if (= Bytes 0) (fx* Mss 8) Bytes)
          N (buffer.index Slots)
          _ (if (and (net-ipv4.unicast? IP) (fx>= Port 0) (fx<= Port 65535) (fx> Mss 0) (fx> N 0)) true
                  (error "tcp: listener needs a unicast endpoint, positive slots and an MTU of at least 41"))
@@ -1279,7 +1364,7 @@
         ip <- IP
         port <- Port
         capacity <- N
-        slots <- (initialise-slots (vector (fx->number N)) D IP Port Mss N)
+        slots <- (initialise-slots (vector (fx->number N)) D IP Port Mss Capacity N)
         next-sequence <- Initial
         next-port <- (fx+ 49152 (shen-jit.bit-and Key1 16383))
         key0 <- Key0
@@ -1406,6 +1491,32 @@
                         (do (free-slot S) false))))))
         false))
 
+(define reject-segment
+  {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  L B I Count Local IP Port Now ->
+    (let Flags (segment-flags B I)
+         D (listener.device L)
+         Tx (net-link.device.tx D)
+      (if (and (endpoint? IP Port) (fx> Local 0) (not (flag? Flags 4)) (not (net-link.full? Tx)))
+          (let Out (net-link.ring.data Tx)
+               At (net-link.tail-offset Tx)
+               Ack (flag? Flags 16)
+               Space (fx+ (fx- Count (fx+ 20 (header-length B I)))
+                          (fx+ (if (flag? Flags 2) (type 1 fixnum) (type 0 fixnum))
+                               (if (flag? Flags 1) (type 1 fixnum) (type 0 fixnum))))
+            (do (net-ipv4.write-header Out At 40 6 (listener.ip L) IP)
+                (buffer.u16-be-> Out (fx+ At 20) Local)
+                (buffer.u16-be-> Out (fx+ At 22) Port)
+                (buffer.u32-be-> Out (fx+ At 24) (if Ack (buffer.u32-be B (fx+ I 28)) 0))
+                (buffer.u32-be-> Out (fx+ At 28)
+                  (if Ack 0 (seq-add (buffer.u32-be B (fx+ I 24)) Space)))
+                (buffer.u16-be-> Out (fx+ At 32) (if Ack 20484 20500))
+                (buffer.u16-be-> Out (fx+ At 34) 0)
+                (buffer.u32-be-> Out (fx+ At 36) 0)
+                (buffer.u16-be-> Out (fx+ At 36) (net-ipv4.transport-checksum Out At 6 20))
+                (net-link.publish Tx 40 (net-link.delivery D Now))))
+          false)))
+
 (define table-ingress
   {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
   L B I Count Now Listening ->
@@ -1416,7 +1527,9 @@
              Local (buffer.u16-be B (fx+ I 22))
              Index (find-peer L Local IP Port 1)
           (if (= Index 0)
-              (and Listening (admit L B I Count Local IP Port Now))
+              (if (and Listening (not (flag? (segment-flags B I) 16)))
+                  (admit L B I Count Local IP Port Now)
+                  (reject-segment L B I Count Local IP Port Now))
               (receive-valid (listener-slot.peer (slot-at L Index)) B I Count Now)))
         false))
 
@@ -1504,7 +1617,8 @@
          Replay (peer.tx-replay P)
          Repair (peer.sack-next-repair P)
          Credit (fx- (peer.cwnd P) (peer.sack-pipe P))
-      (or (peer.ack-needed P)
+      (or (peer.aborting P)
+          (peer.ack-needed P)
           (fx> (peer.rx-duplicate-acks P) 0)
           (if (not (= (peer.tx-flags P) 0)) (fx< (peer.tx-due P) 0)
               (or (and (fx>= Replay 0) (fx< Replay (smaller End (peer.cwnd P))))
@@ -1611,6 +1725,35 @@
 (define connection-shutdown-write
   {listener --> fixnum --> boolean}
   L Token -> (shutdown-write (listener-slot.peer (lease-slot L Token))))
+
+(define connection-abort
+  {listener --> fixnum --> boolean}
+  L Token ->
+    (let P (listener-slot.peer (lease-slot L Token))
+      (cases (terminal? P) false
+             (= (state P) syn-sent) (stop-peer P reset)
+             true (do (peer.aborting-> P true) (peer.tx-due-> P -1) true))))
+
+\\ Validate a quoted segment against a live tuple and its outstanding sequence interval.
+(define path-mtu
+  {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  L B I Count Mtu Now ->
+    (if (and (fx>= Count 28) (= (buffer.u8 B I) 69) (= (buffer.u8 B (fx+ I 9)) 6)
+             (= (buffer.u32-be B (fx+ I 12)) (listener.ip L))
+             (= (net-ipv4.packet-checksum B I 20) 0)
+             (fx>= Mtu 68) (fx< Mtu (buffer.u16-be B (fx+ I 2))))
+        (let Index (find-peer L (buffer.u16-be B (fx+ I 20)) (buffer.u32-be B (fx+ I 16))
+                               (buffer.u16-be B (fx+ I 22)) 1)
+          (and (fx> Index 0)
+               (let P (listener-slot.peer (slot-at L Index))
+                    Flight (peer.tx-flight P)
+                    Seq (buffer.u32-be B (fx+ I 24))
+                 (and (fx< (seq-distance Seq (send-una P)) Flight) (fx< Mtu (peer.path-mtu P))
+                      (do (peer.path-mtu-> P Mtu)
+                          (peer.send-mss-> P (smaller (peer.send-mss P) (fx- Mtu 40)))
+                          (peer.tx-due-> P Now)
+                          true)))))
+        false))
 
 (define release
   {listener --> fixnum --> boolean}
