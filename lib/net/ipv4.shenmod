@@ -1,6 +1,6 @@
 (shen.module
   (version 1)
   (name net/ipv4)
-  (requires buffer)
+  (requires buffer net/wire)
   (typed)
   (sources tc+ "ipv4.shen"))

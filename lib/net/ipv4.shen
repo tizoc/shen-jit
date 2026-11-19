@@ -2,6 +2,8 @@
 (shen.x.namespace net-ipv4
   (use buffer)
   (use shen-jit)
+  (use net-wire => wire)
+  (import layout write-layout)
   (export address unicast? write-header valid? valid-header? fragmented?
           packet-checksum transport-checksum sum16 checksum)
 
@@ -42,40 +44,38 @@
 (define transport-checksum
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
   B I Proto N ->
-    (let Pseudo (sum16 B (fx+ I 12) 8 (fx+ Proto N))
-      (checksum (sum16 B (fx+ I 20) N Pseudo))))
+    (let Pseudo (sum16 B (wire.ipv4.source-at I) 8 (fx+ Proto N))
+      (checksum (sum16 B (fx+ I (wire.ipv4.size)) N Pseudo))))
 
 (define write-header
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> buffer.view}
   B I Count Proto Src Dst ->
-    (do (buffer.u16-be-> B I 17664)                     \\ Version 4, IHL 5, service byte 0.
-        (buffer.u16-be-> B (fx+ I 2) Count)
-        (buffer.u16-be-> B (fx+ I 4) 0)                \\ Zero identification for the atomic datagram.
-        (buffer.u16-be-> B (fx+ I 6) 16384)            \\ Don't Fragment.
-        (buffer.u16-be-> B (fx+ I 8) (fx+ 16384 Proto)) \\ TTL 64.
-        (buffer.u16-be-> B (fx+ I 10) 0)
-        (buffer.u32-be-> B (fx+ I 12) Src)
-        (buffer.u32-be-> B (fx+ I 16) Dst)
-        (buffer.u16-be-> B (fx+ I 10) (packet-checksum B I 20))))
+    (do (write-layout wire.ipv4 B I
+          (version 4) (header-length 5) (total-length Count)
+          (dont-fragment 1) (time-to-live 64) (protocol Proto)
+          (source Src) (destination Dst))
+        (wire.ipv4.checksum-> B I (packet-checksum B I (wire.ipv4.size)))))
 
 (define valid-header?
   {buffer.view --> fixnum --> fixnum --> boolean}
   B I N ->
-    (and (fx>= N 20)
-         (= (buffer.u8 B I) 69)
-         (= (buffer.u16-be B (fx+ I 2)) N)
-         (fx> (buffer.u8 B (fx+ I 8)) 0)
-         (= (shen-jit.bit-and (buffer.u16-be B (fx+ I 6)) 32768) 0)
-         (= (packet-checksum B I 20) 0)))
+    (and (fx>= N (wire.ipv4.size))
+         (= (wire.ipv4.version B I) 4)
+         (= (wire.ipv4.header-length B I) 5)
+         (= (wire.ipv4.total-length B I) N)
+         (fx> (wire.ipv4.time-to-live B I) 0)
+         (= (wire.ipv4.reserved B I) 0)
+         (= (packet-checksum B I (wire.ipv4.size)) 0)))
 
 (define fragmented?
   {buffer.view --> fixnum --> boolean}
-  B I -> (not (= (shen-jit.bit-and (buffer.u16-be B (fx+ I 6)) 16383) 0)))
+  B I -> (or (= (wire.ipv4.more-fragments B I) 1)
+             (not (= (wire.ipv4.fragment-offset B I) 0))))
 
 (define valid?
   {buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   B I N Proto ->
     (and (valid-header? B I N)
          (not (fragmented? B I))
-         (= (buffer.u8 B (fx+ I 9)) Proto)))
+         (= (wire.ipv4.protocol B I) Proto)))
 )
