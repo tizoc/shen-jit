@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- The guide's page "Writing fast programs": measuring time and allocation, what allocates, loops that run without
+  allocating, and typed programs, with timings of typed numeric programs beside C.
+
 ### Changed
 
 - A `lambda` or `freeze` that captures nothing, `(fn add)` included, is made once, as its definition is loaded:

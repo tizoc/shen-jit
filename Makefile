@@ -270,7 +270,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi structs modules numbers floats word words option result buffers grammar io fs processes parallel tree-sitter framing io-sockets deadlines http-head http http-streaming http-listener json datalog curl
+GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words option result buffers grammar io fs processes parallel tree-sitter framing io-sockets deadlines http-head http http-streaming http-listener json datalog curl
 GUIDE_PANDOC := pandoc -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
 guide:

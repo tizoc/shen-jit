@@ -775,6 +775,12 @@ Smaller examples are in `tools/`, each on the page of the libraries it uses.
 
 ## Close to the machine
 
+### Writing fast programs
+
+Most code needs nothing special. For the code that runs most, [Writing fast programs](performance.md) shows how
+to measure time and allocation, what allocates, how a loop can run without allocating and how typed programs keep
+numbers in registers, with timings of typed numeric programs beside C.
+
 ### Bytes and bits
 
 Primitives for raw bytes, with every access checked. The collector frees the buffers, and saved executables keep

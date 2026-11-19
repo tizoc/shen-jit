@@ -12,6 +12,7 @@ on:
       - docs/semantics.md
       - docs/bytecode.md
       - docs/ffi.md
+      - docs/performance.md
       - docs/structs.md
       - docs/modules.md
       - docs/numbers.md
