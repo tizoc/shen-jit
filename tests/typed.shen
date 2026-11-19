@@ -198,6 +198,7 @@
   [(shen-jit.apply (shen-jit.function float-mixed-sum) [0.5 9007199254740993 1])
    (trap-error (shen-jit.apply (shen-jit.function float-mixed-sum) [0.5 2305843009213693951 1])
                (/. E (error-to-string E)))])
+(typed.check "a sealed call of no arguments, not inlined" 58 (float-after-later 30))
 (typed.check "a quotient" (/ 1.5 2.5) (float-quotient 1.5 2.5))
 (typed.check "a square root in a register" [true 5.0] [(typed.has? float-sqrt float-hypot) (float-hypot 3 4)])
 (typed.check "by zero, as /" (trap-error (/ 1.5 (- 0.5 0.5)) (/. E (error-to-string E)))
@@ -559,7 +560,7 @@
          (module.load "tests/typed/foreign.shenmod")
          (optimise -)
          (shen-jit.seal -)
-         (typed.check "a C call in registers" [true false 1 2 0]
+         (typed.check "a C call in registers" [true false 1 2 -1]
            [(typed.has? float-call1 foreign-sum) (typed.has? call-sealed foreign-sum)
             (tl (get foreign-cos shen-jit.foreign-floats)) (tl (get foreign-pow shen-jit.foreign-floats))
             (tl (get foreign-labs shen-jit.foreign-floats))])
@@ -567,6 +568,8 @@
                                            (* (foreign-pow 1.5 2) 2.5)]
            [(foreign-sum 3 0.5) (foreign-power 1.5 2.0)])
          (typed.check "two arguments" true (typed.has? float-call2 foreign-power))
+         (typed.check "no arguments, an ordinary call" [-1 (+ 1 (foreign-rounding))]
+           [(tl (get foreign-rounding shen-jit.foreign-floats)) (foreign-rounding-plus 1)])
          (typed.check "memory, typed" 2.5 (foreign-memory 4))
          (typed.check "integer arguments of a C call stay exact" [(+ 9007199254740993 1) "integer overflow"]
            [(shen-jit.apply (shen-jit.function foreign-sum-of) [9007199254740993 1])

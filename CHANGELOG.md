@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+
+- In a typed program, a sealed call of a function of no arguments that is not inlined, such as one written before
+  the function's definition, or of a C function of no arguments, compiles: it failed with "partial function
+  shen-jit.lower.float-call", and asked on standard input whether to track it.
+
 ## [0.10] - 2026-11-19
 
 ### Added

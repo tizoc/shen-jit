@@ -18,3 +18,6 @@
 
 (define foreign-product-of {number --> number --> float}
   P Q -> (float (foreign-pow (* P Q) 1)))
+
+\\ A C function of no arguments, which is not one of doubles, is called as any other.
+(define foreign-rounding-plus {number --> number} N -> (+ N (foreign-rounding)))

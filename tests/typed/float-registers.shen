@@ -148,3 +148,9 @@
 (define float-roots {fixnum --> fixnum --> float --> float}
   I N Acc -> Acc where (fx>= I N)
   I N Acc -> (float-roots (fx+ I 1) N (fl+ Acc (float-root (fx->fl I)))))
+
+\\ A sealed call of no arguments that is not inlined, as one before its definition is not, is an
+\\ ordinary call: only the C functions of doubles that lib/ffi.shen marks are called in registers.
+(define float-after-later {fixnum --> fixnum} M -> (fx+ M (float-later)))
+
+(define float-later {--> fixnum} -> 28)

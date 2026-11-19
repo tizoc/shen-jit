@@ -465,7 +465,7 @@
 \\ its arguments and result stay in registers, and the call is to C, which keeps nothing of them.
 (define foreign-float?
   F Args -> (and (shen-jit.symbol? F) (shen-jit.sealed? F)
-                 (= (length Args) (definition-property F shen-jit.foreign-floats 0))))
+                 (= (length Args) (definition-property F shen-jit.foreign-floats -1))))
 
 (define float-call
   1 -> float-call1

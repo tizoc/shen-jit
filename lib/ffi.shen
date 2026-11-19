@@ -130,12 +130,13 @@
            Name)))
 
 \\ How many doubles a function of doubles giving a double takes, which typed code calls with its
-\\ floats in registers (docs/bytecode.md), or 0: from one to three, neither blocking nor variadic.
+\\ floats in registers (docs/bytecode.md), or -1, which no call matches, as 0 would one of no
+\\ arguments: from one to three, neither blocking nor variadic.
 \\ The property pairs this count with the installed procedure, so replacements cannot inherit it.
 (define ffi.floats
   Types double false 0 -> (length Types) where (and (> (length Types) 0) (< (length Types) 4)
                                                    (ffi.all-double? Types))
-  _ _ _ _ -> 0)
+  _ _ _ _ -> -1)
 
 (define ffi.all-double?
   [] -> true

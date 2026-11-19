@@ -4143,6 +4143,12 @@ every index was a tagged fixnum in a slot.
 - **The claim is the procedure's** (2026-11-15). The property pairs it with the installed procedure, as a struct
   reader's field does ("Struct fields read with no check in typed definitions", below): a property of the name
   alone would have an ordinary function that replaced a foreign one, and was sealed, called as a native one.
+- **Calls of no arguments taken for C calls** (2026-11-19). The lowerer compared a sealed call's argument count
+  with the property, taking 0 where there was none, and `lib/ffi.shen` recorded 0 for a C function not of
+  doubles. A sealed call of no arguments that was not inlined, as one written before its definition is not, or
+  of a C function of none, was then taken for a call of doubles, and `float-call`, which knows one to three,
+  failed as a partial function, whose question, whether to track it, waited on standard input: a test run from
+  a terminal hung. Both now take -1, which no call matches, and `tests/typed.shen` calls one of each.
 - **Registers across calls of functions: not built.** All guest code runs in one native frame, guest calls being
   jumps with the guest frame pointer, so the words where the JIT saves raw registers around C are shared by
   every function, and a callee would overwrite its caller's. Keeping them would mean saving them in the guest
