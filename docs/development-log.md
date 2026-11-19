@@ -3803,6 +3803,19 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   check has passed. On the `net-dsl` branch, TCP's lossy run 170.8–171.2 against 162.0–162.8 ms, its UDP echo
   22.4–22.5 against 21.6–21.7.
 
+### TCP selective acknowledgments (2026-11-19, Apple M3 Max and Linux in Docker Desktop)
+
+- SYN and SYN-ACK negotiate SACK-Permitted. The receiver reports up to four ranges from
+  the receive bitmap, most recent first. A transmit bitmap keeps advisory SACK state
+  through cumulative ACKs and is cleared on timeout.
+- The wire test dropped 36- and 12-byte segments in one flight near sequence wrap. Both
+  gaps were recovered at 25 ms of simulated time, before the one-second timeout. The
+  second retry stopped at the next selectively acknowledged byte. The test also covered
+  a legacy SYN and ignored a SACK range beyond the outstanding flight.
+- The Linux heap probe included 16 runs of the two-loss test and the mixed TUN workload.
+  It measured zero Shen heap words after setup, with five words for the allocating
+  control. The 8,000-connection stress run added zero collections.
+
 ### TCP congestion control (2026-11-19, Apple M3 Max and Linux in Docker Desktop)
 
 - The congestion window bounds new data and timeout replay. It starts at four MSS and

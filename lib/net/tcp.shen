@@ -22,6 +22,7 @@
   (tx : buffer.view)
   (rx : buffer.view)
   (rx-present : buffer.view)
+  (tx-sacked : buffer.view)
   (mss : fixnum)
   (capacity : fixnum)
   (mutable phase : symbol)
@@ -41,6 +42,9 @@
   (mutable rtt-blocked-bytes : fixnum)
   (mutable tx-duplicate-acks : fixnum)
   (mutable tx-fast-retransmit : boolean)
+  (mutable sack-enabled : boolean)
+  (mutable tx-sack-high : fixnum)
+  (mutable rx-sack-recent : fixnum)
   (mutable cwnd : fixnum)
   (mutable ssthresh : fixnum)
   (mutable ca-acked : fixnum)
@@ -88,6 +92,7 @@
         tx <- (buffer.new Capacity)
         rx <- (buffer.new Capacity)
         rx-present <- (buffer.new Mss)
+        tx-sacked <- (buffer.new Mss)
         mss <- Mss
         capacity <- Capacity
         phase <- closed
@@ -107,6 +112,9 @@
         rtt-blocked-bytes <- 0
         tx-duplicate-acks <- 0
         tx-fast-retransmit <- false
+        sack-enabled <- false
+        tx-sack-high <- 0
+        rx-sack-recent <- -1
         cwnd <- 0
         ssthresh <- Capacity
         ca-acked <- 0
@@ -161,6 +169,22 @@
              (do (buffer.u8-> Map I 0)
                  (clear-presence Map I))))
 
+(define presence-mask
+  {fixnum --> fixnum}
+  At -> (shen-jit.shift-left 1 (shen-jit.bit-and At 7)))
+
+(define marked?
+  {buffer.view --> fixnum --> boolean}
+  Map At -> (flag? (buffer.u8 Map (shen-jit.shift-right At 3)) (presence-mask At)))
+
+(define clear-sack
+  {peer --> boolean}
+  P -> (if (fx> (peer.tx-sack-high P) 0)
+           (do (clear-presence (peer.tx-sacked P) (peer.mss P))
+               (peer.tx-sack-high-> P 0)
+               true)
+           true))
+
 (define clear-duplicate-acks
   {peer --> boolean}
   P -> (do (peer.tx-duplicate-acks-> P 0)
@@ -187,6 +211,9 @@
               (peer.rtt-sample-at-> P -1)
               (peer.rtt-blocked-bytes-> P 0)
               (clear-duplicate-acks P)
+              (clear-sack P)
+              (peer.sack-enabled-> P false)
+              (peer.rx-sack-recent-> P -1)
               (peer.cwnd-> P 0)
               (peer.ssthresh-> P (peer.capacity P))
               (peer.ca-acked-> P 0)
@@ -229,6 +256,16 @@
 (define wrap-offset
   {fixnum --> fixnum --> fixnum}
   At Capacity -> (if (fx>= At Capacity) (fx- At Capacity) At))
+
+(define receive-tail
+  {peer --> fixnum}
+  P -> (wrap-offset (fx+ (peer.rx-start P) (peer.rx-length P)) (peer.capacity P)))
+
+(define receive-limit
+  {peer --> fixnum --> fixnum}
+  P Window ->
+    (let Final (peer.rx-fin P)
+      (if (fx< Final 0) Window (smaller Window (seq-distance Final (peer.recv-next P))))))
 
 (define copy-into-ring
   {buffer.view --> fixnum --> fixnum --> buffer.view --> fixnum --> fixnum --> buffer.view}
@@ -288,29 +325,106 @@
               true)
           false)))
 
+(define receive-marked?
+  {peer --> fixnum --> fixnum --> boolean}
+  P Tail Offset -> (marked? (peer.rx-present P) (wrap-offset (fx+ Tail Offset) (peer.capacity P))))
+
+(define sack-run-start
+  {peer --> fixnum --> fixnum --> fixnum}
+  P Tail I ->
+    (if (and (fx> I 0) (receive-marked? P Tail (fx- I 1)))
+        (sack-run-start P Tail (fx- I 1)) I))
+
+(define sack-run-end
+  {peer --> fixnum --> fixnum --> fixnum --> fixnum}
+  P Tail I Limit ->
+    (if (and (fx< I Limit) (receive-marked? P Tail I))
+        (sack-run-end P Tail (fx+ I 1) Limit) I))
+
+(define write-sack-block
+  {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> buffer.view}
+  P B At Left Right ->
+    (let Next (peer.recv-next P)
+      (do (buffer.u32-be-> B At (seq-add Next Left))
+          (buffer.u32-be-> B (fx+ At 4) (seq-add Next Right)))))
+
+(define write-sack-runs
+  {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
+  P B At Tail I Limit Skip Used Max ->
+    (cases (or (fx>= I Limit) (= Used Max)) Used
+           (not (receive-marked? P Tail I))
+             (write-sack-runs P B At Tail (fx+ I 1) Limit Skip Used Max)
+           true
+             (let End (sack-run-end P Tail (fx+ I 1) Limit)
+               (if (= I Skip) (write-sack-runs P B At Tail End Limit Skip Used Max)
+                   (do (write-sack-block P B (fx+ At (fx* Used 8)) I End)
+                       (write-sack-runs P B At Tail End Limit Skip (fx+ Used 1) Max))))))
+
+(define write-sack
+  {peer --> buffer.view --> fixnum --> fixnum}
+  P B At ->
+    (let Tail (receive-tail P)
+         Limit (receive-limit P (window P))
+         Max (smaller 4 (fxquotient (fx- (net-link.mtu (peer.device P)) 44) 8))
+         Recent (seq-distance (peer.rx-sack-recent P) (peer.recv-next P))
+         First (if (and (fx>= (peer.rx-sack-recent P) 0)
+                        (fx< Recent Limit) (receive-marked? P Tail Recent))
+                   (sack-run-start P Tail Recent) (type -1 fixnum))
+         Blocks (fx+ At 4)
+         Used (if (fx>= First 0)
+                  (do (write-sack-block P B Blocks First (sack-run-end P Tail (fx+ First 1) Limit))
+                      (type 1 fixnum))
+                  (type 0 fixnum))
+         N (write-sack-runs P B Blocks Tail 0 Limit First Used Max)
+         Size (fx* N 8)
+      (if (= N 0) 0
+          (do (buffer.u16-be-> B At 257) \\ Two NOPs align the block edges.
+              (buffer.u16-be-> B (fx+ At 2) (fx+ 1282 Size))
+              (fx+ Size 4)))))
+
+(define wants-sack?
+  {peer --> boolean}
+  P -> (and (peer.sack-enabled P) (fx> (peer.rx-pending P) 0) (not (peer.recv-eof P))))
+
+(define sack-capable?
+  {peer --> boolean}
+  P -> (fx>= (net-link.mtu (peer.device P)) 52))
+
+(define write-options
+  {peer --> buffer.view --> fixnum --> fixnum --> fixnum}
+  P B I Flags ->
+    (cases (and (flag? Flags 2) (sack-capable? P) (or (= Flags 2) (peer.sack-enabled P)))
+             (do (buffer.u32-be-> B (fx+ I 40) 67239936) 4) \\ SACK-Permitted, EOL, padding.
+           (and (= Flags 16) (wants-sack? P)) (write-sack P B (fx+ I 40))
+           true 0))
+
 (define write-segment
-  {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> buffer.view}
-  P B I Flags Seq At Count ->
-    (do (net-ipv4.write-header B I (fx+ Count 40) 6 (peer.local-ip P) (peer.remote-ip P))
+  {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> buffer.view}
+  P B I Flags Seq At Count Options ->
+    (do (net-ipv4.write-header B I (fx+ (fx+ Count 40) Options) 6 (peer.local-ip P) (peer.remote-ip P))
         (buffer.u16-be-> B (fx+ I 20) (peer.local-port P))
         (buffer.u16-be-> B (fx+ I 22) (peer.remote-port P))
         (buffer.u32-be-> B (fx+ I 24) Seq)
         (buffer.u32-be-> B (fx+ I 28) (if (flag? Flags 16) (peer.recv-next P) 0))
-        (buffer.u16-be-> B (fx+ I 32) (fx+ 20480 Flags))
+        (buffer.u16-be-> B (fx+ I 32) (fx+ (fx+ 20480 (fx* Options 1024)) Flags))
         (buffer.u16-be-> B (fx+ I 34) (window P))
         (buffer.u16-be-> B (fx+ I 36) 0)
         (buffer.u16-be-> B (fx+ I 38) 0)
         (if (= Count 0) B
-            (copy-from-ring B (fx+ I 40) (peer.tx P) At (peer.capacity P) Count))
-        (buffer.u16-be-> B (fx+ I 36) (net-ipv4.transport-checksum B I 6 (fx+ Count 20)))))
+            (copy-from-ring B (fx+ (fx+ I 40) Options) (peer.tx P) At (peer.capacity P) Count))
+        (buffer.u16-be-> B (fx+ I 36) (net-ipv4.transport-checksum B I 6 (fx+ (fx+ Count 20) Options)))))
 
 (define emit-segment
   {peer --> net-link.ring --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
   P R Now Flags Seq At Count ->
     (let Delivery (net-link.delivery (peer.device P) Now)
-      (do (write-segment P (net-link.ring.data R) (net-link.tail-offset R) Flags Seq At Count)
-          (net-link.publish R (fx+ Count 40) Delivery)
-          (if (flag? Flags 16) (peer.ack-needed-> P false) P)
+         B (net-link.ring.data R)
+         I (net-link.tail-offset R)
+         Options (write-options P B I Flags)
+      (do (write-segment P B I Flags Seq At Count Options)
+          (net-link.publish R (fx+ (fx+ Count 40) Options) Delivery)
+          (if (and (flag? Flags 16) (or (= Flags 16) (not (wants-sack? P))))
+              (peer.ack-needed-> P false) P)
           true)))
 
 (define emit-ack
@@ -437,6 +551,20 @@
           (if (= Flight 0) (peer.tx-due-> P (fx+ Now (peer.tx-rto P))) P)
           true)))
 
+(define sack-hole-end
+  {peer --> fixnum --> fixnum --> fixnum}
+  P I Limit ->
+    (if (or (fx>= I Limit)
+            (marked? (peer.tx-sacked P) (wrap-offset (fx+ (peer.tx-head P) I) (peer.capacity P))))
+        I (sack-hole-end P (fx+ I 1) Limit)))
+
+(define fast-retry-length
+  {peer --> fixnum --> fixnum}
+  P End ->
+    (let Limit (smaller (peer.send-mss P) End)
+      \\ Always retry the cumulative gap, even if the peer reneged on that byte.
+      (if (fx> (peer.tx-sack-high P) 0) (sack-hole-end P 1 Limit) Limit)))
+
 (define flush-data
   {peer --> net-link.ring --> fixnum --> boolean --> boolean}
   P R Now Expired ->
@@ -448,16 +576,18 @@
                        (fx- (smaller Window (peer.cwnd P)) Flight))
          N (smaller (fx- (peer.tx-length P) Flight) (smaller (peer.send-mss P) Available))
       (cases (and Expired (fx> End 0))
-               (do (if (fx> Window 0) (congestion-timeout P Flight) true)
+               (do (clear-sack P)
+                   (if (fx> Window 0) (congestion-timeout P Flight) true)
                    (replay-data P R Now 0 End true))
              (and (fx>= Replay 0) (fx< Replay (smaller End (peer.cwnd P))))
                (replay-data P R Now Replay End false)
              (and (peer.tx-fast-retransmit P) (fx> End 0) (fx> Window 0))
                (do (congestion-fast-loss P Flight)
-                   (retransmit-data P R Now 0 (smaller (peer.send-mss P) End))
+                   (retransmit-data P R Now 0 (fast-retry-length P End))
                    (peer.tx-fast-retransmit-> P false)
                    true)
              (and (fx> (peer.rx-duplicate-acks P) 0) (not (peer.ack-needed P))) (emit-ack P R Now)
+             (and (peer.ack-needed P) (wants-sack? P)) (emit-ack P R Now)
              (fx> N 0) (send-new-data P R Now Flight N)
              true false)))
 
@@ -479,7 +609,7 @@
   {buffer.view --> fixnum --> fixnum}
   B I -> (fx* 4 (shen-jit.shift-right (buffer.u8 B (fx+ I 32)) 4)))
 
-\\ Skip unnegotiated options, and read MSS from SYN. Return -1 for malformed options.
+\\ Read MSS and validate option boundaries before any other option reads.
 (define options
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
   B I End Mss ->
@@ -490,11 +620,22 @@
                  (fx< (fx- End I) 2) -1
                  true (let N (buffer.u8 B (fx+ I 1))
                          (cases (or (fx< N 2) (fx> N (fx- End I))) -1
+                                (and (= Kind 4) (not (= N 2))) -1
                                 (not (= Kind 2)) (options B (fx+ I N) End Mss)
                                 (not (= N 4)) -1
                                 true (let Advertised (buffer.u16-be B (fx+ I 2))
                                        (if (= Advertised 0) -1
                                            (options B (fx+ I N) End (smaller Mss Advertised))))))))))
+
+(define option-offset
+  {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
+  B I End Wanted ->
+    (if (= I End) -1
+        (let Kind (buffer.u8 B I)
+          (cases (= Kind 0) -1
+                 (= Kind Wanted) I
+                 (= Kind 1) (option-offset B (fx+ I 1) End Wanted)
+                 true (option-offset B (fx+ I (buffer.u8 B (fx+ I 1))) End Wanted)))))
 
 (define valid-segment?
   {buffer.view --> fixnum --> fixnum --> boolean}
@@ -626,6 +767,27 @@
                          true)
                      (do (peer.ca-acked-> P Credit) true))))))
 
+(define write-sack-marks
+  {buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
+  _ _ _ 0 _ -> true
+  Map At Capacity N Mark ->
+    (let I (shen-jit.shift-right At 3)
+         Bits (buffer.u8 Map I)
+         Mask (presence-mask At)
+      (do (if (= (flag? Bits Mask) Mark) Map
+              (buffer.u8-> Map I (shen-jit.bit-xor Bits Mask)))
+          (write-sack-marks Map (wrap-offset (fx+ At 1) Capacity) Capacity (fx- N 1) Mark))))
+
+(define retire-sack
+  {peer --> fixnum --> boolean}
+  P N ->
+    (let High (peer.tx-sack-high P)
+      (cases (= High 0) true
+             (fx>= N High) (clear-sack P)
+             true (do (write-sack-marks (peer.tx-sacked P) (peer.tx-head P) (peer.capacity P) N false)
+                      (peer.tx-sack-high-> P (fx- High N))
+                      true))))
+
 (define advance-ack
   {peer --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
   P Ack N Flight Now ->
@@ -636,6 +798,7 @@
          Blocked (peer.rtt-blocked-bytes P)
       (do (if (or (= Ack SampleEnd) (seq-after? Ack SampleEnd)) (take-rtt-sample P Now) false)
           (if (fx> Blocked 0) (peer.rtt-blocked-bytes-> P (larger 0 (fx- Blocked N))) P)
+          (retire-sack P N)
           (peer.tx-head-> P (wrap-offset (fx+ (peer.tx-head P) N) (peer.capacity P)))
           (peer.tx-length-> P (fx- (peer.tx-length P) N))
           (peer.tx-flight-> P Left)
@@ -655,11 +818,15 @@
                 true))
           false)))
 
+(define send-una
+  {peer --> fixnum}
+  P -> (seq-add (peer.send-next P) (fx- 0 (peer.tx-flight P))))
+
 (define acknowledge-data
   {peer --> fixnum --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
   P Seq Ack Window Now PureAck ->
     (let Flight (peer.tx-flight P)
-         Una (seq-add (peer.send-next P) (fx- 0 Flight))
+         Una (send-una P)
          N (seq-distance Ack Una)
          OldWindow (peer.remote-window P)
       (if (fx<= N Flight)
@@ -681,9 +848,39 @@
         (acknowledge-data P Seq Ack Window Now PureAck)
         (acknowledge-control P Seq Ack Window Now)))
 
-(define presence-mask
-  {fixnum --> fixnum}
-  At -> (shen-jit.shift-left 1 (shen-jit.bit-and At 7)))
+(define read-sack-blocks
+  {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  _ _ I I _ -> true
+  P B I End Una ->
+    (let Left (seq-distance (buffer.u32-be B I) Una)
+         Right (seq-distance (buffer.u32-be B (fx+ I 4)) Una)
+         Capacity (peer.capacity P)
+      (do (if (and (fx> Left 0) (fx< Left Right) (fx<= Right (peer.tx-flight P)))
+              (do (write-sack-marks (peer.tx-sacked P) (wrap-offset (fx+ (peer.tx-head P) Left) Capacity)
+                                    Capacity (fx- Right Left) true)
+                  (peer.tx-sack-high-> P (larger (peer.tx-sack-high P) Right))
+                  true)
+              false)
+          (read-sack-blocks P B (fx+ I 8) End Una))))
+
+(define accept-sack
+  {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  P B Options End Ack Previous ->
+    (if (and (peer.sack-enabled P) (= Ack (send-una P)) (fx> (peer.tx-flight P) 0))
+        (let At (option-offset B Options End 5)
+             _ (if (fx>= At 0)
+                   (let Size (buffer.u8 B (fx+ At 1))
+                     (if (and (fx>= Size 10) (fx<= Size 34) (= (fxremainder (fx- Size 2) 8) 0))
+                         (read-sack-blocks P B (fx+ At 2) (fx+ At Size) Ack)
+                         false))
+                   false)
+          \\ A partial ACK in fast recovery exposes another reported gap. One retry per ACK.
+          (if (and (seq-after? Ack Previous) (fx> (peer.recovery-bytes P) 0) (fx> (peer.tx-sack-high P) 0))
+              (do (peer.tx-duplicate-acks-> P 3)
+                  (peer.tx-fast-retransmit-> P true)
+                  true)
+              false))
+        false))
 
 \\ Store the first byte received at each position and count only newly marked bytes.
 (define store-missing
@@ -727,7 +924,7 @@
   P B Start Offset N Limit ->
     (let Rx (peer.rx P)
          Capacity (peer.capacity P)
-         Tail (wrap-offset (fx+ (peer.rx-start P) (peer.rx-length P)) Capacity)
+         Tail (receive-tail P)
          Pending (peer.rx-pending P)
       (if (and (= Offset 0) (= Pending 0))
           (do (copy-into-ring Rx Tail Capacity B Start N)
@@ -763,12 +960,17 @@
          _ (if (and Fin (fx< End Window) (fx< (peer.rx-fin P) 0))
                (peer.rx-fin-> P (seq-add Next End)) P)
          Final (peer.rx-fin P)
-         Limit (if (fx< Final 0) Window (smaller Window (seq-distance Final Next)))
+         Limit (receive-limit P Window)
          Count (smaller N (fx- Limit Offset))
       \\ Keep up to three gap ACKs across polls even when several segments arrive together.
       (do (if (= Offset 0) (peer.ack-needed-> P true)
               (peer.rx-duplicate-acks-> P (smaller 3 (fx+ (peer.rx-duplicate-acks P) 1))))
-          (if (fx> Count 0) (receive-bytes P B Start Offset Count Limit) true)
+          (if (fx> Count 0)
+              (do (receive-bytes P B Start Offset Count Limit)
+                  (if (and (fx> Offset 0) (peer.sack-enabled P))
+                      (peer.rx-sack-recent-> P (seq-add Next Offset)) P)
+                  true)
+              true)
           (if (= Final (peer.recv-next P)) (receive-fin P Now) true))))
 
 (define answer-duplicate
@@ -783,9 +985,10 @@
         false))
 
 (define receive-connected
-  {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
-  P B Start N Flags Seq Ack Win Now ->
+  {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  P B Options Start N Flags Seq Ack Win Now ->
     (let Next (peer.recv-next P)
+         Previous (send-una P)
          Window (window P)
          Ahead (seq-distance Seq Next)
          Skip (seq-distance Next Seq)
@@ -800,6 +1003,7 @@
              (not Acceptable) (answer-duplicate P Flags Seq N Now)
              true
                (do (acknowledge P Seq Ack Win Now (and (= Flags 16) (= N 0)))
+                   (if (peer.sack-enabled P) (accept-sack P B Options Start Ack Previous) false)
                    (if (and (fx> Span 0) (not (peer.recv-eof P)))
                        (if Overlap
                            (receive-text P B (fx+ Start Skip) 0 (fx- N Skip) Fin Window Now)
@@ -807,19 +1011,21 @@
                        (answer-duplicate P Flags Seq N Now))))))
 
 (define receive-opening
-  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
-  P Flags Seq Ack Win N Mss Now ->
+  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
+  P Flags Seq Ack Win N Mss Now Sacked ->
     (let Phase (state P)
       (cases (and (= Phase listen-state) (= Flags 2) (= N 0))
                (do (peer.recv-next-> P (seq-add Seq 1))
                    (remember-window P Seq Ack Win)
                    (peer.send-mss-> P Mss)
+                   (peer.sack-enabled-> P Sacked)
                    (peer.phase-> P syn-received)
                    (queue-control P 18))
              (and (= Phase syn-sent) (= Flags 18) (= N 0) (acknowledge? P Ack))
                (do (peer.recv-next-> P (seq-add Seq 1))
                    (remember-window P Seq Ack Win)
                    (peer.send-mss-> P Mss)
+                   (peer.sack-enabled-> P Sacked)
                    (peer.tx-flags-> P 0)
                    (finish-syn P Now)
                    (peer.phase-> P established)
@@ -843,17 +1049,19 @@
              H (fx+ 20 (header-length B I))
              Start (fx+ I H)
              N (fx- Count H)
-             Mss (options B (fx+ I 40) Start (peer.mss P))
+             Options (fx+ I 40)
+             Mss (options B Options Start (peer.mss P))
           (cases (fx< Mss 0) false
                  (or (= Phase listen-state) (= Phase syn-sent))
-                   (receive-opening P Flags Seq Ack Win N Mss Now)
+                   (receive-opening P Flags Seq Ack Win N Mss Now
+                                    (and (sack-capable? P) (fx>= (option-offset B Options Start 4) 0)))
                  (and (= Phase syn-received)
                       (not (and (= Seq (peer.recv-next P)) (flag? Flags 16) (acknowledge? P Ack))))
                    (if (and (= Flags 2) (= (seq-add Seq 1) (peer.recv-next P))
                             (fx>= (peer.tx-due P) 0))
                        (do (peer.tx-due-> P Now) true)
                        false)
-                 true (receive-connected P B Start N Flags Seq Ack Win Now)))))
+                 true (receive-connected P B Options Start N Flags Seq Ack Win Now)))))
 
 (define receive-segment
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}

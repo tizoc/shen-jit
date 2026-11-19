@@ -490,7 +490,7 @@ test-net-udp: $(BUILD)/shen-jit
 
 # In-memory TCP connection, loss recovery and steady-state allocation regression.
 test-net-tcp: $(BUILD)/shen-jit
-	sh tests/net_alloc.sh $(SHEN_JIT) tests/net_tcp.shenmod TCP "7,000 typed TCP connections"
+	sh tests/net_alloc.sh $(SHEN_JIT) tests/net_tcp.shenmod TCP "8,000 typed TCP connections"
 
 # Shared ingress, UDP overflow and ICMP wire checks.
 .PHONY: test-net-interface

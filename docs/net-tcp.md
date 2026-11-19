@@ -2,8 +2,8 @@
 
 The optional `net/tcp` module, [lib/net/tcp.shen](../lib/net/tcp.shen), provides individual TCP peers and a
 bounded TCP listener over the [packet link](net-udp.md). Each connection uses bounded send and receive
-windows with cumulative acknowledgments. The stack emits 20-byte IPv4 and TCP
-headers, honors the MSS option in incoming SYNs, and skips unnegotiated options. TCP runs entirely in
+windows with cumulative and selective acknowledgments. The stack emits 20-byte IPv4 headers,
+honors the MSS option in incoming SYNs, and can add SACK options to TCP headers. TCP runs entirely in
 managed Shen/JIT. [Linux TUN](net-tun.md) connects the link to kernel TCP sockets. To share a link
 with UDP and ICMP, use [the shared IPv4 interface](net-tun.md#shared-ipv4-interface).
 
@@ -60,6 +60,20 @@ peer enters `tcp.timed-out` when the sixth retry expires. One byte can probe a z
 and recover a lost window update. The clock makes these transitions reproducible.
 [TCP incoming segment processing](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.10.7.4)
 
+## Selective acknowledgments
+
+TCP offers SACK-Permitted on SYN when the link MTU is at least 52 bytes. A listener
+includes it in SYN-ACK when the caller offered it. When both peers agree, the receiver
+reports up to four byte ranges on standalone ACKs, subject to the link MTU. The most
+recently received range comes first, and the cumulative ACK stays at the next missing byte.
+Peers without negotiated SACK use cumulative ACK recovery. [TCP SACK options](https://www.rfc-editor.org/rfc/rfc2018.html)
+
+The sender records reported bytes in a preallocated bitmap of up to 536 bytes per peer.
+The first fast retransmit stops at the next recorded range. A partial advancing ACK during
+fast recovery can schedule one more missing range before the timer expires. Transmit storage
+stays occupied until cumulatively acknowledged. Timeout clears the SACK bitmap so replay
+can cover bytes the peer may have discarded.
+
 ## Congestion control
 
 A connection starts with a congestion window of four MSS, or one MSS after a retried SYN.
@@ -113,8 +127,10 @@ fast-retransmit test recovers a dropped segment at 25 ms of simulated time and e
 a lost fast retry on the same connection. The adaptive timer test varies RTT and checks
 the actual retry deadlines after loss and after fresh samples. Congestion tests count
 segments on the wire through slow start, partial ACKs in congestion avoidance, timeout
-replay, and fast retransmit. The allocation regression runs 7,000 typed connections
-under allocation stress, with a warmup-only baseline and an allocating positive control.
+replay, and fast retransmit. SACK tests check negotiation, legacy peers, sequence wrap,
+and two losses in a six-segment flight, including a gap shorter than one MSS. The
+allocation regression runs 8,000 typed connections under allocation stress, with a
+warmup-only baseline and an allocating positive control.
 
 ## Simulated throughput
 
