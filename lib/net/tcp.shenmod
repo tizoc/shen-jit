@@ -1,6 +1,6 @@
 (shen.module
   (version 1)
   (name net/tcp)
-  (requires net/link net/ipv6 net/wire grammar)
+  (requires net/link net/ipv6 net/wire grammar net/seq)
   (typed)
   (sources tc+ "tcp.shen"))

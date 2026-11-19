@@ -9,6 +9,7 @@
   (use grammar)
   (import struct defstruct)
   (import layout write-layout defflags flag-bits)
+  (import net-seq seq seq-of seq-number seq-add seq-distance seq-after?)
   (externals [defgrammar u16-be <end> <e> skip])
   (shadow listen release)
   (export peer make-peer listen connect state send recv-into shutdown-write poll
@@ -30,8 +31,8 @@
   (mutable start : fixnum)
   (mutable length : fixnum)
   (mutable flags : fixnum)
-  (mutable sequence : fixnum)
-  (mutable acknowledgement : fixnum)
+  (mutable sequence : seq)
+  (mutable acknowledgement : seq)
   (mutable window : fixnum)
   (mutable mss : fixnum))
 
@@ -57,7 +58,7 @@
   (mutable path-mtu : fixnum)
   (mutable aborting : boolean)
   (mutable phase : symbol)
-  (mutable send-next : fixnum)
+  (mutable send-next : seq)
   (mutable tx-flags : fixnum)
   (mutable tx-head : fixnum)
   (mutable tx-length : fixnum)
@@ -69,7 +70,7 @@
   (mutable srtt : fixnum)
   (mutable rttvar : fixnum)
   (mutable rtt-sample-at : fixnum)
-  (mutable rtt-sample-end : fixnum)
+  (mutable rtt-sample-end : seq)
   (mutable rtt-blocked-bytes : fixnum)
   (mutable tx-duplicate-acks : fixnum)
   (mutable tx-fast-retransmit : boolean)
@@ -84,10 +85,10 @@
   (mutable ca-acked : fixnum)
   (mutable recovery-bytes : fixnum)
   (mutable remote-window : fixnum)
-  (mutable remote-window-seq : fixnum)
-  (mutable remote-window-ack : fixnum)
+  (mutable remote-window-seq : seq)
+  (mutable remote-window-ack : seq)
   (mutable send-mss : fixnum)
-  (mutable recv-next : fixnum)
+  (mutable recv-next : seq)
   (mutable rx-start : fixnum)
   (mutable rx-length : fixnum)
   (mutable rx-pending : fixnum)
@@ -162,13 +163,13 @@
         map-bytes <- MapBytes
         options-state <- (grammar.state)
         segment <- (:segment data <- (buffer.new 0) options <- 0 start <- 0 length <- 0 flags <- 0
-                             sequence <- 0 acknowledgement <- 0 window <- 0 mss <- 0)
+                             sequence <- (seq-of 0) acknowledgement <- (seq-of 0) window <- 0 mss <- 0)
         window-scale <- (scale-for Capacity 0)
         remote-scale <- -1
         path-mtu <- (net-link.mtu D)
         aborting <- false
         phase <- closed
-        send-next <- 0
+        send-next <- (seq-of 0)
         tx-flags <- 0
         tx-head <- 0
         tx-length <- 0
@@ -180,7 +181,7 @@
         srtt <- 0
         rttvar <- 0
         rtt-sample-at <- -1
-        rtt-sample-end <- 0
+        rtt-sample-end <- (seq-of 0)
         rtt-blocked-bytes <- 0
         tx-duplicate-acks <- 0
         tx-fast-retransmit <- false
@@ -195,10 +196,10 @@
         ca-acked <- 0
         recovery-bytes <- 0
         remote-window <- 0
-        remote-window-seq <- 0
-        remote-window-ack <- 0
+        remote-window-seq <- (seq-of 0)
+        remote-window-ack <- (seq-of 0)
         send-mss <- Mss
-        recv-next <- 0
+        recv-next <- (seq-of 0)
         rx-start <- 0
         rx-length <- 0
         rx-pending <- 0
@@ -220,18 +221,10 @@
   {peer --> symbol}
   P -> (peer.phase P))
 
-(define seq-add
+\\ A 32-bit word's sum, as the hash of a connection's endpoints takes it.
+(define add32
   {fixnum --> fixnum --> fixnum}
-  Seq N -> (shen-jit.bit-and (fx+ Seq N) 4294967295))
-
-(define seq-distance
-  {fixnum --> fixnum --> fixnum}
-  End Start -> (seq-add End (fx- 0 Start)))
-
-(define seq-after?
-  {fixnum --> fixnum --> boolean}
-  A B -> (let Delta (seq-distance A B)
-           (and (fx> Delta 0) (fx< Delta 2147483648))))
+  A B -> (shen-jit.bit-and (fx+ A B) 4294967295))
 
 (define flag?
   {fixnum --> fixnum --> boolean}
@@ -284,7 +277,7 @@
     (if (and (= (state P) closed) (= (peer.rx-length P) 0))
         (let _ (if (and (fx>= Seq 0) (fx<= Seq 4294967295)) true
                      (error "tcp: initial sequence must fit unsigned 32 bits"))
-          (do (peer.send-next-> P Seq)
+          (do (peer.send-next-> P (seq-of Seq))
               (peer.tx-flags-> P 0)
               (peer.tx-head-> P 0)
               (peer.tx-length-> P 0)
@@ -311,7 +304,7 @@
               (peer.path-mtu-> P (net-link.mtu (peer.device P)))
               (peer.aborting-> P false)
               (peer.send-mss-> P (smaller (peer.mss P) (fx- (peer.path-mtu P) (minimum-header P))))
-              (peer.recv-next-> P 0)
+              (peer.recv-next-> P (seq-of 0))
               (peer.rx-start-> P 0)
               (if (fx> (peer.rx-pending P) 0) (clear-presence (peer.rx-present P) (peer.map-bytes P)) true)
               (peer.rx-pending-> P 0)
@@ -367,7 +360,7 @@
   {peer --> fixnum --> fixnum}
   P Window ->
     (let Final (peer.rx-fin P)
-      (if (fx< Final 0) Window (smaller Window (seq-distance Final (peer.recv-next P))))))
+      (if (fx< Final 0) Window (smaller Window (seq-distance (seq-of Final) (peer.recv-next P))))))
 
 (define copy-into-ring
   {buffer.view --> fixnum --> fixnum --> buffer.view --> fixnum --> fixnum --> buffer.view}
@@ -455,8 +448,8 @@
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> buffer.view}
   P B At Left Right ->
     (let Next (peer.recv-next P)
-      (do (buffer.u32-be-> B At (seq-add Next Left))
-          (buffer.u32-be-> B (fx+ At 4) (seq-add Next Right)))))
+      (do (buffer.u32-be-> B At (seq-number (seq-add Next Left)))
+          (buffer.u32-be-> B (fx+ At 4) (seq-number (seq-add Next Right))))))
 
 (define write-sack-runs
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
@@ -476,7 +469,7 @@
     (let Tail (receive-tail P)
          Limit (receive-limit P (window P))
          Max (smaller 4 (fxquotient (fx- (peer.path-mtu P) (fx+ (minimum-header P) 4)) 8))
-         Recent (seq-distance (peer.rx-sack-recent P) (peer.recv-next P))
+         Recent (seq-distance (seq-of (peer.rx-sack-recent P)) (peer.recv-next P))
          First (if (and (fx>= (peer.rx-sack-recent P) 0)
                         (fx< Recent Limit) (receive-marked? P Tail Recent))
                    (sack-run-start P Tail Recent) (type -1 fixnum))
@@ -537,19 +530,19 @@
       (smaller 65535 (shen-jit.shift-right Space Shift))))
 
 (define write-segment
-  {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> buffer.view}
+  {peer --> buffer.view --> fixnum --> fixnum --> seq --> fixnum --> fixnum --> fixnum --> buffer.view}
   P B T Flags Seq At Count Options ->
     (let Header (fx+ (wire.tcp.size) Options)
       (do (write-layout wire.tcp B T
             (source-port (peer.local-port P)) (destination-port (peer.remote-port P))
-            (sequence Seq)
-            (acknowledgement (if (flag? Flags (flag-bits control ack)) (peer.recv-next P) 0))
+            (sequence (seq-number Seq))
+            (acknowledgement (if (flag? Flags (flag-bits control ack)) (seq-number (peer.recv-next P)) 0))
             (data-offset (shen-jit.shift-right Header 2)) (flags Flags) (window (advertised-window P Flags)))
           (if (= Count 0) B
               (copy-from-ring B (fx+ T Header) (peer.tx P) At (peer.capacity P) Count)))))
 
 (define emit-segment
-  {peer --> net-link.ring --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  {peer --> net-link.ring --> fixnum --> fixnum --> seq --> fixnum --> fixnum --> boolean}
   P R Now Flags Seq At Count ->
     (let Delivery (net-link.delivery (peer.device P) Now)
          B (net-link.ring.data R)
@@ -603,7 +596,7 @@
           true)))
 
 (define start-rtt-sample
-  {peer --> fixnum --> fixnum --> boolean}
+  {peer --> fixnum --> seq --> boolean}
   P Now End ->
     (if (and (fx< (peer.rtt-sample-at P) 0) (= (peer.rtt-blocked-bytes P) 0))
         (do (peer.rtt-sample-end-> P End)
@@ -898,7 +891,7 @@
                  true)))
 
 (define acknowledge?
-  {peer --> fixnum --> boolean}
+  {peer --> seq --> boolean}
   P Ack -> (and (not (= (peer.tx-flags P) 0))
                 (fx>= (peer.tx-due P) 0)
                 (= Ack (peer.send-next P))))
@@ -946,7 +939,7 @@
           (restart-timer P 0 Now))))
 
 (define remember-window
-  {peer --> fixnum --> fixnum --> fixnum --> boolean}
+  {peer --> seq --> seq --> fixnum --> boolean}
   P Seq Ack Window ->
     (do (peer.remote-window-> P Window)
         (peer.remote-window-seq-> P Seq)
@@ -954,7 +947,7 @@
         true))
 
 (define update-window
-  {peer --> fixnum --> fixnum --> fixnum --> boolean}
+  {peer --> seq --> seq --> fixnum --> boolean}
   P Seq Ack Window ->
     (let LastSeq (peer.remote-window-seq P)
          LastAck (peer.remote-window-ack P)
@@ -964,7 +957,7 @@
           false)))
 
 (define acknowledge-control
-  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  {peer --> seq --> seq --> fixnum --> fixnum --> boolean}
   P Seq Ack Window Now ->
     (if (acknowledge? P Ack)
         (let Phase (state P)
@@ -1012,7 +1005,7 @@
                       true))))
 
 (define advance-ack
-  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  {peer --> seq --> fixnum --> fixnum --> fixnum --> boolean}
   P Ack N Flight Now ->
     (let Left (fx- Flight N)
          Replay (peer.tx-replay P)
@@ -1045,7 +1038,7 @@
           false)))
 
 (define send-una
-  {peer --> fixnum}
+  {peer --> seq}
   P -> (seq-add (peer.send-next P) (fx- 0 (peer.tx-flight P))))
 
 (define queue-sack-head-repair
@@ -1055,7 +1048,7 @@
            true))
 
 (define acknowledge-data
-  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
+  {peer --> seq --> seq --> fixnum --> fixnum --> boolean --> boolean}
   P Seq Ack Window Now PureAck ->
     (let Flight (peer.tx-flight P)
          Una (send-una P)
@@ -1075,18 +1068,18 @@
           false)))
 
 (define acknowledge
-  {peer --> fixnum --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
+  {peer --> seq --> seq --> fixnum --> fixnum --> boolean --> boolean}
   P Seq Ack Window Now PureAck ->
     (if (= (peer.tx-flags P) 0)
         (acknowledge-data P Seq Ack Window Now PureAck)
         (acknowledge-control P Seq Ack Window Now)))
 
 (define read-sack-blocks
-  {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  {peer --> buffer.view --> fixnum --> fixnum --> seq --> boolean}
   _ _ I I _ -> true
   P B I End Una ->
-    (let Left (seq-distance (buffer.u32-be B I) Una)
-         Right (seq-distance (buffer.u32-be B (fx+ I 4)) Una)
+    (let Left (seq-distance (seq-of (buffer.u32-be B I)) Una)
+         Right (seq-distance (seq-of (buffer.u32-be B (fx+ I 4))) Una)
          Capacity (peer.capacity P)
       (do (if (and (fx> Left 0) (fx< Left Right) (fx<= Right (peer.tx-flight P)))
               (do (write-sack-marks (peer.tx-sacked P) (wrap-offset (fx+ (peer.tx-head P) Left) Capacity)
@@ -1097,7 +1090,7 @@
           (read-sack-blocks P B (fx+ I 8) End Una))))
 
 (define accept-sack
-  {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  {peer --> buffer.view --> fixnum --> fixnum --> seq --> seq --> boolean}
   P B Options End Ack Previous ->
     (if (and (peer.sack-enabled P) (= Ack (send-una P)) (fx> (peer.tx-flight P) 0))
         (let At (option-offset B Options End 5)
@@ -1190,7 +1183,7 @@
     (let End (fx+ Offset N)
          Next (peer.recv-next P)
          _ (if (and Fin (fx< End Window) (fx< (peer.rx-fin P) 0))
-               (peer.rx-fin-> P (seq-add Next End)) P)
+               (peer.rx-fin-> P (seq-number (seq-add Next End))) P)
          Final (peer.rx-fin P)
          Limit (receive-limit P Window)
          Count (smaller N (fx- Limit Offset))
@@ -1200,10 +1193,10 @@
           (if (fx> Count 0)
               (do (receive-bytes P B Start Offset Count Limit)
                   (if (and (fx> Offset 0) (peer.sack-enabled P))
-                      (peer.rx-sack-recent-> P (seq-add Next Offset)) P)
+                      (peer.rx-sack-recent-> P (seq-number (seq-add Next Offset))) P)
                   true)
               true)
-          (if (= Final (peer.recv-next P)) (receive-fin P Now) true))))
+          (if (= Final (seq-number (peer.recv-next P))) (receive-fin P Now) true))))
 
 \\ A segment's length in sequence space: a FIN takes one.
 (define span
@@ -1354,8 +1347,8 @@
                (segment.start-> Seg Start)
                (segment.length-> Seg (fx- Count H))
                (segment.flags-> Seg (segment-flags B I))
-               (segment.sequence-> Seg (wire.tcp.sequence B I))
-               (segment.acknowledgement-> Seg (wire.tcp.acknowledgement B I))
+               (segment.sequence-> Seg (seq-of (wire.tcp.sequence B I)))
+               (segment.acknowledgement-> Seg (seq-of (wire.tcp.acknowledgement B I)))
                (segment.window-> Seg (wire.tcp.window B I))
                (segment.mss-> Seg Mss)
                true))))
@@ -1460,8 +1453,8 @@
          N (buffer.index Slots)
          _ (if (and (net-ipv4.unicast? IP) (fx>= Port 0) (fx<= Port 65535) (fx> Mss 0) (fx> N 0)) true
                  (error "tcp: listener needs a unicast endpoint, positive slots and an MTU of at least 41"))
-         _ (if (and (= Initial (seq-add Initial 0)) (= Key0 (seq-add Key0 0))
-                    (= Key1 (seq-add Key1 0))) true
+         _ (if (and (= Initial (add32 Initial 0)) (= Key0 (add32 Key0 0))
+                    (= Key1 (add32 Key1 0))) true
                  (error "tcp: initial sequence must fit unsigned 32 bits"))
       (:listener
         device <- D
@@ -1528,7 +1521,7 @@
 \\ HalfSipHash-2-4 over the fixed 12-byte IPv4 TCP tuple.
 (define rotate32
   {fixnum --> fixnum --> fixnum}
-  X Bits -> (seq-add (shen-jit.shift-left X Bits) (shen-jit.shift-right X (fx- 32 Bits))))
+  X Bits -> (add32 (shen-jit.shift-left X Bits) (shen-jit.shift-right X (fx- 32 Bits))))
 
 (define hash-round
   {buffer.view --> buffer.view}
@@ -1537,12 +1530,12 @@
          V1 (buffer.u32-be H 4)
          V2 (buffer.u32-be H 8)
          V3 (buffer.u32-be H 12)
-         A (seq-add V0 V1)
+         A (add32 V0 V1)
          B (shen-jit.bit-xor (rotate32 V1 5) A)
-         C (seq-add V2 V3)
+         C (add32 V2 V3)
          D (shen-jit.bit-xor (rotate32 V3 8) C)
-         E (seq-add (rotate32 A 16) D)
-         G (seq-add C B)
+         E (add32 (rotate32 A 16) D)
+         G (add32 C B)
       (do (buffer.u32-be-> H 0 E)
           (buffer.u32-be-> H 4 (shen-jit.bit-xor (rotate32 B 13) G))
           (buffer.u32-be-> H 8 (rotate32 G 16))
@@ -1599,8 +1592,8 @@
       (do (hash-address6 H (peer.local-ip6 P))
           (hash-address6 H (peer.remote-ip6 P))
           (hash-word H (fx+ (shen-jit.shift-left (peer.local-port P) 16) (peer.remote-port P)))
-          (listener.next-sequence-> L (seq-add Seq 65537))
-          (seq-add (hash-end H 36) (seq-add Seq (fx* Now 250))))))
+          (listener.next-sequence-> L (add32 Seq 65537))
+          (add32 (hash-end H 36) (add32 Seq (fx* Now 250))))))
 
 (define seed-port
   {listener --> listener}
@@ -1621,9 +1614,9 @@
   {listener --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
   L Local IP Port Now ->
     (let Seq (listener.next-sequence L)
-      (do (listener.next-sequence-> L (seq-add Seq 65537))
+      (do (listener.next-sequence-> L (add32 Seq 65537))
           (if (= (listener.port L) 0)
-              (seq-add (tuple-hash L Local IP Port) (seq-add Seq (fx* Now 250)))
+              (add32 (tuple-hash L Local IP Port) (add32 Seq (fx* Now 250)))
               Seq))))
 
 (define configure-peer
@@ -1676,7 +1669,7 @@
       (write-layout wire.tcp Out At
         (source-port (wire.tcp.destination-port B T)) (destination-port (wire.tcp.source-port B T))
         (sequence (if Ack (wire.tcp.acknowledgement B T) 0))
-        (acknowledgement (if Ack 0 (seq-add (wire.tcp.sequence B T) Space)))
+        (acknowledgement (if Ack 0 (seq-number (seq-add (seq-of (wire.tcp.sequence B T)) Space))))
         (data-offset 5) (flags (if Ack (flag-bits control rst) (flag-bits control rst ack))))))
 
 (define reset-allowed?
@@ -2017,7 +2010,7 @@
   L Index Seq Mtu Now ->
     (and (fx> Index 0)
          (let P (listener-slot.peer (slot-at L Index))
-           (and (fx< (seq-distance Seq (send-una P)) (peer.tx-flight P))
+           (and (fx< (seq-distance (seq-of Seq) (send-una P)) (peer.tx-flight P))
                 (fx< Mtu (peer.path-mtu P))
                 (do (peer.path-mtu-> P Mtu)
                     (peer.send-mss-> P (smaller (peer.send-mss P) (fx- Mtu (minimum-header P))))

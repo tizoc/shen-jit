@@ -3842,6 +3842,13 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   `fx<` across the wrap a type error, but a value of a type the typed compiler does not know stays in a
   slot, its arithmetic generic: a loop of sequence arithmetic took 0.061 to 0.070 s against 0.021 with
   fixnums. It would need a way to say that a type is a fixnum underneath, for registers alone.
+- With `shen-jit.represent` on `main`, TCP's sequence numbers became a type, `seq`, in `lib/net/seq.shen`,
+  represented by a fixnum. The peer's and the segment's sequence fields are `seq`s; two fields that hold a
+  sequence number or -1 stay fixnums, converted where used, since a type with a case for none would allocate.
+  The listener's hash had added its words with sequence addition, which the types refused; it uses `add32`.
+  The TCP connections took 365.3 to 366.3 ms and 365.0 to 366.1 in two runs, UDP 38.0 to 38.3, and the TUN and
+  TAP suites used no heap words. The options' and names' bytes are passed with `main`'s `(skip N)`, so
+  `lib/net/wire.shen` declares formats only.
 
 ### Dual-stack networking and SLAAC (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
 
