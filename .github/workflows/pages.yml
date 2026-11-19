@@ -22,6 +22,7 @@ on:
       - docs/option.md
       - docs/result.md
       - docs/buffers.md
+      - docs/layout.md
       - docs/grammar.md
       - docs/io.md
       - docs/fs.md

@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name layout-test)
+  (requires layout)
+  (typed)
+  (sources tc+ "layout_typed.shen" tc- "layout_checks.shen"))

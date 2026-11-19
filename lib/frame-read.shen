@@ -44,8 +44,8 @@
 (define read-payload
   {fixnum --> buffer.view --> (io.result io.transfer) --> (io.result (option.t frame))}
   Tag Payload (:ok (:io.transfer true _)) -> (:ok (option.some (:frame Tag Payload)))
-  _ _ (:ok (:io.transfer false N)) -> (frame.error "incomplete payload" (fx+ 6 N))
-  _ _ (:err Error) -> (:err (io.progress Error (fx+ 6 (io.error-progress Error)))))
+  _ _ (:ok (:io.transfer false N)) -> (frame.error "incomplete payload" (fx+ (header.size) N))
+  _ _ (:err Error) -> (:err (io.progress Error (fx+ (header.size) (io.error-progress Error)))))
 
 (define read-header
   {reader --> buffer.view --> (io.result io.transfer) -->
@@ -53,20 +53,21 @@
   _ _ (:ok (:io.transfer false 0)) -> (:ok (option.none))
   _ _ (:ok (:io.transfer false N)) -> (frame.error "incomplete header" N)
   _ _ (:err Error) -> (:err Error)
-  F B (:ok (:io.transfer true 6)) ->
-    (let Tag (buffer.u16-be B 0)
-         N (buffer.u32-be B 2)
+  F B (:ok (:io.transfer true Count)) ->
+    (let Tag (header.tag B 0)
+         N (header.length B 0)
       (if (fx> N (reader.limit F))
-          (frame.error "payload exceeds limit" 6)
+          (frame.error "payload exceeds limit" (header.size))
           (let Payload (buffer.new N)
-            (read-payload Tag Payload (io.reader-exact (reader.input F) Payload))))))
+            (read-payload Tag Payload (io.reader-exact (reader.input F) Payload)))))
+    where (= Count (header.size)))
 
 (define next-or-terminal
   {reader --> (option.t (io.result (option.t frame))) -->
    (io.result (option.t frame))}
   _ [Terminal] -> Terminal
   F [] ->
-    (let B (buffer.new 6)
+    (let B (buffer.new (header.size))
          Start (io.position (reader.input F))
          _ (reader.busy-> F true)
          Result (trap-error (read-header F B (io.reader-exact (reader.input F) B))

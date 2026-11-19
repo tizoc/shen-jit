@@ -20,13 +20,17 @@
   (import struct defstruct)
   (externals [? at defgrammar eof none plain ready require skip span text u16-be u32-be unknown])
   (shadow bind call compile done every? inline list pos read run stream subst type value)
-  (export finish match? parse parse-range prepare read read-within defgrammar)
+  (export finish match? parse parse-range prepare read read-within state defgrammar)
 
 (define grammar.error
   S At Message -> (do (address-> S 1 At) (address-> S 2 Message) -2))
 
+\\ A parse's state, of the type state: a caller that keeps one parses with <rule>.parse-at again and again,
+\\ which then allocates nothing itself.
 (define state
   -> (address-> (absvector 3) 0 skip))
+
+(declare state [--> state])
 
 (define result
   P S At End Fail -> (if (= P End) (<-address S 0) (failed P S At Fail)))
@@ -198,16 +202,23 @@
   Name Params [Types Value] Rules ->
     (let Checked (types Name Params Types Value Rules)
          View (gensym (protect V)) Fail (gensym (protect F)) R (gensym (protect R)) Limit (gensym (protect L))
+         St (gensym (protect S)) A (gensym (protect A)) E (gensym (protect E))
          Parse (client-name Name ".parse")
          Match (client-name Name ".match?")
          Read (client-name Name ".read")
+         ParseAt (client-name Name ".parse-at")
+         EndAt (client-name Name ".end-at")
          Result [result.t [io.error * [option.t Value]]]
          _ (declare Parse (arrows (append Types [buffer.view (arrows [fixnum string] Value)]) Value))
          _ (declare Match (arrows (append Types [buffer.view]) boolean))
          _ (declare Read (arrows (append Types [io.reader fixnum (arrows [fixnum string] Result)]) Result))
+         _ (declare ParseAt (arrows (append Types [state buffer.view fixnum fixnum (arrows [fixnum string] Value)]) Value))
+         _ (declare EndAt (arrows (append Types [state buffer.view fixnum fixnum]) fixnum))
          _ (eval (append [define Parse | Params] [View Fail -> (parse-form [Name | Params] View Fail)]))
          _ (eval (append [define Match | Params] [View -> (match-form [Name | Params] View)]))
          _ (eval (append [define Read | Params] [R Limit Fail -> (read-form [Name | Params] R Limit Fail)]))
+         _ (eval (append [define ParseAt | Params] [St View A E Fail -> (parse-at-form [Name | Params] St View A E Fail)]))
+         _ (eval (append [define EndAt | Params] [St View A E -> (end-at-form [Name | Params] St View A E)]))
       Checked))
 
 (define client-name
@@ -808,6 +819,30 @@
     (let V (gensym (protect V)) S (gensym (protect S)) At (gensym (protect At)) End (gensym (protect End))
       [let V [buffer.check View] S [state] At [buffer.view.start V] End [buffer.view.end V]
         (parsed-whole (call-rule Rule [buffer.view.owner V] At End S) S At End Fail)]))
+
+\\ A range of a view, by offsets in it, with a state the caller keeps, so that the parse allocates nothing
+\\ but the values its rules build. Positions given to Fail count from the start of the view's storage, as parse's do.
+(define parse-at-form
+  Rule S View A E Fail ->
+    (let V (gensym (protect V)) Start (gensym (protect Start)) At (gensym (protect At)) End (gensym (protect End))
+      [let V [buffer.check View]
+           Start [buffer.view.start V]
+        [if [and [>= A 0] [and [<= A E] [<= E [- [buffer.view.end V] Start]]]]
+            [let At [+ Start A] End [+ Start E]
+              (parsed-whole (call-rule Rule [buffer.view.owner V] At End S) S At End Fail)]
+            [simple-error "grammar: the range is outside the view"]]]))
+
+\\ A prefix of a range of a view: the offset in the view where the rule's match ends, -1 when it does
+\\ not match, or -2 when a require failed; nothing else is allocated.
+(define end-at-form
+  Rule S View A E ->
+    (let V (gensym (protect V)) Start (gensym (protect Start)) P (gensym (protect P))
+      [let V [buffer.check View]
+           Start [buffer.view.start V]
+        [if [and [>= A 0] [and [<= A E] [<= E [- [buffer.view.end V] Start]]]]
+            [let P (call-rule Rule [buffer.view.owner V] [+ Start A] [+ Start E] S)
+              [if [< P 0] P [- P Start]]]
+            [simple-error "grammar: the range is outside the view"]]]))
 
 (define parsed-whole
   Call S At End Fail ->

@@ -62,7 +62,7 @@ SHA256 := $(shell command -v sha256sum 2>/dev/null || echo shasum -a 256)
 # An image loads only into the build that wrote it.
 BUILD_ID := $(shell cat $(RUNTIME_SRC) $(RUNTIME_HDR) | $(SHA256) | cut -c1-16)
 
-.PHONY: all release install stlib test-stlib test-thorn test-native test-buffer test-json test-io test-http test-datalog test-datalog-swipl bench-datalog bench-datalog-souffle test-ffi test-differential test-overrides differential-scheme fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-lib-stress test-core test-libs test-ctrlc-windows test-linux bench bench-independent bench-numeric stage0 check-lowerer measure load-kernel clean
+.PHONY: test-layout all release install stlib test-stlib test-thorn test-native test-buffer test-json test-io test-http test-datalog test-datalog-swipl bench-datalog bench-datalog-souffle test-ffi test-differential test-overrides differential-scheme fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-lib-stress test-core test-libs test-ctrlc-windows test-linux bench bench-independent bench-numeric stage0 check-lowerer measure load-kernel clean
 
 all: $(BUILD)/shen-jit
 
@@ -270,7 +270,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words option result buffers grammar io fs processes parallel tree-sitter framing io-sockets deadlines http-head http http-streaming http-listener json datalog curl
+GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words option result buffers layout grammar io fs processes parallel tree-sitter framing io-sockets deadlines http-head http http-streaming http-listener json datalog curl
 PANDOC ?= pandoc
 GUIDE_PANDOC := $(PANDOC) -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
@@ -383,7 +383,7 @@ test-isolates-stress: $(BUILD)/shen-jit
 	SHEN_JIT_GC_STRESS=1 $(BUILD)/shen-jit eval -l tests/isolates.shen | $(FFI_RESULT)
 
 # Every library's suite, without the collections test-lib-stress adds (about 30 s).
-test-libs: test-buffer test-json test-io test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces \
+test-libs: test-buffer test-layout test-json test-io test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces \
   test-parallel
 
 .PHONY: test-isolates test-isolates-stress test-parallel
@@ -479,6 +479,10 @@ test-io: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -m clock -m io/socket -m http \
 	  -e '(tc +)' -l tests/http_typed.shen | $(FFI_RESULT)
 	sh tests/http_image.sh $(SHEN_JIT)
+
+# Binary layouts: generated accessors against raw bytes, ranges, offsets, namespaces and inlining.
+test-layout: $(BUILD)/shen-jit
+	$(BUILD)/shen-jit eval -m tests/layout-test.shenmod | $(FFI_RESULT)
 
 # Complete request parsing, bounded bodies, response streams and persistent connections.
 test-http: $(BUILD)/shen-jit

@@ -1,7 +1,12 @@
 (shen.x.namespace frame
   (use buffer)
+  (import layout deflayout write-layout)
   (shadow limit)
   (export encode)
+
+\\ A tag, then the payload's length; the payload follows.
+(deflayout header
+  (tag 16) (length 32))
 
 (define limit
   {fixnum --> fixnum}
@@ -22,10 +27,9 @@
          Max (limit Limit)
          N (buffer.length Payload)
          _ (if (fx<= N Max) true (error "frame: payload exceeds limit"))
-         Out (buffer.new (fx+ 6 N))
-      (do (buffer.u16-be-> Out 0 T)
-          (buffer.u32-be-> Out 2 N)
-          (buffer.copy-into! Out 6 Payload 0 N)
+         Out (buffer.new (fx+ (header.size) N))
+      (do (write-layout header Out 0 (tag T) (length N))
+          (buffer.copy-into! Out (header.size) Payload 0 N)
           Out)))
 
 )
