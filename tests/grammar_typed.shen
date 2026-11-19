@@ -104,6 +104,15 @@
       (@p "a read with an argument" (= (grammar.read (<gt.keyword> "let") (gt.reader "let") (function gt.reject))
                                        (:result.ok ["let"])))
       (@p "a call to a rule defined after" (= (grammar.parse <gt.ahead> (gt.view "go") (function gt.raise)) "ahead"))
+      (@p "a range of a view, with a state kept"
+          (let S (grammar.state) V (gt.view "ab123cd")
+            (= [(<gt.number>.parse-at 0 S V 2 5 (/. At M -1)) (<gt.number>.parse-at 0 S V 0 2 (/. At M -1))
+                (<gt.number>.parse-at 0 S V 3 5 (/. At M -1))]
+               [123 -1 23])))
+      (@p "where a prefix ends" (let S (grammar.state) V (gt.view "12ab")
+                                  (= [(<gt.number>.end-at 0 S V 0 4) (<gt.number>.end-at 0 S V 2 4)] [2 -1])))
+      (@p "a range outside the view"
+          (= (trap-error (<gt.number>.parse-at 0 (grammar.state) (gt.view "12") 0 3 (/. At M -1)) (/. E -9)) -9))
       (@p "a value and a capture" (= (map (/. T (grammar.parse <gt.either> (gt.view T) (function gt.raise))) ["#ab" "cd"])
                                      ["#ab" "cd"]))])
 

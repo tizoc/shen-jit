@@ -606,6 +606,10 @@ A grammar can have types, as `defcc` does, and `grammar.read` parses from an I/O
 loops compile at their first use; `(grammar.finish)` compiles them all ahead, in the builder, before spawning isolates
 that parse, which cannot compile, or saving the program, as `http.listen` does.
 
+[Binary layouts](https://github.com/tizoc/shen-jit/blob/main/docs/layout.md): `lib/layout.shen` declares a fixed binary
+format as its specification draws it, fields in order with their widths, and defines typed accessors for each field,
+which inline where they are called, a way to write a whole layout in packed stores, and named bits.
+
 [JSON](https://github.com/tizoc/shen-jit/blob/main/docs/json.md): `lib/json.shen` decodes JSON from views and encodes
 it into them, with strict UTF-8, numbers kept as written until converted exactly, and limits on what it reads and
 writes. It needs `lib/grammar.shen` loaded first.

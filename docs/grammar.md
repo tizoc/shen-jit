@@ -223,6 +223,19 @@ produces `(:result.ok [[]])`. Clean EOF produces `(:result.ok [])`. See [optiona
 type, so under `(tc +)` each rule is compiled as a repetition is. Under `(tc -)` a
 signature changes nothing in how a rule runs.
 
+Code that parses again and again without allocating, as a server does for each packet, has two more entry
+points, which take a `grammar.state`, made once with `(grammar.state)` and kept, and a range of a view, from
+offset A to offset E in it:
+
+| Function | Type | What it does |
+| --- | --- | --- |
+| `<rule>.parse-at` | `T1 --> ... --> grammar.state --> buffer.view --> fixnum --> fixnum --> (fixnum --> string --> Value) --> Value` | Parses the whole range, as `<rule>.parse` parses a view |
+| `<rule>.end-at` | `T1 --> ... --> grammar.state --> buffer.view --> fixnum --> fixnum --> fixnum` | Matches a prefix of the range, and gives the offset in the view where the match ends, -1 if it does not match, or -2 if a require failed |
+
+They allocate nothing but the values the rules build, where `<rule>.parse` makes a state and its caller a view
+of the range. A range outside the view raises. `(grammar.finish)` has a type, so a typed library can make its
+rules' loops as it loads.
+
 ## Compared with defcc
 
 `defgrammar` keeps `defcc`'s notation where the meaning is the same: alternatives ended by `;`, `:=`,

@@ -3717,6 +3717,17 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   `fs.name` does; a root such as `/` keeps its own. A check in `tests/fs.shen` failed before.
   `fs.lstat` of `link/` still reports the directory, which is what POSIX means by the slash.
 
+### Binary layouts and grammar ranges (2026-11-19, Apple M3 Max)
+
+- `lib/layout.shen` and the grammar entry points `<rule>.parse-at` and `<rule>.end-at` come from an experiment that
+  declared a networking stack's packet formats as its RFCs draw them, on branch `net-dsl`. There, reading fields
+  through layouts measured as reading raw offsets, 37.7 against 37.6 ms for 10,000 UDP echo cycles and 361.6 against
+  361.4 for its TCP connections, and a typed caller's code showed the reads inline with no call. **Rejected: writing a
+  layout field by field**, which cost 12% and 6% there, a read, mask and store for each field narrower than a byte;
+  `write-layout` packs them. `.parse-at` and `.end-at` take a kept state and a range of a view because `.parse` made a
+  state per parse and needed a view of the range, two allocations per packet. The frame library's header is the first
+  layout here. `make test-layout` checks the generated code against raw bytes, ranges, namespaces and inlining.
+
 ### Buffer fields and mutation names (2026-11-19, Apple M3 Max)
 
 - Added typed unsigned 16- and 32-bit big-endian reads and stores on buffer views. A store checks

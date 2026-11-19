@@ -5,6 +5,16 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- The module `layout`: `(deflayout Name (Field Bits) ...)` declares a fixed binary format as its specification draws
+  it and defines typed readers, writers and offsets of each field and the layout's size, which inline where called;
+  `write-layout` writes a whole layout in packed stores, with its constants folded; `defflags` and `flag-bits` name a
+  field's bits as constants made as the code is read. The frame library's header is a layout.
+- Typed grammar rules have `<rule>.parse-at`, which parses a range of a view, and `<rule>.end-at`, which gives where a
+  match of a prefix ends, both with a `(grammar.state)` the caller keeps, so that a parse allocates nothing but its
+  values.
+
 ### Fixed
 
 - In a typed program, a sealed call of a function of no arguments that is not inlined, such as one written before
