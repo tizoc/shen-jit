@@ -2,10 +2,11 @@
   (use buffer)
   (use shen-jit)
   (externals [blocking bool bytes define-foreign int32 int64])
-  (export c-open c-close c-read c-write c-wait c-clock make-guard kill-guard)
+  (export c-open c-open-tap c-close c-read c-write c-wait c-clock make-guard kill-guard)
 
 (shen-jit.library tun-library ["shen-tun.so" "build/shen-tun.so"])
-(define-foreign c-open tun-library "shen_tun_open" (string bool) --> int32)
+(define-foreign c-open tun-library "shen_tun_open" (string) --> int32)
+(define-foreign c-open-tap tun-library "shen_tap_open" (string) --> int32)
 (define-foreign c-close tun-library "shen_tun_close" (int32) --> int32)
 (define-foreign c-read tun-library "shen_tun_read" (int32 bytes int32) --> int32)
 (define-foreign c-write tun-library "shen_tun_write" (int32 bytes int64 int32) --> int32)

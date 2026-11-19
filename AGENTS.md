@@ -87,13 +87,14 @@ Run what the change can break, and nothing more: CI runs everything on every pus
 | `frame`; `cursor`; `layout`; `mmap`, `handle`, `sqlite` | `make test-io`; `test-buffer`; `test-layout test-io`; `test-ffi`, and `test-http` for `sqlite` |
 | `net/udp`, `net/tcp`, and their shared link or IPv4 code | `make test-net-udp test-net-tcp` |
 | `net/interface` | `make test-net-interface` for shared ingress, UDP queue overflow and ICMP echo fixtures |
-| `net/tun` | `make test-net-tun` in an isolated Linux network namespace with `/dev/net/tun`, `iproute2`, `ping`, and Python 3 |
+| `net/dhcp`, `net/dns` | `make test-net-clients` for portable client state and wire checks |
+| `net/tun`, `net/ethernet` | `make test-net-tun test-net-tap` in an isolated Linux network namespace with `/dev/net/tun`, `iproute2`, `ping`, and Python 3 |
 | An application in `example-apps/` | `test-http` for `sqlite-http`, `test-datalog` for `depends` and `source-deps`, `test-tree-sitter` for `source-facts` |
 | A test, `Makefile`, `tools/` or CI | What the edit touches |
 | Documentation only | Nothing; `make guide` if a rendered page's layout changed, and the examples you changed |
 
 `make test-core` is `test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn
-test-native test-ffi test-overrides test-structs test-isolates test-modules test-typed`, and `make test-libs` is `test-buffer test-layout test-json test-io test-net-udp test-net-tcp test-net-interface test-fs test-process
+test-native test-ffi test-overrides test-structs test-isolates test-modules test-typed`, and `make test-libs` is `test-buffer test-layout test-json test-io test-net-udp test-net-tcp test-net-interface test-net-clients test-fs test-process
 test-tree-sitter test-http test-datalog test-curl test-namespaces test-parallel`.
 
 Keep each suite fast. A check that needs a collection at every allocation, a long wait or a large input goes in a

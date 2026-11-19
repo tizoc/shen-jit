@@ -702,7 +702,7 @@ connection behind the I/O library's readers and writers, with deadlines.
 two typed Shen peers over bounded packet queues, with a caller-supplied clock.
 [In-memory TCP](https://github.com/tizoc/shen-jit/blob/main/docs/net-tcp.md) uses the same link for
 individual connections and bounded listeners with preallocated TCP sliding windows.
-[Linux TUN packet I/O](https://github.com/tizoc/shen-jit/blob/main/docs/net-tun.md) connects the packet queues
+[Linux TUN and TAP packet I/O](https://github.com/tizoc/shen-jit/blob/main/docs/net-tun.md) connects the packet queues
 to a Linux kernel network interface. The shared IPv4 interface serves TCP, UDP, and ICMP echo on one link.
 
 ### HTTP
@@ -1227,7 +1227,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | Target | What it does |
 | --- | --- |
 | `make test-core` | `test`, `test-jit`, `test-ops`, `test-kl`, `check-lowerer`, `check-generated`, `test-kernel`, `test-stlib`, `test-thorn`, `test-native`, `test-ffi`, `test-overrides`, `test-structs`, `test-isolates`, `test-modules` and `test-typed` |
-| `make test-libs` | `test-buffer`, `test-json`, `test-io`, `test-net-udp`, `test-net-tcp`, `test-net-interface`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl`, `test-namespaces` and `test-parallel` |
+| `make test-libs` | `test-buffer`, `test-json`, `test-io`, `test-net-udp`, `test-net-tcp`, `test-net-interface`, `test-net-clients`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl`, `test-namespaces` and `test-parallel` |
 | `make test` | The runtime's unit tests |
 | `make test-jit`, `make test-ops` | The JIT and the instructions, on small programs |
 | `make test-kl` | The `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
@@ -1247,7 +1247,8 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-net-udp` | In-memory IPv4/UDP echo, independent wire fixtures, queue and clock behavior, and allocation stress |
 | `make test-net-tcp` | In-memory TCP echo, sliding-window recovery, stream backpressure, shutdown, and allocation stress |
 | `make test-net-interface` | Shared IPv4 dispatch, UDP overflow, receive retry, and ICMP wire fixtures |
-| `make test-net-tun` | Optional Linux TCP, UDP, and ping through one TUN interface with a direct heap allocation check |
+| `make test-net-clients` | DHCP lease lifecycle and DNS response handling |
+| `make test-net-tun test-net-tap` | Linux TCP, UDP, ping, and outbound HTTP over both devices with direct heap allocation checks. TAP also exercises DHCP and DNS. |
 | `make test-http` | Request/response framing, streaming, persistent connections, shutdown, SQLite example, typing and images/GC |
 | `make test-datalog` | Datalog answers/errors/generated programs against its plain evaluator, also in isolates, in parts and with joins shared out; Shen/KL dependency analysis and source-fact matching/reach/impact with independent graph oracles |
 | `make test-datalog-swipl` | The same generated programs against SWI-Prolog's tabling, if `swipl` is there |

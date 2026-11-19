@@ -40,7 +40,7 @@
              mtu <- Mtu
              guard <- (make-guard 0)
              fd <- -1)
-         Fd (checked (fixnum (c-open Name Tap)) open)
+         Fd (checked (fixnum (if Tap (c-open-tap Name) (c-open Name))) open)
       (do (adapter.fd-> A Fd) A)))
 
 (define live?

@@ -3803,6 +3803,16 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   check has passed. On the `net-dsl` branch, TCP's lossy run 170.8–171.2 against 162.0–162.8 ms, its UDP echo
   22.4–22.5 against 21.6–21.7.
 
+### IPv4 kernel test coverage (2026-11-19, Linux x86-64 in Docker Desktop)
+
+- Added the portable DHCP and DNS suite to the release matrix and a Linux TUN
+  and TAP job in a private network namespace. Both kernel workloads and the
+  portable networking targets passed from generated release inputs.
+- Kept the existing TUN opener's native signature when adding the TAP opener.
+  Derived the ephemeral port start from the tuple hash output so it exposes no
+  bits of the sequence secret directly. The 128 KiB windows in the TAP test reserve 311,296 bytes per TCP slot,
+  including bitmaps, before metadata.
+
 ### DHCP, DNS, and outbound streams (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
 
 - Added a DHCP client with allocation-free acquisition, renewal, rebind and expiry,

@@ -12,14 +12,14 @@
 #include <time.h>
 #include <unistd.h>
 
-int shen_tun_open(const char *name, bool tap)
+static int open_device(const char *name, short mode)
 {
     struct ifreq request = {0};
     size_t length = strlen(name);
     if (length == 0 || length >= sizeof request.ifr_name)
         return -EINVAL;
     memcpy(request.ifr_name, name, length);
-    request.ifr_flags = (tap ? IFF_TAP : IFF_TUN) | IFF_NO_PI;
+    request.ifr_flags = mode | IFF_NO_PI;
     int fd = open("/dev/net/tun", O_RDWR | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0)
         return -errno;
@@ -29,6 +29,16 @@ int shen_tun_open(const char *name, bool tap)
         return -code;
     }
     return fd;
+}
+
+int shen_tun_open(const char *name)
+{
+    return open_device(name, IFF_TUN);
+}
+
+int shen_tap_open(const char *name)
+{
+    return open_device(name, IFF_TAP);
 }
 
 int shen_tun_close(int fd)

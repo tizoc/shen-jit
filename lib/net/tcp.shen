@@ -1345,17 +1345,6 @@
   {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
   D IP Port Slots Initial -> (new-table D IP Port Slots Initial 0 0 0))
 
-(define make-table
-  {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
-  D IP Slots Key0 Key1 -> (new-table D IP 0 Slots 0 Key0 Key1 0))
-
-(define make-table-sized
-  {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
-  D IP Slots Key0 Key1 Bytes ->
-    (if (and (fx>= Bytes 1) (fx<= Bytes 1048576))
-        (new-table D IP 0 Slots 0 Key0 Key1 Bytes)
-        (error "tcp: window must be in 1..1048576 bytes")))
-
 (define new-table
   {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
   D IP Port Slots Initial Key0 Key1 Bytes ->
@@ -1374,7 +1363,7 @@
         capacity <- N
         slots <- (initialise-slots (vector (fx->number N)) D IP Port Mss Capacity N)
         next-sequence <- Initial
-        next-port <- (fx+ 49152 (shen-jit.bit-and Key1 16383))
+        next-port <- 49152
         key0 <- Key0
         key1 <- Key1
         hash <- (buffer.new 16)
@@ -1461,6 +1450,21 @@
           (buffer.u32-be-> H 8 (shen-jit.bit-xor (buffer.u32-be H 8) 255))
           (hash-round (hash-round (hash-round (hash-round H))))
           (shen-jit.bit-xor (buffer.u32-be H 4) (buffer.u32-be H 12)))))
+
+(define seed-port
+  {listener --> listener}
+  L -> (listener.next-port-> L (fx+ 49152 (shen-jit.bit-and (tuple-hash L 0 0 0) 16383))))
+
+(define make-table
+  {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
+  D IP Slots Key0 Key1 -> (seed-port (new-table D IP 0 Slots 0 Key0 Key1 0)))
+
+(define make-table-sized
+  {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
+  D IP Slots Key0 Key1 Bytes ->
+    (if (and (fx>= Bytes 1) (fx<= Bytes 1048576))
+        (seed-port (new-table D IP 0 Slots 0 Key0 Key1 Bytes))
+        (error "tcp: window must be in 1..1048576 bytes")))
 
 (define next-sequence
   {listener --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
