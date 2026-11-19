@@ -9,7 +9,9 @@
   (use net-link)
   (use tcp)
   (use udp)
+  (use net-wire => wire)
   (import struct defstruct)
+  (import layout write-layout)
   (export interface interface.listener make make-host make-host-sized connect poll next-deadline
           enable-ipv6 connect6 udp-send6 no-address udp-binding udp-send udp-recv-into udp-dropped)
 
@@ -159,21 +161,21 @@
     (let D (interface.device F)
          Tx (net-link.device.tx D)
          IP (interface.ip F)
-         Start (fx+ I 20)
-         Count (fx- N 20)
-      (if (and (not (net-link.full? Tx)) (fx>= N 28)
+         Start (fx+ I (wire.ipv4.size))
+         Count (fx- N (wire.ipv4.size))
+      (if (and (not (net-link.full? Tx)) (fx>= Count (wire.icmp.size))
                (net-ipv4.valid? B I N 1)
-               (= (buffer.u32-be B (fx+ I 16)) IP)
-               (net-ipv4.unicast? (buffer.u32-be B (fx+ I 12)))
-               (= (buffer.u16-be B Start) 2048)
+               (= (wire.ipv4.destination B I) IP)
+               (net-ipv4.unicast? (wire.ipv4.source B I))
+               (= (wire.icmp.type B Start) 8) (= (wire.icmp.code B Start) 0)       \\ An echo request.
                (= (net-ipv4.packet-checksum B Start Count) 0))
           (let Out (net-link.ring.data Tx)
                At (net-link.tail-offset Tx)
-               Body (fx+ At 20)
-            (do (net-ipv4.write-header Out At N 1 IP (buffer.u32-be B (fx+ I 12)))
-                (buffer.copy-into! Out (fx+ Body 4) B (fx+ Start 4) (fx- Count 4))
-                (buffer.u32-be-> Out Body 0)
-                (buffer.u16-be-> Out (fx+ Body 2) (net-ipv4.packet-checksum Out Body Count))
+               Body (fx+ At (wire.ipv4.size))
+            (do (net-ipv4.write-header Out At N 1 IP (wire.ipv4.source B I))
+                (write-layout wire.icmp Out Body (type 0) (code 0))                 \\ The reply,
+                (buffer.copy-into! Out (wire.icmp.rest-at Body) B (wire.icmp.rest-at Start) (fx- Count 4))  \\ with the same rest.
+                (wire.icmp.checksum-> Out Body (net-ipv4.packet-checksum Out Body Count))
                 (net-link.publish Tx N (net-link.delivery D Now))))
           false)))
 
@@ -182,18 +184,17 @@
   F B I N Code Now ->
     (let D (interface.device F)
          Tx (net-link.device.tx D)
-         Quote (if (fx< N 28) N (type 28 fixnum))
-         Count (fx+ Quote 28)
+         Headers (fx+ (wire.ipv4.size) (wire.icmp.size))
+         Quote (if (fx< N Headers) N Headers)                \\ The IP header and 8 bytes after it.
+         Count (fx+ Quote Headers)
       (if (and (fx<= Count (net-link.mtu D)) (not (net-link.full? Tx)))
           (let Out (net-link.ring.data Tx)
                At (net-link.tail-offset Tx)
-               Body (fx+ At 20)
-            (do (net-ipv4.write-header Out At Count 1 (interface.ip F) (buffer.u32-be B (fx+ I 12)))
-                (buffer.u16-be-> Out Body (fx+ 768 Code))
-                (buffer.u16-be-> Out (fx+ Body 2) 0)
-                (buffer.u32-be-> Out (fx+ Body 4) 0)
-                (buffer.copy-into! Out (fx+ Body 8) B I Quote)
-                (buffer.u16-be-> Out (fx+ Body 2) (net-ipv4.packet-checksum Out Body (fx+ Quote 8)))
+               Body (fx+ At (wire.ipv4.size))
+            (do (net-ipv4.write-header Out At Count 1 (interface.ip F) (wire.ipv4.source B I))
+                (write-layout wire.icmp Out Body (type 3) (code Code))             \\ Destination unreachable.
+                (buffer.copy-into! Out (fx+ Body (wire.icmp.size)) B I Quote)
+                (wire.icmp.checksum-> Out Body (net-ipv4.packet-checksum Out Body (fx+ Quote (wire.icmp.size))))
                 (net-link.publish Tx Count (net-link.delivery D Now))))
           false)))
 
@@ -209,26 +210,30 @@
 (define icmp-ingress
   {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   F B I N Now ->
-    (if (fx< N 28) false
-        (let Code (buffer.u16-be B (fx+ I 20))
-          (cases (= Code 2048) (echo-request F B I N Now)
-                 (and (= Code 772) (fx>= N 56)
-                      (= (net-ipv4.packet-checksum B (fx+ I 20) (fx- N 20)) 0))
-                   (tcp.path-mtu (interface.listener F) B (fx+ I 28) (fx- N 28)
-                                 (buffer.u16-be B (fx+ I 26)) Now)
-                 true false))))
+    (let T (fx+ I (wire.ipv4.size))
+         Headers (fx+ (wire.ipv4.size) (wire.icmp.size))
+      (if (fx< N Headers) false
+          (let Type (wire.icmp.type B T)
+               Code (wire.icmp.code B T)
+            (cases (and (= Type 8) (= Code 0)) (echo-request F B I N Now)
+                   (and (= Type 3) (= Code 4) (fx>= N (fx+ Headers Headers))   \\ Fragmentation needed,
+                        (= (net-ipv4.packet-checksum B T (fx- N (wire.ipv4.size))) 0))  \\ quoting our header.
+                     (tcp.path-mtu (interface.listener F) B (fx+ I Headers) (fx- N Headers)
+                                   (wire.icmp-too-big.next-hop-mtu B T) Now)
+                   true false)))))
 
 (define dispatch
   {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   F B I N Now ->
-    (let Proto (buffer.u8 B (fx+ I 9))
+    (let Proto (wire.ipv4.protocol B I)
+         T (fx+ I (wire.ipv4.size))
       (cases (= Proto 6)
-               (and (fx>= N 40)
+               (and (fx>= N (fx+ (wire.ipv4.size) (wire.tcp.size)))
                     (tcp.table-ingress (interface.listener F) B I N Now
-                                       (list-has-port? (interface.tcp-ports F) (buffer.u16-be B (fx+ I 22)))))
+                                       (list-has-port? (interface.tcp-ports F) (wire.tcp.destination-port B T))))
              (= Proto 17)
-               (and (fx>= N 28)
-                    (udp-ingress F (interface.udp-bindings F) (buffer.u16-be B (fx+ I 22)) B I N Now))
+               (and (fx>= N (fx+ (wire.ipv4.size) (wire.udp.size)))
+                    (udp-ingress F (interface.udp-bindings F) (wire.udp.destination-port B T) B I N Now))
              (= Proto 1) (icmp-ingress F B I N Now)
              true (unreachable F B I N 2 Now))))
 
@@ -244,10 +249,12 @@
   {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   F B I N Now ->
     (and (net-ipv4.valid-header? B I N)
-         (net-ipv4.unicast? (buffer.u32-be B (fx+ I 12)))
-         (let Dst (buffer.u32-be B (fx+ I 16))
-           (cases (and (= Dst 4294967295) (fx>= N 28) (= (buffer.u8 B (fx+ I 9)) 17)
-                       (= (buffer.u32-be B (fx+ I 20)) 4390980))
+         (net-ipv4.unicast? (wire.ipv4.source B I))
+         (let Dst (wire.ipv4.destination B I)
+              T (fx+ I (wire.ipv4.size))
+           (cases (and (= Dst 4294967295) (fx>= N (fx+ (wire.ipv4.size) (wire.udp.size)))
+                       (= (wire.ipv4.protocol B I) 17)
+                       (= (wire.udp.source-port B T) 67) (= (wire.udp.destination-port B T) 68))   \\ A DHCP server's broadcast.
                     (dhcp-broadcast (interface.udp-bindings F) B I N)
                   (not (= Dst (interface.ip F))) false
                   (net-ipv4.fragmented? B I)
@@ -266,20 +273,19 @@
 
 (define emit-icmp6
   {interface --> net-ipv6.address --> net-ipv6.address --> buffer.view --> fixnum -->
-   fixnum --> fixnum --> fixnum --> fixnum --> boolean}
-  F Source Remote B Start Bytes Type Detail Now ->
+   fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  F Source Remote B Start Bytes Type Code Detail Now ->
     (let D (interface.device F)
          Tx (net-link.device.tx D)
-         Count (fx+ Bytes 48)
+         Count (fx+ Bytes (fx+ (wire.ipv6.size) (wire.icmp.size)))
       (if (and (not (net-link.full? Tx)) (fx<= Count (net-link.mtu D)))
           (let Out (net-link.ring.data Tx)
                At (net-link.tail-offset Tx)
-               ICMP (fx+ At 40)
+               ICMP (fx+ At (wire.ipv6.size))
             (do (net-ipv6.write-header Out At Count 58 64 Source Remote)
-                (buffer.u32-be-> Out ICMP (shen-jit.shift-left Type 16))
-                (buffer.u32-be-> Out (fx+ ICMP 4) Detail)
-                (buffer.copy-into! Out (fx+ ICMP 8) B Start Bytes)
-                (buffer.u16-be-> Out (fx+ ICMP 2) (net-ipv6.transport-checksum Out At 58 (fx+ Bytes 8)))
+                (write-layout wire.icmp Out ICMP (type Type) (code Code) (rest Detail))
+                (buffer.copy-into! Out (fx+ ICMP (wire.icmp.size)) B Start Bytes)
+                (wire.icmp.checksum-> Out ICMP (net-ipv6.transport-checksum Out At 58 (fx+ Bytes (wire.icmp.size))))
                 (net-link.publish Tx Count (net-link.delivery D Now))))
           false)))
 
@@ -287,22 +293,25 @@
   {interface --> net-ipv6.address --> net-ipv6.address --> buffer.view --> fixnum -->
    fixnum --> fixnum --> boolean}
   F Local Remote B I N Now ->
-    (and (fx>= N 48) (= (net-ipv6.transport-checksum B I 58 (fx- N 40)) 0)
-         (let Type (buffer.u16-be B (fx+ I 40))
-           (cases (= Type 32768)
-                    (emit-icmp6 F Local Remote B (fx+ I 48) (fx- N 48)
-                                 33024 (buffer.u32-be B (fx+ I 44)) Now)
-                  (= Type 512)
-                    (tcp.path-mtu6 (interface.listener F) B (fx+ I 48) (fx- N 48)
-                                   (buffer.u32-be B (fx+ I 44)) Now Local)
-                  true false))))
+    (let T (fx+ I (wire.ipv6.size))
+         Headers (fx+ (wire.ipv6.size) (wire.icmp.size))
+      (and (fx>= N Headers) (= (net-ipv6.transport-checksum B I 58 (fx- N (wire.ipv6.size))) 0)
+           (let Type (wire.icmp.type B T)
+                Code (wire.icmp.code B T)
+             (cases (and (= Type 128) (= Code 0))                \\ An echo request, answered with its rest.
+                      (emit-icmp6 F Local Remote B (fx+ I Headers) (fx- N Headers)
+                                   129 0 (wire.icmp.rest B T) Now)
+                    (and (= Type 2) (= Code 0))                  \\ Packet too big.
+                      (tcp.path-mtu6 (interface.listener F) B (fx+ I Headers) (fx- N Headers)
+                                     (wire.icmp6-too-big.mtu B T) Now Local)
+                    true false)))))
 
 (define udp-ingress6
   {interface --> (list udp.inbox) --> fixnum --> net-ipv6.address --> net-ipv6.address -->
    buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   F [] _ Local Remote B I N Now ->
     (and (udp.valid-datagram6? B I N)
-         (emit-icmp6 F Local Remote B I (smaller N 1232) 260 0 Now))
+         (emit-icmp6 F Local Remote B I (smaller N 1232) 1 4 0 Now))      \\ Port unreachable.
   F [Q | Rest] Port Local Remote B I N Now ->
     (if (= (udp.peer.port (udp.inbox.peer Q)) Port)
         (udp.inbox-ingress6 Q B I N)
@@ -311,14 +320,15 @@
 (define dispatch6
   {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   F S Local B I N Now ->
-    (let Remote (net-ipv6.read-address (ipv6-state.remote S) B (fx+ I 8))
-         Proto (buffer.u8 B (fx+ I 6))
+    (let Remote (net-ipv6.read-address (ipv6-state.remote S) B (wire.ipv6.source-at I))
+         Proto (wire.ipv6.next-header B I)
+         T (fx+ I (wire.ipv6.size))
       (and (net-ipv6.unicast? Remote)
-           (cases (and (= Proto 6) (fx>= N 60))
+           (cases (and (= Proto 6) (fx>= N (fx+ (wire.ipv6.size) (wire.tcp.size))))
                     (tcp.table-ingress6 (interface.listener F) B I N Now
-                                        (list-has-port? (interface.tcp-ports F) (buffer.u16-be B (fx+ I 42))) Local)
-                  (and (= Proto 17) (fx>= N 48))
-                    (udp-ingress6 F (interface.udp-bindings F) (buffer.u16-be B (fx+ I 42))
+                                        (list-has-port? (interface.tcp-ports F) (wire.tcp.destination-port B T)) Local)
+                  (and (= Proto 17) (fx>= N (fx+ (wire.ipv6.size) (wire.udp.size))))
+                    (udp-ingress6 F (interface.udp-bindings F) (wire.udp.destination-port B T)
                                   Local Remote B I N Now)
                   (= Proto 58) (icmp6 F Local Remote B I N Now)
                   true false))))

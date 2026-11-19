@@ -45,6 +45,16 @@
   (type 8) (code 8) (checksum 16)
   (rest 32))
 
+\\ RFC 1191: "fragmentation needed", with the next hop's MTU.
+(deflayout icmp-too-big
+  (type 8) (code 8) (checksum 16)
+  (_ 16) (next-hop-mtu 16))
+
+\\ RFC 4443: "packet too big".
+(deflayout icmp6-too-big
+  (type 8) (code 8) (checksum 16)
+  (mtu 32))
+
 \\ IEEE 802.3.
 (deflayout ethernet
   (destination 48)
