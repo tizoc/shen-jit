@@ -49,6 +49,8 @@
   F Params Typed Sealed Annotated
   -> (do (check-defun F Params Sealed)
          (set *inline-depth* 0)
+         (set *cold* false)
+         (set *stage0* (cons? Sealed))
          (set *fresh* 0)
          (set *looping* [F])
          (let Trusted (set *typed* Annotated)
@@ -149,6 +151,8 @@
 
 (define expression
   X Sealed -> (do (set *inline-depth* 0)
+                  (set *cold* false)
+                  (set *stage0* (cons? Sealed))
                   (set *fresh* 0)
                   (set *typed* false)
                   (set *registers* false)

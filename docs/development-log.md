@@ -976,6 +976,38 @@ cannot. The kernel suite is the kernel's `tests/runme.shen`; the stlib install l
   depth 7 130.8–135.6 against 130.2–132.0, with one run at 142: where code lies, not what it runs.
   `make bench-independent`, 7 rounds: every row within 1%, but those of a few milliseconds, startup 4 against 4 and
   the contract examples 15 against 14.
+- **Contained bodies inlined at any depth, and errors' messages left cold** (2026-11-19, Apple M3 Max, load 3 to 4
+  with other work running, executables alternated against the commit before). The TCP stack being written on the
+  `net-dsl` branch spent 37% of its lossy run's samples in `buffer.u8`, called from typed loops that walk a byte map
+  bit by bit, such as `measure-sack-pipe`, through `sacked?` and `marked?`: at the third level the read stayed a call,
+  and so the loop stayed boxed. Every buffer accessor calls `shen.app` to make its error's message, which made its form
+  `calling`, two levels deep. Now a small sealed body whose code calls nothing, not even in tail position, but where an
+  error's message is made is marked `contained`, and inlines at any depth and is no level, as its own code inlined all
+  it calls. An error's message, the argument of `simple-error`, inlines only bodies of primitives, which keeps code no
+  correct run reaches small and keeps that argument true: with tail calls allowed, or with messages inlining contained
+  bodies, two small functions that call each other that way made the lowerer recurse without end, and the CLI test
+  has both. Stage 0 knows bodies only from their source, so lowering for it, and the self-hosting check, take a
+  contained body as any small one, and the kernel's own code is unchanged but for its messages. The TCP lossy run
+  (`tests/net_tcp.shen` there, mode 1) 262.4–264.0 against 248.9–250.0 ms, UDP's 25.8–25.9 against 25.7, the
+  first runs (mode `wire`) 12.0–12.7 against 12.5–13.1, the 301 networking functions 13,327 against 18,314
+  instructions, the executable 3.8 KB larger. The typed numeric programs of `make bench-numeric`, best of three:
+  matmul 40.1 against 40.2 ms, trace 411.8 against 408.7, the others within 2% but nbody, 1.69 against 1.60. `make
+  bench`, two alternated rounds: geomean 1.005, no result differences; `trap-error with get and handler that uses error
+  (error raised)` 4.7–4.9 against 5.1–5.4 ms, and alone, a million raises, 48.6–50.2 against 50.6–52.3, as `get`'s
+  message now calls `shen.app`. `make bench-independent`, 7 rounds: 0.97–1.01, startup 5 against 4. Stage 0 output
+  changes in most kernel files, for their messages.
+  **Rejected: three levels for every body** (against the commit before, load near 4). TCP 265.1 against 257.2 and
+  278.4 against 266.2 ms, UDP 26.3 against 25.8: most reads stayed calls, as a boxed caller inlines a `calling` body at
+  no depth. **Rejected: contained bodies of any size,** every accessor among them. TCP the same 6%, UDP 26.3 against
+  25.1, but the networking code 13,327 against 23,907 instructions, `tcp.hash-round` 1,010 for seven reads and
+  writes, its build 0.33 against 0.40 s and its first runs, startup aside, 4.6 against 7.0 ms. **Rejected: messages that inline as
+  before but for contained bodies,** enough for the argument above: `get`'s raise as before, but the networking code
+  18,773 instructions and the executable 1.5 KB larger, for a rule harder to state.
+  **Fixed on the way:** `registers.shen` did not declare `return`, the tail calls, `jump-if-false`,
+  `jump-unless-entry`, `closure` and `capture` external, so `exits-first?` compared instructions with names the
+  namespace had prefixed: code that kept values in registers and called before a return, a tail call or a branch was
+  made boxed, against what design.md says. Alone: the networking code 13,327 against 13,371 instructions, its timings
+  and the numeric programs the same.
 
 ### Factorisation
 

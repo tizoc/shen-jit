@@ -14,12 +14,13 @@
 
 (shen.x.namespace shen-jit.lower
   (use shen-jit)
-  (externals [again apply below indexed past call-sealed call-value code const effect exit fix* fix+ fix-
-    fixnum float frozen jump label loop move new none prim push-handler
+  (externals [again apply below indexed past call-sealed call-value capture closure code const effect exit fix* fix+ fix-
+    fixnum float frozen jump jump-if-false jump-unless-entry label loop move new none prim push-handler return
+    tail-call tail-call-sealed tail-call-value
     float float* float+ float- float-box float-call1 float-call2 float-call3 float-divide float-from-word
     float-load float-load-at float-load-index float-move float-number float-sqrt float-store float-store-at
     float-store-index fix-store8 fix-store16 fix-store32 fix-store-s32 fix-from-float word-load-index word-store-index word-store64 float-unless<
-    float-unless<= float-unless= float-unless> float-unless>= skip slot typed calling var word word+ word- word-and
+    float-unless<= float-unless= float-unless> float-unless>= skip slot contained typed calling var word word+ word- word-and
     word-box word-load-s32 word-load16 word-load32 word-load8 word-move word-number word-or word-sar
     word-shl word-unless< word-unless<= word-unless= word-unless> word-unless>= word-xor
     word.t word* word-shr word-rotl word-rotr word-load64 word-unless-u< word-unless-u<=
@@ -130,6 +131,17 @@
   [X | Xs] -> (or (float-source? X) (float-source-in? Xs))
   _ -> false)
 
+\\ Whether code calls nothing, not even in tail position, but on its way to a raise, as an
+\\ error's message is made: inlined, it calls nothing either but where the message is made, which
+\\ inlines no calling body.
+(define calls-only-to-raise?
+  Is -> (and (not (tail-calls? Is)) (calls-before? Is Is [])))
+
+(define tail-calls?
+  [] -> false
+  [[Op | _] | _] -> true where (element? Op [tail-call tail-call-sealed tail-call-value])
+  [_ | Is] -> (tail-calls? Is))
+
 (define calls-nothing?
   [] -> true
   [[Op | _] | _] -> false where (element? Op [call call-sealed call-value push-handler])
@@ -140,32 +152,36 @@
 \\ an error's message, made by calls, does. A handler keeps nothing of them, so none is allowed.
 \\ The builder holds its instructions last first.
 (define keeps-nothing-across?
-  Backwards -> (let Is (reverse Backwards) (keeps-nothing-h? Is Is)))
+  Backwards -> (let Is (reverse Backwards)
+                 (calls-before? Is Is [return tail-call tail-call-sealed tail-call-value])))
 
-(define keeps-nothing-h?
-  [] _ -> true
-  [[push-handler | _] | _] _ -> false
-  [[Op | _] | Is] All -> (and (exits-first? Is All [] 0) (keeps-nothing-h? Is All))
+\\ Whether every call in Is is followed by a raise or one of Exits.
+(define calls-before?
+  [] _ _ -> true
+  [[push-handler | _] | _] _ _ -> false
+  [[Op | _] | Is] All Exits -> (and (exits-first? Is All Exits [] 0) (calls-before? Is All Exits))
       where (element? Op [call call-sealed call-value])
-  [_ | Is] All -> (keeps-nothing-h? Is All))
+  [_ | Is] All Exits -> (calls-before? Is All Exits))
 
-\\ Whether every way on from Is leaves the definition first, looking at a bounded number of
-\\ instructions: past that, it is taken not to, and the code is made boxed.
+\\ Whether every way on from Is leaves the definition first, by a raise or one of Exits, looking
+\\ at a bounded number of instructions: past that, it is taken not to, and the code is made boxed.
 (define exits-first?
-  _ _ _ 4000 -> false
-  [] _ _ _ -> false
-  [[Op | _] | _] _ _ _ -> true where (element? Op [return tail-call tail-call-sealed tail-call-value])
-  [[prim _ simple-error | _] | _] _ _ _ -> true
-  [[jump L] | _] All Seen N -> (exits-first-at? L All Seen (+ N 1))
-  [[jump-if-false _ L] | Is] All Seen N -> (and (exits-first-at? L All Seen (+ N 1)) (exits-first? Is All Seen (+ N 1)))
-  [[jump-unless-entry _ _ L] | Is] All Seen N -> (and (exits-first-at? L All Seen (+ N 1)) (exits-first? Is All Seen (+ N 1)))
-  [[label L] | Is] All Seen N -> (or (element? L Seen) (exits-first? Is All [L | Seen] (+ N 1)))
-  [[Op | _] | Is] All Seen N -> (exits-first? Is All Seen (+ N 1))
+  _ _ _ _ 4000 -> false
+  [] _ _ _ _ -> false
+  [[Op | _] | _] _ Exits _ _ -> true where (element? Op Exits)
+  [[prim _ simple-error | _] | _] _ _ _ _ -> true
+  [[jump L] | _] All Exits Seen N -> (exits-first-at? L All Exits Seen (+ N 1))
+  [[jump-if-false _ L] | Is] All Exits Seen N
+  -> (and (exits-first-at? L All Exits Seen (+ N 1)) (exits-first? Is All Exits Seen (+ N 1)))
+  [[jump-unless-entry _ _ L] | Is] All Exits Seen N
+  -> (and (exits-first-at? L All Exits Seen (+ N 1)) (exits-first? Is All Exits Seen (+ N 1)))
+  [[label L] | Is] All Exits Seen N -> (or (element? L Seen) (exits-first? Is All Exits [L | Seen] (+ N 1)))
+  [[Op | _] | Is] All Exits Seen N -> (exits-first? Is All Exits Seen (+ N 1))
       where (element? Op [const move prim closure capture call call-sealed call-value inline])
-  _ _ _ _ -> false)
+  _ _ _ _ _ -> false)
 
 (define exits-first-at?
-  L All Seen N -> (or (element? L Seen) (exits-first? (after-label L All) All [L | Seen] N)))
+  L All Exits Seen N -> (or (element? L Seen) (exits-first? (after-label L All) All Exits [L | Seen] N)))
 
 (define after-label
   _ [] -> []
@@ -1079,9 +1095,10 @@
 \\ inlined into a caller that does too, though larger than inlining otherwise allows, and one that
 \\ is a loop becomes a loop of the caller's: inline-form and call (inline.shen) come here for them.
 
-\\ The inline form of F, whose Code is made; else, when Code keeps values in registers, which it
-\\ does only when it calls nothing but on its way out, a body of up to 800 nodes, marked typed, or
-\\ calling when it calls at all (inline-at), which only a
+\\ The inline form of F, whose Code is made: a small body, marked contained when that code calls
+\\ nothing but on its way to a raise; else, when Code keeps values in registers, which it does only
+\\ when it calls nothing but on its way out, a body of up to 800 nodes, marked typed when it calls
+\\ nothing but in tail position, or calling when it calls at all (inline-at), which only a
 \\ definition that keeps values in registers too inlines: a loop over such a function, as over
 \\ the force between two bodies, then keeps its own values in registers round it. A body that
 \\ calls F, which such code does only in tail position, as its loop, is marked loop, with where
@@ -1089,7 +1106,9 @@
 (define inline-of
   F Params Body Sealed Code Kinds
   -> (let Inline (inline-form F Params Body (cons? Sealed))
-       (cond ((or (cons? Inline) (not (value *typed*)) (not (computes? (instructions Code)))
+          Contained (calls-only-to-raise? (instructions Code))
+       (cond ((cons? Inline) (if Contained (append Inline [contained]) Inline))
+             ((or (not (value *typed*)) (not (computes? (instructions Code)))
                   (> (size Body) 800))
               Inline)
              ((inlinable? F Body false) [Params Body (if (calls-nothing? (instructions Code)) typed calling)])

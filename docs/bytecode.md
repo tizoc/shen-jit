@@ -525,7 +525,15 @@ the shifts. The others are calls to C.
   lambdas, capturing the parameter's variable. A number argument replaces its parameter
   in the body, unless a parameter is named `let` or `lambda`, so that `(vector 1)` lowers to `(absvector 2)` and a constant
   length, and a float stays a constant of the code computing with it. A body that is then a constant,
-  with no parameter left, is that constant, which its caller takes as an operand. A definition with
+  with no parameter left, is that constant, which its caller takes as an operand. A small body whose
+  code calls nothing, not even in tail position, but where an error's message is made carries
+  `(Params Body contained)`: where the callee is sealed it inlines at any depth and is no level, as its
+  own code inlined all it calls and it cannot be redefined, so that a loop over helpers that read a
+  buffer keeps its values in registers. An error's message, the argument of `simple-error`, inlines
+  only bodies of primitives: it is code no correct run reaches, and a contained body could otherwise
+  reach itself through messages that call each other. Stage 0 knows bodies from their source, not from
+  their code, so lowering for it, as the self-hosting check does too, takes a contained body as any
+  small one. A definition with
   type annotations whose code keeps values in registers carries `(Params Body typed)` instead when it
   is not small, up to 800 nodes, or `(Params Body calling)` when that code calls on its way out,
   inlined only into a definition that keeps values in registers: a typed body at any depth where the

@@ -28,6 +28,9 @@ All notable changes to this project are documented in this file. The format is b
 
 - `(fixnum N)` of an integer literal is read as `(type N fixnum)`, so binding a literal as a fixnum, as in
   `(let Step (if Up (fixnum 1) (fixnum -1)) ...)`, costs nothing; of anything else it still checks at run time.
+- A small sealed function whose code calls nothing but to make an error's message inlines at any depth, so a typed
+  loop that reads a buffer through such helpers keeps its values in registers. An error's message inlines only
+  primitives, which makes code smaller and raising an error with a formatted message a little slower.
 
 ### Fixed
 

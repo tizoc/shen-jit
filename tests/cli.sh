@@ -179,6 +179,21 @@ check sealed-chain-outer "$dir/sealed.out" "  in f"
     > "$dir/lambda-arg.out" 2>&1
 check lambda-arg "$dir/lambda-arg.out" "lambda-arg 2 [b a] 5 9"
 
+# Small sealed functions that call each other, in tail position or where their errors' messages
+# are made: neither is contained, as a message inlines no body that calls, so inlining either ends.
+cat > "$dir/contained.shen" <<'SHEN'
+(define cli-ef X -> (if (string? X) X (simple-error (cn "ef " (cli-eg "x")))))
+(define cli-eg X -> (if (string? X) X (simple-error (cn "eg " (cli-ef "y")))))
+(define cli-eh X -> (@s (cli-eg X) "!"))
+(define cli-even? N -> (if (= N 0) true (cli-odd? (- N 1))))
+(define cli-odd? N -> (if (= N 0) false (cli-even? (- N 1))))
+(define cli-parity N -> (if (cli-even? N) even odd))
+(output "contained ~A ~A ~A ~A~%" (cli-eh "a") (trap-error (cli-eh 1) (/. E (error-to-string E)))
+        (cli-parity 10) (cli-parity 7))
+SHEN
+"$SHEN" --seal eval -l "$dir/contained.shen" > "$dir/contained.out" 2>&1
+check contained "$dir/contained.out" "contained a! eg y even odd"
+
 # Functions the kernel did not know when compiling a call, such as one
 # defined later at the top level, are called through fn: by name when the
 # arity matches, with currying and fn's error otherwise.

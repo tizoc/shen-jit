@@ -190,11 +190,22 @@
   \\ eval-kl runs the lowerer, which is guest code, so it is a sealed call to
   \\ the port's shen-jit.eval-kl rather than a C primitive.
   Scope [eval-kl X] -> [call shen-jit.eval-kl [(norm Scope X)]]
+  \\ A raise's message is made only when the definition fails: only bodies of primitives
+  \\ inline there (inline-at), so that code no correct run reaches stays small.
+  Scope [simple-error X] -> (shen-jit.lower.prim simple-error [(cold Scope X)])
+      where (not (element? simple-error Scope))
   Scope [F | Args] -> (norm-named Scope F Args)
   Scope X -> [var X] where (element? X Scope)
   \\ Values with no literal syntax (absvectors, closures, streams) can reach
   \\ eval-kl at runtime; like Shen/Scheme, treat them as constants.
   _ X -> [const X])
+
+(define cold
+  Scope X -> (let Was (value *cold*)
+                  Cold (set *cold* true)
+                  Normal (norm Scope X)
+                  Back (set *cold* Was)
+               Normal))
 
 (define pure?
   X Scope -> (or (element? X Scope) (or (number? X) (= X []))))

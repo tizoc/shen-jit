@@ -4,11 +4,12 @@
 \\ may read their last bits differently); otherwise []. A call to a sealed F
 \\ with as many arguments as F's parameters becomes the body, two levels
 \\ deep at most, or at any depth if it is primitives alone over parameters and
-\\ constants. A closure in the body becomes one of the caller's.
+\\ constants, or if its code calls nothing but where an error's message is
+\\ made (inline-at). A closure in the body becomes one of the caller's.
 
 (shen.x.namespace shen-jit.lower
   (use shen-jit)
-  (externals [apply const prim trap var typed])
+  (externals [apply const prim trap var calling contained loop typed])
 
 (define inline-form
   F Params Body Stage0 -> [Params Body] where (and (inlinable? F Body Stage0)
@@ -58,25 +59,50 @@
 
 \\ A body of primitives over parameters and constants, such as a struct's
 \\ reader or constructor, calls nothing, so it is inlined at any depth. So is
-\\ a typed body where F is sealed: F's own code called nothing, so the body
-\\ inlines no more than that code held, and F, which cannot be redefined, was
-\\ made after all it calls. One whose code calls on its way out, calling, is
-\\ inlined two levels deep, as those calls could reach it again. A loop is
-\\ inlined two levels deep, only where F is sealed, and not inside itself: its
-\\ own calls of F go back to its head.
+\\ a contained body where F is sealed: F's own code called nothing but where
+\\ an error's message is made, and nothing that calls is inlined there, so the
+\\ body inlines no more than that code held, and F, which cannot be redefined,
+\\ was made after all it calls; nor is it a level (inlined-norm). So is a
+\\ typed body, larger, which only code that keeps values in registers inlines,
+\\ where F is sealed: F's own code called nothing but on its way out. One whose
+\\ code calls, calling, is inlined into such code two levels deep, as those
+\\ calls could reach it again. A loop is inlined two levels deep, only where F
+\\ is sealed, and not inside itself: its own calls of F go back to its head.
 (define inline-at
-  F N -> (let Depth (trap-error (value *inline-depth*) (/. E 0))
-              Inline (shen-jit.inline-body F)
+  F N -> (let Inline (shen-jit.inline-body F)
            (if (and (cons? Inline) (= (length (hd Inline)) N)
-                    (if (cons? (tl (tl Inline)))
-                        (and (trap-error (value *registers*) (/. E false))
-                             (if (loop-form? Inline)
-                                 (and (< Depth 2) (shen-jit.sealed? F)
-                                      (not (element? F (trap-error (value *looping*) (/. E [])))))
-                                 (or (< Depth 2) (and (shen-jit.sealed? F) (= (hd (tl (tl Inline))) typed)))))
-                        (or (< Depth 2) (leaf? (hd (tl Inline))))))
+                    (if (trap-error (value *cold*) (/. E false))
+                        (and (not (loop-form? Inline)) (leaf? (hd (tl Inline))))
+                        (inline-here? F (if (stage0?) (uncontained Inline) Inline)
+                                      (trap-error (value *inline-depth*) (/. E 0))
+                                      (trap-error (value *registers*) (/. E false)))))
                Inline
                [])))
+
+(define inline-here?
+  _ [_ Body] Depth _ -> (or (< Depth 2) (leaf? Body))
+  F [_ Body contained] Depth _ -> (or (< Depth 2) (shen-jit.sealed? F) (leaf? Body))
+  F [_ _ typed] Depth Registers -> (and Registers (or (< Depth 2) (shen-jit.sealed? F)))
+  _ [_ _ calling] Depth Registers -> (and Registers (< Depth 2))
+  F [_ _ loop _] Depth Registers
+  -> (and Registers (< Depth 2) (shen-jit.sealed? F)
+          (not (element? F (trap-error (value *looping*) (/. E [])))))
+  _ _ _ _ -> false)
+
+\\ Stage 0 knows bodies from their source alone, not from code, so lowering for it, as the
+\\ self-hosting check does too, takes a contained body as any small one.
+(define stage0?
+  -> (trap-error (value *stage0*) (/. E false)))
+
+(define uncontained
+  [Params Body contained] -> [Params Body]
+  Inline -> Inline)
+
+\\ Whether F is sealed and its small body contained (inline-of).
+(define contained?
+  F -> (and (shen-jit.sealed? F) (not (stage0?))
+            (let Inline (shen-jit.inline-body F)
+              (and (cons? Inline) (cons? (tl (tl Inline))) (= (hd (tl (tl Inline))) contained)))))
 
 (define leaf?
   [Op | Args] -> (and (leaf-op? Op (length Args))
@@ -126,10 +152,11 @@
 (define inline-args
   F Params Body Args -> (inline-frozen F Params Args (inlined-norm F Params Body) [] []))
 
-\\ F's Body normalised where it is inlined: a level deeper, and typed only if F was annotated too.
+\\ F's Body normalised where it is inlined: a level deeper, unless F is contained, and typed only if
+\\ F was annotated too.
 (define inlined-norm
   F Params Body -> (let Depth (value *inline-depth*)
-                        Deeper (set *inline-depth* (+ Depth 1))
+                        Deeper (set *inline-depth* (if (contained? F) Depth (+ Depth 1)))
                         Typed (value *typed*)
                         Inner (set *typed* (and Typed (annotated? F)))
                         Normal (norm Params Body)

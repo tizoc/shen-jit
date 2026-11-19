@@ -276,8 +276,10 @@ Some refinements are built on that:
 - **Loops exit out of line.** A test that ends a loop, an `=` with a constant symbol, number or special whose true branch only returns, jumps
   to a return placed with the slow paths, so a turn of the loop takes one jump, back, instead of two.
 - **Small functions are inlined,** by the lowerer, sealed or open, two levels deep, or at any depth when the body
-  is primitives alone over parameters and constants, up to 48 nodes, as a struct's reader or constructor is, or a
-  sealed typed body inlined into code that keeps registers. An open one sits behind a test that the name's
+  is primitives alone over parameters and constants, up to 48 nodes, as a struct's reader or constructor is, a
+  sealed small body whose own code calls nothing but where an error's message is made, which is no level either,
+  or a sealed typed body inlined into code that keeps registers. An error's message inlines only bodies of
+  primitives. An open one sits behind a test that the name's
   definition still has that body, which on arm64 and x86-64 is a nop that a redefinition patches into a branch to the ordinary
   call, and elsewhere a test each time. Bodies inlined after stage 0 are marked in the bytecode, so a backtrace names them as if
   they were not inlined. A lambda passed to a sealed one that only applies it makes no closure: it runs where it is applied.
