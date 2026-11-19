@@ -20,7 +20,7 @@ checkout's own workflow, and git ignores it.
 | `site/` | What renders the guide: pandoc's template and a filter |
 | `include/` | `shen.h`, for C written for Shen |
 | `lib/` | Libraries that are not in the default image, loaded on request as modules, each described by a `.shenmod` file beside it ([docs/modules.md](docs/modules.md)): `native.shen`, native code written by hand and the rules bytecode is checked against, `ffi.shen`, calling C, and `memory.shen`, `mmap.shen`, `sqlite.shen` and `socket.shen` over it, `handle.shen`, which releases memory once nothing reaches it, `datalog.shen`, relations and recursive rules, over `native.shen`, `buffer.shen`, with `buffer-view.shen`, its struct, and `buffer-typed.shen`, its typed checks, and `cursor.shen`, views over bytes, `grammar.shen`, parsers over those, I/O over those (`io/`, `frame.shen`, `deadline.shen` and `clock.shen`), with its results from `result.shen`, HTTP/1.1 over that (`http/`), `json.shen`, `parallel.shen`, a map over isolates, `numbers.shen`, fixnum and float types for typed code, `floats.shen`, arrays of doubles over it, `word.shen`, 64-bit words for it, and `words.shen`, arrays of them |
-| `tools/` | Scripts: `stlib.shen` writes the executable of `make stlib`, `ci-deps.sh` fetches the kernel, the earlier release that builds this one and Shen/Scheme, `package.sh` makes a release archive, `release-notes.sh` prints a version's section of the changelog, `tree-sitter-deps.sh` fetches the pinned Tree-sitter runtime and C grammar, and `buffer-parsers.shen`, `frame-echo.shen`, `http-echo.shen`, `http-head-capture.shen`, `fs-copy.shen`, `process-filter.shen` and `curl-fetch.shen` are small examples over the libraries |
+| `tools/` | Scripts: `stlib.shen` writes the executable of `make stlib`, `ci-deps.sh` fetches the kernel, the earlier release that builds this one, Shen/Scheme and CI's pandoc, `package.sh` makes a release archive, `release-notes.sh` prints a version's section of the changelog, `tree-sitter-deps.sh` fetches the pinned Tree-sitter runtime and C grammar, and `buffer-parsers.shen`, `frame-echo.shen`, `http-echo.shen`, `http-head-capture.shen`, `fs-copy.shen`, `process-filter.shen` and `curl-fetch.shen` are small examples over the libraries |
 | `example-apps/` | Runnable applications built over the public libraries, each with its own README and independent test: `sqlite-http` over HTTP and SQLite, `depends` over Datalog, `source-facts`, C source facts from Tree-sitter, and `source-deps`, those facts in Datalog |
 | `assets/` | The logos and icons |
 | `tests/` | Unit tests, `eval-kl` cases, CLI tests and benchmark drivers |
@@ -132,8 +132,8 @@ On macOS, Guard Malloc finds a write past a block or into a freed one at once:
 
 New behaviour gets cases in `tests/kl/eval-cases.kl` (KL) or `tests/cli.sh` (the executable). Note that the readers turn `8.0` into the integer 8, as Shen's reader does.
 
-CI (`.github/workflows/ci.yml`) follows `tests/linux.sh`: one job makes the tarball, with pandoc and the kernel and host releases that `tools/ci-deps.sh` checks by hash, and each platform builds and
-tests it with a C compiler alone. Moving the kernel, the host or Shen/Scheme updates the hashes there.
+CI (`.github/workflows/ci.yml`) follows `tests/linux.sh`: one job makes the tarball, with the pandoc, kernel and host releases that `tools/ci-deps.sh` checks by hash, and each platform builds and
+tests it with a C compiler alone. Moving the kernel, the host, Shen/Scheme or pandoc updates the hashes there.
 
 `make test-thorn` runs THORN, from the kernel, with its wall-clock limit taken away. `tests/thorn.expected` holds each problem's inference count and what went unproved, which Shen/Scheme also gives. Moving the kernel may change them: compare with Shen/Scheme, then run `tests/thorn.sh` with `UPDATE_THORN=1`.
 

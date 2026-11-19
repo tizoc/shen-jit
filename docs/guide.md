@@ -1198,6 +1198,7 @@ These can be set on the command line, or in a file `local.mk`, which git ignores
 | `KERNEL_DIR` | `.deps/kernel` | The kernel, for `make test-kernel`, `make test-thorn`, `make test-overrides` and `make bench-independent` |
 | `BENCH_DIR` | `.deps/shen-scheme-src` | Shen/Scheme's sources, for `make bench` |
 | `STLIB_DIR` | none | The standard library's sources, for `make bench-independent`, which leaves that workload out without them |
+| `PANDOC` | `pandoc` | pandoc, for `make guide` and `make dist`. On Linux, `sh tools/ci-deps.sh pandoc DIR` fetches the release CI uses |
 
 `make bench` also needs Shen/Scheme, as above, and `sh tools/ci-deps.sh shen-scheme-src .deps/shen-scheme-src` fetches
 its sources.

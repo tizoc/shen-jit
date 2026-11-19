@@ -8,6 +8,8 @@
 #   sh tools/ci-deps.sh shen-scheme DIR       Shen/Scheme's release for this platform, in DIR: it can
 #                                             build Shen/JIT too, and make bench compares against it
 #   sh tools/ci-deps.sh shen-scheme-src DIR   its sources, whose benchmarks make bench runs
+#   sh tools/ci-deps.sh pandoc DIR            pandoc's release for Linux, in DIR: CI renders the guide
+#                                             with it, as make PANDOC=... guide
 #
 # Each prints what to use: DIR, or the executable. make deps runs the first two.
 set -e
@@ -17,6 +19,8 @@ BOOTSTRAP=0.1
 BOOTSTRAP_URL=https://github.com/tizoc/shen-jit/releases/download/v$BOOTSTRAP/shen-jit-$BOOTSTRAP
 SCHEME=0.54
 SCHEME_URL=https://github.com/tizoc/shen-scheme/releases/download/v$SCHEME/shen-scheme-v$SCHEME
+PANDOC=3.12.1
+PANDOC_URL=https://github.com/jgm/pandoc/releases/download/$PANDOC/pandoc-$PANDOC
 
 fetch() { # url, hash, directory
     mkdir -p "$3"
@@ -83,8 +87,20 @@ shen-scheme-src)
     fetch "$SCHEME_URL-src.tar.gz" 1de4a013690e204c5f3d61abd52f8adf1ecb2d2ebfa6bfdda184b312fd9bd007 "$2"
     echo "$2"
     ;;
+pandoc)
+    case "$(uname -s)-$(uname -m)" in
+    Linux-x86_64)
+        fetch "$PANDOC_URL-linux-amd64.tar.gz" d0c90410e90204c9ca83b8539fac5c7aed01fd537207e4585849f8abc5df20b8 "$2" ;;
+    Linux-aarch64)
+        fetch "$PANDOC_URL-linux-arm64.tar.gz" 445d96fd08801fe636cab1158b4f017ee320ac3b7446328b4fe2f902117b19b9 "$2" ;;
+    *)
+        echo "pandoc $PANDOC is fetched only for Linux: install it from https://pandoc.org elsewhere" >&2
+        exit 1 ;;
+    esac
+    echo "$2/bin/pandoc"
+    ;;
 *)
-    echo "usage: ci-deps.sh kernel|shen-jit|shen-scheme|shen-scheme-src DIR" >&2
+    echo "usage: ci-deps.sh kernel|shen-jit|shen-scheme|shen-scheme-src|pandoc DIR" >&2
     exit 2
     ;;
 esac

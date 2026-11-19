@@ -2510,6 +2510,12 @@ the Ryzen VM, in 214 s. macOS had hidden everything below. Timing is in the JIT 
   the other lacked. `docs/guide.md` now holds them, pandoc renders it, and the README only points to it. It is read as GitHub's
   Markdown, so that it reads the same in the repository and its anchors match. The tarball carries the page, so that every release
   archive has it without each platform needing pandoc.
+- **pandoc from its own release (2026-11-19).** Publishing the guide took 35 to 598 s a run, of which `make guide` took
+  2: the rest was installing Ubuntu's pandoc, `apt-get update` 20 to 33 s and the 26.9 MB package 11 s at best and
+  8 min 47 s at 51 kB/s at worst, from Ubuntu's mirror. The tarball job did the same on every push. Both now fetch
+  pandoc's own Linux release from GitHub, pinned with its hash in `tools/ci-deps.sh`, and pass it as `PANDOC`:
+  in Ubuntu 24.04 containers on an M3 Max, fetching took 2.8 s and rendering 1.5 s on arm64, 3.0 s and 6.8 s on
+  x86-64 under emulation. CI renders with 3.12.1, as here, where Ubuntu's was 3.1.3.
 - **The standard library is left out of the default image (2026-11-01), optional since 2026-11-03.** The names it exports become
   system functions, so a program on it cannot define its own `take`. It also defines `min` twice, so it cannot be loaded sealed.
 - **`make stlib`** loads the kernel's precompiled `stlib.kl` and saves a binary: a 1.7 MB image, starting in 3.4 ms against 2.8.
