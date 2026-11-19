@@ -8,7 +8,7 @@
   (use grammar)
   (import struct defstruct)
   (import layout write-layout)
-  (externals [defgrammar <end> skip])
+  (externals [defgrammar <end> skip u16-be u32-be])
   (export host make configure-static poll ingress next-deadline
           host.device host.link-local host.global host.local-state host.global-state
           host.preferred-until host.valid-until host.router host.router-until
@@ -50,7 +50,9 @@
   (mutable router-until : fixnum)
   (mutable preferred-until : fixnum)
   (mutable valid-until : fixnum)
-  (option-state : grammar.state))
+  (option-state : grammar.state)
+  (mutable source-link : fixnum)                   \\ The options' first link-layer addresses, or -1.
+  (mutable target-link : fixnum))
 
 (define blank-address
   {--> net-ipv6.address}
@@ -79,6 +81,8 @@
                (not (and (= IdHigh 0) (= IdLow 0))))
           (:host
             option-state <- (grammar.state)
+            source-link <- -1
+            target-link <- -1
             device <- D
             mac <- Mac
             link-local <- (net-ipv6.make-address 4269801472 0 IdHigh IdLow)
@@ -209,33 +213,39 @@
   B I Kind Mac -> (write-layout wire.ndp-link-address B I (type Kind) (length 1) (address Mac)))
 
 \\ Neighbor discovery's options, RFC 4861 4.6: a type and a length in 8-byte units, never 0, that covers
-\\ both, to the end; a link-layer address takes one unit.
-(defgrammar <options> {==> boolean}
+\\ both, to the end. A source (1) or target (2) link-layer address takes one unit, and the first of each
+\\ is stored in H as it is matched.
+(defgrammar (<options> H) {host ==> boolean}
   <end> := true;
-  Kind Units (where (and (fx> Units 0) (or (not (or (= Kind 1) (= Kind 2))) (= Units 1))))
-    (skip (fx- (fx* 8 Units) 2)) <options> := true;)
+  1 1 (u16-be High) (u32-be Low) (<options> (source-link H (link-address High Low))) := <options>;
+  2 1 (u16-be High) (u32-be Low) (<options> (target-link H (link-address High Low))) := <options>;
+  Kind Units (where (and (fx> Units 0) (not (= Kind 1)) (not (= Kind 2))))
+    (skip (fx- (fx* 8 Units) 2)) (<options> H) := <options>;)
 
 (grammar.finish)
 
+(define link-address
+  {fixnum --> fixnum --> fixnum}
+  High Low -> (fx+ (shen-jit.shift-left High 32) Low))
+
+(define source-link
+  {host --> fixnum --> host}
+  H Mac -> (if (fx< (host.source-link H) 0) (host.source-link-> H Mac) H))
+
+(define target-link
+  {host --> fixnum --> host}
+  H Mac -> (if (fx< (host.target-link H) 0) (host.target-link-> H Mac) H))
+
 (define options-valid?
   {host --> buffer.view --> fixnum --> fixnum --> boolean}
-  H B At End -> (<options>.parse-at (host.option-state H) B At End (/. Position Message false)))
+  H B At End -> (do (host.source-link-> H -1)
+                    (host.target-link-> H -1)
+                    (<options>.parse-at H (host.option-state H) B At End (/. Position Message false))))
 
-(define option-offset
-  {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
-  B At End Kind ->
-    (if (= At End) -1
-        (let Bytes (fx* 8 (wire.ndp-option.length B At))
-          (if (= (wire.ndp-option.type B At) Kind) At
-              (option-offset B (fx+ At Bytes) End Kind)))))
-
-(define option-mac
-  {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
-  B At End Kind ->
-    (let I (option-offset B At End Kind)
-      (if (and (fx>= I 0) (= (wire.ndp-option.length B I) 1))
-          (let Mac (wire.ndp-link-address.address B I) (if (valid-mac? Mac) Mac (type 0 fixnum)))
-          0)))
+\\ A link-layer address the options gave, if it is a unicast one, or 0.
+(define link-mac
+  {fixnum --> fixnum}
+  Mac -> (if (valid-mac? Mac) Mac 0))
 
 (define set-neighbor
   {neighbor --> fixnum --> fixnum --> boolean}
@@ -318,13 +328,13 @@
            (options-valid? H B Opt End)
            (if Dad
                (and (net-ipv6.solicited-node? Destination Target)
-                    (fx< (option-offset B Opt End 1) 0))
+                    (fx< (host.source-link H) 0))
                (and (net-ipv6.unicast? Source)
                     (or (net-ipv6.same? Destination Target)
                         (net-ipv6.solicited-node? Destination Target))))
            (or (and Dad (duplicate-if-probing H Target))
                (and (local-target? H Target Now)
-                    (do (if Dad false (learn H Source (option-mac B Opt End 1) Now))
+                    (do (if Dad false (learn H Source (link-mac (host.source-link H)) Now))
                         (if Dad (emit H Target (host.all-nodes H) Target 136 0 1 Now)     \\ Override,
                             (emit H Target Source Target 136 1 1 Now))))))))           \\ and solicited.
 
@@ -345,7 +355,7 @@
                     (net-ipv6.same? (host.destination H) (host.global H))))
            (options-valid? H B Opt End)
            (or (duplicate-if-probing H Target)
-               (advertise-neighbor H Target (option-mac B Opt End 2)
+               (advertise-neighbor H Target (link-mac (host.target-link H))
                                    (wire.ndp-neighbor-advertisement.override B Body) Now)))))
 
 \\ Apply the unauthenticated-advertisement lifetime rule from RFC 4862.
@@ -413,7 +423,7 @@
            (do (if (or (net-ipv6.same? Source (host.router H)) (fx<= (host.router-until H) Now))
                    (do (net-ipv6.copy-address (host.router H) Source)
                        (host.router-until-> H (fx+ Now Span))
-                       (learn H Source (option-mac B Opt End 1) Now))
+                       (learn H Source (link-mac (host.source-link H)) Now))
                    false)
                (prefixes H B Opt End Now)
                (if (or (fx> (host.router-until H) Now) (fx> (host.valid-until H) Now))

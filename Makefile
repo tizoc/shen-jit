@@ -495,7 +495,8 @@ test-net-tcp: $(BUILD)/shen-jit
 # Shared ingress, UDP overflow and ICMP wire checks.
 .PHONY: test-net-interface
 test-net-interface: $(BUILD)/shen-jit
-	$(BUILD)/shen-jit eval -m tests/net_interface.shenmod -e '(do (net-interface-test.run) (net-interface-test.host) (net-interface-test.multiport) (net-interface-test.fragments) (net-interface-test.errors) (net-interface-test.window-scale) (net-interface-test.pmtu))' | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m tests/net_interface.shenmod -e '(do (net-interface-test.run) (net-interface-test.host) (net-interface-test.multiport) (net-interface-test.fragments) (net-interface-test.errors) (net-interface-test.window-scale) (net-interface-test.pmtu) (net-interface-test.default-mss))' \
+	  | grep -a '^FAIL \|^[0-9]* passed' | awk '{ print } / 0 failed/ { n++ } END { exit n != 8 }' # Each suite reports.
 
 # Portable DHCP and DNS state and wire checks.
 .PHONY: test-net-clients

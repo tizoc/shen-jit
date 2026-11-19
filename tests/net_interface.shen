@@ -280,3 +280,44 @@
                                            (= (net-ipv4.transport-checksum Big 0 6 580) 0)) "resegment at reduced path MTU")
            (output "1 passed, 0 failed~%")
            true)))
+
+\\ A segment from A's port 12345 to B's port 80, without options or data.
+(define net-interface-test.segment
+  {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> buffer.view}
+  B From To Seq Ack Flags ->
+    (do (net-ipv4.write-header B 0 40 6 From To)
+        (buffer.u16-be-> B 20 12345)
+        (buffer.u16-be-> B 22 80)
+        (buffer.u32-be-> B 24 Seq)
+        (buffer.u32-be-> B 28 Ack)
+        (buffer.u16-be-> B 32 (fx+ 20480 Flags))                              \\ Five words of header.
+        (buffer.u16-be-> B 34 8192)
+        (buffer.u32-be-> B 36 0)
+        (buffer.u16-be-> B 36 (net-ipv4.transport-checksum B 0 6 20))))
+
+\\ A SYN that offers no maximum segment size gets IPv4's default, 536 bytes, from a table whose own is larger.
+(define net-interface-test.default-mss
+  {--> boolean}
+  -> (let Link (net-link.make 8 1500 0 (freeze 0))
+          Left (net-link.left Link)
+          A (net-ipv4.address 192 0 2 1)
+          B (net-ipv4.address 192 0 2 2)
+          Server (net-interface.make-host-sized (net-link.right Link) B [80] 1 30 40 [] 0 8192)
+          S (net-interface.interface.listener Server)
+          Wire (buffer.new 1500)
+          Data (buffer.new 600)
+       (do (net-interface-test.segment Wire A B 1000 0 2)
+           (net-link.packet-send Left Wire 40)
+           (net-interface.poll Server 1)
+           (net-interface-test.expect (= (net-link.packet-recv-into Left Wire) 44) "SYN-ACK to a SYN without options")
+           (net-interface-test.segment Wire A B 1001 (fx+ (buffer.u32-be Wire 24) 1) 16)
+           (net-link.packet-send Left Wire 40)
+           (net-interface.poll Server 1)
+           (let Token (tcp.accept-on S 80)
+             (do (net-interface-test.expect (= (tcp.connection-send S Token Data 600) 600)
+                                            "queue a write larger than the default size")
+                 (net-interface.poll Server 1)
+                 (net-interface-test.expect (= (net-link.packet-recv-into Left Wire) 576)
+                                            "segments of the default size")))
+           (output "1 passed, 0 failed~%")
+           true)))

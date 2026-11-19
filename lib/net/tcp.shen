@@ -10,7 +10,7 @@
   (import struct defstruct)
   (import layout write-layout defflags flag-bits)
   (import net-seq seq seq-of seq-number seq-add seq-distance seq-after?)
-  (externals [defgrammar u16-be <end> <e> skip])
+  (externals [defgrammar u16-be <end> <e> skip at])
   (shadow listen release)
   (export peer make-peer listen connect state send recv-into shutdown-write poll
           listener make-listener listener-poll accept connection-index connection-state
@@ -25,16 +25,21 @@
 (defflags control cwr ece urg ack psh rst syn fin)
 
 \\ A received segment, read once into a record its peer keeps: where it lies, and what its header says.
+\\ A segment received, and what its options offer: the smallest maximum segment size and a window scale,
+\\ -1 if not offered, whether SACK is permitted, and where its SACK blocks are, -1 if it has none.
 (defstruct segment
   (mutable data : buffer.view)
-  (mutable options : fixnum)
   (mutable start : fixnum)
   (mutable length : fixnum)
   (mutable flags : fixnum)
   (mutable sequence : seq)
   (mutable acknowledgement : seq)
   (mutable window : fixnum)
-  (mutable mss : fixnum))
+  (mutable mss : fixnum)
+  (mutable scale : fixnum)
+  (mutable sack-permitted : boolean)
+  (mutable sack-at : fixnum)
+  (mutable sack-end : fixnum))
 
 (defstruct peer
   (device : net-link.device)
@@ -162,8 +167,9 @@
         capacity <- Capacity
         map-bytes <- MapBytes
         options-state <- (grammar.state)
-        segment <- (:segment data <- (buffer.new 0) options <- 0 start <- 0 length <- 0 flags <- 0
-                             sequence <- (seq-of 0) acknowledgement <- (seq-of 0) window <- 0 mss <- 0)
+        segment <- (:segment data <- (buffer.new 0) start <- 0 length <- 0 flags <- 0
+                             sequence <- (seq-of 0) acknowledgement <- (seq-of 0) window <- 0
+                             mss <- -1 scale <- -1 sack-permitted <- false sack-at <- -1 sack-end <- -1)
         window-scale <- (scale-for Capacity 0)
         remote-scale <- -1
         path-mtu <- (net-link.mtu D)
@@ -833,31 +839,37 @@
   B I -> (fx* 4 (wire.tcp.data-offset B I)))
 
 \\ TCP's options, RFC 9293 3.1: a kind, then, but for the end of the list and a no-op, a length that
-\\ counts both bytes. The value is the smallest maximum segment size offered, or Mss if none is. A known
-\\ kind with the wrong length, a size of 0, or a length past the end does not match. Each alternative
-\\ tests its kind and length before the rest of the list, so that none parses it again after another.
-(defgrammar (<options> Mss) {fixnum ==> fixnum}
-  <end> := Mss;
-  0 (* _) := Mss;                                                        \\ The end; padding follows.
-  1 (<options> Mss) := <options>;                                        \\ No-op.
-  2 4 (u16-be Size) (where (fx> Size 0)) (<options> (smaller Mss Size)) := <options>;   \\ Maximum segment size.
-  3 3 _ (<options> Mss) := <options>;                                    \\ Window scale.
-  4 2 (<options> Mss) := <options>;                                      \\ SACK permitted.
-  Kind Length (where (and (fx> Kind 4) (fx>= Length 2))) (skip (fx- Length 2)) (<options> Mss)
+\\ counts both bytes. What they offer is stored in the segment as they are matched. A known kind with
+\\ the wrong length, a size of 0, or a length past the end does not match; SACK blocks of a length that
+\\ is not whole blocks are passed over. Each alternative tests its kind and length before the rest of
+\\ the list, so that none parses it again after another.
+(defgrammar (<options> Seg) {segment ==> boolean}
+  <end> := true;
+  0 (* _) := true;                                                       \\ The end; padding follows.
+  1 (<options> Seg) := <options>;                                        \\ No-op.
+  2 4 (u16-be Size) (where (fx> Size 0)) (<options> (offer-mss Seg Size)) := <options>;
+  3 3 Shift (<options> (segment.scale-> Seg (smaller 14 Shift))) := <options>;     \\ RFC 7323.
+  4 2 (<options> (segment.sack-permitted-> Seg true)) := <options>;      \\ RFC 2018.
+  5 Length (where (sack-length? Length)) (at At) (skip (fx- Length 2))
+    (<options> (sack-blocks Seg At (fx+ At (fx- Length 2)))) := <options>;
+  Kind Length (where (and (fx> Kind 4) (fx>= Length 2))) (skip (fx- Length 2)) (<options> Seg)
     := <options>;)
+
+(define offer-mss
+  {segment --> fixnum --> segment}
+  Seg Size -> (let Mss (segment.mss Seg) (segment.mss-> Seg (if (fx< Mss 0) Size (smaller Mss Size)))))
+
+\\ One to four blocks, of two edges each.
+(define sack-length?
+  {fixnum --> boolean}
+  Length -> (and (fx>= Length 10) (fx<= Length 34) (= (fxremainder (fx- Length 2) 8) 0)))
+
+(define sack-blocks
+  {segment --> fixnum --> fixnum --> segment}
+  Seg At End -> (do (segment.sack-at-> Seg At) (segment.sack-end-> Seg End)))
 
 \\ Compile the rules' loops now, while the module loads, so that a saved program carries them.
 (grammar.finish)
-
-(define option-offset
-  {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
-  B I End Wanted ->
-    (if (= I End) -1
-        (let Kind (buffer.u8 B I)
-          (cases (= Kind 0) -1
-                 (= Kind Wanted) I
-                 (= Kind 1) (option-offset B (fx+ I 1) End Wanted)
-                 true (option-offset B (fx+ I (buffer.u8 B (fx+ I 1))) End Wanted)))))
 
 (define valid-segment?
   {buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
@@ -1090,16 +1102,11 @@
           (read-sack-blocks P B (fx+ I 8) End Una))))
 
 (define accept-sack
-  {peer --> buffer.view --> fixnum --> fixnum --> seq --> seq --> boolean}
-  P B Options End Ack Previous ->
+  {peer --> segment --> seq --> seq --> boolean}
+  P Seg Ack Previous ->
     (if (and (peer.sack-enabled P) (= Ack (send-una P)) (fx> (peer.tx-flight P) 0))
-        (let At (option-offset B Options End 5)
-             _ (if (fx>= At 0)
-                   (let Size (buffer.u8 B (fx+ At 1))
-                     (if (and (fx>= Size 10) (fx<= Size 34) (= (fxremainder (fx- Size 2) 8) 0))
-                         (read-sack-blocks P B (fx+ At 2) (fx+ At Size) Ack)
-                         false))
-                   false)
+        (let At (segment.sack-at Seg)
+             _ (if (fx>= At 0) (read-sack-blocks P (segment.data Seg) At (segment.sack-end Seg) Ack) false)
           (if (sack-recovering? P)
               (do (if (or (repaired? P 0) (and (seq-after? Ack Previous) (fx> (peer.tx-sack-high P) 0)))
                       (queue-sack-head-repair P) true)
@@ -1259,7 +1266,7 @@
          Fin (flag? (segment.flags Seg) (flag-bits control fin))
          Win (shen-jit.shift-left (segment.window Seg) (larger 0 (peer.remote-scale P)))
       (do (acknowledge P Seq Ack Win Now (and (= (segment.flags Seg) (flag-bits control ack)) (= N 0)))
-          (if (peer.sack-enabled P) (accept-sack P B (segment.options Seg) Start Ack Previous) false)
+          (if (peer.sack-enabled P) (accept-sack P Seg Ack Previous) false)
           (if (and (fx> (span Seg) 0) (not (peer.recv-eof P)))
               (if (fx< Skip (span Seg))
                   (receive-text P B (fx+ Start Skip) 0 (fx- N Skip) Fin Window Now)
@@ -1306,27 +1313,17 @@
 (define accept-syn
   {peer --> segment --> boolean --> peer}
   P Seg Listening ->
-    (let B (segment.data Seg)
-         Options (segment.options Seg)
-         Start (segment.start Seg)
-         Seq (segment.sequence Seg)
-         Mss (if (fx< (option-offset B Options Start 2) 0)
-                 (smaller (segment.mss Seg) (if (= (peer.ip-header P) (wire.ipv4.size)) 536 1220))
-                 (segment.mss Seg))
-         Scale (read-scale B Options Start)
-         Sacked (and (sack-capable? P) (fx>= (option-offset B Options Start 4) 0))
+    (let Seq (segment.sequence Seg)
+         Offered (segment.mss Seg)
+         Limit (smaller (peer.mss P) (fx- (peer.path-mtu P) (minimum-header P)))
+         Mss (smaller Limit (if (fx>= Offered 0) Offered (if (= (peer.ip-header P) (wire.ipv4.size)) 536 1220)))
+         Sacked (and (sack-capable? P) (segment.sack-permitted Seg))
       (do (peer.recv-next-> P (seq-add Seq 1))
           (remember-window P Seq (segment.acknowledgement Seg) (segment.window Seg))
           (peer.send-mss-> P Mss)
           (peer.remote-scale-> P (if (and (sack-capable? P) (or Listening (fx> (peer.window-scale P) 0)))
-                                     Scale (type -1 fixnum)))
+                                     (segment.scale Seg) (type -1 fixnum)))
           (peer.sack-enabled-> P Sacked))))
-
-(define read-scale
-  {buffer.view --> fixnum --> fixnum --> fixnum}
-  B Options End ->
-    (let At (option-offset B Options End 3)
-      (if (fx< At 0) -1 (smaller 14 (buffer.u8 B (fx+ At 2))))))
 
 (define terminal?
   {peer --> boolean}
@@ -1338,20 +1335,18 @@
   P Seg B I Count ->
     (let H (header-length B I)
          Start (fx+ I H)
-         Options (fx+ I (wire.tcp.size))
-         Mss (<options>.parse-at (smaller (peer.mss P) (fx- (peer.path-mtu P) (minimum-header P)))
-                                 (peer.options-state P) B Options Start (/. At Message -1))
-      (and (fx>= Mss 0)
-           (do (segment.data-> Seg B)
-               (segment.options-> Seg Options)
-               (segment.start-> Seg Start)
-               (segment.length-> Seg (fx- Count H))
-               (segment.flags-> Seg (segment-flags B I))
-               (segment.sequence-> Seg (seq-of (wire.tcp.sequence B I)))
-               (segment.acknowledgement-> Seg (seq-of (wire.tcp.acknowledgement B I)))
-               (segment.window-> Seg (wire.tcp.window B I))
-               (segment.mss-> Seg Mss)
-               true))))
+      (do (segment.data-> Seg B)
+          (segment.start-> Seg Start)
+          (segment.length-> Seg (fx- Count H))
+          (segment.flags-> Seg (segment-flags B I))
+          (segment.sequence-> Seg (seq-of (wire.tcp.sequence B I)))
+          (segment.acknowledgement-> Seg (seq-of (wire.tcp.acknowledgement B I)))
+          (segment.window-> Seg (wire.tcp.window B I))
+          (segment.mss-> Seg -1)
+          (segment.scale-> Seg -1)
+          (segment.sack-permitted-> Seg false)
+          (segment.sack-at-> Seg -1)
+          (<options>.parse-at Seg (peer.options-state P) B (fx+ I (wire.tcp.size)) Start (/. At Message false)))))
 
 (define receive-valid
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
