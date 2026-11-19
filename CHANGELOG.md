@@ -49,6 +49,8 @@ All notable changes to this project are documented in this file. The format is b
   Linux TUN and TAP tests cover joins, leaves, query responses, and zero Shen heap allocations after setup.
 - Multicast UDP supports source-specific subscriptions in both families, with setup-sized INCLUDE filters
   and IGMPv3 and MLDv2 reports for source changes and source-specific queries.
+- Releasing TCP streams can retain TIME-WAIT in a separate preallocated table,
+  so later connections can reuse the stream slots during the two-minute wait.
 
 ### Changed
 

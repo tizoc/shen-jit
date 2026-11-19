@@ -3,8 +3,11 @@
   (use buffer)
   (use net-link)
   (use net-ipv4)
+  (use net-ipv6)
+  (use shen-jit)
   (import struct defstruct)
-  (export setup checks verify exercise window-case make-window-case exercise-window)
+  (export setup checks verify exercise window-case make-window-case exercise-window
+          wait-fixture make-wait-fixture exercise-time-wait)
 
 (defstruct pair
   (time : (vector fixnum))
@@ -1211,12 +1214,159 @@
           (tcp.listener-poll L 2)
           (expect (fx> (tcp.accept L) 0) "half-open timeout returns its slot to the listener"))))
 
+(defstruct wait-fixture
+  (time : (vector fixnum))
+  (left : net-link.device)
+  (right : net-link.device)
+  (listener : tcp.listener)
+  (local4 : fixnum)
+  (remote4 : fixnum)
+  (local6 : net-ipv6.address)
+  (remote6 : net-ipv6.address)
+  (wire : buffer.view))
+
+(define make-wait-fixture
+  {fixnum --> wait-fixture}
+  Mtu ->
+    (let Time (clock 0)
+         Link (net-link.make 1 Mtu 0 (freeze (fx<-vector Time 1)))
+         Right (net-link.right Link)
+         Local (net-ipv4.address 192 0 2 2)
+      (:wait-fixture
+        time <- Time
+        left <- (net-link.left Link)
+        right <- Right
+        listener <- (tcp.make-table-limits Right Local 1 17 52 64 1)
+        local4 <- Local
+        remote4 <- (net-ipv4.address 192 0 2 1)
+        local6 <- (net-ipv6.make-address 536939960 0 0 2)
+        remote6 <- (net-ipv6.make-address 536939960 0 0 1)
+        wire <- (buffer.new 80))))
+
+(define wait-seq
+  {fixnum --> fixnum}
+  X -> (shen-jit.bit-and (fx+ X 1) 4294967295))
+
+(define wait-ingress
+  {wait-fixture --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  F IpBytes Flags Seq Ack Now ->
+    (let L (wait-fixture.listener F)
+         B (wait-fixture.wire F)
+         N (fx+ IpBytes 20)
+      (do (fxvector-> (wait-fixture.time F) 1 Now)
+          (if (= IpBytes 20)
+              (net-ipv4.write-header B 0 N 6 (wait-fixture.remote4 F) (wait-fixture.local4 F))
+              (net-ipv6.write-header B 0 N 6 64 (wait-fixture.remote6 F) (wait-fixture.local6 F)))
+          (buffer.u16-be-> B IpBytes 12345)
+          (buffer.u16-be-> B (fx+ IpBytes 2) 7)
+          (buffer.u32-be-> B (fx+ IpBytes 4) Seq)
+          (buffer.u32-be-> B (fx+ IpBytes 8) Ack)
+          (buffer.u16-be-> B (fx+ IpBytes 12) (fx+ 20480 Flags))
+          (buffer.u16-be-> B (fx+ IpBytes 14) 64)
+          (buffer.u32-be-> B (fx+ IpBytes 16) 0)
+          (if (= IpBytes 20)
+              (do (checksum-segment B 20) (tcp.table-ingress L B 0 N Now true))
+              (do (buffer.u16-be-> B 56 (net-ipv6.transport-checksum B 0 6 20))
+                  (tcp.table-ingress6 L B 0 N Now true (wait-fixture.local6 F)))))))
+
+(define wait-out
+  {wait-fixture --> fixnum}
+  F -> (net-link.packet-recv-into (wait-fixture.left F) (wait-fixture.wire F)))
+
+(define wait-open
+  {wait-fixture --> fixnum --> fixnum --> fixnum}
+  F IpBytes Now ->
+    (let L (wait-fixture.listener F)
+         B (wait-fixture.wire F)
+      (do (expect (wait-ingress F IpBytes 2 4294967294 0 Now) "open a fresh tuple")
+          (tcp.listener-transmit L Now)
+          (expect (and (fx>= (wait-out F) (fx+ IpBytes 20))
+                       (= (buffer.u8 B (fx+ IpBytes 13)) 18)) "SYN reaches the listener")
+          (wait-ingress F IpBytes 16 4294967295 (wait-seq (buffer.u32-be B (fx+ IpBytes 4))) Now)
+          (let Token (tcp.accept-on L 7)
+            (do (expect (fx> Token 0) "accept after the final ACK") Token)))))
+
+(define wait-close
+  {wait-fixture --> fixnum --> fixnum --> fixnum --> boolean --> fixnum}
+  F IpBytes Token Now Block ->
+    (let L (wait-fixture.listener F)
+         B (wait-fixture.wire F)
+      (do (fxvector-> (wait-fixture.time F) 1 Now)
+          (expect (tcp.connection-shutdown-write L Token) "listener closes first")
+          (tcp.listener-transmit L Now)
+          (expect (and (= (wait-out F) (fx+ IpBytes 20)) (= (buffer.u8 B (fx+ IpBytes 13)) 17)) "listener FIN")
+          (let Seq (wait-seq (buffer.u32-be B (fx+ IpBytes 4)))
+            (do (if Block (expect (= (net-link.packet-send (wait-fixture.right F) B 0) net-link.sent)
+                                  "fill the link before the final ACK") true)
+                (expect (wait-ingress F IpBytes 17 4294967295 Seq Now) "client FIN also acknowledges ours")
+                (expect (= (tcp.connection-state L Token) tcp.time-wait) "active close enters TIME-WAIT")
+                Seq)))))
+
+(define wait-ack
+  {wait-fixture --> fixnum --> fixnum --> boolean}
+  F IpBytes Seq ->
+    (let B (wait-fixture.wire F)
+      (and (= (wait-out F) (fx+ IpBytes 20))
+           (= (buffer.u16-be B IpBytes) 7)
+           (= (buffer.u16-be B (fx+ IpBytes 2)) 12345)
+           (= (buffer.u8 B (fx+ IpBytes 13)) 16)
+           (= (buffer.u32-be B (fx+ IpBytes 4)) Seq)
+           (= (buffer.u32-be B (fx+ IpBytes 8)) 0)
+           (if (= IpBytes 20)
+               (= (net-ipv4.transport-checksum B 0 6 20) 0)
+               (and (net-ipv6.address-at? (wait-fixture.local6 F) B 8)
+                    (net-ipv6.address-at? (wait-fixture.remote6 F) B 24)
+                    (= (net-ipv6.transport-checksum B 0 6 20) 0))))))
+
+(define exercise-time-wait
+  {wait-fixture --> boolean}
+  F ->
+    (let L (wait-fixture.listener F)
+         First (wait-open F 20 0)
+         Seq4 (wait-close F 20 First 0 true)
+      (do (expect (tcp.release L First) "park the IPv4 tuple with its blocked ACK")
+          (expect (= (tcp.listener-deadline L 0) -1) "backpressure defers the parked ACK")
+          (expect (= (wait-out F) 0) "make space for the parked ACK")
+          (expect (= (tcp.listener-deadline L 0) 0) "a writable ring wakes the parked ACK")
+          (tcp.listener-transmit L 0)
+          (expect (wait-ack F 20 Seq4) "respond from the parked record without a stream slot")
+          (let Second (wait-open F 40 40)
+            (do (expect (not (= First Second)) "fresh token in the same slot")
+                (expect (wait-ingress F 20 17 4294967295 Seq4 50) "retransmitted IPv4 FIN matches older tuple")
+                (tcp.listener-transmit L 50)
+                (expect (wait-ack F 20 Seq4) "acknowledge the duplicate FIN with the old sequence")
+                (expect (not (wait-ingress F 20 4 0 0 51)) "ignore reset in TIME-WAIT")
+                (let Seq6 (wait-close F 40 Second 60 false)
+                  (do (tcp.listener-transmit L 60)
+                      (expect (wait-ack F 40 Seq6) "full-table fallback sends the normal close ACK")
+                      (expect (not (tcp.release L Second)) "a full wait table preserves the live slot")
+                      (fxvector-> (wait-fixture.time F) 1 120010)
+                      (tcp.listener-transmit L 120010)
+                      (expect (not (tcp.release L Second)) "the duplicate FIN postponed expiry")
+                      (expect (and (wait-ingress F 20 2 63 0 120041) (= (tcp.accept L) 0))
+                              "a SYN for the parked tuple cannot claim a slot")
+                      (tcp.listener-transmit L 120041)
+                      (expect (wait-ack F 20 Seq4) "same-tuple SYN still sees the old sequence")
+                      (expect (= (tcp.listener-deadline L 120041) 120050) "advertise the refreshed deadline")
+                      (fxvector-> (wait-fixture.time F) 1 120050)
+                      (tcp.listener-transmit L 120050)
+                      (expect (tcp.release L Second) "a freed wait entry lets the fallback stream release")
+                      (expect (wait-ingress F 40 17 4294967295 Seq6 120055) "IPv6 duplicate FIN reaches parked tuple")
+                      (tcp.listener-transmit L 120055)
+                      (expect (wait-ack F 40 Seq6) "IPv6 parked tuple replies from the saved local address")
+                      (expect (= (tcp.listener-deadline L 120055) 240055) "IPv6 duplicate FIN refreshes expiry")
+                      (expect (fx> (wait-open F 20 120056) 0) "the expired IPv4 tuple can reopen")
+                      (tcp.expire-addresses6 L (wait-fixture.local6 F) false (wait-fixture.local6 F) false)
+                      (expect (= (tcp.listener-deadline L 120056) -1)
+                              "withdrawn IPv6 addresses clear their waiting tuples"))))))))
+
 (define checks
   {fixnum --> boolean}
   Mtu -> (and (fixture Mtu) (option-fixtures Mtu) (receive-window 41) (partial-read 45)
               (ring-wrap 43) (overlapping-replay 43) (receive-window-edge 43) (reordered-fin 43) (reset-staged-slot 43)
               (timeout-after-syn-loss Mtu) (listener-reuse Mtu) (listener-fairness Mtu)
-              (listener-half-open-timeout Mtu) (verify 1 false)))
+              (listener-half-open-timeout Mtu) (exercise-time-wait (make-wait-fixture Mtu))
+              (verify 1 false)))
 
-(preclude [pair.%match window-case.%match sack-case.%match])
+(preclude [pair.%match window-case.%match sack-case.%match wait-fixture.%match])
 )

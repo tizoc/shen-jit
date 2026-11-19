@@ -114,8 +114,8 @@ and both stream buffers for every slot. Admission, polling, and slot reuse use t
 
 | Operation | Meaning |
 | --- | --- |
-| `tcp.make-listener Device LocalIP LocalPort Slots InitialSequence` | Allocate `Slots` connection records and buffers. `InitialSequence` is the first initial sequence number, in 0 through 4294967295. |
-| `tcp.listener-poll Listener Budget` | Consume at most `Budget` incoming packets and return the number examined. Check timers and allow up to one outgoing segment per slot. The output rotation advances after a segment is queued. |
+| `tcp.make-listener Device LocalIP LocalPort Slots InitialSequence` | Allocate `Slots` connection records and buffers and 16 TIME-WAIT records. `InitialSequence` is the first initial sequence number, in 0 through 4294967295. |
+| `tcp.listener-poll Listener Budget` | Consume at most `Budget` incoming packets and return the number examined. Check timers and rotate output among streams and TIME-WAIT acknowledgments. |
 | `tcp.accept Listener` | Return the next established connection's fixnum token, or `0` if none is ready. |
 | `tcp.connection-index Listener Token` | Return the physical slot index in 1 through `Slots` for caller-owned preallocated buffers. |
 | `tcp.accept-on Listener Port` | Accept an established stream for a particular local port. |
@@ -125,11 +125,21 @@ and both stream buffers for every slot. Admission, polling, and slot reuse use t
 | `tcp.connection-recv-into Listener Token Out Count` | Receive bytes with the same return contract as `tcp.recv-into`. |
 | `tcp.connection-shutdown-write Listener Token` | Queue FIN with the same return contract as `tcp.shutdown-write`. |
 | `tcp.connection-abort Listener Token` | Abort the stream and send a reset when the transmit queue has room. An unestablished active open is canceled locally. |
-| `tcp.release Listener Token` | Recycle a terminal connection, discarding any unread data. Returns false while the connection is live, including TIME-WAIT. |
+| `tcp.release Listener Token` | Recycle a terminal connection or move a TIME-WAIT connection to an available TIME-WAIT record. A successful release discards any unread data and invalidates the token. |
 
 Half-open handshakes take up slots and are reclaimed on timeout. A full listener drops new SYNs, allowing
 clients to retry. An accepted connection retains its slot until released. Tokens are scoped to the listener,
 and reuse of a slot gives the next connection a fresh token. Access through a released token raises.
+
+TIME-WAIT records keep the endpoint tuple, sequence numbers, and timer without
+holding send or receive buffers. A matching retransmitted FIN gets an ACK and
+restarts the two-minute timer. A matching SYN receives the old connection's
+ACK until expiry. On an active open, the local port stays reserved while the
+record exists. If the table fills, `tcp.release` returns false and the caller
+keeps its token and stream slot. Retry when a TIME-WAIT record expires or the
+connection reaches `tcp.closed`. `net-stream.release` uses the same rule.
+The shared interface can [set the TIME-WAIT capacity](net-tun.md#shared-ipv4-interface).
+[TCP closing rules](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.6)
 
 `make test-net-tcp` builds a typed executable and checks independent SYN bytes, segmentation at
 the peer's MSS, cumulative ACKs, and reordering across ring and sequence wraparound. It also
@@ -142,7 +152,9 @@ segments on the wire through slow start, partial ACKs in congestion avoidance, t
 replay, and fast retransmit. SACK tests check negotiation, legacy peers, sequence wrap,
 and two repairs sent before either is acknowledged, including a gap shorter than one
 MSS. A five-loss test checks that the fifth repair waits for space in the congestion
-window. The allocation regression runs 9,000 typed connections under allocation stress,
+window. A one-record TIME-WAIT fixture checks blocked ACK delivery, full-table
+fallback, IPv4 and IPv6 duplicate FINs, and expiry. The allocation regression
+runs 9,000 typed connections under allocation stress,
 with a warmup-only baseline and an allocating positive control.
 
 ## Simulated throughput

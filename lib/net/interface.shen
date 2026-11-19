@@ -15,7 +15,7 @@
   (use net-wire => wire)
   (import struct defstruct)
   (import layout write-layout)
-  (export interface interface.listener make make-host make-host-sized connect poll next-deadline
+  (export interface interface.listener make make-host make-host-sized make-host-limits connect poll next-deadline
           enable-multicast enable-multicast-sized join4 join6 leave4 leave6 joined4? joined6?
           join-source4 join-source6 leave-source4 leave-source6
           enable-ipv6 enable-ipv6-sized connect6 udp-send6 no-address udp-binding udp-send udp-recv-into udp-dropped)
@@ -79,6 +79,12 @@
    (list fixnum) --> fixnum --> fixnum --> interface}
   D IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots Bytes ->
     (new-host D IP TcpPorts (tcp.make-table-sized D IP TcpSlots Key0 Key1 Bytes) UdpPorts UdpSlots))
+
+(define make-host-limits
+  {net-link.device --> fixnum --> (list fixnum) --> fixnum --> fixnum --> fixnum -->
+   (list fixnum) --> fixnum --> fixnum --> fixnum --> interface}
+  D IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots Bytes WaitSlots ->
+    (new-host D IP TcpPorts (tcp.make-table-limits D IP TcpSlots Key0 Key1 Bytes WaitSlots) UdpPorts UdpSlots))
 
 (define new-host
   {net-link.device --> fixnum --> (list fixnum) --> tcp.listener --> (list fixnum) --> fixnum --> interface}

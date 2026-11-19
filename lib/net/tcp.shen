@@ -16,7 +16,8 @@
           listener make-listener listener-poll accept connection-index connection-state
           listener-ingress listener-transmit make-table table-ingress table-connect accept-on
           listener-deadline connection-readable? connection-writable? connection-abort
-          make-table-sized path-mtu path-mtu6 table-ingress6 table-ingress6-at header-fits? table-connect6 expire-addresses6
+          make-table-sized make-table-limits path-mtu path-mtu6
+          table-ingress6 table-ingress6-at header-fits? table-connect6 expire-addresses6
           connection-send connection-send-from connection-recv-into connection-recv-at connection-shutdown-write release
           closed listen-state syn-sent syn-received established close-wait fin-wait-1 fin-wait-2
           closing last-ack time-wait timed-out reset)
@@ -40,6 +41,12 @@
   (mutable sack-permitted : boolean)
   (mutable sack-at : fixnum)
   (mutable sack-end : fixnum))
+
+(define blank-segment
+  {--> segment}
+  -> (:segment data <- (buffer.new 0) start <- 0 length <- 0 flags <- 0
+               sequence <- (seq-of 0) acknowledgement <- (seq-of 0) window <- 0
+               mss <- -1 scale <- -1 sack-permitted <- false sack-at <- -1 sack-end <- -1))
 
 (defstruct peer
   (device : net-link.device)
@@ -167,9 +174,7 @@
         capacity <- Capacity
         map-bytes <- MapBytes
         options-state <- (grammar.state)
-        segment <- (:segment data <- (buffer.new 0) start <- 0 length <- 0 flags <- 0
-                             sequence <- (seq-of 0) acknowledgement <- (seq-of 0) window <- 0
-                             mss <- -1 scale <- -1 sack-permitted <- false sack-at <- -1 sack-end <- -1)
+        segment <- (blank-segment)
         window-scale <- (scale-for Capacity 0)
         remote-scale <- -1
         path-mtu <- (net-link.mtu D)
@@ -901,12 +906,16 @@
   {buffer.view --> fixnum --> fixnum}
   B I -> (shen-jit.bit-and (wire.tcp.flags B I) (flag-bits control ack psh rst syn fin)))
 
+\\ RFC 9293 3.6: TIME-WAIT lasts twice the longest a segment lives, two minutes here.
+(define wait-expiry
+  {fixnum --> fixnum}
+  Now -> (fx+ Now 120000))
+
 (define enter-time-wait
   {peer --> fixnum --> boolean}
-  P Now -> (let Until (fx+ Now 120000)
-             (do (peer.wait-until-> P Until)
-                 (peer.phase-> P time-wait)
-                 true)))
+  P Now -> (do (peer.wait-until-> P (wait-expiry Now))
+               (peer.phase-> P time-wait)
+               true))
 
 (define acknowledge?
   {peer --> seq --> boolean}
@@ -1217,14 +1226,19 @@
   Seg -> (if (flag? (segment.flags Seg) (flag-bits control fin)) (fx+ (segment.length Seg) 1) (segment.length Seg)))
 
 \\ A segment repeated, or out of the window, is acknowledged again; time-wait restarts on a FIN repeated.
+\\ A FIN sent again: one whose sequence space ends where the next byte is expected.
+(define repeated-fin?
+  {segment --> seq --> boolean}
+  Seg Next -> (and (flag? (segment.flags Seg) (flag-bits control fin))
+                   (= (seq-add (segment.sequence Seg) (fx+ (segment.length Seg) 1)) Next)))
+
 (define answer-duplicate
   {peer --> segment --> fixnum --> boolean}
   P Seg Now ->
     (let Flags (segment.flags Seg)
       (if (or (fx> (segment.length Seg) 0) (flag? Flags (flag-bits control syn fin)))
           (do (peer.ack-needed-> P true)
-              (if (and (= (state P) time-wait) (flag? Flags (flag-bits control fin))
-                       (= (seq-add (segment.sequence Seg) (fx+ (segment.length Seg) 1)) (peer.recv-next P)))
+              (if (and (= (state P) time-wait) (repeated-fin? Seg (peer.recv-next P)))
                   (enter-time-wait P Now)
                   true))
           false)))
@@ -1247,6 +1261,7 @@
 \\ A segment past the handshake, RFC 9293 3.10.7.4, by the state and the flags, in order.
 (define connected
   {symbol --> fixnum --> peer --> segment --> fixnum --> boolean}
+  time-wait Flags _ _ _ -> false where (flag? Flags (flag-bits control rst))   \\ RFC 1337.
   time-wait _ P Seg Now -> (answer-duplicate P Seg Now)
   _ Flags P Seg _ -> (reset-received P Seg) where (flag? Flags (flag-bits control rst))
   _ Flags P Seg Now -> (answer-duplicate P Seg Now) where (flag? Flags (flag-bits control syn))
@@ -1337,8 +1352,8 @@
 
 \\ Reads the segment of Count bytes at I of B into Seg, and whether its options are well formed.
 (define read-segment
-  {peer --> segment --> buffer.view --> fixnum --> fixnum --> boolean}
-  P Seg B I Count ->
+  {grammar.state --> segment --> buffer.view --> fixnum --> fixnum --> boolean}
+  State Seg B I Count ->
     (let H (header-length B I)
          Start (fx+ I H)
       (do (segment.data-> Seg B)
@@ -1352,13 +1367,13 @@
           (segment.scale-> Seg -1)
           (segment.sack-permitted-> Seg false)
           (segment.sack-at-> Seg -1)
-          (<options>.parse-at Seg (peer.options-state P) B (fx+ I (wire.tcp.size)) Start (/. At Message false)))))
+          (<options>.parse-at Seg State B (fx+ I (wire.tcp.size)) Start (/. At Message false)))))
 
 (define receive-valid
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   P B I Count Now ->
     (and (not (terminal? P))
-         (read-segment P (peer.segment P) B I Count)
+         (read-segment (peer.options-state P) (peer.segment P) B I Count)
          (let Seg (peer.segment P)
               Phase (state P)
               Flags (segment.flags Seg)
@@ -1414,12 +1429,35 @@
   (mutable token : fixnum)
   (mutable lease : symbol))
 
+\\ RFC 9293 3.6.1: a connection in TIME-WAIT whose stream slot was released, by its tuple, where its
+\\ sequences stood, the window it advertised, when the wait ends, and whether a segment awaits an
+\\ acknowledgement. It holds no buffers.
+(defstruct wait-entry
+  (local6 : net-ipv6.address)
+  (remote6 : net-ipv6.address)
+  (mutable ip-header : fixnum)
+  (mutable remote4 : fixnum)
+  (mutable local-port : fixnum)
+  (mutable remote-port : fixnum)
+  (mutable send-next : seq)
+  (mutable recv-next : seq)
+  (mutable window : fixnum)
+  (mutable until : fixnum)
+  (mutable ack-needed : boolean))
+
 (defstruct listener
   (device : net-link.device)
   (ip : fixnum)
   (port : fixnum)
   (capacity : fixnum)
   (slots : (vector listener-slot))
+  (wait-slots : fixnum)
+  (waits : (vector wait-entry))
+  (wait-segment : segment)
+  (wait-options : grammar.state)
+  (mutable wait-used : fixnum)
+  (mutable next-wait-output : fixnum)
+  (mutable wait-first : boolean)
   (mutable next-sequence : fixnum)
   (mutable next-port : fixnum)
   (key0 : fixnum)
@@ -1444,11 +1482,30 @@
 
 (define make-listener
   {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
-  D IP Port Slots Initial -> (new-table D IP Port Slots Initial 0 0 0))
+  D IP Port Slots Initial -> (new-table D IP Port Slots Initial 0 0 0 16))
+
+(define initialise-waits
+  {(vector wait-entry) --> fixnum --> (vector wait-entry)}
+  V 0 -> V
+  V I ->
+    (let W (:wait-entry
+             local6 <- (net-ipv6.make-address 0 0 0 0)
+             remote6 <- (net-ipv6.make-address 0 0 0 0)
+             ip-header <- (wire.ipv4.size)
+             remote4 <- 0
+             local-port <- 0
+             remote-port <- 0
+             send-next <- (seq-of 0)
+             recv-next <- (seq-of 0)
+             window <- 0
+             until <- -1
+             ack-needed <- false)
+      (initialise-waits (fxvector-> V I W) (fx- I 1))))
 
 (define new-table
-  {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
-  D IP Port Slots Initial Key0 Key1 Bytes ->
+  {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum -->
+   fixnum --> listener}
+  D IP Port Slots Initial Key0 Key1 Bytes WaitSlots ->
     (let Mss (if (= Bytes 0) (peer-mss D) (smaller Bytes (fx- (net-link.mtu D) 40)))
          Capacity (if (= Bytes 0) (fx* Mss 8) Bytes)
          N (buffer.index Slots)
@@ -1463,6 +1520,13 @@
         port <- Port
         capacity <- N
         slots <- (initialise-slots (vector (fx->number N)) D IP Port Mss Capacity N)
+        wait-slots <- WaitSlots
+        waits <- (initialise-waits (vector (fx->number WaitSlots)) WaitSlots)
+        wait-segment <- (blank-segment)
+        wait-options <- (grammar.state)
+        wait-used <- 0
+        next-wait-output <- 1
+        wait-first <- false
         next-sequence <- Initial
         next-port <- 49152
         key0 <- Key0
@@ -1487,6 +1551,113 @@
              (peer.rx-length-> P 0)
              (listener-slot.lease-> S vacant)
              true)))
+
+(define wait-at
+  {listener --> fixnum --> wait-entry}
+  L I -> (fx<-vector (listener.waits L) I))
+
+(define occupied-wait?
+  {wait-entry --> boolean}
+  W -> (fx>= (wait-entry.until W) 0))
+
+(define vacant-wait
+  {listener --> fixnum --> fixnum}
+  _ 0 -> 0
+  L I -> (if (occupied-wait? (wait-at L I)) (vacant-wait L (fx- I 1)) I))
+
+\\ How many records to scan: none while all are free.
+(define wait-scan-limit
+  {listener --> fixnum}
+  L -> (if (= (listener.wait-used L) 0) 0 (listener.wait-slots L)))
+
+\\ Moves a connection in TIME-WAIT out of its stream slot into a free record, if there is one.
+(define save-wait
+  {listener --> peer --> boolean}
+  L P ->
+    (let I (if (= (listener.wait-slots L) (listener.wait-used L)) (type 0 fixnum)
+               (vacant-wait L (listener.wait-slots L)))
+      (and (fx> I 0)
+           (let W (wait-at L I)
+                H (peer.ip-header P)
+             (do (if (= H (wire.ipv6.size))
+                     (do (net-ipv6.copy-address (wait-entry.local6 W) (peer.local-ip6 P))
+                         (net-ipv6.copy-address (wait-entry.remote6 W) (peer.remote-ip6 P)))
+                     (wait-entry.remote6 W))
+                 (wait-entry.ip-header-> W H)
+                 (wait-entry.remote4-> W (peer.remote-ip P))
+                 (wait-entry.local-port-> W (peer.local-port P))
+                 (wait-entry.remote-port-> W (peer.remote-port P))
+                 (wait-entry.send-next-> W (peer.send-next P))
+                 (wait-entry.recv-next-> W (peer.recv-next P))
+                 (wait-entry.window-> W (advertised-window P (flag-bits control ack)))
+                 (wait-entry.until-> W (peer.wait-until P))
+                 (wait-entry.ack-needed-> W (peer.ack-needed P))
+                 (listener.wait-used-> L (fx+ (listener.wait-used L) 1))
+                 true)))))
+
+(define clear-wait
+  {listener --> wait-entry --> boolean}
+  L W ->
+    (do (wait-entry.until-> W -1)
+        (wait-entry.ack-needed-> W false)
+        (listener.wait-used-> L (fx- (listener.wait-used L) 1))
+        true))
+
+\\ The record of the tuple a packet at I belongs to, with IpBytes of IP header, or 0.
+(define find-wait
+  {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
+  _ _ _ _ _ _ 0 -> 0
+  L B I IpBytes Local Remote J ->
+    (let W (wait-at L J)
+      (if (and (occupied-wait? W) (= Local (wait-entry.local-port W))
+               (= Remote (wait-entry.remote-port W)) (= IpBytes (wait-entry.ip-header W))
+               (if (= IpBytes (wire.ipv4.size)) (= (wait-entry.remote4 W) (wire.ipv4.source B I))
+                   (and (net-ipv6.address-at? (wait-entry.local6 W) B (wire.ipv6.destination-at I))
+                        (net-ipv6.address-at? (wait-entry.remote6 W) B (wire.ipv6.source-at I)))))
+          J
+          (find-wait L B I IpBytes Local Remote (fx- J 1)))))
+
+\\ A segment for a record, read as a peer's are, with the listener's segment and options state.
+(define receive-wait
+  {listener --> wait-entry --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  L W B T Bytes Now ->
+    (let Seg (listener.wait-segment L)
+      (and (read-segment (listener.wait-options L) Seg B T Bytes)
+           (waiting (segment.flags Seg) W Seg Now))))
+
+\\ RFC 9293 3.10.7.4 and RFC 1337, for a record: a reset is ignored, a segment that takes sequence
+\\ space is acknowledged again, and a FIN sent again restarts the wait.
+(define waiting
+  {fixnum --> wait-entry --> segment --> fixnum --> boolean}
+  Flags _ _ _ -> false where (flag? Flags (flag-bits control rst))
+  Flags W Seg Now ->
+    (do (wait-entry.ack-needed-> W true)
+        (if (repeated-fin? Seg (wait-entry.recv-next W)) (wait-entry.until-> W (wait-expiry Now)) W)
+        true)
+    where (or (fx> (segment.length Seg) 0) (flag? Flags (flag-bits control syn fin)))
+  _ _ _ _ -> false)
+
+\\ A record's acknowledgement: its last sequence, and all it received.
+(define emit-wait-ack
+  {listener --> wait-entry --> net-link.ring --> fixnum --> boolean}
+  L W Tx Now ->
+    (let H (wait-entry.ip-header W)
+         Size (fx+ H (wire.tcp.size))
+         B (net-link.ring.data Tx)
+         I (net-link.tail-offset Tx)
+         T (fx+ I H)
+      (do (if (= H (wire.ipv4.size))
+              (net-ipv4.write-header B I Size 6 (listener.ip L) (wait-entry.remote4 W))
+              (net-ipv6.write-header B I Size 6 64 (wait-entry.local6 W) (wait-entry.remote6 W)))
+          (write-layout wire.tcp B T
+            (source-port (wait-entry.local-port W)) (destination-port (wait-entry.remote-port W))
+            (sequence (seq-number (wait-entry.send-next W)))
+            (acknowledgement (seq-number (wait-entry.recv-next W)))
+            (data-offset 5) (flags (flag-bits control ack)) (window (wait-entry.window W)))   \\ No options.
+          (wire.tcp.checksum-> B T (transport-checksum B I H (wire.tcp.size)))
+          (net-link.publish Tx Size (net-link.delivery (listener.device L) Now))
+          (wait-entry.ack-needed-> W false)
+          true)))
 
 (define find-peer
   {listener --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
@@ -1602,14 +1773,18 @@
 
 (define make-table
   {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
-  D IP Slots Key0 Key1 -> (seed-port (new-table D IP 0 Slots 0 Key0 Key1 0)))
+  D IP Slots Key0 Key1 -> (seed-port (new-table D IP 0 Slots 0 Key0 Key1 0 16)))
 
 (define make-table-sized
   {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
-  D IP Slots Key0 Key1 Bytes ->
-    (if (and (fx>= Bytes 1) (fx<= Bytes 1048576))
-        (seed-port (new-table D IP 0 Slots 0 Key0 Key1 Bytes))
-        (error "tcp: window must be in 1..1048576 bytes")))
+  D IP Slots Key0 Key1 Bytes -> (make-table-limits D IP Slots Key0 Key1 Bytes 16))
+
+(define make-table-limits
+  {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
+  D IP Slots Key0 Key1 Bytes WaitSlots ->
+    (if (and (fx>= Bytes 1) (fx<= Bytes 1048576) (fx>= WaitSlots 0) (fx<= WaitSlots 1024))
+        (seed-port (new-table D IP 0 Slots 0 Key0 Key1 Bytes WaitSlots))
+        (error "tcp: need a 1..1048576-byte window and 0..1024 TIME-WAIT slots")))
 
 (define next-sequence
   {listener --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
@@ -1731,9 +1906,11 @@
               Bytes (fx- Count (wire.ipv4.size))
            (and (endpoint? IP Port) (fx> Local 0)
                 (let Index (find-peer L Local IP Port 1)
-                  (if (= Index 0)
-                      (new-segment L B T Bytes Local IP Port Now Listening)
-                      (receive-valid (listener-slot.peer (slot-at L Index)) B T Bytes Now)))))))
+                  (if (fx> Index 0)
+                      (receive-valid (listener-slot.peer (slot-at L Index)) B T Bytes Now)
+                      (let Wait (find-wait L B I (wire.ipv4.size) Local Port (wait-scan-limit L))
+                        (if (fx> Wait 0) (receive-wait L (wait-at L Wait) B T Bytes Now)
+                            (new-segment L B T Bytes Local IP Port Now Listening)))))))))
 
 (define new-segment6
   {listener --> buffer.view --> fixnum --> fixnum --> net-ipv6.address --> net-ipv6.address -->
@@ -1767,9 +1944,11 @@
                 Local (wire.tcp.destination-port B T)
              (and (net-ipv6.unicast? Remote) (fx> Port 0) (fx> Local 0)
                   (let Index (find-peer6 L Local LocalIP Remote Port 1)
-                    (if (= Index 0)
-                        (new-segment6 L B T Bytes LocalIP Remote Local Port Now Listening)
-                        (receive-valid (listener-slot.peer (slot-at L Index)) B T Bytes Now))))))))
+                    (if (fx> Index 0)
+                        (receive-valid (listener-slot.peer (slot-at L Index)) B T Bytes Now)
+                        (let Wait (find-wait L B I (wire.ipv6.size) Local Port (wait-scan-limit L))
+                          (if (fx> Wait 0) (receive-wait L (wait-at L Wait) B T Bytes Now)
+                              (new-segment6 L B T Bytes LocalIP Remote Local Port Now Listening))))))))))
 
 (define listener-ingress
   {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
@@ -1791,13 +1970,22 @@
                     (= (peer.local-port (listener-slot.peer S)) Port))
                (local-port-in-use? L Port (fx+ I 1))))))
 
+(define wait-port-in-use?
+  {listener --> fixnum --> fixnum --> boolean}
+  _ _ 0 -> false
+  L Port I ->
+    (let W (wait-at L I)
+      (or (and (occupied-wait? W) (= (wait-entry.local-port W) Port))
+          (wait-port-in-use? L Port (fx- I 1)))))
+
 (define claim-port
   {listener --> (list fixnum) --> fixnum --> fixnum}
   _ _ 0 -> 0
   L Reserved Left ->
     (let Port (listener.next-port L)
       (do (listener.next-port-> L (if (= Port 65535) 49152 (fx+ Port 1)))
-          (if (or (bound-port? Reserved Port) (local-port-in-use? L Port 1))
+          (if (or (bound-port? Reserved Port) (local-port-in-use? L Port 1)
+                  (wait-port-in-use? L Port (wait-scan-limit L)))
               (claim-port L Reserved (fx- Left 1))
               Port))))
 
@@ -1833,7 +2021,14 @@
 (define expire-addresses6
   {listener --> net-ipv6.address --> boolean --> net-ipv6.address --> boolean --> boolean}
   L Local LocalReady Global GlobalReady ->
-    (expire-slots6 L Local LocalReady Global GlobalReady (listener.capacity L)))
+    (do (expire-slots6 L Local LocalReady Global GlobalReady (listener.capacity L))
+        (expire-waits6 L Local LocalReady Global GlobalReady (wait-scan-limit L))))
+
+(define usable-address6?
+  {net-ipv6.address --> net-ipv6.address --> boolean --> net-ipv6.address --> boolean --> boolean}
+  Source Local LocalReady Global GlobalReady ->
+    (or (and LocalReady (net-ipv6.same? Source Local))
+        (and GlobalReady (net-ipv6.same? Source Global))))
 
 (define expire-slots6
   {listener --> net-ipv6.address --> boolean --> net-ipv6.address --> boolean --> fixnum --> boolean}
@@ -1843,11 +2038,21 @@
          P (listener-slot.peer S)
          Source (peer.local-ip6 P)
       (do (if (and (= (peer.ip-header P) 40) (not (= (listener-slot.lease S) vacant)) (not (terminal? P))
-                   (not (or (and LocalReady (net-ipv6.same? Source Local))
-                            (and GlobalReady (net-ipv6.same? Source Global)))))
+                   (not (usable-address6? Source Local LocalReady Global GlobalReady)))
               (stop-peer P reset)
               false)
           (expire-slots6 L Local LocalReady Global GlobalReady (fx- I 1)))))
+
+(define expire-waits6
+  {listener --> net-ipv6.address --> boolean --> net-ipv6.address --> boolean --> fixnum --> boolean}
+  _ _ _ _ _ 0 -> true
+  L Local LocalReady Global GlobalReady I ->
+    (let W (wait-at L I)
+      (do (if (and (occupied-wait? W) (= (wait-entry.ip-header W) (wire.ipv6.size))
+                   (not (usable-address6? (wait-entry.local6 W) Local LocalReady Global GlobalReady)))
+              (clear-wait L W)
+              false)
+          (expire-waits6 L Local LocalReady Global GlobalReady (fx- I 1)))))
 
 (define listener-input
   {listener --> net-link.ring --> fixnum --> fixnum --> fixnum --> fixnum}
@@ -1872,9 +2077,40 @@
           (if (and (= Lease pending) (terminal? P)) (free-slot S) true)
           (listener-output L Now Next (fx- Left 1)))))
 
+(define wait-output
+  {listener --> net-link.ring --> fixnum --> fixnum --> fixnum --> boolean}
+  _ _ _ _ 0 -> true
+  L Tx Now I Left ->
+    (let W (wait-at L I)
+         Next (if (= I (listener.wait-slots L)) (type 1 fixnum) (fx+ I 1))
+      (do (transmit-wait L W Tx Now Next)
+          (wait-output L Tx Now Next (fx- Left 1)))))
+
+(define transmit-wait
+  {listener --> wait-entry --> net-link.ring --> fixnum --> fixnum --> boolean}
+  L W Tx Now Next ->
+    (and (occupied-wait? W)
+         (do (if (and (wait-entry.ack-needed W) (not (net-link.full? Tx)))
+                 (do (emit-wait-ack L W Tx Now) (listener.next-wait-output-> L Next))
+                 L)
+             (if (and (not (wait-entry.ack-needed W)) (fx>= Now (wait-entry.until W)))
+                 (clear-wait L W)
+                 true))))
+
 (define listener-transmit
   {listener --> fixnum --> boolean}
-  L Now -> (listener-output L Now (listener.next-output L) (listener.capacity L)))
+  L Now ->
+    (let Slots (wait-scan-limit L)
+      (if (= Slots 0)
+          (listener-output L Now (listener.next-output L) (listener.capacity L))
+          (let Tx (net-link.device.tx (listener.device L))
+               First (listener.wait-first L)
+            \\ Streams and records take turns going first, as a full send ring could stall either.
+            (do (if First (wait-output L Tx Now (listener.next-wait-output L) Slots) false)
+                (listener-output L Now (listener.next-output L) (listener.capacity L))
+                (if First false (wait-output L Tx Now (listener.next-wait-output L) Slots))
+                (listener.wait-first-> L (not First))
+                true)))))
 
 (define earlier
   {fixnum --> fixnum --> fixnum}
@@ -1922,8 +2158,18 @@
 
 (define listener-deadline
   {listener --> fixnum --> fixnum}
-  L Now -> (table-deadline L Now (not (net-link.full? (net-link.device.tx (listener.device L))))
-                          (listener.capacity L) -1))
+  L Now ->
+    (let Writable (not (net-link.full? (net-link.device.tx (listener.device L))))
+         Due (table-deadline L Now Writable (listener.capacity L) -1)
+      (wait-deadline L Now Writable (wait-scan-limit L) Due)))
+
+(define wait-deadline
+  {listener --> fixnum --> boolean --> fixnum --> fixnum --> fixnum}
+  _ _ _ 0 At -> At
+  L Now Writable I At ->
+    (let W (wait-at L I)
+         Due (if (wait-entry.ack-needed W) (if Writable Now (type -1 fixnum)) (wait-entry.until W))
+      (wait-deadline L Now Writable (fx- I 1) (earlier At Due))))
 
 (define listener-poll
   {listener --> fixnum --> fixnum}
@@ -2058,7 +2304,9 @@
 (define release
   {listener --> fixnum --> boolean}
   L Token -> (let S (lease-slot L Token)
-               (and (terminal? (listener-slot.peer S)) (free-slot S))))
+                   P (listener-slot.peer S)
+               (and (or (terminal? P) (and (= (state P) time-wait) (save-wait L P)))
+                    (free-slot S))))
 
-(preclude [peer.%match listener.%match listener-slot.%match])
+(preclude [peer.%match listener.%match listener-slot.%match wait-entry.%match])
 )

@@ -175,6 +175,7 @@
   {net-tun.adapter --> (fixnum --> fixnum) --> server --> fixnum --> string --> boolean}
   Tun Ethernet S Expected Label ->
     (let Window (tcp-test.make-window-case 43)
+         Wait (tcp-test.make-wait-fixture 128)
          Until (fx+ (net-tun.monotonic 0) 25000)
          Scratch (echo-session.scratch (fx<-vector (server.streams S) 1))
          _ (mark 0)
@@ -186,6 +187,7 @@
          _ (notify 0)
          _ (mark 0)
          _ (tcp-test.exercise-window Window 16)
+         _ (tcp-test.exercise-time-wait Wait)
          Count (echo Tun Ethernet S Until Expected)
          Words (words 0)
       (if (= Words 0)

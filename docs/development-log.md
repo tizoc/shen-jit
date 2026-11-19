@@ -3803,6 +3803,22 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   check has passed. On the `net-dsl` branch, TCP's lossy run 170.8–171.2 against 162.0–162.8 ms, its UDP echo
   22.4–22.5 against 21.6–21.7.
 
+### Bounded TCP TIME-WAIT records (2026-11-19, Linux x86-64 in Docker Desktop)
+
+- With the original four-slot HTTP example on TUN and TAP, the fifth
+  connection attempt timed out after four successful server-first closes.
+  Moving TIME-WAIT into 128 smaller records let each device complete all
+  100 requests, alternating IPv4 and IPv6. The full workload delivered 115
+  responses with zero Shen heap words allocated in the transport loop and
+  a five-word positive control on each device.
+- The records added 26,680 bytes of setup allocation and retained Shen
+  heap on each device. TUN allocated 375,168 bytes and retained 143,080 bytes.
+  TAP allocated 425,616 bytes and retained 193,528 bytes.
+- An injected-clock fixture filled a one-record table, kept the next
+  connection in its stream slot, and retried release when the record expired.
+  It also checked IPv4 and IPv6 duplicate FINs, sequence wraparound, and
+  deferred ACKs under transmit backpressure.
+
 ### Declared packet formats (2026-11-19, Apple M3 Max, and Linux arm64 in Docker Desktop)
 
 - An experiment, on branch `net-dsl`: the networking code rewritten to say what its RFCs say, after
@@ -3893,6 +3909,12 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   -0.2 ms of UDP echo, TCP within noise. **Found: a case's generality on the frequent path**, IGMP's
   options in every packet's check, cost 2% until the frequent case had its own. Linux's TUN and TAP
   suites pass the rewrite, IGMP and MLD against Linux's own, with no heap words.
+- Brought the other branch's TIME-WAIT records (its 2d072ae), which free a released connection's stream
+  slot for the two-minute wait. Its TCP changes did not merge, as they read segments by offsets and walked
+  options by hand: written again, a record's segment is read through the options grammar, with a segment
+  and state the listener keeps, and answered by rules, its sequences `seq`s and its ACK written with
+  `write-layout`. Its one-record fixture passed as written, and inside the TUN and TAP echo tests' allocation
+  probe used no heap words. TCP connections 363.8 to 365.2 ms and 420.3 to 422.4, at loads of 3.6 and 4.
 
 ### Source-specific multicast (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
 

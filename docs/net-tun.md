@@ -40,6 +40,7 @@ adapter, or an in-memory peer. Call only `net-interface.poll` to drive this side
 | `net-interface.make Device IP TcpPort TcpSlots InitialSequence UdpPort UdpSlots` | Preallocate the TCP listener and a UDP receive queue. Each UDP slot holds one packet of up to the link MTU. |
 | `net-interface.make-host Device IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots` | Set up listener and UDP bindings from lists of port fixnums. All TCP connections share `TcpSlots`. UDP uses `UdpSlots` per port. Supply two independently randomized unsigned 32-bit key words at setup. |
 | `net-interface.make-host-sized Device IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots Bytes` | Choose 1 through 1,048,576 bytes per TCP send and receive buffer. Setup also reserves the appropriate presence and SACK bitmaps. |
+| `net-interface.make-host-limits Device IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots Bytes WaitSlots` | Also choose 0 through 1,024 detached TCP TIME-WAIT records. The other constructors reserve 16. At zero, TIME-WAIT connections hold their stream slot until expiry. |
 | `net-interface.connect Interface RemoteIP RemotePort` | Claim a TCP slot, pick an unused ephemeral port, and start an active open. Returns a token, or zero when no slot or port is free. |
 | `net-interface.next-deadline Interface` | Give the earliest ingress or TCP deadline in absolute monotonic milliseconds, or `-1` while waiting for external I/O. |
 | `net-interface.udp-binding Interface Port` | Get an inbox for `udp.inbox-recv-into`, `udp.inbox-ready?`, or `udp.send` with `udp.inbox.peer`. |
