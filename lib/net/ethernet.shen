@@ -7,7 +7,9 @@
   (use net-ndp)
   (use net-routes)
   (use shen-jit)
+  (use net-wire => wire)
   (import struct defstruct)
+  (import layout write-layout)
   (export adapter make configure enable-ipv6 pump next-deadline hardware adapter.dropped)
 
 (defstruct neighbor
@@ -38,16 +40,6 @@
         (fx+ (shen-jit.shift-left High 32) Low)
         (error "net/ethernet: MAC address is wider than 48 bits")))
 
-(define read-mac
-  {buffer.view --> fixnum --> fixnum}
-  B I -> (hardware (buffer.u16-be B I) (buffer.u32-be B (fx+ I 2))))
-
-(define write-mac
-  {buffer.view --> fixnum --> fixnum --> buffer.view}
-  B I Mac ->
-    (do (buffer.u16-be-> B I (shen-jit.shift-right Mac 32))
-        (buffer.u32-be-> B (fx+ I 2) (shen-jit.bit-and Mac 4294967295))))
-
 (define unicast-mac?
   {fixnum --> boolean}
   Mac -> (and (fx> Mac 0) (fx<= Mac 281474976710655)
@@ -70,7 +62,7 @@
    fixnum --> adapter}
   Frames Packets Mac IP Routes Slots ->
     (let Mtu (net-link.mtu Packets)
-      (if (and (fx>= Mtu 68) (fx>= (net-link.mtu Frames) (fx+ Mtu 14))
+      (if (and (fx>= Mtu 68) (fx>= (net-link.mtu Frames) (fx+ Mtu (wire.ethernet.size)))
                (unicast-mac? Mac) (or (= IP 0) (net-ipv4.unicast? IP))
                (fx>= Slots 1) (fx<= Slots 256))
           (:adapter
@@ -173,10 +165,12 @@
 
 (define ethernet-header
   {adapter --> buffer.view --> fixnum --> fixnum --> fixnum --> buffer.view}
-  A B At Dst Kind ->
-    (do (write-mac B At Dst)
-        (write-mac B (fx+ At 6) (adapter.mac A))
-        (buffer.u16-be-> B (fx+ At 12) Kind)))
+  A B At Dst Kind -> (write-layout wire.ethernet B At (destination Dst) (source (adapter.mac A)) (ethertype Kind)))
+
+\\ The shortest frame, without its check sequence: shorter ones are padded.
+(define minimum-frame
+  {--> fixnum}
+  -> 60)
 
 (define arp
   {adapter --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
@@ -186,17 +180,14 @@
       (if (net-link.full? Tx) false
           (let B (net-link.ring.data Tx)
                I (net-link.tail-offset Tx)
-               Start (fx+ I 14)
+               Start (fx+ I (wire.ethernet.size))
             (do (ethernet-header A B I Dst 2054)
-                (buffer.u32-be-> B Start 67584)
-                (buffer.u16-be-> B (fx+ Start 4) 1540)
-                (buffer.u16-be-> B (fx+ Start 6) Op)
-                (write-mac B (fx+ Start 8) (adapter.mac A))
-                (buffer.u32-be-> B (fx+ Start 14) (adapter.ip A))
-                (write-mac B (fx+ Start 18) TargetMac)
-                (buffer.u32-be-> B (fx+ Start 24) TargetIP)
-                (pad B (fx+ I 42) (fx+ I 60))
-                (net-link.publish Tx 60 (net-link.delivery D Now)))))))
+                (write-layout wire.arp B Start
+                  (hardware-type 1) (protocol-type 2048) (hardware-length 6) (protocol-length 4) (operation Op)
+                  (sender-hardware (adapter.mac A)) (sender-protocol (adapter.ip A))
+                  (target-hardware TargetMac) (target-protocol TargetIP))
+                (pad B (fx+ Start (wire.arp.size)) (fx+ I (minimum-frame)))
+                (net-link.publish Tx (minimum-frame) (net-link.delivery D Now)))))))
 
 (define learn
   {adapter --> fixnum --> fixnum --> fixnum --> boolean}
@@ -211,22 +202,23 @@
 (define arp-input
   {adapter --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   A B I N Now ->
-    (and (fx>= N 42) (fx> (adapter.ip A) 0)
-         (= (buffer.u32-be B (fx+ I 14)) 67584)
-         (= (buffer.u16-be B (fx+ I 18)) 1540)
-         (= (buffer.u32-be B (fx+ I 38)) (adapter.ip A))
-         (let Op (buffer.u16-be B (fx+ I 20))
-              Mac (read-mac B (fx+ I 22))
-              IP (buffer.u32-be B (fx+ I 28))
-           (and (unicast-mac? Mac) (= Mac (read-mac B (fx+ I 6)))
+    (let S (fx+ I (wire.ethernet.size))
+      (and (fx>= N (fx+ (wire.ethernet.size) (wire.arp.size))) (fx> (adapter.ip A) 0)
+           (= (wire.arp.hardware-type B S) 1) (= (wire.arp.protocol-type B S) 2048)      \\ IPv4 over Ethernet.
+           (= (wire.arp.hardware-length B S) 6) (= (wire.arp.protocol-length B S) 4)
+           (= (wire.arp.target-protocol B S) (adapter.ip A))
+           (let Op (wire.arp.operation B S)
+                Mac (wire.arp.sender-hardware B S)
+                IP (wire.arp.sender-protocol B S)
+             (and (unicast-mac? Mac) (= Mac (wire.ethernet.source B I))
                 (cases (= Op 1)
                          (do (if (net-ipv4.unicast? IP) (learn A IP Mac Now) true)
                              (arp A IP Mac Mac 2 Now))
                        (= Op 2)
-                         (and (= (read-mac B (fx+ I 32)) (adapter.mac A))
+                         (and (= (wire.arp.target-hardware B S) (adapter.mac A))
                               (net-ipv4.unicast? IP) (fx> (find A IP (adapter.slots A)) 0)
                               (learn A IP Mac Now))
-                       true false)))))
+                       true false))))))
 
 (define receive-ip
   {adapter --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
@@ -241,22 +233,23 @@
 (define frame-input
   {adapter --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   A B I N Now ->
-    (and (fx>= N 14)
-         (let Dst (read-mac B I)
-              Kind (buffer.u16-be B (fx+ I 12))
-              IP (fx+ I 14)
+    (and (fx>= N (wire.ethernet.size))
+         (let Dst (wire.ethernet.destination B I)
+              Kind (wire.ethernet.ethertype B I)
+              IP (fx+ I (wire.ethernet.size))
+              Payload (fx- N (wire.ethernet.size))
               Ours (= Dst (adapter.mac A))
               Broadcast (= Dst 281474976710655)
            (cases (and (= Kind 2054) (or Ours Broadcast)) (arp-input A B I N Now)
-                  (and (= Kind 2048) (fx>= N 34) (or Ours Broadcast)
-                       (= (shen-jit.shift-right (buffer.u8 B IP) 4) 4))
-                    (let Count (buffer.u16-be B (fx+ IP 2))
-                      (and (fx>= Count 20) (receive-ip A B IP (fx- N 14) Count Now)))
-                  (and (= Kind 34525) (fx>= N 54) (not (= (adapter.ipv6 A) []))
-                       (= (shen-jit.shift-right (buffer.u8 B IP) 4) 6)
-                       (or Ours (and (= (buffer.u8 B (fx+ IP 24)) 255)
-                                     (= Dst (net-ipv6.multicast-mac-at B (fx+ IP 24))))))
-                    (receive-ip A B IP (fx- N 14) (fx+ 40 (buffer.u16-be B (fx+ IP 4))) Now)
+                  (and (= Kind 2048) (fx>= Payload (wire.ipv4.size)) (or Ours Broadcast)
+                       (= (wire.ipv4.version B IP) 4))
+                    (let Count (wire.ipv4.total-length B IP)
+                      (and (fx>= Count (wire.ipv4.size)) (receive-ip A B IP Payload Count Now)))
+                  (and (= Kind 34525) (fx>= Payload (wire.ipv6.size)) (not (= (adapter.ipv6 A) []))
+                       (= (wire.ipv6.version B IP) 6)
+                       (or Ours (and (= (buffer.u8 B (wire.ipv6.destination-at IP)) 255)        \\ Multicast,
+                                     (= Dst (net-ipv6.multicast-mac-at B (wire.ipv6.destination-at IP))))))  \\ to our group.
+                    (receive-ip A B IP Payload (fx+ (wire.ipv6.size) (wire.ipv6.payload-length B IP)) Now)
                   true false))))
 
 (define rx-frames
@@ -278,10 +271,10 @@
           (let B (net-link.ring.data Tx)
                At (net-link.tail-offset Tx)
                N (net-link.head-length R)
-               Len (fx+ N 14)
+               Len (fx+ N (wire.ethernet.size))
                Wire (if (fx>= Len 60) Len (type 60 fixnum))
             (do (ethernet-header A B At Mac Kind)
-                (buffer.copy-into! B (fx+ At 14) (net-link.ring.data R) (net-link.head-offset R) N)
+                (buffer.copy-into! B (fx+ At (wire.ethernet.size)) (net-link.ring.data R) (net-link.head-offset R) N)
                 (pad B (fx+ At Len) (fx+ At Wire))
                 (net-link.publish Tx Wire (net-link.delivery D Now)))))))
 
