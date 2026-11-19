@@ -4,7 +4,9 @@
   (use net-link)
   (use net-ipv6)
   (use shen-jit)
+  (use net-wire => wire)
   (import struct defstruct)
+  (import layout write-layout)
   (export host make configure-static poll ingress next-deadline
           host.device host.link-local host.global host.local-state host.global-state
           host.preferred-until host.valid-until host.router host.router-until
@@ -194,46 +196,39 @@
              (fx< Now (host.router-until H)) (claim H (host.router H) Now)
              true 0)))
 
-(define mac-at
-  {buffer.view --> fixnum --> fixnum}
-  B I -> (fx+ (shen-jit.shift-left (buffer.u16-be B I) 32) (buffer.u32-be B (fx+ I 2))))
-
 (define valid-mac?
   {fixnum --> boolean}
   Mac -> (and (fx> Mac 0) (= (shen-jit.bit-and Mac 1099511627776) 0)))
 
 (define write-option
   {buffer.view --> fixnum --> fixnum --> fixnum --> buffer.view}
-  B I Kind Mac ->
-    (do (buffer.u16-be-> B I (fx+ (fx* Kind 256) 1))
-        (buffer.u16-be-> B (fx+ I 2) (shen-jit.shift-right Mac 32))
-        (buffer.u32-be-> B (fx+ I 4) (shen-jit.bit-and Mac 4294967295))))
+  B I Kind Mac -> (write-layout wire.ndp-link-address B I (type Kind) (length 1) (address Mac)))
 
 (define options-valid?
   {buffer.view --> fixnum --> fixnum --> boolean}
   B At End ->
     (or (= At End)
         (and (fx<= (fx+ At 2) End)
-             (let Kind (buffer.u8 B At)
-                  Bytes (fx* 8 (buffer.u8 B (fx+ At 1)))
+             (let Kind (wire.ndp-option.type B At)
+                  Bytes (fx* 8 (wire.ndp-option.length B At))
                (and (fx> Bytes 0) (fx<= (fx+ At Bytes) End)
-                    (or (not (or (= Kind 1) (= Kind 2))) (= Bytes 8))
+                    (or (not (or (= Kind 1) (= Kind 2))) (= Bytes (wire.ndp-link-address.size)))
                     (options-valid? B (fx+ At Bytes) End))))))
 
 (define option-offset
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
   B At End Kind ->
     (if (= At End) -1
-        (let Bytes (fx* 8 (buffer.u8 B (fx+ At 1)))
-          (if (= (buffer.u8 B At) Kind) At
+        (let Bytes (fx* 8 (wire.ndp-option.length B At))
+          (if (= (wire.ndp-option.type B At) Kind) At
               (option-offset B (fx+ At Bytes) End Kind)))))
 
 (define option-mac
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
   B At End Kind ->
     (let I (option-offset B At End Kind)
-      (if (and (fx>= I 0) (= (buffer.u8 B (fx+ I 1)) 1))
-          (let Mac (mac-at B (fx+ I 2)) (if (valid-mac? Mac) Mac (type 0 fixnum)))
+      (if (and (fx>= I 0) (= (wire.ndp-option.length B I) 1))
+          (let Mac (wire.ndp-link-address.address B I) (if (valid-mac? Mac) Mac (type 0 fixnum)))
           0)))
 
 (define set-neighbor
@@ -252,37 +247,42 @@
 
 (define advertise-neighbor
   {host --> net-ipv6.address --> fixnum --> fixnum --> fixnum --> boolean}
-  H IP Mac Flags Now ->
+  H IP Mac Override Now ->
     (and (valid-mac? Mac)
          (let I (find H IP (host.slots H))
            (and (fx> I 0)
                 (let N (neighbor-at H I)
                      Old (neighbor.mac N)
                   (and (or (= Old 0) (= Old Mac)
-                           (not (= (shen-jit.bit-and Flags 536870912) 0)))
+                           (= Override 1))
                        (set-neighbor N Mac Now)))))))
 
 (define emit
   {host --> net-ipv6.address --> net-ipv6.address --> net-ipv6.address -->
-   fixnum --> fixnum --> fixnum --> boolean}
-  H Source Destination Target Kind Flags Now ->
+   fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  H Source Destination Target Kind Solicited Override Now ->
     (let D (host.device H)
          Tx (net-link.device.tx D)
          Mac (host.mac H)
       (if (net-link.full? Tx) false
           (let B (net-link.ring.data Tx)
                At (net-link.tail-offset Tx)
-               Body (fx+ At 40)
-               Base (if (= Kind 133) (type 8 fixnum) (type 24 fixnum))
+               Body (fx+ At (wire.ipv6.size))
+               Base (cases (= Kind 133) (wire.ndp-router-solicitation.size)
+                           (= Kind 135) (wire.ndp-neighbor-solicitation.size)
+                           true (wire.ndp-neighbor-advertisement.size))
                IncludeMac (and (fx> Mac 0) (not (net-ipv6.unspecified? Source)))
-               N (if IncludeMac (fx+ Base 8) Base)
-               Count (fx+ N 40)
+               N (if IncludeMac (fx+ Base (wire.ndp-link-address.size)) Base)
+               Count (fx+ N (wire.ipv6.size))
             (do (net-ipv6.write-header B At Count 58 255 Source Destination)
-                (buffer.u32-be-> B Body (shen-jit.shift-left Kind 24))
-                (buffer.u32-be-> B (fx+ Body 4) Flags)
-                (if (= Kind 133) B (net-ipv6.write-address B (fx+ Body 8) Target))
-                (if IncludeMac (write-option B (fx+ Body Base) (if (= Kind 136) 2 1) Mac) B)
-                (buffer.u16-be-> B (fx+ Body 2) (net-ipv6.transport-checksum B At 58 N))
+                (cases (= Kind 133) (write-layout wire.ndp-router-solicitation B Body (type 133))
+                       (= Kind 135) (do (write-layout wire.ndp-neighbor-solicitation B Body (type 135))
+                                        (net-ipv6.write-address B (wire.ndp-neighbor-solicitation.target-at Body) Target))
+                       true (do (write-layout wire.ndp-neighbor-advertisement B Body
+                                  (type 136) (solicited Solicited) (override Override))
+                                (net-ipv6.write-address B (wire.ndp-neighbor-advertisement.target-at Body) Target)))
+                (if IncludeMac (write-option B (fx+ Body Base) (if (= Kind 136) 2 1) Mac) B)   \\ Target or source address.
+                (wire.icmp.checksum-> B Body (net-ipv6.transport-checksum B At 58 N))
                 (net-link.publish Tx Count (net-link.delivery D Now)))))))
 
 (define duplicate-if-probing
@@ -305,8 +305,8 @@
   H B Body End Now ->
     (let Source (host.source H)
          Destination (host.destination H)
-         Target (net-ipv6.read-address (host.target H) B (fx+ Body 8))
-         Opt (fx+ Body 24)
+         Target (net-ipv6.read-address (host.target H) B (wire.ndp-neighbor-solicitation.target-at Body))
+         Opt (fx+ Body (wire.ndp-neighbor-solicitation.size))
          Dad (net-ipv6.unspecified? Source)
       (and (net-ipv6.unicast? Target)
            (options-valid? B Opt End)
@@ -319,27 +319,28 @@
            (or (and Dad (duplicate-if-probing H Target))
                (and (local-target? H Target Now)
                     (do (if Dad false (learn H Source (option-mac B Opt End 1) Now))
-                        (if Dad (emit H Target (host.all-nodes H) Target 136 536870912 Now)
-                            (emit H Target Source Target 136 1610612736 Now))))))))
+                        (if Dad (emit H Target (host.all-nodes H) Target 136 0 1 Now)     \\ Override,
+                            (emit H Target Source Target 136 1 1 Now))))))))           \\ and solicited.
 
 (define neighbor-advertisement
   {host --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   H B Body End Now ->
     (let Source (host.source H)
-         Target (net-ipv6.read-address (host.target H) B (fx+ Body 8))
-         Flags (buffer.u32-be B (fx+ Body 4))
-         Opt (fx+ Body 24)
+         Target (net-ipv6.read-address (host.target H) B (wire.ndp-neighbor-advertisement.target-at Body))
+         Solicited (wire.ndp-neighbor-advertisement.solicited B Body)
+         Opt (fx+ Body (wire.ndp-neighbor-advertisement.size))
       (and (net-ipv6.unicast? Source) (net-ipv6.unicast? Target)
            (or (local-target? H (host.destination H) Now)
                (and (net-ipv6.same? (host.destination H) (host.all-nodes H))
-                    (= (shen-jit.bit-and Flags 1073741824) 0))
+                    (= Solicited 0))
                (and (= (host.local-state H) tentative)
                     (net-ipv6.same? (host.destination H) (host.link-local H)))
                (and (= (host.global-state H) tentative)
                     (net-ipv6.same? (host.destination H) (host.global H))))
            (options-valid? B Opt End)
            (or (duplicate-if-probing H Target)
-               (advertise-neighbor H Target (option-mac B Opt End 2) Flags Now)))))
+               (advertise-neighbor H Target (option-mac B Opt End 2)
+                                   (wire.ndp-neighbor-advertisement.override B Body) Now)))))
 
 \\ Apply the unauthenticated-advertisement lifetime rule from RFC 4862.
 (define refreshed-valid
@@ -352,23 +353,22 @@
 (define set-prefix
   {host --> buffer.view --> fixnum --> fixnum --> boolean}
   H B At Now ->
-    (let P (net-ipv6.read-address (host.target H) B (fx+ At 16))
-         Flags (buffer.u8 B (fx+ At 3))
-         Valid (fx* (buffer.u32-be B (fx+ At 4)) 1000)
-         Preferred (fx* (buffer.u32-be B (fx+ At 8)) 1000)
+    (let P (net-ipv6.read-address (host.target H) B (wire.ndp-prefix.prefix-at At))
+         Valid (fx* (wire.ndp-prefix.valid-lifetime B At) 1000)            \\ In milliseconds.
+         Preferred (fx* (wire.ndp-prefix.preferred-lifetime B At) 1000)
          Global (host.global H)
          Known (same-prefix? Global P)
          CanReplace (or (= (host.global-state H) absent) (fx<= (host.valid-until H) Now))
-      (if (and (= (buffer.u8 B (fx+ At 2)) 64)
+      (if (and (= (wire.ndp-prefix.prefix-length B At) 64)
                (net-ipv6.unicast? P) (not (net-ipv6.link-local? P)))
-          (do (if (and (not (= (shen-jit.bit-and Flags 128) 0))
+          (do (if (and (= (wire.ndp-prefix.on-link B At) 1)
                        (or (fx<= (host.prefix-until H) Now) (same-prefix? P (host.prefix H))))
                   (do (net-ipv6.copy-address (host.prefix H) P)
                       (host.prefix-until-> H (fx+ Now Valid))
                       true)
                   false)
               (if (and (not (host.static H)) (not (= (host.local-state H) duplicate))
-                       (not (= (shen-jit.bit-and Flags 64) 0))
+                       (= (wire.ndp-prefix.autonomous B At) 1)
                        (fx<= Preferred Valid) (or (and CanReplace (fx> Valid 0)) Known))
                   (let Until (if CanReplace (fx+ Now Valid) (refreshed-valid (host.valid-until H) Valid Now))
                        Expires (fx+ Now Preferred)
@@ -388,17 +388,19 @@
   {host --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   H B I End Now ->
     (if (= I End) true
-        (let N (buffer.u8 B (fx+ I 1))
-          (do (if (and (= (buffer.u8 B I) 3) (= N 4)) (set-prefix H B I Now) false)
-              (prefixes H B (fx+ I (fx* 8 N)) End Now)))))
+        (let Bytes (fx* 8 (wire.ndp-option.length B I))
+          (do (if (and (= (wire.ndp-option.type B I) 3) (= Bytes (wire.ndp-prefix.size)))   \\ Prefix information.
+                  (set-prefix H B I Now)
+                  false)
+              (prefixes H B (fx+ I Bytes) End Now)))))
 
 (define router-advertisement
   {host --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   H B Body End Now ->
     (let Source (host.source H)
          Destination (host.destination H)
-         Opt (fx+ Body 16)
-         Span (fx* (buffer.u16-be B (fx+ Body 6)) 1000)
+         Opt (fx+ Body (wire.ndp-router-advertisement.size))
+         Span (fx* (wire.ndp-router-advertisement.router-lifetime B Body) 1000)
       (and (net-ipv6.link-local? Source)
            (or (net-ipv6.same? Destination (host.all-nodes H)) (local-target? H Destination Now))
            (options-valid? B Opt End)
@@ -415,20 +417,24 @@
 (define ingress
   {host --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   H B I N Now ->
-    (let Body (fx+ I 40)
+    (let Body (fx+ I (wire.ipv6.size))
          End (fx+ I N)
-      (and (fx>= N 48)
+         Message (fx- N (wire.ipv6.size))
+      (and (fx>= Message (wire.icmp.size))
            (net-ipv6.valid-header? B I N)
-           (= (buffer.u8 B (fx+ I 6)) 58)
-           (= (buffer.u8 B (fx+ I 7)) 255)
-           (= (buffer.u8 B (fx+ Body 1)) 0)
-           (= (net-ipv6.transport-checksum B I 58 (fx- N 40)) 0)
-           (let Kind (buffer.u8 B Body)
-             (do (net-ipv6.read-address (host.source H) B (fx+ I 8))
-                 (net-ipv6.read-address (host.destination H) B (fx+ I 24))
-                 (cases (and (= Kind 134) (fx>= N 56)) (router-advertisement H B Body End Now)
-                        (and (= Kind 135) (fx>= N 64)) (neighbor-solicitation H B Body End Now)
-                        (and (= Kind 136) (fx>= N 64)) (neighbor-advertisement H B Body End Now)
+           (= (wire.ipv6.next-header B I) 58)
+           (= (wire.ipv6.hop-limit B I) 255)                    \\ From this link only.
+           (= (wire.icmp.code B Body) 0)
+           (= (net-ipv6.transport-checksum B I 58 Message) 0)
+           (let Kind (wire.icmp.type B Body)
+             (do (net-ipv6.read-address (host.source H) B (wire.ipv6.source-at I))
+                 (net-ipv6.read-address (host.destination H) B (wire.ipv6.destination-at I))
+                 (cases (and (= Kind 134) (fx>= Message (wire.ndp-router-advertisement.size)))
+                          (router-advertisement H B Body End Now)
+                        (and (= Kind 135) (fx>= Message (wire.ndp-neighbor-solicitation.size)))
+                          (neighbor-solicitation H B Body End Now)
+                        (and (= Kind 136) (fx>= Message (wire.ndp-neighbor-advertisement.size)))
+                          (neighbor-advertisement H B Body End Now)
                         true false))))))
 
 (define drive-dad
@@ -436,7 +442,7 @@
   H Address At Now ->
     (if (fx< At 0)
         (if (emit H (host.unspecified H) (net-ipv6.solicited-node (host.group H) Address)
-                  Address 135 0 Now)
+                  Address 135 0 0 Now)
             (fx+ Now 1000) At)
         At))
 
@@ -471,7 +477,7 @@
               (cases (fx<= (neighbor.expires N) Now) (free-queue Q)
                      (and (= (neighbor.mac N) 0) (fx<= (neighbor.probe-at N) Now) (local-ready? H))
                        (and (emit H (host.link-local H)
-                                  (net-ipv6.solicited-node (host.group H) Address) Address 135 0 Now)
+                                  (net-ipv6.solicited-node (host.group H) Address) Address 135 0 0 Now)
                             (do (neighbor.probe-at-> N (fx+ Now 1000)) true))
                      true false)
               false)
@@ -482,7 +488,7 @@
   H Now ->
     (do (dad H Now)
         (if (and (fx> (host.rs-left H) 0) (local-ready? H) (fx>= Now (host.rs-at H))
-                 (emit H (host.link-local H) (host.all-routers H) (host.unspecified H) 133 0 Now))
+                 (emit H (host.link-local H) (host.all-routers H) (host.unspecified H) 133 0 0 Now))
             (do (host.rs-left-> H (fx- (host.rs-left H) 1))
                 (host.rs-at-> H (fx+ Now 4000)))
             H)

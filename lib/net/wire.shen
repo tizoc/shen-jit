@@ -55,6 +55,42 @@
   (type 8) (code 8) (checksum 16)
   (mtu 32))
 
+\\ RFC 4861, neighbor discovery: the messages after ICMPv6's first word, then their options.
+(deflayout ndp-router-solicitation
+  (type 8) (code 8) (checksum 16)
+  (_ 32))
+
+(deflayout ndp-router-advertisement
+  (type 8) (code 8) (checksum 16)
+  (current-hop-limit 8) (managed 1) (other 1) (_ 6) (router-lifetime 16)
+  (reachable-time 32)
+  (retransmit-timer 32))
+
+(deflayout ndp-neighbor-solicitation
+  (type 8) (code 8) (checksum 16)
+  (_ 32)
+  (target 128))
+
+(deflayout ndp-neighbor-advertisement
+  (type 8) (code 8) (checksum 16)
+  (router 1) (solicited 1) (override 1) (_ 29)
+  (target 128))
+
+\\ Every option starts so; its length counts 8-byte units.
+(deflayout ndp-option
+  (type 8) (length 8))
+
+\\ Source (1) or target (2) link-layer address, over Ethernet.
+(deflayout ndp-link-address
+  (type 8) (length 8) (address 48))
+
+(deflayout ndp-prefix
+  (type 8) (length 8) (prefix-length 8) (on-link 1) (autonomous 1) (_ 6)
+  (valid-lifetime 32)
+  (preferred-lifetime 32)
+  (_ 32)
+  (prefix 128))
+
 \\ IEEE 802.3.
 (deflayout ethernet
   (destination 48)
