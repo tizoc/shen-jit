@@ -2,7 +2,7 @@
 (shen.x.namespace net-link
   (use buffer)
   (import struct defstruct)
-  (export link device ring ring.data device.rx device.tx make make-ring left right mtu now delivery
+  (export link device ring ring.data ring.mtu ring.slots device.rx device.tx make make-ring left right mtu now delivery
           sent would-block too-large
           head-offset head-length head-deadline tail-offset ready? full? publish consume packet-send packet-recv-into)
 

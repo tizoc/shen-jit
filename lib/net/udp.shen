@@ -11,7 +11,7 @@
   (shadow bind)
   (export link device peer peer.port recv-info recv-info.source recv-info.family recv-info.source6 recv-info.destination6 recv-info.port recv-info.length
           make-link left right ipv4 bind make-recv-info packet-send packet-recv-into
-          send send6 recv-into echo-step valid-datagram6? inbox-ingress6
+          send send6 recv-into echo-step valid-datagram6? valid-datagram6-at? inbox-ingress6 inbox-ingress6-at reserve-inbox
           sent would-block too-large received empty budget-exhausted too-small
           inbox inbox.peer inbox.dropped make-inbox inbox-ingress inbox-recv-into inbox-ready? inbox-discard inbox-ingress-broadcast valid-datagram? write-packet)
 
@@ -32,7 +32,7 @@
 
 (defstruct inbox
   (peer : peer)
-  (queue : net-link.ring)
+  (mutable queue : net-link.ring)
   (mutable dropped : fixnum))
 
 \\ These names remain the UDP facade over the shared link.
@@ -174,18 +174,22 @@
                         (net-link.publish Tx Size Delivery)
                         sent)))))
 
-(define valid-datagram6?
-  {buffer.view --> fixnum --> fixnum --> boolean}
-  B I N ->
-    (let T (datagram6 I)
-      (and (fx>= N (headers6))
+(define valid-datagram6-at?
+  {buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  B I N T ->
+    (let Length (fx- (fx+ I N) T)
+      (and (fx>= T (datagram6 I)) (fx>= Length (wire.udp.size))
            (net-ipv6.valid-header? B I N)
-           (= (wire.ipv6.next-header B I) 17)
            (port? (wire.udp.source-port B T))
            (port? (wire.udp.destination-port B T))
-           (= (wire.udp.length B T) (fx- N (wire.ipv6.size)))
+           (= (wire.udp.length B T) Length)
            (not (= (wire.udp.checksum B T) 0))
-           (= (net-ipv6.transport-checksum B I 17 (fx- N (wire.ipv6.size))) 0))))
+           (= (net-ipv6.transport-checksum-at B I T 17 Length) 0))))
+
+(define valid-datagram6?
+  {buffer.view --> fixnum --> fixnum --> boolean}
+  B I N -> (and (fx>= N (headers6)) (= (wire.ipv6.next-header B I) 17)
+                (valid-datagram6-at? B I N (datagram6 I))))
 
 \\ Length checks precede reading the transport header.
 (define valid-datagram?
@@ -281,6 +285,14 @@
         queue <- (net-link.make-ring N Mtu)
         dropped <- 0)))
 
+(define reserve-inbox
+  {inbox --> fixnum --> boolean}
+  Q Bytes ->
+    (let R (inbox.queue Q)
+      (cases (fx<= Bytes (net-link.ring.mtu R)) true
+             (net-link.ready? R 0) (error "udp: reserve receive space before polling")
+             true (do (inbox.queue-> Q (net-link.make-ring (net-link.ring.slots R) Bytes)) true))))
+
 \\ The interface always consumes ingress, even when just this inbox is full.
 (define store-inbox
   {inbox --> buffer.view --> fixnum --> fixnum --> boolean}
@@ -295,11 +307,35 @@
   {inbox --> buffer.view --> fixnum --> fixnum --> boolean}
   Q B I N -> (and (accept? (inbox.peer Q) B I N) (store-inbox Q B I N)))
 
+\\ Queue the base header and UDP together so a reader can use a fixed offset.
+(define store-inbox6
+  {inbox --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  Q B I N T ->
+    (let R (inbox.queue Q)
+         Length (fx- (fx+ I N) T)
+         Size (fx+ Length (wire.ipv6.size))
+      (cases (fx> Size (net-link.ring.mtu R)) false
+             (net-link.full? R) (do (inbox.dropped-> Q (fx+ (inbox.dropped Q) 1)) false)
+             true (let Out (net-link.ring.data R)
+                       At (net-link.tail-offset R)
+                    (do (if (= T (datagram6 I)) (buffer.copy-into! Out At B I Size)
+                            (do (buffer.copy-into! Out At B I (wire.ipv6.size))
+                                (buffer.copy-into! Out (datagram6 At) B T Length)
+                                (wire.ipv6.payload-length-> Out At Length)
+                                (wire.ipv6.next-header-> Out At 17)))
+                        (net-link.publish R Size 0))))))
+
+(define inbox-ingress6-at
+  {inbox --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  Q B I N T ->
+    (and (valid-datagram6-at? B I N T) (= (wire.udp.destination-port B T) (peer.port (inbox.peer Q)))
+         (store-inbox6 Q B I N T)))
+
 (define inbox-ingress6
   {inbox --> buffer.view --> fixnum --> fixnum --> boolean}
   Q B I N ->
-    (and (valid-datagram6? B I N) (= (wire.udp.destination-port B (datagram6 I)) (peer.port (inbox.peer Q)))
-         (store-inbox Q B I N)))
+    (and (fx>= N (headers6)) (= (wire.ipv6.next-header B I) 17)
+         (inbox-ingress6-at Q B I N (datagram6 I))))
 
 (define inbox-ingress-broadcast
   {inbox --> buffer.view --> fixnum --> fixnum --> boolean}

@@ -1248,7 +1248,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-net-tcp` | In-memory TCP echo, sliding-window recovery, stream backpressure, shutdown, and allocation stress |
 | `make test-net-interface` | Shared IPv4 dispatch, UDP overflow, receive retry, and ICMP wire fixtures |
 | `make test-net-clients` | DHCP lease lifecycle and DNS response handling |
-| `make test-net-ipv6` | Mandatory UDP checksum, ICMPv6 errors and TCP path MTU, router advertisements, duplicate address detection, and SLAAC lifetimes |
+| `make test-net-ipv6` | IPv6 extension headers and bounded reassembly, UDP checksums, ICMPv6, TCP path MTU, and SLAAC |
 | `make test-net-tun test-net-tap` | Linux IPv4 and IPv6 TCP, UDP, and ping over both devices with direct heap allocation checks. TAP also exercises DHCP, DNS, and SLAAC. |
 | `make test-http` | Request/response framing, streaming, persistent connections, shutdown, SQLite example, typing and images/GC |
 | `make test-datalog` | Datalog answers/errors/generated programs against its plain evaluator, also in isolates, in parts and with joins shared out; Shen/KL dependency analysis and source-fact matching/reach/impact with independent graph oracles |

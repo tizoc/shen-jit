@@ -9,7 +9,7 @@
   (use udp)
   (import struct defstruct)
   (shadow run)
-  (export run)
+  (export run clock expect)
 
 (define expect
   {boolean --> string --> boolean}

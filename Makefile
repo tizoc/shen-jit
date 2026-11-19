@@ -506,7 +506,8 @@ test-net-clients: $(BUILD)/shen-jit
 # Portable dual-stack transport and IPv6 address discovery checks.
 .PHONY: test-net-ipv6
 test-net-ipv6: $(BUILD)/shen-jit
-	$(BUILD)/shen-jit eval -m tests/net_ipv6.shenmod -e '(net-ipv6-test.run)' | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -m tests/net_ipv6.shenmod -e '(do (net-ipv6-test.run) (net-ipv6-ext-test.run))' \
+	  | grep -a '^FAIL \|^[0-9]* passed' | awk '{ print } / 0 failed/ { n++ } END { exit n != 2 }' # Each suite reports.
 
 # Optional Linux integration. Run test-net-tun inside a disposable network namespace.
 .PHONY: tun test-net-tun test-net-tap

@@ -88,7 +88,7 @@ Run what the change can break, and nothing more: CI runs everything on every pus
 | `net/udp`, `net/tcp`, and their shared link or IPv4 code | `make test-net-udp test-net-tcp` |
 | `net/interface` | `make test-net-interface` for shared ingress, UDP queue overflow and ICMP echo fixtures |
 | `net/dhcp`, `net/dns` | `make test-net-clients` for portable client state and wire checks |
-| `net/ipv6`, `net/ndp` | `make test-net-ipv6` for IPv6 transport, ICMPv6, and SLAAC checks |
+| `net/ipv6`, `net/ipv6-headers`, `net/fragments6`, `net/ndp` | `make test-net-ipv6` for IPv6 transport, reassembly, ICMPv6, and SLAAC checks |
 | `net/tun`, `net/ethernet` | `make test-net-tun test-net-tap` in an isolated Linux network namespace with `/dev/net/tun`, `iproute2`, `ping`, and Python 3 |
 | An application in `example-apps/` | `test-http` for `sqlite-http`, `test-datalog` for `depends` and `source-deps`, `test-tree-sitter` for `source-facts` |
 | A test, `Makefile`, `tools/` or CI | What the edit touches |

@@ -34,6 +34,90 @@ def ipv6(address):
     return socket.inet_pton(socket.AF_INET6, address)
 
 
+def ipv6_packet(source, destination, next_header, body):
+    return struct.pack("!IHBB16s16s", 0x60000000, len(body), next_header, 64,
+                       ipv6(source), ipv6(destination)) + body
+
+
+def upper_checksum(source, destination, protocol, packet):
+    pseudo = ipv6(source) + ipv6(destination) + struct.pack("!I3xB", len(packet), protocol)
+    return checksum(pseudo + packet)
+
+
+def options(next_header):
+    # PadN with four zero bytes fills the six-byte option area.
+    return bytes((next_header, 0, 1, 4, 0, 0, 0, 0))
+
+
+def udp_segment(source, destination, port, payload):
+    header = struct.pack("!HHHH", port, PORT, 8 + len(payload), 0)
+    value = upper_checksum(source, destination, 17, header + payload)
+    return header[:6] + struct.pack("!H", value or 65535) + payload
+
+
+def fragment(next_header, offset, more, identification):
+    return struct.pack("!BBHI", next_header, 0, offset | int(more), identification)
+
+
+def injected_udp(resources, datagrams, host, guest):
+    raw = net_socket(resources, socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_RAW)
+    port = datagrams.getsockname()[1]
+    sample = b"after the IPv6 extension chain"
+    # Hop-by-Hop, Routing (no remaining segments), Atomic Fragment, Destination Options.
+    routing = bytes((44, 0, 253, 0, 0, 0, 0, 0))
+    body = options(43) + routing + fragment(60, 0, False, 17) + options(17)
+    body += udp_segment(host, guest, port, sample)
+    raw.sendto(ipv6_packet(host, guest, 0, body), (guest, 0))
+    answer, sender = datagrams.recvfrom(1500)
+    if answer != sample or sender[:2] != (guest, PORT):
+        raise RuntimeError("UDP after IPv6 extension headers did not echo intact")
+
+    payload = bytes(i % 251 for i in range(2189))
+    rejected = net_socket(resources, socket.AF_INET6, socket.SOCK_DGRAM)
+    rejected.bind((host, 0))
+    rejected_data = options(17) + udp_segment(host, guest, rejected.getsockname()[1], payload)
+    for offset, stop in ((0, 720), (712, 1440), (1440, len(rejected_data))):
+        body = options(44) + fragment(60, offset, stop < len(rejected_data), 18)
+        raw.sendto(ipv6_packet(host, guest, 0, body + rejected_data[offset:stop]), (guest, 0))
+
+    fragmentable = options(17) + udp_segment(host, guest, port, payload)
+    offsets = (1440, 0, 720)
+    for offset in offsets:
+        piece = fragmentable[offset:] if offset == 1440 else fragmentable[offset:offset + 720]
+        more = offset + len(piece) < len(fragmentable)
+        body = options(44) + fragment(60, offset, more, 17) + piece
+        raw.sendto(ipv6_packet(host, guest, 0, body), (guest, 0))
+    answer, sender = datagrams.recvfrom(1500)
+    if answer != payload[:64] or sender[:2] != (guest, PORT):
+        raise RuntimeError("UDP reassembled above the link MTU did not echo")
+    if select.select([rejected], [], [], 0)[0]:
+        raise RuntimeError("overlapping fragments reached the UDP application")
+
+
+def injected_echo(resources, host, guest):
+    raw = net_socket(resources, socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_RAW)
+    replies = net_socket(resources, socket.AF_INET6, socket.SOCK_RAW, socket.IPPROTO_ICMPV6)
+    body = struct.pack("!BBHHH", 128, 0, 0, 45435, 3) + b"IPv6 with destination options"
+    value = upper_checksum(host, guest, 58, body)
+    body = body[:2] + struct.pack("!H", value) + body[4:]
+    raw.sendto(ipv6_packet(host, guest, 60, options(58) + body), (guest, 0))
+    while True:
+        echo, sender = replies.recvfrom(1500)
+        if (sender[0] == guest and echo[:2] == b"\x81\x00" and echo[4:8] == body[4:8]):
+            if echo[8:] != body[8:]:
+                raise RuntimeError("extended ICMPv6 echo reply payload changed")
+            break
+
+    unknown_option = bytes((58, 0, 130, 4, 0, 0, 0, 0))
+    raw.sendto(ipv6_packet(host, guest, 60, unknown_option + body), (guest, 0))
+    while True:
+        response, sender = replies.recvfrom(1500)
+        if sender[0] == guest and response[:2] == b"\x04\x02":
+            if len(response) <= 50 or response[4:8] != struct.pack("!I", 42) or response[50] != 130:
+                raise RuntimeError("ICMPv6 parameter error did not quote the unrecognized option")
+            return
+
+
 def router_advertisement():
     source, destination = ipv6("fe80::1"), ipv6("ff02::1")
     advertisement = struct.pack("!BBHBBHII", 134, 0, 0, 64, 0, 60, 0, 0)
@@ -167,9 +251,12 @@ def exchange(binary, mode, interface, host4, guest4, host6, guest6):
                 command("ping", "-6", "-n", "-c", "1", "-W", "2", guest6)
                 if mode == "tap":
                     command("ping", "-6", "-n", "-c", "1", "-W", "2", f"fe80::20%{interface}")
+                injected_echo(resources, host6, guest6)
                 streams = []
                 for i, (family, host, guest) in enumerate(families):
                     stream = net_socket(resources, family, socket.SOCK_STREAM)
+                    if family == socket.AF_INET6:
+                        stream.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_DSTOPTS, options(6))
                     stream.bind((host, 0))
                     stream.connect((guest, PORT))
                     payload = bytes((p + i) % 251 for p in range(16003 + i * 7013))
@@ -179,15 +266,18 @@ def exchange(binary, mode, interface, host4, guest4, host6, guest6):
                     datagrams = net_socket(resources, family, socket.SOCK_DGRAM)
                     datagrams.bind((host, 0))
                     udp_echo(datagrams, guest, (b"", bytes(range(256)) * (i + 4)))
+                    if family == socket.AF_INET6:
+                        injected_udp(resources, datagrams, host, guest)
                 count = sum(future.result() for future in running)
                 if discovery:
                     discovery.result()
                     routed.result()
                 output, _ = process.communicate(timeout=10)
-                expected = f"Dual stack echoed {count} TCP bytes and four UDP datagrams, 0 Shen heap words (control 5)"
+                expected = f"Dual stack echoed {count} TCP bytes and six UDP datagrams, 0 Shen heap words (control 5)"
                 if process.returncode or expected not in output:
                     raise RuntimeError(output.strip())
                 print(f"{mode.upper()} {expected}")
+                print(f"{mode.upper()} reassembled 2,189 IPv6 UDP payload bytes from three reordered fragments")
             except BaseException:
                 if process.poll() is None:
                     process.kill()

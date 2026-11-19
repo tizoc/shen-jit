@@ -16,7 +16,7 @@
           listener make-listener listener-poll accept connection-index connection-state
           listener-ingress listener-transmit make-table table-ingress table-connect accept-on
           listener-deadline connection-readable? connection-writable? connection-abort
-          make-table-sized path-mtu path-mtu6 table-ingress6 table-connect6 expire-addresses6
+          make-table-sized path-mtu path-mtu6 table-ingress6 table-ingress6-at header-fits? table-connect6 expire-addresses6
           connection-send connection-send-from connection-recv-into connection-recv-at connection-shutdown-write release
           closed listen-state syn-sent syn-received established close-wait fin-wait-1 fin-wait-2
           closing last-ack time-wait timed-out reset)
@@ -871,19 +871,25 @@
 \\ Compile the rules' loops now, while the module loads, so that a saved program carries them.
 (grammar.finish)
 
+(define header-fits?
+  {buffer.view --> fixnum --> fixnum --> boolean}
+  B T Count ->
+    (and (fx>= Count (wire.tcp.size)) (fx>= (header-length B T) (wire.tcp.size)) (fx<= (header-length B T) Count)))
+
+(define valid-tcp?
+  {buffer.view --> fixnum --> fixnum --> boolean}
+  B T Count ->
+    (and (header-fits? B T Count)
+         (= (wire.tcp.reserved B T) 0)
+         (not (flag? (wire.tcp.flags B T) (flag-bits control urg)))))                     \\ URG is refused.
+
 (define valid-segment?
-  {buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
-  B I N IpBytes ->
-    (let T (fx+ I IpBytes)
-         Count (fx- N IpBytes)
-      (and (fx>= Count (wire.tcp.size))
-           (if (= IpBytes (wire.ipv4.size)) (net-ipv4.valid? B I N 6)
-               (and (net-ipv6.valid-header? B I N) (= (wire.ipv6.next-header B I) 6)))
-           (= (wire.tcp.reserved B T) 0)
-           (fx>= (header-length B T) (wire.tcp.size))
-           (fx<= (header-length B T) Count)
-           (not (flag? (wire.tcp.flags B T) (flag-bits control urg)))                     \\ URG is refused.
-           (= (transport-checksum B I IpBytes Count) 0))))
+  {buffer.view --> fixnum --> fixnum --> boolean}
+  B I N ->
+    (let T (fx+ I (wire.ipv4.size))
+         Count (fx- N (wire.ipv4.size))
+      (and (net-ipv4.valid? B I N 6) (valid-tcp? B T Count)
+           (= (net-ipv4.transport-checksum B I 6 Count) 0))))
 
 (define addressed-to?
   {buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
@@ -1368,7 +1374,7 @@
          (addressed-to? B I (peer.local-ip P) (peer.local-port P))
          (= (wire.ipv4.source B I) (peer.remote-ip P))
          (= (wire.tcp.source-port B (fx+ I (wire.ipv4.size))) (peer.remote-port P))
-         (valid-segment? B I N (wire.ipv4.size))
+         (valid-segment? B I N)
          (receive-valid P B (fx+ I (wire.ipv4.size)) (fx- N (wire.ipv4.size)) Now)))
 
 (define receive-ready
@@ -1717,7 +1723,7 @@
 (define table-ingress
   {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
   L B I Count Now Listening ->
-    (and (valid-segment? B I Count (wire.ipv4.size)) (= (wire.ipv4.destination B I) (listener.ip L))
+    (and (valid-segment? B I Count) (= (wire.ipv4.destination B I) (listener.ip L))
          (let T (fx+ I (wire.ipv4.size))
               IP (wire.ipv4.source B I)
               Port (wire.tcp.source-port B T)
@@ -1744,17 +1750,26 @@
 (define table-ingress6
   {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> net-ipv6.address --> boolean}
   L B I Count Now Listening LocalIP ->
-    (and (valid-segment? B I Count (wire.ipv6.size)) (net-ipv6.address-at? LocalIP B (wire.ipv6.destination-at I))
-         (let T (fx+ I (wire.ipv6.size))
-              Remote (net-ipv6.read-address (listener.input-ip6 L) B (wire.ipv6.source-at I))
-              Port (wire.tcp.source-port B T)
-              Local (wire.tcp.destination-port B T)
-              Bytes (fx- Count (wire.ipv6.size))
-           (and (net-ipv6.unicast? Remote) (fx> Port 0) (fx> Local 0)
-                (let Index (find-peer6 L Local LocalIP Remote Port 1)
-                  (if (= Index 0)
-                      (new-segment6 L B T Bytes LocalIP Remote Local Port Now Listening)
-                      (receive-valid (listener-slot.peer (slot-at L Index)) B T Bytes Now)))))))
+    (and (fx>= Count (fx+ (wire.ipv6.size) (wire.tcp.size))) (= (wire.ipv6.next-header B I) 6)
+         (table-ingress6-at L B I Count (fx+ I (wire.ipv6.size)) Now Listening LocalIP)))
+
+\\ A segment at T, after the base header and any extension headers.
+(define table-ingress6-at
+  {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> boolean --> net-ipv6.address -->
+   boolean}
+  L B I Count T Now Listening LocalIP ->
+    (let Bytes (fx- (fx+ I Count) T)
+      (and (fx>= T (fx+ I (wire.ipv6.size))) (net-ipv6.valid-header? B I Count) (valid-tcp? B T Bytes)
+           (= (net-ipv6.transport-checksum-at B I T 6 Bytes) 0)
+           (net-ipv6.address-at? LocalIP B (wire.ipv6.destination-at I))
+           (let Remote (net-ipv6.read-address (listener.input-ip6 L) B (wire.ipv6.source-at I))
+                Port (wire.tcp.source-port B T)
+                Local (wire.tcp.destination-port B T)
+             (and (net-ipv6.unicast? Remote) (fx> Port 0) (fx> Local 0)
+                  (let Index (find-peer6 L Local LocalIP Remote Port 1)
+                    (if (= Index 0)
+                        (new-segment6 L B T Bytes LocalIP Remote Local Port Now Listening)
+                        (receive-valid (listener-slot.peer (slot-at L Index)) B T Bytes Now))))))))
 
 (define listener-ingress
   {listener --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}

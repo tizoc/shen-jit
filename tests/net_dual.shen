@@ -71,7 +71,7 @@
         ipv6 <- H
         sessions <- (sessions (vector 3) 3)
         inbox <- (net-interface.udp-binding F 7777)
-        udp-out <- (buffer.new 1452)
+        udp-out <- (buffer.new 4096)
         udp-info <- (udp.make-recv-info)
         outbound <- (net-stream.make F)
         remote6 <- Remote
@@ -164,6 +164,20 @@
          (net-ipv6.same? (udp.recv-info.source6 Info) Destination)
          (do (server.route-reply-> S true) true)))
 
+(define fragment-pattern?
+  {buffer.view --> fixnum --> fixnum --> boolean}
+  B At Count ->
+    (or (= At Count)
+        (and (= (buffer.u8 B At) (fxremainder At 251))
+             (fragment-pattern? B (fx+ At 1) Count))))
+
+(define echo-length
+  {buffer.view --> fixnum --> fixnum}
+  B N ->
+    (cases (fx<= N 1452) N
+           (and (= N 2189) (fragment-pattern? B 0 N)) 64
+           true (error "reassembled IPv6 UDP contents differed")))
+
 (define udp-echo
   {server --> boolean}
   S ->
@@ -173,18 +187,18 @@
       (if (or (server.udp-pending S) (= (udp.inbox-recv-into (server.inbox S) B Info) udp.received))
           (if (route-received S (server.offlink S) Info) true
               (let V4 (= (udp.recv-info.family Info) 4)
-               N (udp.recv-info.length Info)
-               Port (udp.recv-info.port Info)
-               Status (if V4 (net-interface.udp-send F (udp.recv-info.source Info) Port B N)
-                          (udp.send6 (udp.inbox.peer (server.inbox S))
-                                     (udp.recv-info.destination6 Info) (udp.recv-info.source6 Info) Port B N))
-            (cases (= Status udp.sent)
-                     (do (if V4 (server.udp4-> S (fx+ (server.udp4 S) 1))
-                             (server.udp6-> S (fx+ (server.udp6 S) 1)))
-                         (server.udp-pending-> S false)
-                         true)
-                   (= Status udp.would-block) (do (server.udp-pending-> S true) false)
-                   true (error "dual-stack UDP reply failed at ~A" Status))))
+                   N (echo-length B (udp.recv-info.length Info))
+                   Port (udp.recv-info.port Info)
+                   Status (if V4 (net-interface.udp-send F (udp.recv-info.source Info) Port B N)
+                              (udp.send6 (udp.inbox.peer (server.inbox S))
+                                         (udp.recv-info.destination6 Info) (udp.recv-info.source6 Info) Port B N))
+                (cases (= Status udp.sent)
+                         (do (if V4 (server.udp4-> S (fx+ (server.udp4 S) 1))
+                                 (server.udp6-> S (fx+ (server.udp6 S) 1)))
+                             (server.udp-pending-> S false)
+                             true)
+                       (= Status udp.would-block) (do (server.udp-pending-> S true) false)
+                       true (error "dual-stack UDP reply failed at ~A" Status))))
           false)))
 
 (define open-outbound
@@ -241,7 +255,7 @@
          _ (Ethernet 16)
          _ (net-tun.pump Device 16)
       (cases (and (= (server.closed S) 2) (server.outgoing-done S) (server.route-reply S)
-                  (= (server.udp4 S) 2) (= (server.udp6 S) 2)) (server.bytes S)
+                  (= (server.udp4 S) 2) (= (server.udp6 S) 4)) (server.bytes S)
              (fx>= Now Until)
                (error "dual-stack timeout in IPv6 state ~A with ~A TCP closes and ~A IPv4 / ~A IPv6 UDP echoes"
                       (net-ndp.host.global-state (server.ipv6 S))
@@ -261,7 +275,7 @@
          N (drive Device Ethernet S Until)
          Heap (tun-test.words 0)
       (if (= Heap 0)
-          (do (output "Dual stack echoed ~A TCP bytes and four UDP datagrams, 0 Shen heap words (control ~A)~%"
+          (do (output "Dual stack echoed ~A TCP bytes and six UDP datagrams, 0 Shen heap words (control ~A)~%"
                       (fx->number N) (fx->number Control))
               true)
           (error "dual stack used ~A Shen heap words (-1 means a collection)" (fx->number Heap)))))

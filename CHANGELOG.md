@@ -42,6 +42,9 @@ All notable changes to this project are documented in this file. The format is b
 - The shared interface supports IPv4 and IPv6 TCP and UDP on the same ports and bounded queues. IPv6 adds
   ICMPv6 echo, UDP port errors, TCP path MTU updates, neighbor discovery, and SLAAC. Linux TUN and TAP tests
   cover both families and measure the Shen heap across address discovery and transport.
+- IPv6 receive supports extension headers and bounded fragment reassembly. Each interface can configure
+  its slot count and datagram size. The Linux tests check reordering, overlap rejection, and zero Shen
+  heap allocations after setup on TUN and TAP.
 
 ### Changed
 

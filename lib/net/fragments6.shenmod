@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name net/fragments6)
+  (requires net/ipv6 net/fragments net/wire)
+  (typed)
+  (sources tc+ "fragments6.shen"))

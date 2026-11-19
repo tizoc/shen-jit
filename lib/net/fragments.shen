@@ -5,7 +5,7 @@
   (use shen-jit)
   (use net-wire => wire)
   (import struct defstruct)
-  (export table make receive packet)
+  (export table make receive packet clear overlaps? mark)
   (shadow receive)
 
 (defstruct assembly

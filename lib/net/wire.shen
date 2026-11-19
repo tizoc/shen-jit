@@ -20,6 +20,20 @@
   (source 128)
   (destination 128))
 
+\\ RFC 8200 4.3 to 4.6: an extension header's first 8 bytes, with its length in 8-byte units after
+\\ them; a hop-by-hop or destination options header's options start after the length. A routing
+\\ header's first word, and a fragment header, whose offset counts 8-byte units.
+(deflayout ipv6-extension
+  (next-header 8) (length 8) (options 16)
+  (_ 32))
+
+(deflayout ipv6-routing
+  (next-header 8) (length 8) (routing-type 8) (segments-left 8))
+
+(deflayout ipv6-fragment
+  (next-header 8) (_ 8) (offset 13) (_ 2) (more 1)
+  (identification 32))
+
 \\ An IPv6 address as four 32-bit words, as net-ipv6 keeps it.
 (deflayout ipv6-address
   (a 32)

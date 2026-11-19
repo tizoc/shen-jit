@@ -3866,6 +3866,34 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   expression, and a typed rule still needs a value for each alternative: `(do (update R V)) := true` is as
   long as what it replaces. DHCP's `require` on each option comes from its policy of passing over a known
   option of the wrong length, which makes its catch-all overlap the known ones.
+- Brought IPv6's extension headers and reassembly from the other branch (its 5bbc698) as written,
+  adapted where they met converted code: the transports' `-at` functions read through layouts, and ICMPv6
+  errors give their type and code apart. TCP connections 413.4 to 415.0 ms at a load of 3; the TUN and
+  TAP suites reassembled 2,189 bytes from three reordered fragments with no heap words. `test-net-ipv6`
+  runs two suites in one process now, and counts both reports.
+- Then rewrote the walker: layouts for the extension, routing and fragment headers, the options as a
+  grammar of RFC 8200's actions, and a table of next headers written as a function of literal patterns,
+  with the walk and the check for whether an error may be sent as rules on its answer. Raw byte reads and
+  writes there and in the fragment table and interface went from 20 to 1. Timed alone, 1,000,000 parses,
+  medians of 15: a plain IPv6 and UDP packet 10.14 to 9.16 ns, as one with no extension headers now
+  returns before any walk; one with hop-by-hop and destination options 69.07 to 108.34 ns. **Found: a
+  grammar costs more than a loop written by hand**, about 18 ns for an options header of two options,
+  as its rules compile to untyped definitions; compiling them as typed code would help every grammar.
+  The walker's `router-alert?`, which nothing called, was left out, for the multicast code to bring back
+  through the options grammar.
+
+### IPv6 extension headers and reassembly (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
+
+- Added a bounded receive-side header walker and a fragment table sized during
+  setup. TCP, UDP, ICMPv6 and Neighbor Discovery use the transport offset.
+  UDP inboxes can hold reassembled datagrams larger than the wire MTU.
+- Portable fixtures cover option actions and pointers, both chain limits, atomic
+  fragment isolation, overlap discard, one-slot exhaustion, expiry with an ICMPv6
+  quote, and Neighbor Discovery's fragment rejection.
+- Over both Linux device types, TCP with Destination Options and ICMPv6 with
+  extension headers completed, and a 2,189-byte UDP payload was delivered intact
+  from three reordered fragments. Both workloads rejected an overlap and
+  measured zero Shen heap words after setup, with a five-word positive control.
 
 ### Dual-stack networking and SLAAC (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
 

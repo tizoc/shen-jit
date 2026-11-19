@@ -156,13 +156,39 @@ destination's corresponding Ethernet multicast address.
 | `net-interface.udp-send6 Interface LocalPort IP Port Payload Count` | Send unicast IPv6 over the selected binding. Returns `net-interface.no-address` while no usable address is available for the destination's scope. |
 | `udp.recv-info.family Info`, `udp.recv-info.source6 Info`, `udp.recv-info.destination6 Info` | Read the family (4 or 6) and the reusable source and destination address records for an IPv6 datagram. Consume or copy these records before reusing `Info`. |
 
-IPv6 uses a minimum link MTU of 1,280 bytes. The host processes the IPv6 base header
-with TCP, UDP, or ICMPv6. It handles ICMPv6 echo and neighbor discovery, sends port
-unreachable errors, and applies validated Packet Too Big messages to TCP. Extension
-headers and IPv6 fragment reassembly remain outside this implementation. [IPv6 specification](https://www.rfc-editor.org/rfc/rfc8200.html), [ICMPv6](https://www.rfc-editor.org/rfc/rfc4443.html)
+IPv6 uses a minimum link MTU of 1,280 bytes. TCP, UDP, and ICMPv6 receive through
+Hop-by-Hop Options, Destination Options, Routing headers with zero segments left,
+and Fragment headers. The walker limits each chain to eight headers and 256 bytes
+of extensions. It processes option actions in order and ignores trailing bytes
+after No Next Header. Unsupported routing, ESP, and AH receive no transport
+processing. ICMPv6 handles echo, neighbor discovery, UDP port errors, and TCP
+Packet Too Big feedback. [IPv6 specification](https://www.rfc-editor.org/rfc/rfc8200.html),
+[ICMPv6](https://www.rfc-editor.org/rfc/rfc4443.html)
+
+### IPv6 reassembly
+
+`net-interface.enable-ipv6 Interface Host` reserves two reassembly slots of
+4,096 bytes each. Call `net-interface.enable-ipv6-sized Interface Host Slots Bytes`
+at setup to choose 1 through 16 slots of 1,500 through 65,575 bytes each. The size
+counts the IPv6 header and payload together. UDP inbox slots grow at setup so
+they can receive reassembled datagrams larger than the link MTU. The transmit
+path still segments TCP and bounds UDP to the link MTU.
+
+Each datagram has 60 seconds from its first received fragment. Offset zero must
+contain the full header chain through its transport header. An overlap discards
+the slot's contents and that datagram's remaining fragments are ignored until the
+slot expires. A full table drops new assemblies. Atomic fragments bypass the table.
+Neighbor Discovery messages carrying a Fragment header are ignored, including
+atomic fragments. [IPv6 reassembly](https://www.rfc-editor.org/rfc/rfc8200.html#section-4.5),
+[Atomic fragments](https://www.rfc-editor.org/rfc/rfc6946.html),
+[Neighbor Discovery and fragmentation](https://www.rfc-editor.org/rfc/rfc6980.html)
 
 The Linux integration tests run IPv4 and IPv6 TCP, UDP, and ping through each device.
 They also open an outbound IPv6 TCP stream. The TAP fixture sends a router
 advertisement, observes neighbor solicitations in both directions, and uses the
-advertised router for an off-link UDP exchange. Allocation measurement starts
-before duplicate address detection and ends after the streams and datagrams finish.
+advertised router for an off-link UDP exchange. On both devices, Linux sends TCP
+with Destination Options, ICMPv6 behind an options header, and an IPv6 UDP datagram
+whose 2,189-byte payload arrives in three reordered fragments. The fixture checks
+every reassembled payload byte and rejects an overlapping datagram. Allocation
+measurement starts before duplicate address detection and ends after the streams
+and datagrams finish.

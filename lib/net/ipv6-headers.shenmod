@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name net/ipv6-headers)
+  (requires net/ipv6 net/wire grammar)
+  (typed)
+  (sources tc+ "ipv6-headers.shen"))

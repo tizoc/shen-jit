@@ -3,4 +3,4 @@
   (name net-ipv6-test)
   (requires net/interface net/ipv6 net/ndp)
   (typed)
-  (sources tc+ "net_ipv6.shen"))
+  (sources tc+ "net_ipv6.shen" tc+ "net_ipv6_extensions.shen"))

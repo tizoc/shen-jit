@@ -9,7 +9,7 @@
   (export address make-address address.a address.b address.c address.d copy-address read-address
           write-address compose-prefix same? address-at? unspecified? multicast? unicast? link-local?
           solicited-node solicited-node? multicast-mac-at
-          valid-header? write-header transport-checksum)
+          valid-header? write-header transport-checksum transport-checksum-at)
 
 (defstruct address
   (mutable a : fixnum)
@@ -127,9 +127,14 @@
 
 (define transport-checksum
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
-  B I Proto Length ->
+  B I Proto Length -> (transport-checksum-at B I (fx+ I (wire.ipv6.size)) Proto Length))
+
+\\ The same, for an upper-layer header at At, after extension headers.
+(define transport-checksum-at
+  {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
+  B I At Proto Length ->
     (let Pseudo (net-ipv4.sum16 B (wire.ipv6.source-at I) 32 (fx+ Proto Length))   \\ Both addresses.
-      (net-ipv4.checksum (net-ipv4.sum16 B (fx+ I (wire.ipv6.size)) Length Pseudo))))
+      (net-ipv4.checksum (net-ipv4.sum16 B At Length Pseudo))))
 
 (preclude [address.%match])
 )

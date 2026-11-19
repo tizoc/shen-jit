@@ -9,7 +9,7 @@
   (import struct defstruct)
   (import layout write-layout)
   (externals [defgrammar <end> skip u16-be u32-be])
-  (export host make configure-static poll ingress next-deadline
+  (export host make configure-static poll ingress ingress-at multicast-at? next-deadline
           host.device host.link-local host.global host.local-state host.global-state
           host.preferred-until host.valid-until host.router host.router-until
           tentative usable duplicate absent local-ready? global-ready? source-address
@@ -430,28 +430,43 @@
                    (host.rs-left-> H 0) H)
                true))))
 
+(define multicast-at?
+  {host --> buffer.view --> fixnum --> fixnum --> boolean}
+  H B At Now ->
+    (and (= (buffer.u8 B At) 255)
+         (let Group (net-ipv6.read-address (host.destination H) B At)
+           (or (net-ipv6.same? Group (host.all-nodes H))
+               (and (not (= (host.local-state H) duplicate))
+                    (net-ipv6.solicited-node? Group (host.link-local H)))
+               (and (or (= (host.global-state H) tentative) (global-ready? H Now))
+                    (net-ipv6.solicited-node? Group (host.global H)))))))
+
 (define ingress
   {host --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
-  H B I N Now ->
-    (let Body (fx+ I (wire.ipv6.size))
-         End (fx+ I N)
-         Message (fx- N (wire.ipv6.size))
-      (and (fx>= Message (wire.icmp.size))
+  H B I N Now -> (and (fx>= N (fx+ (wire.ipv6.size) (wire.icmp.size))) (= (wire.ipv6.next-header B I) 58)
+                      (ingress-at H B I N (fx+ I (wire.ipv6.size)) Now)))
+
+\\ A message at Body, after the base header and any extension headers.
+(define ingress-at
+  {host --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+  H B I N Body Now ->
+    (let End (fx+ I N)
+         Message (fx- End Body)
+      (and (fx>= Body (fx+ I (wire.ipv6.size))) (fx>= Message (wire.icmp.size))
            (net-ipv6.valid-header? B I N)
-           (= (wire.ipv6.next-header B I) 58)
            (= (wire.ipv6.hop-limit B I) 255)                    \\ From this link only.
            (= (wire.icmp.code B Body) 0)
-           (= (net-ipv6.transport-checksum B I 58 Message) 0)
            (let Kind (wire.icmp.type B Body)
-             (do (net-ipv6.read-address (host.source H) B (wire.ipv6.source-at I))
-                 (net-ipv6.read-address (host.destination H) B (wire.ipv6.destination-at I))
-                 (cases (and (= Kind 134) (fx>= Message (wire.ndp-router-advertisement.size)))
-                          (router-advertisement H B Body End Now)
-                        (and (= Kind 135) (fx>= Message (wire.ndp-neighbor-solicitation.size)))
-                          (neighbor-solicitation H B Body End Now)
-                        (and (= Kind 136) (fx>= Message (wire.ndp-neighbor-advertisement.size)))
-                          (neighbor-advertisement H B Body End Now)
-                        true false))))))
+             (and (cases (= Kind 134) (fx>= Message (wire.ndp-router-advertisement.size))
+                         (= Kind 135) (fx>= Message (wire.ndp-neighbor-solicitation.size))
+                         (= Kind 136) (fx>= Message (wire.ndp-neighbor-advertisement.size))
+                         true false)
+                  (= (net-ipv6.transport-checksum-at B I Body 58 Message) 0)
+                  (do (net-ipv6.read-address (host.source H) B (wire.ipv6.source-at I))
+                      (net-ipv6.read-address (host.destination H) B (wire.ipv6.destination-at I))
+                      (cases (= Kind 134) (router-advertisement H B Body End Now)
+                             (= Kind 135) (neighbor-solicitation H B Body End Now)
+                             true (neighbor-advertisement H B Body End Now))))))))
 
 (define drive-dad
   {host --> net-ipv6.address --> fixnum --> fixnum --> fixnum}
