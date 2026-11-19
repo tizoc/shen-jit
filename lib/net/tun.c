@@ -1,4 +1,4 @@
-/* Linux TUN transport. Shen owns buffer bounds and packet queues. */
+/* Linux TUN/TAP transport. Shen owns buffer bounds and packet queues. */
 #define _GNU_SOURCE
 #include <errno.h>
 #include <fcntl.h>
@@ -12,14 +12,14 @@
 #include <time.h>
 #include <unistd.h>
 
-int shen_tun_open(const char *name)
+int shen_tun_open(const char *name, bool tap)
 {
     struct ifreq request = {0};
     size_t length = strlen(name);
     if (length == 0 || length >= sizeof request.ifr_name)
         return -EINVAL;
     memcpy(request.ifr_name, name, length);
-    request.ifr_flags = IFF_TUN | IFF_NO_PI;
+    request.ifr_flags = (tap ? IFF_TAP : IFF_TUN) | IFF_NO_PI;
     int fd = open("/dev/net/tun", O_RDWR | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0)
         return -errno;

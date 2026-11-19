@@ -1,7 +1,7 @@
 (shen.module
   (version 1)
   (name net-tun-test)
-  (requires net/tun net/interface)
+  (requires net/tun net/interface net/ethernet)
   (typed)
   (main tun-test.main)
   (sources tc- "net_tun_native.shen" tc+ "net_tcp.shen" tc+ "net_tun_echo.shen"))

@@ -3803,6 +3803,15 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   check has passed. On the `net-dsl` branch, TCP's lossy run 170.8–171.2 against 162.0–162.8 ms, its UDP echo
   22.4–22.5 against 21.6–21.7.
 
+### Ethernet and Linux TAP (2026-11-19, Linux x86-64 in Docker Desktop)
+
+- Reused the Linux descriptor adapter for TAP and added typed Ethernet and ARP.
+  Each neighbor has a preallocated pending packet queue, with bounded retries and
+  expiry. The Ethernet layer chooses the next hop with the IPv4 route table.
+- Each Linux device carried 131,124 TCP bytes on eight connections, three UDP
+  echoes with one overflow drop, and ping during overflow. The direct Shen heap
+  probe read zero words for each device and five words for its positive control.
+
 ### IPv4 wire interoperability (2026-11-19, macOS arm64)
 
 - Added bounded fragment reassembly, ICMP unreachable replies, TCP closed-port resets

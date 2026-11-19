@@ -5,7 +5,7 @@
   (use shen-jit)
   (import struct defstruct)
   (shadow close)
-  (export adapter attach close pump wait monotonic)
+  (export adapter attach attach-tap close pump wait monotonic)
 
 (defstruct adapter
   (device : net-link.device)
@@ -24,7 +24,15 @@
 
 (define attach
   {net-link.device --> string --> adapter}
-  D Name ->
+  D Name -> (open-device D Name false))
+
+(define attach-tap
+  {net-link.device --> string --> adapter}
+  D Name -> (open-device D Name true))
+
+(define open-device
+  {net-link.device --> string --> boolean --> adapter}
+  D Name Tap ->
     (let Mtu (net-link.mtu D)
          A (:adapter
              device <- D
@@ -32,7 +40,7 @@
              mtu <- Mtu
              guard <- (make-guard 0)
              fd <- -1)
-         Fd (checked (fixnum (c-open Name)) open)
+         Fd (checked (fixnum (c-open Name Tap)) open)
       (do (adapter.fd-> A Fd) A)))
 
 (define live?

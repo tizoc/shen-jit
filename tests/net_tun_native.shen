@@ -13,4 +13,5 @@
 )
 
 (define tun-test.main
-  -> (tun-test.run (hd (tl (value *argv*)))))
+  -> (let Args (tl (value *argv*))
+       (if (= (hd (tl Args)) "tap") (tun-test.run-tap (hd Args)) (tun-test.run (hd Args)))))

@@ -498,7 +498,7 @@ test-net-interface: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -m tests/net_interface.shenmod -e '(do (net-interface-test.run) (net-interface-test.host) (net-interface-test.multiport) (net-interface-test.fragments) (net-interface-test.errors) (net-interface-test.window-scale) (net-interface-test.pmtu))' | $(FFI_RESULT)
 
 # Optional Linux integration. Run test-net-tun inside a disposable network namespace.
-.PHONY: tun test-net-tun
+.PHONY: tun test-net-tun test-net-tap
 tun: $(BUILD)/shen-tun.so
 
 $(BUILD)/shen-tun.so: lib/net/tun.c | $(BUILD)
@@ -508,9 +508,12 @@ $(BUILD)/shen-tun.so: lib/net/tun.c | $(BUILD)
 $(BUILD)/shen-test-tun.so: tests/net_tun_probe.c $(RUNTIME_HDR) | $(BUILD)
 	$(CC) $(CFLAGS) -fPIC -shared -o $@ $<
 
-test-net-tun: $(BUILD)/shen-jit $(BUILD)/shen-tun.so $(BUILD)/shen-test-tun.so
+test-net-tun test-net-tap: test-net-device-build
+	python3 tests/net_tun.py $(abspath $(BUILD)/net-tun-test) $(@:test-net-%=%)
+
+.PHONY: test-net-device-build
+test-net-device-build: $(BUILD)/shen-jit $(BUILD)/shen-tun.so $(BUILD)/shen-test-tun.so
 	$(SHEN_JIT) build tests/net_tun.shenmod -o $(BUILD)/net-tun-test
-	python3 tests/net_tun.py $(abspath $(BUILD)/net-tun-test)
 
 # Complete request parsing, bounded bodies, response streams and persistent connections.
 test-http: $(BUILD)/shen-jit

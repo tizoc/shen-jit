@@ -62,3 +62,22 @@ bytes and EOF on all eight sockets. A test-only probe checks the Shen heap acros
 of simulated reordering, timeout recovery, fast retransmit, adaptive timing, congestion
 control, and SACK recovery with two and five losses in a window. It also covers the
 entire TUN workload and uses a freshly allocated view as a positive control.
+
+## Ethernet and TAP
+
+Use `net-tun.attach-tap` with a packet link sized to the IPv4 MTU plus 14 bytes.
+Connect that link to `net-ethernet.make` and give the Ethernet adapter the device
+at the other end of the interface's IPv4 link. Pass the local MAC and IPv4
+addresses, a list of static routes from `net-routes.make`, and the neighbor
+capacity. Route lookup chooses the longest prefix. A zero gateway marks a
+directly connected route.
+
+Call `net-tun.pump`, `net-ethernet.pump`, and `net-interface.poll` to move frames
+between Linux and the Shen interface. Each unresolved neighbor can queue four
+packets while ARP retries. The pending entries expire after three seconds and
+learned addresses expire after 60 seconds. The Ethernet adapter exposes its
+next deadline in monotonic milliseconds.
+
+Run `make test-net-tap` under the same Linux requirements as the TUN check. The
+test uses a separate subnet and measures the Ethernet, ARP, and IPv4 echo path
+with the same direct Shen heap probe.

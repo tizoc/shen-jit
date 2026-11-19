@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise TCP, UDP, and ping on one TUN in a disposable Linux network namespace."""
+"""Exercise TCP, UDP, and ping on one TUN or TAP in a disposable Linux network namespace."""
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 import os
@@ -12,12 +12,15 @@ import sys
 HOST, GUEST = "192.0.2.1", "192.0.2.2"
 
 
-def configure(interface):
-    subprocess.run(["ip", "addr", "add", HOST, "peer", GUEST, "dev", interface], check=True)
+def configure(interface, mode):
+    address = [HOST, "peer", GUEST] if mode == "tun" else [HOST + "/24"]
+    subprocess.run(["ip", "addr", "add", *address, "dev", interface], check=True)
+    if mode == "tap":
+        subprocess.run(["ip", "link", "set", "dev", interface, "address", "02:00:00:00:00:01"], check=True)
     subprocess.run(["ip", "link", "set", "dev", interface, "mtu", "1500", "up"], check=True)
     route = subprocess.check_output(["ip", "route", "get", GUEST], text=True)
     if f"dev {interface} " not in route:
-        raise RuntimeError(f"kernel route misses the TUN device: {route.strip()}")
+        raise RuntimeError(f"kernel route misses the {mode.upper()} device: {route.strip()}")
 
 
 SLOTS, WAVES = 4, 2
@@ -84,8 +87,8 @@ def expect_datagram(client, expected):
         raise RuntimeError(f"bad UDP echo from {source}, expected {len(expected)} bytes, got {len(actual)}")
 
 
-def echo(server, interface):
-    with subprocess.Popen([server, interface], stdout=subprocess.PIPE,
+def echo(server, interface, mode):
+    with subprocess.Popen([server, interface, mode], stdout=subprocess.PIPE,
                           stderr=subprocess.STDOUT, text=True) as process:
         try:
             expect_line(process, "TUN ready")
@@ -102,7 +105,7 @@ def echo(server, interface):
                 expect_datagram(udp, RECOVERY_DATAGRAM)
                 total += wave(pool, 1)
             output, _ = process.communicate(timeout=10)
-            expected = (f"TUN echo {total} TCP bytes on {SLOTS * WAVES} connections (peak {SLOTS}), "
+            expected = (f"{mode.upper()} echo {total} TCP bytes on {SLOTS * WAVES} connections (peak {SLOTS}), "
                         "UDP echoed 3 and dropped 1, 0 heap words (control ")
             if process.returncode or not output.startswith(expected):
                 raise RuntimeError(f"Shen echo or heap check failed: {output.strip()}")
@@ -118,13 +121,19 @@ def echo(server, interface):
 
 
 def main():
-    interface = f"sjtun{os.getpid()}"
-    subprocess.run(["ip", "tuntap", "add", "dev", interface, "mode", "tun"], check=True)
+    global HOST, GUEST
+    mode = sys.argv[2]
+    if mode not in ("tun", "tap"):
+        raise ValueError(f"unknown link mode {mode!r}")
+    if mode == "tap":
+        HOST, GUEST = "192.0.3.1", "192.0.3.2"
+    interface = f"sj{mode}{os.getpid()}"
+    subprocess.run(["ip", "tuntap", "add", "dev", interface, "mode", mode], check=True)
     try:
-        configure(interface)
-        echo(sys.argv[1], interface)
+        configure(interface, mode)
+        echo(sys.argv[1], interface, mode)
     finally:
-        subprocess.run(["ip", "tuntap", "del", "dev", interface, "mode", "tun"], check=True)
+        subprocess.run(["ip", "tuntap", "del", "dev", interface, "mode", mode], check=True)
 
 
 if __name__ == "__main__":

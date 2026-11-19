@@ -5,13 +5,15 @@
   (use net-tun)
   (use net-ipv4)
   (use net-interface)
+  (use net-ethernet)
+  (use net-routes)
   (use tcp)
   (use tcp-test)
   (use udp)
   (use shen-jit)
   (import struct defstruct)
   (shadow run)
-  (export run)
+  (export run run-tap)
 
 (defstruct echo-session
   (scratch : buffer.view)
@@ -149,17 +151,17 @@
               false))))
 
 (define echo
-  {net-tun.adapter --> server --> fixnum --> fixnum --> fixnum}
-  Tun S Until Expected ->
+  {net-tun.adapter --> (fixnum --> fixnum) --> server --> fixnum --> fixnum --> fixnum}
+  Tun Ethernet S Until Expected ->
     (let F (server.interface S)
-         In (net-tun.pump Tun 16)
+         In (fx+ (net-tun.pump Tun 16) (Ethernet 16))
          Handled (net-interface.poll F 16)
          _ (report-udp-full S)
          _ (accept-streams S)
          _ (echo-streams S (server.capacity S))
          _ (echo-datagram S)
          More (net-interface.poll F 16)
-         Out (net-tun.pump Tun 16)
+         Out (fx+ (Ethernet 16) (net-tun.pump Tun 16))
       (cases (and (= (server.closed S) Expected) (= (server.udp-echoes S) 3)) (server.bytes S)
              (fx>= (net-tun.monotonic 0) Until)
                (error "TUN echo timed out with ~A closed and ~A active TCP connections and ~A UDP echoes"
@@ -167,11 +169,11 @@
                       (fx->number (server.udp-echoes S)))
              true
                (do (if (= (fx+ (fx+ In Out) (fx+ Handled More)) 0) (net-tun.wait Tun 10) false)
-                   (echo Tun S Until Expected)))))
+                   (echo Tun Ethernet S Until Expected)))))
 
 (define measured
-  {net-tun.adapter --> server --> fixnum --> boolean}
-  Tun S Expected ->
+  {net-tun.adapter --> (fixnum --> fixnum) --> server --> fixnum --> string --> boolean}
+  Tun Ethernet S Expected Label ->
     (let Window (tcp-test.make-window-case 43)
          Until (fx+ (net-tun.monotonic 0) 25000)
          Scratch (echo-session.scratch (fx<-vector (server.streams S) 1))
@@ -184,15 +186,19 @@
          _ (notify 0)
          _ (mark 0)
          _ (tcp-test.exercise-window Window 16)
-         Count (echo Tun S Until Expected)
+         Count (echo Tun Ethernet S Until Expected)
          Words (words 0)
       (if (= Words 0)
-          (do (output "TUN echo ~A TCP bytes on ~A connections (peak ~A), UDP echoed ~A and dropped ~A, ~A heap words (control ~A)~%"
-                      (fx->number Count) (fx->number (server.closed S)) (fx->number (server.peak S))
+          (do (output "~A echo ~A TCP bytes on ~A connections (peak ~A), UDP echoed ~A and dropped ~A, ~A heap words (control ~A)~%"
+                      Label (fx->number Count) (fx->number (server.closed S)) (fx->number (server.peak S))
                       (fx->number (server.udp-echoes S))
                       (fx->number (net-interface.udp-dropped (server.interface S)))
                       (fx->number Words) (fx->number Control)) true)
           (error "TUN echo used ~A heap words (-1 means a collection)" (fx->number Words)))))
+
+(define no-ethernet
+  {fixnum --> fixnum}
+  _ -> 0)
 
 (define run
   {string --> boolean}
@@ -204,7 +210,28 @@
          F (net-interface.make (net-link.left Link) Guest 7777 Slots 4294967290 7777 2)
          S (make-server F Slots Mtu)
          Tun (net-tun.attach (net-link.right Link) Name)
-      (shen-jit.finally (freeze (measured Tun S 8)) (freeze (net-tun.close Tun)))))
+      (shen-jit.finally (freeze (measured Tun (/. B (no-ethernet B)) S 8 "TUN")) (freeze (net-tun.close Tun)))))
+
+(define run-tap
+  {string --> boolean}
+  Name ->
+    (let Mtu (type 1500 fixnum)
+         Clock (freeze (net-tun.monotonic 0))
+         IpLink (net-link.make 8 Mtu 0 Clock)
+         FrameLink (net-link.make 8 (fx+ Mtu 14) 0 Clock)
+         Guest (net-ipv4.address 192 0 3 2)
+         Subnet (net-ipv4.address 192 0 3 0)
+         Mac (net-ethernet.hardware 512 2)
+         Route (net-routes.make Subnet 24 0)
+         Eth (net-ethernet.make (net-link.left FrameLink) (net-link.right IpLink)
+                                 Mac Guest [Route] 4)
+         Slots (type 4 fixnum)
+         F (net-interface.make-host-sized (net-link.left IpLink) Guest [7777] Slots
+                                          1212 20 [7777] 2 131072)
+         S (make-server F Slots Mtu)
+         Tap (net-tun.attach-tap (net-link.right FrameLink) Name)
+         Step (/. Budget (net-ethernet.pump Eth Budget))
+      (shen-jit.finally (freeze (measured Tap Step S 8 "TAP")) (freeze (net-tun.close Tap)))))
 
 (preclude [echo-session.%match server.%match])
 )
