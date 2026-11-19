@@ -17,6 +17,7 @@
   <e> := [];)
 
 (defgrammar <gt.empty-list> {==> (list fixnum)} ";" := [];)
+(defgrammar <gt.counted> {==> fixnum} Length (skip Length) "." := Length;)
 
 (defgrammar <gt.word> {==> string} (text <gt.letters>) := <gt.letters>;)
 
@@ -113,6 +114,11 @@
                                   (= [(<gt.number>.end-at 0 S V 0 4) (<gt.number>.end-at 0 S V 2 4)] [2 -1])))
       (@p "a range outside the view"
           (= (trap-error (<gt.number>.parse-at 0 (grammar.state) (gt.view "12") 0 3 (/. At M -1)) (/. E -9)) -9))
+      (@p "a counted skip, also from a reader"
+          (let Text (cn (n->string 3) "abc.")
+               R (io.reader (io.input-buffer (gt.view Text)) [])
+            (and (= (grammar.parse <gt.counted> (gt.view Text) (function gt.raise)) 3)
+                 (= (grammar.read <gt.counted> R (function gt.reject)) (:result.ok [3])))))
       (@p "a value and a capture" (= (map (/. T (grammar.parse <gt.either> (gt.view T) (function gt.raise))) ["#ab" "cd"])
                                      ["#ab" "cd"]))])
 

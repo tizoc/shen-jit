@@ -14,6 +14,8 @@ All notable changes to this project are documented in this file. The format is b
 - Typed grammar rules have `<rule>.parse-at`, which parses a range of a view, and `<rule>.end-at`, which gives where a
   match of a prefix ends, both with a `(grammar.state)` the caller keeps, so that a parse allocates nothing but its
   values.
+- `(skip N)` in a grammar passes N bytes of anything, N an expression such as a length read before them, in one step,
+  and waits for them in a read from a reader.
 
 ### Fixed
 

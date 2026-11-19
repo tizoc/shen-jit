@@ -52,6 +52,7 @@ and a value, then perhaps `where` and a guard:
 | `(where Guard)` | Nothing, when Guard is true |
 | `(at P)` | Nothing, binding P to the position, so that a guard can bound a length; [read from a reader](#reading-as-input-arrives), its position in the stream |
 | `(u16-be N)`, `(u32-be N)` | Two or four bytes, bound to N as an unsigned big-endian number |
+| `(skip N)` | N bytes of anything, N an expression, such as a length read before them; nothing if N is negative |
 
 Alternatives are tried in order, and the first that matches wins: a later failure never comes back to
 try the next one. `(*` and `(+` take as many as they can, and never give any back, so `(* <letter>) <letter>`

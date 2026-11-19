@@ -3727,6 +3727,9 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   `write-layout` packs them. `.parse-at` and `.end-at` take a kept state and a range of a view because `.parse` made a
   state per parse and needed a view of the range, two allocations per packet. The frame library's header is the first
   layout here. `make test-layout` checks the generated code against raw bytes, ranges, namespaces and inlining.
+- `(skip N)`, from the same experiment, where a length-prefixed field's bytes were a rule calling itself once a byte:
+  10,000 parses of a 255-byte field took 8.6 ms that way and 0.13 to 0.17 with the item, in a sealed typed build. Its
+  bounds check is the form the streaming variant rewrites, so a read from a reader waits for the bytes.
 
 ### Buffer fields and mutation names (2026-11-19, Apple M3 Max)
 

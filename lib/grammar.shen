@@ -291,6 +291,7 @@
 (define checks
   [] -> []
   [[where G] | Items] -> [G | (checks Items)]
+  [[skip N] | Items] -> [[fx>= N 0] | (checks Items)]
   [[require | Rest] | Items] ->
     (append (checks (butlast Rest)) [[= (last Rest) ""] | (checks Items)])
   [[F X] | Items] -> (append (checks [X]) (checks Items)) where (element? F [* + ? text span])
@@ -702,9 +703,23 @@
     where (variable? V)
   C [u16-be V] Items Pos Fail Done -> (fixed C V 2 Items Pos Fail Done) where (variable? V)
   C [u32-be V] Items Pos Fail Done -> (fixed C V 4 Items Pos Fail Done) where (variable? V)
+  C [skip N] Items Pos Fail Done -> (skip-bytes C N Items Pos Fail Done)
   _ [F | Items] _ _ _ _ -> (error "defgrammar: (~A Item) takes one item: name a sequence as a rule, in ~R"
                                    F [F | Items]) where (element? F [* + ?])
   _ X _ _ _ _ -> (error "defgrammar: ~R is not an item" X))
+
+\\ (skip N): N bytes of anything, N an expression, as a length read before them; a negative N does
+\\ not match. The check of the last byte is a bounds check as any other, which a streaming read waits on.
+(define skip-bytes
+  C N Items Pos Fail Done ->
+    (let Count (gensym (protect N)) P (gensym (protect P))
+      [let Count (subst C N)
+        [if [< Count 0]
+            Fail
+            [let P [+ (pos Pos) Count]
+              [if [< [- P 1] (end C)]
+                  (seq C Items [P 0] Fail Done)
+                  (ended C Fail)]]]]))
 
 \\ A big-endian unsigned field of N bytes, bound to V.
 (define fixed

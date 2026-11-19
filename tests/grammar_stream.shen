@@ -142,4 +142,9 @@
              (function stream-test.fail))
       [Before After Plain])))
 
+\\ A counted skip waits for its bytes as any other item does.
+(defgrammar <s.counted> Length (skip Length) ";" := Length;)
+(stream-test.check "a counted skip, read a byte at a time" (:result.ok [5])
+  (freeze (grammar.read <s.counted> (stream-test.reader (cn (n->string 5) "abcde;") 1) (function stream-test.fail))))
+
 (output "~A passed, ~A failed~%" (value stream-test.passed) (value stream-test.failed))

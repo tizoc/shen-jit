@@ -267,4 +267,15 @@
 (grammar-test.check "a sealed loop matches" true
   (freeze (grammar.match? <gs.word> (buffer.from-string "abc"))))
 
+\\ (skip N) passes N bytes, N read before them.
+(defgrammar <gk.record> Kind Length (skip Length) := [Kind Length];)
+(defgrammar <gk.records> <gk.record> <gk.records> := [<gk.record> | <gk.records>]; <e> := [];)
+(defgrammar <gk.signed> Length (skip (- Length 10)) := Length;)
+(define gk.bytes Bs -> (fold-bytes (buffer.new (length Bs)) 0 Bs))
+(define fold-bytes B _ [] -> B B I [X | Xs] -> (fold-bytes (buffer.u8-> B I X) (+ I 1) Xs))
+(grammar-test.check "records of a length and that many bytes" [[[1 2] [3 0]] [error 0 "trailing input"] [error 0 "no match"]]
+  (freeze [(grammar.parse <gk.records> (gk.bytes [1 2 97 98 3 0]) (/. At M [error At M]))
+           (grammar.parse <gk.records> (gk.bytes [1 5 97]) (/. At M [error At M]))
+           (grammar.parse <gk.signed> (gk.bytes [5]) (/. At M [error At M]))]))
+
 (output "~A passed, ~A failed~%" (value grammar-test.passed) (value grammar-test.failed))
