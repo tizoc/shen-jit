@@ -52,7 +52,7 @@ absent() { # name, file, a line that must not be there
     fi
 }
 
-# Count operands accept 255. Oversized values report the relevant limit.
+# Arity and call counts accept 255. A closure can hold 4096 captures.
 cat > "$dir/counts.shen" <<'SHEN'
 (define load-code Arity Instructions ->
   (output "~A~%" (trap-error (do (shen-jit.install [code f Arity 258 [] Instructions []]) loaded)
@@ -61,14 +61,47 @@ cat > "$dir/counts.shen" <<'SHEN'
 (load-code 256 [[return 2]])
 (load-code 0 [[tail-call 0 f 256]])
 (load-code 0 [[entry 256 0] [label 0] [return 2]])
-(load-code 0 [[capture 2 256] [return 2]])
+
+(define capture-slots
+  0 Slots -> Slots
+  N Slots -> (capture-slots (- N 1) [2 | Slots]))
+(define capture-result Count Index ->
+  (trap-error
+    (let Slots (capture-slots (- Count 1) [3])
+         Body [code lambda 1 4 [] [[capture 3 Index] [return 3]] []]
+         Make (shen-jit.install [code make-wide-closure 2 5 []
+                                  [[closure 4 0 | Slots] [return 4]] [Body]])
+         Closure (Make 1 42)
+      (Closure 0))
+    (/. E (error-to-string E))))
+(output "last capture: ~A~%" (capture-result 4096 4095))
+(output "~A~%" (capture-result 4097 4096))
+(output "~A~%" (capture-result 4097 4095))
 SHEN
 "$SHEN" script "$dir/counts.shen" > "$dir/counts.out" 2>&1
 check count-255 "$dir/counts.out" "loaded"
 check function-arity-limit "$dir/counts.out" "function has more than 255 parameters"
 check call-argument-limit "$dir/counts.out" "call has more than 255 arguments"
 check entry-arity-limit "$dir/counts.out" "entry has more than 255 parameters"
-check capture-index-limit "$dir/counts.out" "capture index exceeds 255"
+check capture-4095 "$dir/counts.out" "last capture: 42"
+check capture-index-limit "$dir/counts.out" "capture index exceeds 4095"
+check capture-count-limit "$dir/counts.out" "closure has more than 4096 captures"
+
+# A wide lambda gets its captures through a freeze. Repeated references use
+# their original slots across both closures.
+awk 'BEGIN {
+    print "(define wide-closure Base ->"
+    print "  (let"
+    for (i = 1; i <= 257; i++) printf "    C%d (+ Base %d)\n", i, i
+    printf "    (freeze (/. Ignored [C257 C257 "
+    for (i = 256; i >= 1; i--) printf "C%d ", i
+    print "C257 C129 C1]))))"
+    printf "(output \"wide closure: ~A~%%\" (= ((thaw (wide-closure 0)) 0) [257 257 "
+    for (i = 256; i >= 1; i--) printf "%d ", i
+    print "257 129 1]))"
+}' > "$dir/wide-closure.shen"
+"$SHEN" script "$dir/wide-closure.shen" > "$dir/wide-closure.out" 2>&1
+check wide-capture-order "$dir/wide-closure.out" "wide closure: true"
 
 # Backtraces at the REPL: the frames of an error that reaches the top level,
 # innermost first, a run of one name on one line, and none for an error the

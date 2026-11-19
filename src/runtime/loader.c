@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+enum { MAX_CAPTURES = 4096 };
+
 typedef struct {
     VM *vm;
     LoadStats *stats;
@@ -44,11 +46,16 @@ static size_t list_length(V list)
     return list == V_NIL ? n : (size_t)-1;
 }
 
+static V list_drop(V list, size_t n)
+{
+    while (n--)
+        list = ptr(list)[1];
+    return list;
+}
+
 static V nth(V list, size_t i)
 {
-    while (i--)
-        list = ptr(list)[1];
-    return ptr(list)[0];
+    return ptr(list_drop(list, i))[0];
 }
 
 static bool symbol_is(V v, const char *name)
@@ -154,10 +161,10 @@ static bool encode(Loader *l, V insn, uint64_t frame, uint64_t nconst, uint64_t 
         return false;
     uint64_t x;
     /* Each operand position has a kind: s slot, o slot or constant (an
-       operand), k constant, c code, l label, f function symbol, n count, r a real
-       register, w a word register, W a word register or a constant. */
+       operand), k constant, c code, i capture index, l label, f function symbol,
+       n count, r a real register, w a word register, W a word register or a constant. */
     static const char *const kinds[OP_COUNT] = {
-        [OP_MOVE] = "ss", [OP_CONST] = "sk", [OP_CAPTURE] = "sn",
+        [OP_MOVE] = "ss", [OP_CONST] = "sk", [OP_CAPTURE] = "si",
         [OP_CLOSURE] = "sc", [OP_PRIM] = "s", [OP_LABEL] = "l", [OP_JUMP] = "l",
         [OP_JUMP_IF_FALSE] = "ol", [OP_CALL] = "ssfn", [OP_CALL_SEALED] = "ssfn",
         [OP_CALL_VALUE] = "ssn", [OP_TAIL_CALL] = "sfn", [OP_TAIL_CALL_SEALED] = "sfn",
@@ -194,10 +201,14 @@ static bool encode(Loader *l, V insn, uint64_t frame, uint64_t nconst, uint64_t 
         case 'o': ok = operand(v, frame, nconst, &x); break;
         case 'k': ok = small_int(v, nconst, &x); break;
         case 'c': ok = small_int(v, ncode, &x); break;
+        case 'i':
+            if (is_fix(v) && fixval(v) >= MAX_CAPTURES)
+                return fail(l, "capture index exceeds 4095");
+            ok = small_int(v, MAX_CAPTURES, &x);
+            break;
         case 'l': case 'h': case 'b': ok = small_int(v, UINT32_MAX, &x); break;
         case 'n':
-            ok = byte_count(l, v, &x, op == OP_CAPTURE ? "capture index exceeds 255" :
-                                      op == OP_ENTRY ? "entry has more than 255 parameters" :
+            ok = byte_count(l, v, &x, op == OP_ENTRY ? "entry has more than 255 parameters" :
                                                        "call has more than 255 arguments");
             break;
         case 'r': ok = small_int(v, REAL_REGISTERS, &x); break;
@@ -232,12 +243,14 @@ static bool encode(Loader *l, V insn, uint64_t frame, uint64_t nconst, uint64_t 
         if (!emit(l, (uint64_t)p) || !emit(l, n - 3))
             return false;
     } else if (op == OP_CLOSURE) {
+        if (n - 3 > MAX_CAPTURES)
+            return fail(l, "closure has more than 4096 captures");
         if (!emit(l, n - 3))
             return false;
     }
     if (op == OP_PRIM || op == OP_CLOSURE) {
-        for (size_t i = 3; i < n; i++) {
-            V v = nth(insn, i);
+        for (V args = list_drop(insn, 3); args != V_NIL; args = ptr(args)[1]) {
+            V v = ptr(args)[0];
             bool ok = op == OP_PRIM ? operand(v, frame, nconst, &x) : small_int(v, frame, &x);
             if (!ok || !emit(l, x))
                 return fail(l, "bad operand");
