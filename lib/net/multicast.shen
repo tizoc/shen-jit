@@ -20,16 +20,14 @@
   State : source-state;)
 
 (defstruct source
-  (mutable ip4 : fixnum)
-  (ip6 : net-ipv6.address)
+  (address : net-ipv6.address)                           \\ IPv4's mapped.
   (mutable state : source-state)
   (mutable reports : fixnum)
   (mutable queried : boolean))
 
 (defstruct group
   (mutable family : fixnum)
-  (mutable ip4 : fixnum)
-  (ip6 : net-ipv6.address)
+  (address : net-ipv6.address)                           \\ IPv4's mapped.
   (sources : (vector source))
   (source-limit : fixnum)
   (mutable filtered : boolean)
@@ -63,8 +61,7 @@
   V 0 -> V
   V I ->
     (let S (:source
-              ip4 <- 0
-              ip6 <- (net-ipv6.make-address 0 0 0 0)
+              address <- (net-ipv6.make-address 0 0 0 0)
               state <- vacant
               reports <- 0
               queried <- false)
@@ -76,8 +73,7 @@
   V I Sources ->
     (let G (:group
               family <- 0
-              ip4 <- 0
-              ip6 <- (net-ipv6.make-address 0 0 0 0)
+              address <- (net-ipv6.make-address 0 0 0 0)
               sources <- (setup-sources (vector (fx->number Sources)) Sources)
               source-limit <- Sources
               filtered <- false
@@ -159,15 +155,28 @@
     (and (net-ipv6.multicast? IP) (fx>= (net-ipv6.scope IP) 2) (fx<= (net-ipv6.scope IP) 14)
          (not (net-ipv6.same? IP (membership.nodes6 M))) (not (ssm6? IP))))
 
+\\ The slot of a group, by its address, IPv4's mapped, or 0.
 (define find
-  {membership --> fixnum --> fixnum --> net-ipv6.address --> fixnum --> fixnum}
-  _ _ _ _ 0 -> 0
-  M Family IP4 IP6 I ->
+  {membership --> net-ipv6.address --> fixnum --> fixnum}
+  _ _ 0 -> 0
+  M IP I ->
     (let G (at M I)
-      (if (and (= (group.family G) Family)
-               (if (= Family 4) (= (group.ip4 G) IP4) (net-ipv6.same? (group.ip6 G) IP6)))
+      (if (and (not (= (group.family G) 0)) (net-ipv6.same? (group.address G) IP))
           I
-          (find M Family IP4 IP6 (fx- I 1)))))
+          (find M IP (fx- I 1)))))
+
+\\ An IPv4 group's address, and a source's, mapped into the membership's two scratch addresses.
+(define group4
+  {membership --> fixnum --> net-ipv6.address}
+  M IP -> (net-ipv6.map-ipv4 (membership.scratch6 M) IP))
+
+(define source4
+  {membership --> fixnum --> net-ipv6.address}
+  M IP -> (net-ipv6.map-ipv4 (membership.sender6 M) IP))
+
+(define family-of
+  {net-ipv6.address --> fixnum}
+  IP -> (if (net-ipv6.mapped? IP) 4 6))
 
 (define vacant
   {membership --> fixnum --> fixnum}
@@ -184,28 +193,27 @@
         true))
 
 (define join
-  {membership --> fixnum --> fixnum --> net-ipv6.address --> fixnum --> boolean}
-  M Family IP4 IP6 Now ->
-    (let Known (find M Family IP4 IP6 (membership.slots M))
+  {membership --> net-ipv6.address --> fixnum --> boolean}
+  M IP Now ->
+    (let Known (find M IP (membership.slots M))
          I (if (= Known 0) (vacant M (membership.slots M)) Known)
       (and (fx> I 0)
            (let G (at M I)
              (or (group.joined G)
-                 (do (group.family-> G Family)
+                 (do (group.family-> G (family-of IP))
                      (group.filtered-> G false)
-                     (group.ip4-> G IP4)
-                     (if (= Family 6) (net-ipv6.copy-address (group.ip6 G) IP6) (group.ip6 G))
+                     (net-ipv6.copy-address (group.address G) IP)
                      (group.reporter-> G false)
                      (schedule-change G true Now)))))))
 
 (define join4
   {membership --> fixnum --> fixnum --> boolean}
   M IP Now ->
-    (and (usable4? IP) (join M 4 IP (membership.blank6 M) Now)))
+    (and (usable4? IP) (join M (group4 M IP) Now)))
 
 (define join6
   {membership --> net-ipv6.address --> fixnum --> boolean}
-  M IP Now -> (and (usable6? M IP) (join M 6 0 IP Now)))
+  M IP Now -> (and (usable6? M IP) (join M IP Now)))
 
 (define leave
   {membership --> fixnum --> fixnum --> boolean}
@@ -216,20 +224,20 @@
 
 (define leave4
   {membership --> fixnum --> fixnum --> boolean}
-  M IP Now -> (leave M (find M 4 IP (membership.blank6 M) (membership.slots M)) Now))
+  M IP Now -> (leave M (find M (group4 M IP) (membership.slots M)) Now))
 
 (define leave6
   {membership --> net-ipv6.address --> fixnum --> boolean}
-  M IP Now -> (leave M (find M 6 0 IP (membership.slots M)) Now))
+  M IP Now -> (leave M (find M IP (membership.slots M)) Now))
 
 (define joined4?
   {membership --> fixnum --> boolean}
-  M IP -> (let I (find M 4 IP (membership.blank6 M) (membership.slots M))
+  M IP -> (let I (find M (group4 M IP) (membership.slots M))
            (and (fx> I 0) (group.joined (at M I)))))
 
 (define joined6?
   {membership --> net-ipv6.address --> boolean}
-  M IP -> (let I (find M 6 0 IP (membership.slots M))
+  M IP -> (let I (find M IP (membership.slots M))
            (and (fx> I 0) (group.joined (at M I)))))
 
 (define joined6-at?
@@ -242,44 +250,40 @@
   G I -> (fx<-vector (group.sources G) I))
 
 (define find-source
-  {group --> fixnum --> fixnum --> net-ipv6.address --> fixnum --> fixnum --> fixnum}
-  _ _ _ _ 0 Free -> Free
-  G Family IP4 IP6 I Free ->
+  {group --> net-ipv6.address --> fixnum --> fixnum --> fixnum}
+  _ _ 0 Free -> Free
+  G IP I Free ->
     (let S (source-at G I)
-      (cases (= (source.state S) vacant)
-               (find-source G Family IP4 IP6 (fx- I 1) (if (= Free 0) I Free))
-             (if (= Family 4) (= (source.ip4 S) IP4) (net-ipv6.same? (source.ip6 S) IP6)) I
-             true (find-source G Family IP4 IP6 (fx- I 1) Free))))
+      (cases (= (source.state S) vacant) (find-source G IP (fx- I 1) (if (= Free 0) I Free))
+             (net-ipv6.same? (source.address S) IP) I
+             true (find-source G IP (fx- I 1) Free))))
 
 (define includes?
   {group --> fixnum --> boolean}
   G I -> (and (fx> I 0) (= (source.state (source-at G I)) included)))
 
 (define use-group
-  {group --> fixnum --> fixnum --> net-ipv6.address --> group}
-  G Family G4 G6 ->
+  {group --> net-ipv6.address --> group}
+  G IP ->
     (if (not (= (group.family G) 0)) G
-        (do (group.family-> G Family)
-            (group.ip4-> G G4)
-            (if (= Family 6) (net-ipv6.copy-address (group.ip6 G) G6) (group.ip6 G))
+        (do (group.family-> G (family-of IP))
+            (net-ipv6.copy-address (group.address G) IP)
             (group.source-count-> G 0)
             (group.filtered-> G true))))
 
 (define add-source
-  {membership --> fixnum --> fixnum --> net-ipv6.address --> fixnum --> net-ipv6.address --> fixnum -->
-   boolean}
-  M Family G4 G6 IP4 IP6 Now ->
-    (let Known (find M Family G4 G6 (membership.slots M))
+  {membership --> net-ipv6.address --> net-ipv6.address --> fixnum --> boolean}
+  M Group Source Now ->
+    (let Known (find M Group (membership.slots M))
          Id (if (= Known 0) (vacant M (membership.slots M)) Known)
       (and (fx> Id 0)
            (let G (at M Id)
-                I (find-source G Family IP4 IP6 (group.source-limit G) 0)
+                I (find-source G Source (group.source-limit G) 0)
              (and (fx> I 0)
                   (or (includes? G I)
                       (let S (source-at G I)
-                        (do (use-group G Family G4 G6)
-                            (source.ip4-> S IP4)
-                            (if (= Family 6) (net-ipv6.copy-address (source.ip6 S) IP6) (source.ip6 S))
+                        (do (use-group G Group)
+                            (net-ipv6.copy-address (source.address S) Source)
                             (source.state-> S included)
                             (source.queried-> S false)
                             (source.reports-> S 2)
@@ -289,13 +293,12 @@
                             true))))))))
 
 (define remove-source
-  {membership --> fixnum --> fixnum --> net-ipv6.address --> fixnum --> net-ipv6.address --> fixnum -->
-   boolean}
-  M Family G4 G6 IP4 IP6 Now ->
-    (let Id (find M Family G4 G6 (membership.slots M))
+  {membership --> net-ipv6.address --> net-ipv6.address --> fixnum --> boolean}
+  M Group Source Now ->
+    (let Id (find M Group (membership.slots M))
       (and (fx> Id 0)
            (let G (at M Id)
-                I (find-source G Family IP4 IP6 (group.source-limit G) -1)
+                I (find-source G Source (group.source-limit G) -1)
              (and (includes? G I)
                   (let S (source-at G I)
                        Left (fx- (group.source-count G) 1)
@@ -314,44 +317,44 @@
   {membership --> fixnum --> fixnum --> fixnum --> boolean}
   M Group Source Now ->
     (and (ssm4? Group) (net-ipv4.unicast? Source)
-         (add-source M 4 Group (membership.blank6 M) Source (membership.blank6 M) Now)))
+         (add-source M (group4 M Group) (source4 M Source) Now)))
 
 (define join-source6
   {membership --> net-ipv6.address --> net-ipv6.address --> fixnum --> boolean}
   M Group Source Now ->
     (and (ssm6? Group) (net-ipv6.unicast? Source) (fx>= (net-link.mtu (membership.device M)) (net-ipv6.minimum-mtu))
-         (add-source M 6 0 Group 0 Source Now)))
+         (add-source M Group Source Now)))
 
 (define leave-source4
   {membership --> fixnum --> fixnum --> fixnum --> boolean}
-  M Group Source Now -> (remove-source M 4 Group (membership.blank6 M) Source (membership.blank6 M) Now))
+  M Group Source Now -> (remove-source M (group4 M Group) (source4 M Source) Now))
 
 (define leave-source6
   {membership --> net-ipv6.address --> net-ipv6.address --> fixnum --> boolean}
-  M Group Source Now -> (remove-source M 6 0 Group 0 Source Now))
+  M Group Source Now -> (remove-source M Group Source Now))
 
 (define accepts4?
   {membership --> fixnum --> fixnum --> boolean}
   M Group Source ->
-    (let Id (find M 4 Group (membership.blank6 M) (membership.slots M))
+    (let Id (find M (group4 M Group) (membership.slots M))
       (and (fx> Id 0)
            (let G (at M Id)
              (and (group.joined G)
                   (or (not (group.filtered G))
-                      (includes? G (find-source G 4 Source (membership.blank6 M) (group.source-limit G) -1))))))))
+                      (includes? G (find-source G (source4 M Source) (group.source-limit G) -1))))))))
 
 (define accepts6-at?
   {membership --> buffer.view --> fixnum --> fixnum --> boolean}
   M B Group Source ->
     (and (net-ipv6.multicast-at? B Group)
          (let IP (net-ipv6.read-address (membership.scratch6 M) B Group)
-              Id (find M 6 0 IP (membership.slots M))
+              Id (find M IP (membership.slots M))
            (and (fx> Id 0)
                 (let G (at M Id)
                   (and (group.joined G)
                        (or (not (group.filtered G))
                            (let Remote (net-ipv6.read-address (membership.sender6 M) B Source)
-                             (includes? G (find-source G 6 0 Remote (group.source-limit G) -1))))))))))
+                             (includes? G (find-source G Remote (group.source-limit G) -1))))))))))
 
 (define jitter
   {membership --> fixnum --> fixnum}
@@ -392,10 +395,9 @@
 (define note-query-source
   {membership --> group --> buffer.view --> fixnum --> boolean}
   M G B At ->
-    (let I (if (= (group.family G) 4)
-                 (find-source G 4 (wire.ipv4-address.address B At) (membership.blank6 M) (group.source-limit G) -1)
-                 (let Remote (net-ipv6.read-address (membership.sender6 M) B At)
-                   (find-source G 6 0 Remote (group.source-limit G) -1)))
+    (let Source (if (= (group.family G) 4) (source4 M (wire.ipv4-address.address B At))
+                    (net-ipv6.read-address (membership.sender6 M) B At))
+         I (find-source G Source (group.source-limit G) -1)
       (and (includes? G I) (do (source.queried-> (source-at G I) true) true))))
 
 (define query-matches
@@ -467,7 +469,7 @@
                        (membership.igmp2-until-> M (fx+ Now (older-version-timeout))))
                    M)
                (if (= IP 0) (query-all M (membership.slots M) 4 Span Now Modern)
-                   (let I (find M 4 IP (membership.blank6 M) (membership.slots M))
+                   (let I (find M (group4 M IP) (membership.slots M))
                      (if (= Count 0) (query M I 4 Span Now Modern)
                          (query-sources M I B (fx+ At (wire.igmp3-query.size)) (wire.ipv4-address.size)
                                         Count Span Now))))))))
@@ -491,7 +493,7 @@
                                                                                          \\ v2 report.
                               (or (= Source 0) (net-ipv4.unicast? Source))
                               (not (= Source (membership.ip M))) (fx< (igmp-version M Now) 3))
-                           (suppress M (find M 4 Group (membership.blank6 M) (membership.slots M)))
+                           (suppress M (find M (group4 M Group) (membership.slots M)))
                          true false))))))
 
 (define mld-delay
@@ -518,7 +520,7 @@
            (or Old (and Modern (= Bytes (fx+ (wire.mld2-query.size) (fx* Count (wire.ipv6-address.size))))))
            (do (if Old (membership.mld1-until-> M (fx+ Now (older-version-timeout))) M)
                (if General (query-all M (membership.slots M) 6 Span Now Modern)
-                   (let Index (find M 6 0 Group (membership.slots M))
+                   (let Index (find M Group (membership.slots M))
                      (if (= Count 0) (query M Index 6 Span Now Modern)
                          (query-sources M Index B (fx+ At (wire.mld2-query.size)) (wire.ipv6-address.size)
                                         Count Span Now))))))))
@@ -541,7 +543,7 @@
                               (or (net-ipv6.link-local? Source) (net-ipv6.unspecified? Source)))
                            (let IP (net-ipv6.read-address (membership.scratch6 M) B (wire.mld.group-at At))
                              (and (net-ipv6.address-at? IP B (wire.ipv6.destination-at I))
-                                  (suppress M (find M 6 0 IP (membership.slots M)))))
+                                  (suppress M (find M IP (membership.slots M)))))
                          true false))))))
 
 (define record-type
@@ -558,10 +560,10 @@
     (cases (= Version 3)
              (do (write-layout wire.membership-report B At (type 34) (records 1))
                  (write-layout wire.igmp3-record B (fx+ At (wire.membership-report.size))
-                   (record-type (record-type G Change)) (group (group.ip4 G))))
-           (= Version 1) (write-layout wire.igmp B At (type 18) (group (group.ip4 G)))
-           (group.joined G) (write-layout wire.igmp B At (type 22) (group (group.ip4 G)))
-           true (write-layout wire.igmp B At (type 23) (group (group.ip4 G)))))
+                   (record-type (record-type G Change)) (group (net-ipv6.address.d (group.address G)))))
+           (= Version 1) (write-layout wire.igmp B At (type 18) (group (net-ipv6.address.d (group.address G))))
+           (group.joined G) (write-layout wire.igmp B At (type 22) (group (net-ipv6.address.d (group.address G))))
+           true (write-layout wire.igmp B At (type 23) (group (net-ipv6.address.d (group.address G))))))
 
 \\ IGMP goes with TTL 1 and a router alert, so behind an IPv4 header of 24 bytes.
 (define igmp-offset
@@ -591,7 +593,7 @@
     (let Size (fx+ (igmp-offset) (if (= Version 3) (fx+ (wire.membership-report.size) (wire.igmp3-record.size))
                                      (wire.igmp.size)))
          Dst (cases (= Version 3) (igmp3-reports)
-                    (group.joined G) (group.ip4 G)
+                    (group.joined G) (net-ipv6.address.d (group.address G))
                     true (all-routers))
          B (net-link.ring.data Tx)
          I (net-link.tail-offset Tx)
@@ -607,9 +609,9 @@
         (let R (fx+ At (wire.membership-report.size))
           (do (write-layout wire.membership-report B At (type 143) (records 1))
               (write-layout wire.mld2-record B R (record-type (record-type G Change)))
-              (net-ipv6.write-address B (wire.mld2-record.group-at R) (group.ip6 G))))
+              (net-ipv6.write-address B (wire.mld2-record.group-at R) (group.address G))))
         (do (if (group.joined G) (write-layout wire.mld B At (type 131)) (write-layout wire.mld B At (type 132)))
-            (net-ipv6.write-address B (wire.mld.group-at At) (group.ip6 G)))))
+            (net-ipv6.write-address B (wire.mld.group-at At) (group.address G)))))
 
 \\ MLD goes with hop limit 1 and a hop-by-hop header holding a router alert, so behind 48 bytes.
 (define mld-offset
@@ -636,7 +638,7 @@
     (let Size (fx+ (mld-offset) (if (= Version 2) (fx+ (wire.membership-report.size) (wire.mld2-record.size))
                                     (wire.mld.size)))
          Dst (cases (= Version 2) (membership.reports6 M)
-                    (group.joined G) (group.ip6 G)
+                    (group.joined G) (group.address G)
                     true (membership.routers6 M))
          B (net-link.ring.data Tx)
          I (net-link.tail-offset Tx)
@@ -666,19 +668,19 @@
   G B At Four Kind I ->
     (let S (source-at G I)
       (cases (not (selected? G S Kind)) (write-sources G B At Four Kind (fx- I 1))
-             Four (write-sources G (wire.ipv4-address.address-> B At (source.ip4 S))
+             Four (write-sources G (wire.ipv4-address.address-> B At (net-ipv6.address.d (source.address S)))
                                  (fx+ At (wire.ipv4-address.size)) Four Kind (fx- I 1))
-             true (write-sources G (net-ipv6.write-address B At (source.ip6 S))
+             true (write-sources G (net-ipv6.write-address B At (source.address S))
                                  (fx+ At (wire.ipv6-address.size)) Four Kind (fx- I 1)))))
 
 (define write-source-record
   {group --> buffer.view --> fixnum --> boolean --> fixnum --> fixnum --> buffer.view}
   G B At Four Kind Count ->
     (if Four
-        (write-sources G (write-layout wire.igmp3-record B At (record-type Kind) (sources Count) (group (group.ip4 G)))
+        (write-sources G (write-layout wire.igmp3-record B At (record-type Kind) (sources Count) (group (net-ipv6.address.d (group.address G))))
                        (fx+ At (wire.igmp3-record.size)) Four Kind (group.source-limit G))
         (do (write-layout wire.mld2-record B At (record-type Kind) (sources Count))
-            (net-ipv6.write-address B (wire.mld2-record.group-at At) (group.ip6 G))
+            (net-ipv6.write-address B (wire.mld2-record.group-at At) (group.address G))
             (write-sources G B (fx+ At (wire.mld2-record.size)) Four Kind (group.source-limit G)))))
 
 \\ A v3 or v2 report of the sources a query asked about (1), or of those allowed (5) and blocked (6).
