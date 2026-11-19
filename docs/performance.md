@@ -78,8 +78,11 @@ What it adds is that a small function that takes a function and applies it, `app
 lambda in place, so no closure is made:
 
 ```shen
-(define apply1 F X -> (F X))
-(define bump N -> (apply1 (/. X (+ X N)) 1))
+(define apply1
+  F X -> (F X))
+
+(define bump
+  N -> (apply1 (/. X (+ X N)) 1))
 ```
 
 Open, each `bump` allocates a closure; sealed, it allocates nothing. `shen-jit build` seals a program unless
@@ -108,23 +111,24 @@ This reads records of a kind byte, a big-endian 16-bit length and that many byte
 that the caller made once (`-m buffer`):
 
 ```shen
-(defstruct header (mutable kind) (mutable length))
+(defstruct header
+  (mutable kind)
+  (mutable length))
 
-\\ Reads the record at offset I of In: a kind byte, a big-endian 16-bit length and that many
-\\ bytes, which go to the start of Out. Fills H and gives the offset after the record, -1 if In
-\\ ends first, or -2 if Out is too small.
+\\ Reads the record at offset I of In: a kind byte, a big-endian 16-bit length and that
+\\ many bytes, which go to the start of Out. Fills H and gives the offset after the record,
+\\ -1 if In ends first, or -2 if Out is too small.
 (define read-record
-  In I H Out ->
-    (let Start (+ I 3)
-      (if (> Start (buffer.length In))
-          -1
-          (let N (buffer.u16-be In (+ I 1))
-            (cond ((> (+ Start N) (buffer.length In)) -1)
-                  ((> N (buffer.length Out)) -2)
-                  (true (do (buffer.copy-into! Out 0 In Start N)
-                            (header.kind-> H (buffer.u8 In I))
-                            (header.length-> H N)
-                            (+ Start N))))))))
+  In I _ _ -> -1 where (> (+ I 3) (buffer.length In))
+  In I H Out -> (read-payload In (+ I 3) (buffer.u16-be In (+ I 1)) (buffer.u8 In I) H Out))
+
+(define read-payload
+  In Start N _ _ _ -> -1 where (> (+ Start N) (buffer.length In))
+  _ _ N _ _ Out -> -2 where (> N (buffer.length Out))
+  In Start N Kind H Out -> (do (buffer.copy-into! Out 0 In Start N)
+                               (header.kind-> H Kind)
+                               (header.length-> H N)
+                               (+ Start N)))
 
 \\ Reads every record of In and gives how many it read.
 (define read-all
@@ -181,13 +185,16 @@ and a descriptor's `(typed)` compiles the module with them ([Typed programs](mod
 
 ```shen
 \\ orbit.shen
-(define orbit {float --> float --> float --> float --> fixnum --> fixnum --> fixnum}
+(define orbit
+  {float --> float --> float --> float --> fixnum --> fixnum --> fixnum}
   _ _ _ _ Limit Limit -> Limit
   X Y CX CY N Limit -> (let XX (fl* X X)
                             YY (fl* Y Y)
                          (if (fl> (fl+ XX YY) (float 4))
                              N
-                             (orbit (fl+ (fl- XX YY) CX) (fl+ (fl* (float 2) (fl* X Y)) CY) CX CY (fx+ N 1) Limit))))
+                             (orbit (fl+ (fl- XX YY) CX)
+                                    (fl+ (fl* (float 2) (fl* X Y)) CY)
+                                    CX CY (fx+ N 1) Limit))))
 ```
 
 A call of `orbit` runs its iterations as a loop in registers and allocates nothing. To check that a definition

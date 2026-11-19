@@ -239,13 +239,16 @@ What the compiler does with the types:
   `fx->number`, runs as in untyped code.
 
 ```shen
-(define orbit {float --> float --> float --> float --> fixnum --> fixnum --> fixnum}
+(define orbit
+  {float --> float --> float --> float --> fixnum --> fixnum --> fixnum}
   _ _ _ _ Limit Limit -> Limit
   X Y CX CY N Limit -> (let XX (fl* X X)
                             YY (fl* Y Y)
                          (if (fl> (fl+ XX YY) (float 4))
                              N
-                             (orbit (fl+ (fl- XX YY) CX) (fl+ (fl* (float 2) (fl* X Y)) CY) CX CY (fx+ N 1) Limit))))
+                             (orbit (fl+ (fl- XX YY) CX)
+                                    (fl+ (fl* (float 2) (fl* X Y)) CY)
+                                    CX CY (fx+ N 1) Limit))))
 ```
 
 - **Fixnums in registers.** A `fixnum` parameter, and fixnum arithmetic, comparisons and shifts by a constant
