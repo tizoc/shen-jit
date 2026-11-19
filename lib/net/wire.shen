@@ -91,6 +91,36 @@
   (_ 32)
   (prefix 128))
 
+\\ RFC 2131: BOOTP's fixed part, with DHCP's options after the magic cookie. The client's hardware
+\\ address field is 16 bytes, of which Ethernet uses the first 6.
+(deflayout dhcp
+  (op 8) (hardware-type 8) (hardware-length 8) (hops 8)
+  (transaction-id 32)
+  (seconds 16) (broadcast 1) (_ 15)
+  (client-address 32)
+  (your-address 32)
+  (server-address 32)
+  (relay-address 32)
+  (client-hardware 48) (_ 80)
+  (server-name 512)
+  (boot-file 1024)
+  (magic-cookie 32))
+
+\\ RFC 1035: a message's header; then each question's name and these, and each record's name and these.
+(deflayout dns
+  (id 16) (response 1) (opcode 4) (authoritative 1) (truncated 1) (recursion-desired 1)
+      (recursion-available 1) (_ 3) (rcode 4)
+  (questions 16) (answers 16)
+  (authorities 16) (additionals 16))
+
+(deflayout dns-question
+  (type 16) (class 16))
+
+(deflayout dns-record
+  (type 16) (class 16)
+  (ttl 32)
+  (length 16))
+
 \\ IEEE 802.3.
 (deflayout ethernet
   (destination 48)

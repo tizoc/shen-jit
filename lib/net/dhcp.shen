@@ -5,7 +5,9 @@
   (use net-ipv4)
   (use udp)
   (use shen-jit)
+  (use net-wire => wire)
   (import struct defstruct)
+  (import layout write-layout)
   (export client make poll maintain
           client.state client.address client.mask client.gateway client.dns
           client.deadline client.expires selecting requesting bound renewing rebinding expired)
@@ -187,16 +189,15 @@
 (define accept
   {client --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   C B I N Now ->
-    (and (fx>= N 241)
-         (= (buffer.u16-be B I) 513) \\ BOOTREPLY, Ethernet.
-         (= (buffer.u8 B (fx+ I 2)) 6)
-         (= (buffer.u32-be B (fx+ I 4)) (client.id C))
-         (= (buffer.u16-be B (fx+ I 28)) (shen-jit.shift-right (client.mac C) 32))
-         (= (buffer.u32-be B (fx+ I 30)) (shen-jit.bit-and (client.mac C) 4294967295))
-         (= (buffer.u32-be B (fx+ I 236)) 1669485411)
+    (and (fx> N (wire.dhcp.size))                           \\ At least the end option.
+         (= (wire.dhcp.op B I) 2)                              \\ A reply,
+         (= (wire.dhcp.hardware-type B I) 1) (= (wire.dhcp.hardware-length B I) 6)   \\ over Ethernet,
+         (= (wire.dhcp.transaction-id B I) (client.id C))
+         (= (wire.dhcp.client-hardware B I) (client.mac C))   \\ to us.
+         (= (wire.dhcp.magic-cookie B I) 1669485411)
          (let O (reset-options (client.options C))
-           (and (read-options O B (fx+ I 240) (fx+ I N))
-                (accept-options C O (buffer.u32-be B (fx+ I 16)) Now)))))
+           (and (read-options O B (fx+ I (wire.dhcp.size)) (fx+ I N))
+                (accept-options C O (wire.dhcp.your-address B I) Now)))))
 
 (define init-input
   {client --> net-link.ring --> fixnum --> fixnum --> boolean}
@@ -206,9 +207,11 @@
          (let B (net-link.ring.data R)
               At (net-link.head-offset R)
               N (net-link.head-length R)
+              T (fx+ At (wire.ipv4.size))
+              Headers (fx+ (wire.ipv4.size) (wire.udp.size))
               OK (and (udp.valid-datagram? B At N)
-                      (= (buffer.u32-be B (fx+ At 20)) 4390980)
-                      (accept C B (fx+ At 28) (fx- N 28) Now))
+                      (= (wire.udp.source-port B T) 67) (= (wire.udp.destination-port B T) 68)  \\ Server to client.
+                      (accept C B (fx+ At Headers) (fx- N Headers) Now))
            (do (net-link.consume R)
                (or OK (init-input C R Now (fx- Left 1)))))))
 
@@ -235,13 +238,13 @@
   C Configured Broadcast ->
     (let B (clear (client.out C) 0)
          State (client.state C)
-      (do (buffer.u32-be-> B 0 16844288)
-          (buffer.u32-be-> B 4 (client.id C))
-          (if Broadcast (buffer.u16-be-> B 10 32768) B)
-          (if Configured (buffer.u32-be-> B 12 (client.address C)) B)
-          (buffer.u16-be-> B 28 (shen-jit.shift-right (client.mac C) 32))
-          (buffer.u32-be-> B 30 (shen-jit.bit-and (client.mac C) 4294967295))
-          (buffer.u32-be-> B 236 1669485411)
+      (do (write-layout wire.dhcp B 0
+            (op 1) (hardware-type 1) (hardware-length 6)          \\ A request, over Ethernet.
+            (transaction-id (client.id C))
+            (broadcast (if Broadcast 1 0))
+            (client-address (if Configured (client.address C) 0))
+            (client-hardware (client.mac C))
+            (magic-cookie 1669485411))
           (buffer.u16-be-> B 240 13569)
           (buffer.u8-> B 242 (if (= State selecting) 1 3))
           (buffer.u32-be-> B 243 923140355) \\ Parameter request list, mask and router.

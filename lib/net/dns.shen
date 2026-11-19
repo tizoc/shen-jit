@@ -4,7 +4,9 @@
   (use udp)
   (use net-ipv4)
   (use shen-jit)
+  (use net-wire => wire)
   (import struct defstruct)
+  (import layout write-layout)
   (export resolver make start poll
           resolver.state resolver.ip resolver.ttl resolver.deadline
           idle pending resolved not-found failed)
@@ -60,16 +62,12 @@
       (if (and (not (= (resolver.state R) pending)) (net-ipv4.unicast? Server)
                (fx>= Id 0) (fx<= Id 65535) (fx>= N 1) (fx<= N 255)
                (= (after-name Name 0 N false) N))
-          (do (buffer.u16-be-> Q 0 Id)
-              (buffer.u16-be-> Q 2 256)
-              (buffer.u16-be-> Q 4 1)
-              (buffer.u32-be-> Q 6 0)
-              (buffer.u16-be-> Q 10 0)
-              (buffer.copy-into! Q 12 Name 0 N)
-              (buffer.u32-be-> Q (fx+ 12 N) 65537)
+          (do (write-layout wire.dns Q 0 (id Id) (recursion-desired 1) (questions 1))
+              (buffer.copy-into! Q (wire.dns.size) Name 0 N)
+              (write-layout wire.dns-question Q (fx+ (wire.dns.size) N) (type 1) (class 1))   \\ A, IN.
               (resolver.server-> R Server)
               (resolver.id-> R Id)
-              (resolver.query-length-> R (fx+ N 16))
+              (resolver.query-length-> R (fx+ N (fx+ (wire.dns.size) (wire.dns-question.size))))
               (resolver.ip-> R 0)
               (resolver.ttl-> R 0)
               (resolver.attempts-> R 0)
@@ -127,13 +125,13 @@
   _ _ _ _ _ _ 0 -> -1
   Name Owner B N I EndName Count ->
     (let Fields (after-name B I N true)
-      (if (or (fx< Fields 0) (fx> (fx+ Fields 10) N)) -1
-          (let Data (fx+ Fields 10)
-               Size (buffer.u16-be B (fx+ Fields 8))
+      (if (or (fx< Fields 0) (fx> (fx+ Fields (wire.dns-record.size)) N)) -1
+          (let Data (fx+ Fields (wire.dns-record.size))
+               Size (wire.dns-record.length B Fields)
                Next (fx+ Data Size)
-               Kind (buffer.u16-be B Fields)
+               Kind (wire.dns-record.type B Fields)
             (cases (fx> Next N) -1
-                   (and (= (buffer.u16-be B (fx+ Fields 2)) 1)
+                   (and (= (wire.dns-record.class B Fields) 1)             \\ IN, and A or CNAME.
                         (or (and (= Kind 1) (= Size 4))
                             (and (= Kind 5) (fx> Size 0) (= (after-name B Data Next true) Next)))
                         (name-equal? Name Owner EndName B I N 255))
@@ -145,12 +143,12 @@
   _ _ _ _ _ _ _ 0 -> false
   R Name Owner EndName N Start Ttl Left ->
     (let B (resolver.reply R)
-         Fields (find-answer Name Owner B N Start EndName (buffer.u16-be B 6))
+         Fields (find-answer Name Owner B N Start EndName (wire.dns.answers B 0))
       (if (fx< Fields 0) false
-          (let Data (fx+ Fields 10)
-               Lifetime (buffer.u32-be B (fx+ Fields 4))
+          (let Data (fx+ Fields (wire.dns-record.size))
+               Lifetime (wire.dns-record.ttl B Fields)
                Min (if (fx< Lifetime Ttl) Lifetime Ttl)
-            (if (= (buffer.u16-be B Fields) 1)
+            (if (= (wire.dns-record.type B Fields) 1)
                 (do (resolver.ip-> R (buffer.u32-be B Data))
                     (resolver.ttl-> R Min)
                     (finish R resolved)
@@ -161,22 +159,21 @@
   {resolver --> fixnum --> boolean}
   R N ->
     (let B (resolver.reply R)
-      (and (fx>= N 12) (= (buffer.u16-be B 0) (resolver.id R))
-           (= (shen-jit.bit-and (buffer.u16-be B 2) 63488) 32768)
-           (= (buffer.u16-be B 4) 1)
+      (and (fx>= N (wire.dns.size)) (= (wire.dns.id B 0) (resolver.id R))
+           (= (wire.dns.response B 0) 1) (= (wire.dns.opcode B 0) 0)      \\ An answer to a query,
+           (= (wire.dns.questions B 0) 1)                                  \\ to one question.
            (let Q (resolver.query R)
-                Stop (after-name B 12 N true)
-                Flags (buffer.u16-be B 2)
-                Rcode (shen-jit.bit-and Flags 15)
-             (and (fx>= Stop 0) (fx<= (fx+ Stop 4) N)
-                  (= (buffer.u32-be B Stop) 65537)
-                  (name-equal? Q 12 (resolver.query-length R) B 12 N 255)
-                  (cases (or (not (= (shen-jit.bit-and Flags 512) 0))
+                Stop (after-name B (wire.dns.size) N true)
+                Rcode (wire.dns.rcode B 0)
+             (and (fx>= Stop 0) (fx<= (fx+ Stop (wire.dns-question.size)) N)
+                  (= (wire.dns-question.type B Stop) 1) (= (wire.dns-question.class B Stop) 1)   \\ A, IN.
+                  (name-equal? Q (wire.dns.size) (resolver.query-length R) B (wire.dns.size) N 255)
+                  (cases (or (= (wire.dns.truncated B 0) 1)
                              (and (not (= Rcode 0)) (not (= Rcode 3))))
                            (= (finish R failed) failed)
-                         (= Rcode 3) (= (finish R not-found) not-found)
-                         true (or (resolve-answer R Q 12 (resolver.query-length R)
-                                                  N (fx+ Stop 4) 4294967295 9)
+                         (= Rcode 3) (= (finish R not-found) not-found)        \\ No such name.
+                         true (or (resolve-answer R Q (wire.dns.size) (resolver.query-length R)
+                                                  N (fx+ Stop (wire.dns-question.size)) 4294967295 9)
                                   (= (finish R not-found) not-found))))))))
 
 (define receive-reply
