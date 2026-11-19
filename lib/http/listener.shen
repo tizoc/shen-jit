@@ -14,7 +14,7 @@
   (import struct defstruct)
   (externals [accept cancelling draining listening max-connections pending serve shutdown-grace
     stopped timeout])
-  (shadow port run)
+  (shadow port run stop)
   (export current-server handler listen listener-option option port request response run server
     state stats stop wait-result)
 

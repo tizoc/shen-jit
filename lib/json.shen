@@ -10,7 +10,7 @@
   (use io)
   (use shen-jit)
   (externals [? at byte-limit defgrammar depth-limit object require span text])
-  (shadow <e> read value)
+  (shadow <e> array read value)
   (export from-string from-number from-array from-null empty-object array decode encode integer json.number => number
     json.string => string option parse read stringify value object null)
 

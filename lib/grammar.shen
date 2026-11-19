@@ -19,7 +19,7 @@
   (use shen-jit)
   (import struct defstruct)
   (externals [? at defgrammar eof none plain ready require skip span text u16-be u32-be unknown])
-  (shadow bind call compile every? inline list pos read run stream subst type value)
+  (shadow bind call compile done every? inline list pos read run stream subst type value)
   (export finish match? parse parse-range prepare read read-within defgrammar)
 
 (define grammar.error
