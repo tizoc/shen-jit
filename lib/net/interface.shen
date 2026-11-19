@@ -53,8 +53,20 @@
   _________________________
   Result : send-result;)
 
+\\ The IPv6 packet being received: its N bytes from Start, the address of this host that answers for
+\\ it, how it was addressed, when it came, and whether it came in fragments.
+(defstruct arrival
+  (mutable data : buffer.view)
+  (mutable start : fixnum)
+  (mutable length : fixnum)
+  (mutable local : net-ipv6.address)
+  (mutable scope : scope)
+  (mutable now : fixnum)
+  (mutable fragmented : boolean))
+
 (defstruct ipv6-state
   (ndp : net-ndp.host)
+  (arrival : arrival)
   (remote : net-ipv6.address)
   (headers : net-ipv6-headers.cursor)
   (fragments : net-fragments6.table)
@@ -266,6 +278,9 @@
              (inboxes-empty? (interface.udp-bindings F)))
         (let State (:ipv6-state
                       ndp <- H
+                      arrival <- (:arrival data <- (buffer.new 0) start <- 0 length <- 0
+                                           local <- (net-ipv6.make-address 0 0 0 0) scope <- unicast
+                                           now <- 0 fragmented <- false)
                       remote <- (net-ipv6.make-address 0 0 0 0)
                       headers <- (net-ipv6-headers.make)
                       fragments <- (net-fragments6.make Slots Bytes)
@@ -533,13 +548,24 @@
            (emit-icmp6 F Local Remote B I (smaller N (net-ipv6.error-quote)) (error-type Error) (error-code Error) Pointer Now)
            (do (ipv6-state.error-tokens-> S (fx- (ipv6-state.error-tokens S) 1)) true))))
 
+\\ An error about the packet being received, sent from Local.
+(define report6
+  {interface --> ipv6-state --> net-ipv6.address --> icmp6-error --> fixnum --> boolean}
+  F S Local Error Pointer ->
+    (let A (ipv6-state.arrival S)
+      (error6 F S Local (arrival.data A) (arrival.start A) (arrival.length A) Error Pointer (arrival.now A))))
+
 (define icmp6
-  {interface --> net-ipv6.address --> net-ipv6.address --> buffer.view --> fixnum -->
-   fixnum --> fixnum --> fixnum --> boolean}
-  F Local Remote B I N At Now ->
-    (let Count (fx- (fx+ I N) At)
+  {interface --> ipv6-state --> net-ipv6.address --> fixnum --> boolean}
+  F S Remote At ->
+    (let A (ipv6-state.arrival S)
+         B (arrival.data A)
+         Local (arrival.local A)
+         Now (arrival.now A)
+         Count (fx- (fx+ (arrival.start A) (arrival.length A)) At)
          Body (fx+ At (wire.icmp.size))
-      (and (fx>= Count (wire.icmp.size)) (= (net-ipv6.transport-checksum-at B I At (wire.icmp6-protocol) Count) 0)
+      (and (fx>= Count (wire.icmp.size))
+           (= (net-ipv6.transport-checksum-at B (arrival.start A) At (wire.icmp6-protocol) Count) 0)
            (let Type (wire.icmp.type B At)
                 Code (wire.icmp.code B At)
              (cases (and (= Type 128) (= Code 0))                \\ An echo request, answered with its rest.
@@ -550,65 +576,73 @@
                                      (wire.icmp6-too-big.mtu B At) Now Local)
                     true false)))))
 
+\\ A datagram at At for Port: to the inbox bound to it, or, sent to this host, a port unreachable.
 (define udp-ingress6
-  {interface --> ipv6-state --> (list udp.inbox) --> fixnum --> net-ipv6.address -->
-   buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
-  F S [] _ Local B I N At Now Multicast ->
-    (and (not Multicast) (udp.valid-datagram6-at? B I N At)
-         (error6 F S Local B I N port-unreachable 0 Now))
-  F S [Q | Rest] Port Local B I N At Now Multicast ->
+  {interface --> ipv6-state --> (list udp.inbox) --> fixnum --> fixnum --> boolean}
+  F S [] _ At ->
+    (let A (ipv6-state.arrival S)
+      (and (= (arrival.scope A) unicast)
+           (udp.valid-datagram6-at? (arrival.data A) (arrival.start A) (arrival.length A) At)
+           (report6 F S (arrival.local A) port-unreachable 0)))
+  F S [Q | Rest] Port At ->
     (if (= (udp.peer.port (udp.inbox.peer Q)) Port)
-        (udp.inbox-ingress6-at Q B I N At)
-        (udp-ingress6 F S Rest Port Local B I N At Now Multicast)))
+        (let A (ipv6-state.arrival S)
+          (udp.inbox-ingress6-at Q (arrival.data A) (arrival.start A) (arrival.length A) At))
+        (udp-ingress6 F S Rest Port At)))
 
 (define mld-ingress
-  {(list net-multicast.membership) --> ipv6-state --> buffer.view -->
-   fixnum --> fixnum --> fixnum --> fixnum --> boolean}
-  [] _ _ _ _ _ _ -> false
-  [M] S B I N At Now -> (net-multicast.ingress6 M (net-ndp.host.link-local (ipv6-state.ndp S)) B I N At
-                                                (net-ipv6-headers.cursor.router-alert (ipv6-state.headers S)) Now))
+  {(list net-multicast.membership) --> ipv6-state --> fixnum --> boolean}
+  [] _ _ -> false
+  [M] S At -> (let A (ipv6-state.arrival S)
+                (net-multicast.ingress6 M (net-ndp.host.link-local (ipv6-state.ndp S))
+                                        (arrival.data A) (arrival.start A) (arrival.length A) At
+                                        (net-ipv6-headers.cursor.router-alert (ipv6-state.headers S))
+                                        (arrival.now A))))
 
+\\ A packet whose header walk reached its upper-layer header.
 (define dispatch6
-  {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum --> fixnum -->
-   fixnum --> scope --> boolean --> boolean}
-  F S Local B I N Now Scope Fragmented ->
-    (let Cursor (ipv6-state.headers S)
+  {interface --> ipv6-state --> boolean}
+  F S ->
+    (let A (ipv6-state.arrival S)
+         B (arrival.data A)
+         I (arrival.start A)
+         N (arrival.length A)
+         Scope (arrival.scope A)
+         Cursor (ipv6-state.headers S)
          Proto (net-ipv6-headers.cursor.protocol Cursor)
          At (net-ipv6-headers.cursor.at Cursor)
          Count (fx- (fx+ I N) At)
-         H (ipv6-state.ndp S)
-      (or (and (= Proto (wire.icmp6-protocol)) (not Fragmented)
-               (or (net-ndp.ingress-at H B I N At Now)
-                   (and (= Scope multicast) (mld-ingress (interface.groups F) S B I N At Now))))
+      (or (and (= Proto (wire.icmp6-protocol)) (not (arrival.fragmented A))
+               (or (net-ndp.ingress-at (ipv6-state.ndp S) B I N At (arrival.now A))
+                   (and (= Scope multicast) (mld-ingress (interface.groups F) S At))))
           (and (or (= Scope unicast) (= Scope multicast))
                (let Remote (net-ipv6.read-address (ipv6-state.remote S) B (wire.ipv6.source-at I))
                  (and (net-ipv6.unicast? Remote)
                       (cases (and (= Proto (wire.udp-protocol)) (fx>= Count (wire.udp.size))
                                   (or (= Scope unicast) (multicast-from6? F B I)))
-                               (udp-ingress6 F S (interface.udp-bindings F) (wire.udp.destination-port B At)
-                                             Local B I N At Now (= Scope multicast))
+                               (udp-ingress6 F S (interface.udp-bindings F) (wire.udp.destination-port B At) At)
                              (not (= Scope unicast)) false
                              (and (= Proto (wire.tcp-protocol)) (fx>= Count (wire.tcp.size)))
-                               (tcp.table-ingress6-at (interface.listener F) B I N At Now
-                                 (list-has-port? (interface.tcp-ports F) (wire.tcp.destination-port B At)) Local)
-                             (= Proto (wire.icmp6-protocol)) (icmp6 F Local Remote B I N At Now)
+                               (tcp.table-ingress6-at (interface.listener F) B I N At (arrival.now A)
+                                 (list-has-port? (interface.tcp-ports F) (wire.tcp.destination-port B At))
+                                 (arrival.local A))
+                             (= Proto (wire.icmp6-protocol)) (icmp6 F S Remote At)
                              true false)))))))
 
+\\ A packet whose header walk found a problem: reported if it came to this host, or, to a group, if
+\\ the option asked for it, from an address this host can use.
 (define complain6
-  {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum -->
-   fixnum --> fixnum --> scope --> boolean}
-  F S Local B I N Now Scope ->
-    (let H (ipv6-state.ndp S)
+  {interface --> ipv6-state --> boolean}
+  F S ->
+    (let A (ipv6-state.arrival S)
+         H (ipv6-state.ndp S)
          Cursor (ipv6-state.headers S)
-         Pointer (fx- (net-ipv6-headers.cursor.at Cursor) I)
+         Pointer (fx- (net-ipv6-headers.cursor.at Cursor) (arrival.start A))
          Problem (net-ipv6-headers.cursor.problem Cursor)
-      (cases (= Scope unicast)
-               (error6 F S Local B I N Problem Pointer Now)
-             (and (= Scope multicast) (net-ipv6-headers.cursor.multicast-error Cursor))
-               (cases (net-ndp.local-ready? H)
-                        (error6 F S (net-ndp.host.link-local H) B I N Problem Pointer Now)
-                      (net-ndp.global-ready? H Now)
-                        (error6 F S (net-ndp.host.global H) B I N Problem Pointer Now)
+      (cases (= (arrival.scope A) unicast) (report6 F S (arrival.local A) Problem Pointer)
+             (and (= (arrival.scope A) multicast) (net-ipv6-headers.cursor.multicast-error Cursor))
+               (cases (net-ndp.local-ready? H) (report6 F S (net-ndp.host.link-local H) Problem Pointer)
+                      (net-ndp.global-ready? H (arrival.now A)) (report6 F S (net-ndp.host.global H) Problem Pointer)
                       true false)
              true false)))
 
@@ -619,47 +653,62 @@
          Left (fx- End At)
       (if (= (net-ipv6-headers.cursor.protocol Cursor) (wire.tcp-protocol))
           (tcp.header-fits? B At Left)
-          (fx>= Left 8))))
+          (fx>= Left (wire.udp.size)))))                                    \\ UDP's and ICMPv6's are 8 bytes.
 
 (define fragmented-discovery?
   {net-ipv6-headers.cursor --> buffer.view --> boolean}
   Cursor B ->
     (and (= (net-ipv6-headers.cursor.protocol Cursor) (wire.icmp6-protocol))
          (let Kind (wire.icmp.type B (net-ipv6-headers.cursor.at Cursor))
-           (and (fx>= Kind 133) (fx<= Kind 137)))))
+           (and (fx>= Kind 133) (fx<= Kind 137)))))                         \\ Neighbor discovery's.
 
+\\ A fragment at Frag, which the next-header field at Prev named, into the table; a datagram it
+\\ completes is walked and dispatched in place of the packet.
 (define reassemble6
-  {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum --> fixnum -->
-   fixnum --> fixnum --> fixnum --> scope --> boolean}
-  F S Local B I N Frag Prev Now Scope ->
-    (let Table (ipv6-state.fragments S)
-         Cursor (ipv6-state.headers S)
-         Length (net-fragments6.receive Table B I N Frag Prev Now)
+  {interface --> ipv6-state --> fixnum --> fixnum --> boolean}
+  F S Frag Prev ->
+    (let A (ipv6-state.arrival S)
+         Table (ipv6-state.fragments S)
+         Length (net-fragments6.receive Table (arrival.data A) (arrival.start A) (arrival.length A) Frag Prev
+                                        (arrival.now A))
       (and (fx> Length 0)
            (let Packet (net-fragments6.packet Table)
-             (and (= (net-ipv6-headers.parse Cursor Packet 0 Length) net-ipv6-headers.upper)
-                  (dispatch6 F S Local Packet 0 Length Now Scope true))))))
+             (and (= (net-ipv6-headers.parse (ipv6-state.headers S) Packet 0 Length) net-ipv6-headers.upper)
+                  (do (arrival.data-> A Packet)
+                      (arrival.start-> A 0)
+                      (arrival.length-> A Length)
+                      (arrival.fragmented-> A true)
+                      (dispatch6 F S)))))))
 
+\\ RFC 8200 4.5: the first fragment holds the whole header chain, and no neighbor discovery message.
 (define first-fragment
-  {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum --> fixnum -->
-   fixnum --> fixnum --> fixnum --> scope --> boolean}
-  F S Local B I N Frag Prev Now Scope ->
-    (let Cursor (ipv6-state.headers S)
-         Next (net-ipv6-headers.after-fragment Cursor B I N)
-      (cases (= Next net-ipv6-headers.problem) (complain6 F S Local B I N Now Scope)
+  {interface --> ipv6-state --> fixnum --> fixnum --> boolean}
+  F S Frag Prev ->
+    (let A (ipv6-state.arrival S)
+         B (arrival.data A)
+         Unicast (= (arrival.scope A) unicast)
+         Cursor (ipv6-state.headers S)
+         Next (net-ipv6-headers.after-fragment Cursor B (arrival.start A) (arrival.length A))
+      (cases (= Next net-ipv6-headers.problem) (complain6 F S)
              (or (= Next net-ipv6-headers.incomplete)
-                 (and (= Next net-ipv6-headers.upper) (not (upper-fits? Cursor B (fx+ I N)))))
-               (and (= Scope unicast) (error6 F S Local B I N net-ipv6-headers.incomplete-chain 0 Now))
+                 (and (= Next net-ipv6-headers.upper)
+                      (not (upper-fits? Cursor B (fx+ (arrival.start A) (arrival.length A))))))
+               (and Unicast (report6 F S (arrival.local A) net-ipv6-headers.incomplete-chain 0))
              (and (= Next net-ipv6-headers.upper) (not (fragmented-discovery? Cursor B))
-                  (or (= Scope unicast) (= (net-ipv6-headers.cursor.protocol Cursor) (wire.udp-protocol))))
-               (reassemble6 F S Local B I N Frag Prev Now Scope)
+                  (or Unicast (= (net-ipv6-headers.cursor.protocol Cursor) (wire.udp-protocol))))
+               (reassemble6 F S Frag Prev)
              true false)))
 
+\\ A packet with a fragment header: alone in its datagram, or one of several.
 (define fragment6
-  {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum --> fixnum -->
-   fixnum --> scope --> boolean}
-  F S Local B I N Now Scope ->
-    (let Cursor (ipv6-state.headers S)
+  {interface --> ipv6-state --> boolean}
+  F S ->
+    (let A (ipv6-state.arrival S)
+         B (arrival.data A)
+         I (arrival.start A)
+         N (arrival.length A)
+         Unicast (= (arrival.scope A) unicast)
+         Cursor (ipv6-state.headers S)
          Frag (net-ipv6-headers.cursor.at Cursor)
          Prev (net-ipv6-headers.cursor.next-field Cursor)
          Offset (fx* 8 (wire.ipv6-fragment.offset B Frag))                   \\ In bytes.
@@ -667,32 +716,52 @@
          Bytes (fx- (fx+ I N) (fx+ Frag (wire.ipv6-fragment.size)))
          Remote (net-ipv6.read-address (ipv6-state.remote S) B (wire.ipv6.source-at I))
       (and (net-ipv6.unicast? Remote)
-           (or (= Scope unicast) (and (= Scope multicast) (multicast-from6? F B I)))
+           (or Unicast (and (= (arrival.scope A) multicast) (multicast-from6? F B I)))
            (cases (and (= Offset 0) (not More))
                     (let Next (net-ipv6-headers.after-fragment Cursor B I N)
                       (cases (or (= Next net-ipv6-headers.problem) (= Next net-ipv6-headers.incomplete))
-                               (complain6 F S Local B I N Now Scope)
-                             (= Next net-ipv6-headers.upper)
-                               (dispatch6 F S Local B I N Now Scope true)
+                               (complain6 F S)
+                             (= Next net-ipv6-headers.upper) (do (arrival.fragmented-> A true) (dispatch6 F S))
                              true false))
                   (= Bytes 0) false
                   (and More (not (= (fxremainder Bytes 8) 0)))
-                    (and (= Scope unicast) (error6 F S Local B I N net-ipv6-headers.erroneous-field (wire.ipv6.payload-length-at 0) Now))
+                    (and Unicast (report6 F S (arrival.local A) net-ipv6-headers.erroneous-field
+                                          (wire.ipv6.payload-length-at 0)))
                   (fx> (fx+ Offset Bytes) 65535)
-                    (and (= Scope unicast) (error6 F S Local B I N net-ipv6-headers.erroneous-field (fx- (wire.ipv6-fragment.offset-at Frag) I) Now))
-                  (= Offset 0) (first-fragment F S Local B I N Frag Prev Now Scope)
-                  true (reassemble6 F S Local B I N Frag Prev Now Scope)))))
+                    (and Unicast (report6 F S (arrival.local A) net-ipv6-headers.erroneous-field
+                                          (fx- (wire.ipv6-fragment.offset-at Frag) I)))
+                  (= Offset 0) (first-fragment F S Frag Prev)
+                  true (reassemble6 F S Frag Prev)))))
 
+\\ A packet taken in, by where its header walk ended.
 (define packet6
-  {interface --> ipv6-state --> net-ipv6.address --> buffer.view --> fixnum --> fixnum -->
-   fixnum --> scope --> boolean}
-  F S Local B I N Now Scope ->
-    (let Kind (net-ipv6-headers.parse (ipv6-state.headers S) B I N)
-      (cases (= Kind net-ipv6-headers.upper) (dispatch6 F S Local B I N Now Scope false)
-             (= Kind net-ipv6-headers.fragment) (fragment6 F S Local B I N Now Scope)
-             (or (= Kind net-ipv6-headers.problem) (= Kind net-ipv6-headers.incomplete))
-               (complain6 F S Local B I N Now Scope)
-             true false)))
+  {interface --> ipv6-state --> boolean}
+  F S -> (let A (ipv6-state.arrival S)
+           (walked (net-ipv6-headers.parse (ipv6-state.headers S) (arrival.data A) (arrival.start A)
+                                           (arrival.length A))
+                   F S)))
+
+(define walked
+  {net-ipv6-headers.outcome --> interface --> ipv6-state --> boolean}
+  net-ipv6-headers.upper F S -> (dispatch6 F S)
+  net-ipv6-headers.fragment F S -> (fragment6 F S)
+  net-ipv6-headers.problem F S -> (complain6 F S)
+  net-ipv6-headers.incomplete F S -> (complain6 F S)
+  _ _ _ -> false)
+
+\\ Takes in a packet of N bytes at I of B, to the address Local answers for, as it was addressed.
+(define arrive
+  {ipv6-state --> buffer.view --> fixnum --> fixnum --> fixnum --> net-ipv6.address --> scope --> ipv6-state}
+  S B I N Now Local Scope ->
+    (let A (ipv6-state.arrival S)
+      (do (arrival.data-> A B)
+          (arrival.start-> A I)
+          (arrival.length-> A N)
+          (arrival.now-> A Now)
+          (arrival.local-> A Local)
+          (arrival.scope-> A Scope)
+          (arrival.fragmented-> A false)
+          S)))
 
 (define ingress6
   {interface --> (list ipv6-state) --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
@@ -704,16 +773,16 @@
               Global (net-ndp.host.global H)
               At (wire.ipv6.destination-at I)
            (cases (and (net-ndp.local-ready? H) (net-ipv6.address-at? Local B At))
-                    (packet6 F S Local B I N Now unicast)
+                    (packet6 F (arrive S B I N Now Local unicast))
                   (and (net-ndp.global-ready? H Now) (net-ipv6.address-at? Global B At))
-                    (packet6 F S Global B I N Now unicast)
+                    (packet6 F (arrive S B I N Now Global unicast))
                   (or (net-ndp.multicast-at? H B At Now) (joined6-at? F B At))
-                    (packet6 F S Local B I N Now multicast)
+                    (packet6 F (arrive S B I N Now Local multicast))
                   (or (and (= (net-ndp.host.local-state H) net-ndp.tentative)
                            (net-ipv6.address-at? Local B At))
                       (and (= (net-ndp.host.global-state H) net-ndp.tentative)
                            (net-ipv6.address-at? Global B At)))
-                    (packet6 F S Local B I N Now tentative)
+                    (packet6 F (arrive S B I N Now Local tentative))
                   true false))))
 
 (define expire-slots6
@@ -813,5 +882,5 @@
          (earlier (multicast-deadline (interface.groups F) (interface.ipv6 F))
                   (earlier (ipv6-deadline (interface.ipv6 F) Now) (earlier Rx Tcp)))))
 
-(preclude [interface.%match ipv6-state.%match])
+(preclude [interface.%match ipv6-state.%match arrival.%match])
 )
