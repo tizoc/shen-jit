@@ -19,7 +19,7 @@
 \\ positions, so that a word read at the byte of any position stays in it.
 (define bytes
   {fixnum --> fixnum}
-  Capacity -> (fx+ (fxquotient (fx+ Capacity 7) 8) 3))
+  Capacity -> (fx+ (shen-jit.shift-right (fx+ Capacity 7) 3) 3))
 
 \\ How many of the N positions from At on have the bits of Fill, all ones or none, added to Done. The
 \\ caller has checked the map's bytes, and that the N positions are in the ring.
@@ -74,21 +74,21 @@
                                                 (shen-jit.bit-and Word (shen-jit.bit-xor Bits 4294967295))))
               (mark-from Storage Base (fx+ At Take) (fx- N Take) Mark)))))
 
-\\ A map's storage, once its bytes and the position Pos of a ring of Capacity are checked.
-(define storage-at
-  {buffer.view --> fixnum --> fixnum --> buffer.storage}
+\\ Where a map starts in its storage, once its bytes and the position Pos of a ring of Capacity are
+\\ checked, so that its storage can be read from the view as it is.
+(define base-at
+  {buffer.view --> fixnum --> fixnum --> fixnum}
   Map Pos Capacity ->
-    (let _ (buffer.range (buffer.length Map) 0 (bytes Capacity))
-      (if (and (fx>= Pos 0) (fx< Pos Capacity))
-          (buffer.owner Map)
-          (error "marks: ring position ~A outside ~A" Pos Capacity))))
+    (if (and (fx>= Pos 0) (fx< Pos Capacity))
+        (buffer.offset-at Map 0 (bytes Capacity))
+        (error "marks: ring position ~A outside ~A" Pos Capacity)))
 
 \\ The runs, counts and marks of N positions of a ring from Pos on, across its end once at most.
 (define run-length
   {buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> fixnum}
   Map Pos Capacity N Mark ->
-    (let Storage (storage-at Map Pos Capacity)
-         Base (buffer.offset Map)
+    (let Base (base-at Map Pos Capacity)
+         Storage (buffer.view.owner Map)
          Fill (if Mark (fixnum 4294967295) (fixnum 0))
          First (smaller N (fx- Capacity Pos))
          Run (run-from Storage Base Pos First Fill 0)
@@ -99,8 +99,8 @@
 (define run-length-back
   {buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> fixnum}
   Map Pos Capacity N Mark ->
-    (let Storage (storage-at Map Pos Capacity)
-         Base (buffer.offset Map)
+    (let Base (base-at Map Pos Capacity)
+         Storage (buffer.view.owner Map)
          Fill (if Mark (fixnum 4294967295) (fixnum 0))
          First (smaller N (fx+ Pos 1))
          Run (back-from Storage Base Pos First Fill 0)
@@ -110,16 +110,16 @@
 (define count
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum}
   Map Pos Capacity N ->
-    (let Storage (storage-at Map Pos Capacity)
-         Base (buffer.offset Map)
+    (let Base (base-at Map Pos Capacity)
+         Storage (buffer.view.owner Map)
          First (smaller N (fx- Capacity Pos))
       (count-from Storage Base 0 (smaller (fx- N First) Pos) (count-from Storage Base Pos First 0))))
 
 (define mark
   {buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
   Map Pos Capacity N Mark ->
-    (let Storage (storage-at Map Pos Capacity)
-         Base (buffer.offset Map)
+    (let Base (base-at Map Pos Capacity)
+         Storage (buffer.view.owner Map)
          First (smaller N (fx- Capacity Pos))
       (do (mark-from Storage Base Pos First Mark)
           (mark-from Storage Base 0 (smaller (fx- N First) Pos) Mark))))

@@ -112,7 +112,9 @@ FIN. A closed peer with its receive buffer drained can be initialized again with
 
 A listener owns one side of a packet link. It accepts connections to one local IPv4 address and port and
 matches each segment to a connection by its remote address and port. Setup allocates the connection table
-and both stream buffers for every slot. Admission, polling, and slot reuse use that storage.
+and both stream buffers for every slot. Admission, polling, and slot reuse use that storage. Polling, the
+next deadline and matching a segment pass over vacant slots and unused TIME-WAIT records a run at a time, so
+their cost follows the connections open more than `Slots`.
 
 | Operation | Meaning |
 | --- | --- |

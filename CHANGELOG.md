@@ -86,6 +86,9 @@ All notable changes to this project are documented in this file. The format is b
 - A definition made while sealing is on over one made unsealed, as a grammar's rule replaces its stub, loops in
   registers and inlines as a loop, as it does where its name was new.
 - TCP and IPv6 parse option lists faster by matching one option per iteration.
+- Polling a TCP listener or interface and asking for its next deadline pass over vacant connection slots and
+  unused TIME-WAIT records a run at a time, and over all of them while none is used, so a table sized for many
+  connections costs little while few are open.
 
 ### Fixed
 

@@ -3987,6 +3987,53 @@ Using the end rule in both places was tested too. Testing the two end alternativ
 entry was faster on this compiler. Both parsers gave the same outcomes, retained fields and error
 offsets for 8,678 generated cases, including sliced views and truncated options.
 
+### Vacant TCP slots passed over (2026-11-20, Apple M3 Max, against 6802e81)
+
+A review measured an idle `net-interface.poll` and `next-deadline` at 63 ns with 4 TCP slots and 1.6 µs
+with 256, none of them open: both walked every slot, about 6 ns each. The listener now keeps a map of
+its occupied slots, a bit each in the `net/marks` form, and one of its TIME-WAIT records in use, set
+where a lease is taken and cleared where it is given back, with a count of each. Every scan of slots
+and records, the per-poll output and deadline, IPv6's address expiry, matching a segment to its
+connection, port claims and accept, tests the slot it reaches and, at a vacant one, the next, then
+reads the map from there a run at a time; none reads anything while nothing is open. `net-marks`
+checks a map's view once a call, by `buffer.offset-at`, rather than three times, and sizes it by a
+shift rather than a quotient.
+
+Seven rounds alternated, load 2.6 to 2.8, ns per poll and deadline query on an interface whose
+connections are established and idle. "Spread" opened twice as many and closed every other one.
+
+| Slots, connections | Before | After |
+| --- | ---: | ---: |
+| 4, none | 61.8 | 51.3 |
+| 32, none | 246.0 | 51.9 |
+| 256, none | 1606.4 | 51.9 |
+| 4, 4 | 164.7 | 168.4 |
+| 32, 4 | 371.6 | 237.4 |
+| 256, 4 | 1761.1 | 294.5 |
+| 256, 4 spread | 1760.6 | 351.6 |
+| 256, 64 | 3157.9 | 1902.9 |
+| 256, 64 spread | 3053.3 | 2774.6 |
+| 256, 256 | 7610.2 | 7722.7 |
+
+(4, 4 is from nine later rounds at load 2.3, with the record scan left out while no record is used.)
+TCP's lossy run took 161.2 against 163.9 ms, its lossless run 11.2 against 11.2.
+
+- **Rejected: reading the map at every step.** Finding each next occupied slot from the map alone took
+  93 ns with 4 vacant slots, against 60, and 9.6 against 7.5 µs with 256 open: each read of the map
+  costs about 11 ns. Register code shifts only by constants and has no `ctz`, `clz` or `popcount`, so
+  `net-marks` boxes its words around each of them and calls the primitive. A test of the slot first,
+  and of the next one at a vacancy, leaves the map to runs of two or more.
+- **Inlining.** A helper of 17 nodes testing the bound and the slot was not compiled in place: a body's
+  size counts the end of each list, against a limit of 15. Written as two of at most 15, they are.
+  Reading the slot again in the scan's body, after the test had read it, cost 3 ns a slot a scan with
+  all 256 open; each scan reads it once.
+- **Left:** each open connection still costs about 30 ns a poll and deadline query, in
+  `output-ready?`, `drive-output` and `peer-deadline`, idle or not. Hundreds open would want a list of
+  the slots with work and a structure of deadlines; nothing here asks for that yet.
+
+The portable networking suites pass, 9,000 connections adding no collections under allocation stress,
+and Linux's TUN and TAP suites pass with no heap words.
+
 ### Source-specific multicast (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
 
 - Extended the group table with preallocated INCLUDE filters. Sources stop

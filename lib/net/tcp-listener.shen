@@ -7,6 +7,7 @@
   (use shen-jit)
   (use net-wire => wire)
   (use grammar)
+  (use net-marks)
   (import struct defstruct)
   (import layout write-layout defflags flag-bits)
   (import net-seq seq seq-of seq-number seq-add seq-distance seq-after?)
@@ -25,6 +26,7 @@
 \\ sequences stood, the window it advertised, when the wait ends, and whether a segment awaits an
 \\ acknowledgement. It holds no buffers.
 (defstruct wait-entry
+  (index : fixnum)
   (local : net-ipv6.address)
   (remote : net-ipv6.address)
   (mutable ip-header : fixnum)
@@ -36,14 +38,19 @@
   (mutable until : fixnum)
   (mutable ack-needed : boolean))
 
+\\ The slot map has a bit for each slot that is not vacant, and the wait map one for each record in
+\\ use, so that a scan passes over the others a run at a time, and over all of them while none is used.
 (defstruct listener
   (device : net-link.device)
   (ip : fixnum)
   (port : fixnum)
   (capacity : fixnum)
   (slots : (vector listener-slot))
+  (slot-map : buffer.view)
+  (mutable used : fixnum)
   (wait-slots : fixnum)
   (waits : (vector wait-entry))
+  (wait-map : buffer.view)
   (wait-segment : segment)
   (wait-options : grammar.state)
   (mutable wait-used : fixnum)
@@ -81,6 +88,7 @@
   V 0 -> V
   V I ->
     (let W (:wait-entry
+             index <- I
              local <- (net-ipv6.make-address 0 0 0 0)
              remote <- (net-ipv6.make-address 0 0 0 0)
              ip-header <- (wire.ipv4.size)
@@ -111,8 +119,11 @@
         port <- Port
         capacity <- N
         slots <- (initialise-slots (vector (fx->number N)) D IP Port Mss Capacity N)
+        slot-map <- (buffer.new (net-marks.bytes N))
+        used <- 0
         wait-slots <- WaitSlots
         waits <- (initialise-waits (vector (fx->number WaitSlots)) WaitSlots)
+        wait-map <- (buffer.new (net-marks.bytes WaitSlots))
         wait-segment <- (blank-segment)
         wait-options <- (grammar.state)
         wait-used <- 0
@@ -136,39 +147,64 @@
   {listener --> fixnum --> fixnum}
   L I -> (if (= I (listener.capacity L)) 1 (fx+ I 1)))
 
+\\ The first of slots I to Last whose bit in Map, of Capacity slots counted from 1, is not Skip, or
+\\ Last + 1 if none is.
+(define next-slot
+  {buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> fixnum}
+  Map Capacity I Last Skip ->
+    (if (fx> I Last) (fx+ Last 1)
+        (fx+ I (net-marks.run-length Map (fx- I 1) Capacity (fx+ (fx- Last I) 1) Skip))))
+
+(define vacant-at?
+  {listener --> fixnum --> fixnum --> boolean}
+  L I Last -> (or (fx> I Last) (= (listener-slot.lease (slot-at L I)) vacant)))
+
+\\ The first occupied slot after vacant slot I, up to Last, or Last + 1. A scan tests each slot it
+\\ reaches, and comes here from a vacant one; the next slot is tested first too, as that costs less
+\\ than a read of the map.
+(define skip-vacant
+  {listener --> fixnum --> fixnum --> fixnum}
+  L I Last -> (cases (= (listener.used L) 0) (fx+ Last 1)
+                     (vacant-at? L (fx+ I 1) Last)
+                       (next-slot (listener.slot-map L) (listener.capacity L) (fx+ I 2) Last false)
+                     true (fx+ I 1)))
+
+(define mark-slot
+  {buffer.view --> fixnum --> fixnum --> boolean --> boolean}
+  Map Capacity I Mark -> (net-marks.mark Map (fx- I 1) Capacity 1 Mark))
+
 (define free-slot
-  {listener-slot --> boolean}
-  S -> (let P (listener-slot.peer S)
-         (do (stop-peer P closed)
-             (peer.rx-length-> P 0)
-             (listener-slot.lease-> S vacant)
-             true)))
+  {listener --> listener-slot --> boolean}
+  L S -> (let P (listener-slot.peer S)
+           (do (stop-peer P closed)
+               (peer.rx-length-> P 0)
+               (if (= (listener-slot.lease S) vacant) L (listener.used-> L (fx- (listener.used L) 1)))
+               (listener-slot.lease-> S vacant)
+               (mark-slot (listener.slot-map L) (listener.capacity L) (listener-slot.index S) false))))
 
 (define wait-at
   {listener --> fixnum --> wait-entry}
   L I -> (fx<-vector (listener.waits L) I))
 
-(define occupied-wait?
-  {wait-entry --> boolean}
-  W -> (fx>= (wait-entry.until W) 0))
+(define free-record?
+  {listener --> fixnum --> fixnum --> boolean}
+  L I Last -> (or (fx> I Last) (fx< (wait-entry.until (wait-at L I)) 0)))
 
-(define vacant-wait
-  {listener --> fixnum --> fixnum}
-  _ 0 -> 0
-  L I -> (if (occupied-wait? (wait-at L I)) (vacant-wait L (fx- I 1)) I))
-
-\\ How many records to scan: none while all are free.
-(define wait-scan-limit
-  {listener --> fixnum}
-  L -> (if (= (listener.wait-used L) 0) 0 (listener.wait-slots L)))
+\\ The first record in use after free record I, up to Last, or Last + 1, as skip-vacant finds slots.
+(define skip-free
+  {listener --> fixnum --> fixnum --> fixnum}
+  L I Last -> (cases (= (listener.wait-used L) 0) (fx+ Last 1)
+                     (free-record? L (fx+ I 1) Last)
+                       (next-slot (listener.wait-map L) (listener.wait-slots L) (fx+ I 2) Last false)
+                     true (fx+ I 1)))
 
 \\ Moves a connection in TIME-WAIT out of its stream slot into a free record, if there is one.
 (define save-wait
   {listener --> peer --> boolean}
   L P ->
-    (let I (if (= (listener.wait-slots L) (listener.wait-used L)) (fixnum 0)
-               (vacant-wait L (listener.wait-slots L)))
-      (and (fx> I 0)
+    (let N (listener.wait-slots L)
+         I (next-slot (listener.wait-map L) N 1 N true)
+      (and (fx<= I N)
            (let W (wait-at L I)
                 H (peer.ip-header P)
              (do (net-ipv6.copy-address (wait-entry.local W) (peer.local-address P))
@@ -182,7 +218,7 @@
                  (wait-entry.until-> W (peer.wait-until P))
                  (wait-entry.ack-needed-> W (peer.ack-needed P))
                  (listener.wait-used-> L (fx+ (listener.wait-used L) 1))
-                 true)))))
+                 (mark-slot (listener.wait-map L) N I true))))))
 
 (define clear-wait
   {listener --> wait-entry --> boolean}
@@ -190,18 +226,20 @@
     (do (wait-entry.until-> W -1)
         (wait-entry.ack-needed-> W false)
         (listener.wait-used-> L (fx- (listener.wait-used L) 1))
-        true))
+        (mark-slot (listener.wait-map L) (listener.wait-slots L) (wait-entry.index W) false)))
 
 \\ The record of a tuple, by its addresses and ports, or 0.
 (define find-wait
   {listener --> net-ipv6.address --> net-ipv6.address --> fixnum --> fixnum --> fixnum --> fixnum}
-  _ _ _ _ _ 0 -> 0
-  L Local Remote LocalPort Port J ->
-    (let W (wait-at L J)
-      (if (and (occupied-wait? W) (= LocalPort (wait-entry.local-port W)) (= Port (wait-entry.remote-port W))
-               (net-ipv6.same? Remote (wait-entry.remote W)) (net-ipv6.same? Local (wait-entry.local W)))
-          J
-          (find-wait L Local Remote LocalPort Port (fx- J 1)))))
+  L Local Remote LocalPort Port I ->
+    (if (fx> I (listener.wait-slots L)) 0
+        (let W (wait-at L I)
+          (cases (fx< (wait-entry.until W) 0)
+                   (find-wait L Local Remote LocalPort Port (skip-free L I (listener.wait-slots L)))
+                 (and (= LocalPort (wait-entry.local-port W)) (= Port (wait-entry.remote-port W))
+                      (net-ipv6.same? Remote (wait-entry.remote W)) (net-ipv6.same? Local (wait-entry.local W)))
+                   I
+                 true (find-wait L Local Remote LocalPort Port (fx+ I 1))))))
 
 \\ A segment for a record, read as a peer's are, with the listener's segment and options state.
 (define receive-wait
@@ -249,18 +287,19 @@
   L LocalPort Local Remote Port I ->
     (if (fx> I (listener.capacity L)) 0
         (let S (slot-at L I) P (listener-slot.peer S)
-          (if (and (not (= (listener-slot.lease S) vacant))
-                   (= LocalPort (peer.local-port P)) (= Port (peer.remote-port P))
-                   (net-ipv6.same? Remote (peer.remote-address P))
-                   (net-ipv6.same? Local (peer.local-address P)))
-              I
-              (find-peer L LocalPort Local Remote Port (fx+ I 1))))))
+          (cases (= (listener-slot.lease S) vacant)
+                   (find-peer L LocalPort Local Remote Port (skip-vacant L I (listener.capacity L)))
+                 (and (= LocalPort (peer.local-port P)) (= Port (peer.remote-port P))
+                      (net-ipv6.same? Remote (peer.remote-address P))
+                      (net-ipv6.same? Local (peer.local-address P)))
+                   I
+                 true (find-peer L LocalPort Local Remote Port (fx+ I 1))))))
 
 (define find-vacant
-  {listener --> fixnum --> fixnum}
-  L I ->
-    (if (fx> I (listener.capacity L)) 0
-        (if (= (listener-slot.lease (slot-at L I)) vacant) I (find-vacant L (fx+ I 1)))))
+  {listener --> fixnum}
+  L -> (let N (listener.capacity L)
+            I (next-slot (listener.slot-map L) N 1 N true)
+         (if (fx> I N) 0 I)))
 
 \\ HalfSipHash-2-4 over the fixed 12-byte IPv4 TCP tuple.
 (define rotate32
@@ -376,7 +415,9 @@
   L S Role ->
     (let Token (fx+ (listener-slot.token S) (listener.capacity L))
       (do (listener-slot.token-> S Token)
+          (if (= (listener-slot.lease S) vacant) (listener.used-> L (fx+ (listener.used L) 1)) L)
           (listener-slot.lease-> S Role)
+          (mark-slot (listener.slot-map L) (listener.capacity L) (listener-slot.index S) true)
           Token)))
 
 (define admit-segment
@@ -386,12 +427,12 @@
       (do (listen P Seq)
           (if (receive-valid P B T Count Now)
               (fx> (lease L S pending) 0)
-              (do (free-slot S) false)))))
+              (do (free-slot L S) false)))))
 
 (define opening-index
   {listener --> buffer.view --> fixnum --> fixnum --> fixnum}
   L B T Count ->
-    (if (and (= (segment-flags B T) 2) (= Count (header-length B T))) (find-vacant L 1)
+    (if (and (= (segment-flags B T) 2) (= Count (header-length B T))) (find-vacant L)
         (fixnum 0)))
 
 (define write-reset
@@ -449,7 +490,7 @@
     (let Index (find-peer L LocalPort Local Remote Port 1)
       (if (fx> Index 0)
           (receive-valid (listener-slot.peer (slot-at L Index)) B T Bytes Now)
-          (let Wait (find-wait L Local Remote LocalPort Port (wait-scan-limit L))
+          (let Wait (find-wait L Local Remote LocalPort Port 1)
             (if (fx> Wait 0) (receive-wait L (wait-at L Wait) B T Bytes Now)
                 (new-segment L B T Bytes Local Remote LocalPort Port Now Listening))))))
 
@@ -502,17 +543,20 @@
   L Port I ->
     (and (fx<= I (listener.capacity L))
          (let S (slot-at L I)
-           (or (and (not (= (listener-slot.lease S) vacant))
-                    (= (peer.local-port (listener-slot.peer S)) Port))
-               (local-port-in-use? L Port (fx+ I 1))))))
+           (if (= (listener-slot.lease S) vacant)
+               (local-port-in-use? L Port (skip-vacant L I (listener.capacity L)))
+               (or (= (peer.local-port (listener-slot.peer S)) Port)
+                   (local-port-in-use? L Port (fx+ I 1)))))))
 
 (define wait-port-in-use?
   {listener --> fixnum --> fixnum --> boolean}
-  _ _ 0 -> false
   L Port I ->
-    (let W (wait-at L I)
-      (or (and (occupied-wait? W) (= (wait-entry.local-port W) Port))
-          (wait-port-in-use? L Port (fx- I 1)))))
+    (and (fx<= I (listener.wait-slots L))
+         (let W (wait-at L I)
+           (if (fx< (wait-entry.until W) 0)
+               (wait-port-in-use? L Port (skip-free L I (listener.wait-slots L)))
+               (or (= (wait-entry.local-port W) Port)
+                   (wait-port-in-use? L Port (fx+ I 1)))))))
 
 (define claim-port
   {listener --> (list fixnum) --> fixnum --> fixnum}
@@ -520,8 +564,7 @@
   L Reserved Left ->
     (let Port (listener.next-port L)
       (do (listener.next-port-> L (if (= Port 65535) 49152 (fx+ Port 1)))
-          (if (or (bound-port? Reserved Port) (local-port-in-use? L Port 1)
-                  (wait-port-in-use? L Port (wait-scan-limit L)))
+          (if (or (bound-port? Reserved Port) (local-port-in-use? L Port 1) (wait-port-in-use? L Port 1))
               (claim-port L Reserved (fx- Left 1))
               Port))))
 
@@ -529,7 +572,7 @@
 (define open-connection
   {listener --> (list fixnum) --> net-ipv6.address --> net-ipv6.address --> fixnum --> fixnum}
   L Reserved Local Remote Port ->
-    (let I (find-vacant L 1)
+    (let I (find-vacant L)
          LocalPort (if (= I 0) (fixnum 0) (claim-port L Reserved 16384))
       (if (= LocalPort 0) 0
           (let S (slot-at L I)
@@ -555,8 +598,8 @@
 (define expire-addresses6
   {listener --> net-ipv6.address --> boolean --> net-ipv6.address --> boolean --> boolean}
   L Local LocalReady Global GlobalReady ->
-    (do (expire-slots6 L Local LocalReady Global GlobalReady (listener.capacity L))
-        (expire-waits6 L Local LocalReady Global GlobalReady (wait-scan-limit L))))
+    (do (expire-slots6 L Local LocalReady Global GlobalReady 1)
+        (expire-waits6 L Local LocalReady Global GlobalReady 1)))
 
 (define usable-address6?
   {net-ipv6.address --> net-ipv6.address --> boolean --> net-ipv6.address --> boolean --> boolean}
@@ -566,27 +609,29 @@
 
 (define expire-slots6
   {listener --> net-ipv6.address --> boolean --> net-ipv6.address --> boolean --> fixnum --> boolean}
-  _ _ _ _ _ 0 -> true
   L Local LocalReady Global GlobalReady I ->
-    (let S (slot-at L I)
-         P (listener-slot.peer S)
-         Source (peer.local-address P)
-      (do (if (and (= (peer.ip-header P) (wire.ipv6.size)) (not (= (listener-slot.lease S) vacant)) (not (terminal? P))
-                   (not (usable-address6? Source Local LocalReady Global GlobalReady)))
-              (stop-peer P reset)
-              false)
-          (expire-slots6 L Local LocalReady Global GlobalReady (fx- I 1)))))
+    (or (fx> I (listener.capacity L))
+        (let S (slot-at L I) P (listener-slot.peer S)
+          (if (= (listener-slot.lease S) vacant)
+              (expire-slots6 L Local LocalReady Global GlobalReady (skip-vacant L I (listener.capacity L)))
+              (do (if (and (= (peer.ip-header P) (wire.ipv6.size)) (not (terminal? P))
+                           (not (usable-address6? (peer.local-address P) Local LocalReady Global GlobalReady)))
+                      (stop-peer P reset)
+                      false)
+                  (expire-slots6 L Local LocalReady Global GlobalReady (fx+ I 1)))))))
 
 (define expire-waits6
   {listener --> net-ipv6.address --> boolean --> net-ipv6.address --> boolean --> fixnum --> boolean}
-  _ _ _ _ _ 0 -> true
   L Local LocalReady Global GlobalReady I ->
-    (let W (wait-at L I)
-      (do (if (and (occupied-wait? W) (= (wait-entry.ip-header W) (wire.ipv6.size))
-                   (not (usable-address6? (wait-entry.local W) Local LocalReady Global GlobalReady)))
-              (clear-wait L W)
-              false)
-          (expire-waits6 L Local LocalReady Global GlobalReady (fx- I 1)))))
+    (or (fx> I (listener.wait-slots L))
+        (let W (wait-at L I)
+          (if (fx< (wait-entry.until W) 0)
+              (expire-waits6 L Local LocalReady Global GlobalReady (skip-free L I (listener.wait-slots L)))
+              (do (if (and (= (wait-entry.ip-header W) (wire.ipv6.size))
+                           (not (usable-address6? (wait-entry.local W) Local LocalReady Global GlobalReady)))
+                      (clear-wait L W)
+                      false)
+                  (expire-waits6 L Local LocalReady Global GlobalReady (fx+ I 1)))))))
 
 (define listener-input
   {listener --> net-link.ring --> fixnum --> fixnum --> fixnum --> fixnum}
@@ -598,53 +643,67 @@
             (listener-input L R Now (fx- Budget 1) (fx+ Done 1)))
         Done))
 
-\\ Only an actual send moves the start of the next sweep, even if repeated polls find the ring full.
+\\ The output of the connections in slots I to Last. Only an actual send moves the start of the next
+\\ sweep, even if repeated polls find the ring full.
 (define listener-output
   {listener --> fixnum --> fixnum --> fixnum --> boolean}
-  _ _ _ 0 -> true
-  L Now I Left ->
-    (let S (slot-at L I)
-         P (listener-slot.peer S)
-         Lease (listener-slot.lease S)
-         Next (next-index L I)
-      (do (if (and (not (= Lease vacant)) (drive-output P Now)) (listener.next-output-> L Next) L)
-          (if (and (= Lease pending) (terminal? P)) (free-slot S) true)
-          (listener-output L Now Next (fx- Left 1)))))
+  L Now I Last ->
+    (or (fx> I Last)
+        (let S (slot-at L I)
+             Lease (listener-slot.lease S)
+          (if (= Lease vacant)
+              (listener-output L Now (skip-vacant L I Last) Last)
+              (let P (listener-slot.peer S)
+                (do (if (drive-output P Now) (listener.next-output-> L (next-index L I)) L)
+                    (if (and (= Lease pending) (terminal? P)) (free-slot L S) true)
+                    (listener-output L Now (fx+ I 1) Last)))))))
 
 (define wait-output
   {listener --> net-link.ring --> fixnum --> fixnum --> fixnum --> boolean}
-  _ _ _ _ 0 -> true
-  L Tx Now I Left ->
-    (let W (wait-at L I)
-         Next (if (= I (listener.wait-slots L)) (fixnum 1) (fx+ I 1))
-      (do (transmit-wait L W Tx Now Next)
-          (wait-output L Tx Now Next (fx- Left 1)))))
+  L Tx Now I Last ->
+    (or (fx> I Last)
+        (let W (wait-at L I)
+          (if (fx< (wait-entry.until W) 0)
+              (wait-output L Tx Now (skip-free L I Last) Last)
+              (do (transmit-wait L W Tx Now (if (= I (listener.wait-slots L)) (fixnum 1) (fx+ I 1)))
+                  (wait-output L Tx Now (fx+ I 1) Last))))))
 
 (define transmit-wait
   {listener --> wait-entry --> net-link.ring --> fixnum --> fixnum --> boolean}
   L W Tx Now Next ->
-    (and (occupied-wait? W)
-         (do (if (and (wait-entry.ack-needed W) (not (net-link.full? Tx)))
-                 (do (emit-wait-ack L W Tx Now) (listener.next-wait-output-> L Next))
-                 L)
-             (if (and (not (wait-entry.ack-needed W)) (fx>= Now (wait-entry.until W)))
-                 (clear-wait L W)
-                 true))))
+    (do (if (and (wait-entry.ack-needed W) (not (net-link.full? Tx)))
+            (do (emit-wait-ack L W Tx Now) (listener.next-wait-output-> L Next))
+            L)
+        (if (and (not (wait-entry.ack-needed W)) (fx>= Now (wait-entry.until W)))
+            (clear-wait L W)
+            true)))
+
+\\ A sweep starts where the last one sent, and goes round the slots once.
+(define table-output
+  {listener --> fixnum --> boolean}
+  L Now -> (let Start (listener.next-output L)
+             (do (listener-output L Now Start (listener.capacity L))
+                 (listener-output L Now 1 (fx- Start 1)))))
+
+(define records-output
+  {listener --> net-link.ring --> fixnum --> boolean}
+  L Tx Now -> (let Start (listener.next-wait-output L)
+                (do (wait-output L Tx Now Start (listener.wait-slots L))
+                    (wait-output L Tx Now 1 (fx- Start 1)))))
 
 (define listener-transmit
   {listener --> fixnum --> boolean}
   L Now ->
-    (let Slots (wait-scan-limit L)
-      (if (= Slots 0)
-          (listener-output L Now (listener.next-output L) (listener.capacity L))
-          (let Tx (net-link.device.tx (listener.device L))
-               First (listener.wait-first L)
-            \\ Streams and records take turns going first, as a full send ring could stall either.
-            (do (if First (wait-output L Tx Now (listener.next-wait-output L) Slots) false)
-                (listener-output L Now (listener.next-output L) (listener.capacity L))
-                (if First false (wait-output L Tx Now (listener.next-wait-output L) Slots))
-                (listener.wait-first-> L (not First))
-                true)))))
+    (if (= (listener.wait-used L) 0)
+        (table-output L Now)
+        (let Tx (net-link.device.tx (listener.device L))
+             First (listener.wait-first L)
+          \\ Streams and records take turns going first, as a full send ring could stall either.
+          (do (if First (records-output L Tx Now) false)
+              (table-output L Now)
+              (if First false (records-output L Tx Now))
+              (listener.wait-first-> L (not First))
+              true))))
 
 (define earlier
   {fixnum --> fixnum --> fixnum}
@@ -683,27 +742,30 @@
 
 (define table-deadline
   {listener --> fixnum --> boolean --> fixnum --> fixnum --> fixnum}
-  _ _ _ 0 At -> At
   L Now Writable I At ->
-    (let S (slot-at L I)
-         Due (if (= (listener-slot.lease S) vacant) (fixnum -1)
-                 (peer-deadline (listener-slot.peer S) Now Writable))
-      (table-deadline L Now Writable (fx- I 1) (earlier At Due))))
+    (if (fx> I (listener.capacity L)) At
+        (let S (slot-at L I)
+          (if (= (listener-slot.lease S) vacant)
+              (table-deadline L Now Writable (skip-vacant L I (listener.capacity L)) At)
+              (table-deadline L Now Writable (fx+ I 1)
+                              (earlier At (peer-deadline (listener-slot.peer S) Now Writable)))))))
 
 (define listener-deadline
   {listener --> fixnum --> fixnum}
   L Now ->
     (let Writable (not (net-link.full? (net-link.device.tx (listener.device L))))
-         Due (table-deadline L Now Writable (listener.capacity L) -1)
-      (wait-deadline L Now Writable (wait-scan-limit L) Due)))
+         Due (table-deadline L Now Writable 1 -1)
+      (if (= (listener.wait-used L) 0) Due (wait-deadline L Now Writable 1 Due))))
 
 (define wait-deadline
   {listener --> fixnum --> boolean --> fixnum --> fixnum --> fixnum}
-  _ _ _ 0 At -> At
   L Now Writable I At ->
-    (let W (wait-at L I)
-         Due (if (wait-entry.ack-needed W) (if Writable Now (fixnum -1)) (wait-entry.until W))
-      (wait-deadline L Now Writable (fx- I 1) (earlier At Due))))
+    (if (fx> I (listener.wait-slots L)) At
+        (let W (wait-at L I)
+          (if (fx< (wait-entry.until W) 0)
+              (wait-deadline L Now Writable (skip-free L I (listener.wait-slots L)) At)
+              (let Due (if (wait-entry.ack-needed W) (if Writable Now (fixnum -1)) (wait-entry.until W))
+                (wait-deadline L Now Writable (fx+ I 1) (earlier At Due)))))))
 
 (define listener-poll
   {listener --> fixnum --> fixnum}
@@ -714,26 +776,31 @@
       (do (listener-transmit L Now)
           Count)))
 
+\\ The token of the first connection of slots I to Last ready to accept, or 0.
 (define accept-ready
   {listener --> fixnum --> fixnum --> fixnum --> fixnum}
-  _ _ _ 0 -> 0
-  L Port I Left ->
-    (let S (slot-at L I) P (listener-slot.peer S) Phase (state P)
-      (if (and (= (listener-slot.lease S) pending)
-               (or (= Port 0) (= Port (peer.local-port P)))
-               (or (= Phase established) (= Phase close-wait)))
-          (do (listener-slot.lease-> S leased)
-              (listener.next-accept-> L (next-index L I))
-              (listener-slot.token S))
-          (accept-ready L Port (next-index L I) (fx- Left 1)))))
+  L Port I Last ->
+    (if (fx> I Last) 0
+        (let S (slot-at L I) P (listener-slot.peer S) Phase (state P)
+          (cases (= (listener-slot.lease S) vacant) (accept-ready L Port (skip-vacant L I Last) Last)
+                 (and (= (listener-slot.lease S) pending)
+                      (or (= Port 0) (= Port (peer.local-port P)))
+                      (or (= Phase established) (= Phase close-wait)))
+                   (do (listener-slot.lease-> S leased)
+                       (listener.next-accept-> L (next-index L I))
+                       (listener-slot.token S))
+                 true (accept-ready L Port (fx+ I 1) Last)))))
 
 (define accept
   {listener --> fixnum}
   L -> (accept-on L 0))
 
+\\ From the slot after the last accepted, round the slots once.
 (define accept-on
   {listener --> fixnum --> fixnum}
-  L Port -> (accept-ready L Port (listener.next-accept L) (listener.capacity L)))
+  L Port -> (let Start (listener.next-accept L)
+                 Token (accept-ready L Port Start (listener.capacity L))
+              (if (= Token 0) (accept-ready L Port 1 (fx- Start 1)) Token)))
 
 (define lease-slot
   {listener --> fixnum --> listener-slot}
@@ -841,7 +908,7 @@
   L Token -> (let S (lease-slot L Token)
                    P (listener-slot.peer S)
                (and (or (terminal? P) (and (= (state P) time-wait) (save-wait L P)))
-                    (free-slot S))))
+                    (free-slot L S))))
 
 (preclude [peer.%match listener.%match listener-slot.%match wait-entry.%match])
 )
