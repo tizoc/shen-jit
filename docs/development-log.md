@@ -4089,7 +4089,7 @@ pass through the state and so cannot be typechecked.
   against 18.9 for `<rule>.parse-at`. What remains of the gap is the protocol: an alternative tried after another
   checks its bytes again, each value goes through the state, and the entry checks the view, makes a state and calls.
 
-### Typed rules in continuation-passing form (2026-11-20, Apple M3 Max at load 1.8 to 3.9, against main at 6158be4)
+### Typed rules in continuation-passing form (2026-11-20, Apple M3 Max at load 1.8 to 3.9, against main)
 
 - **By hand first.** The options header above, written as the grammar would emit it in continuation-passing form:
   each alternative applies a let-bound continuation K to its position and value, and fails by thawing the next
@@ -4153,6 +4153,32 @@ pass through the state and so cannot be typechecked.
 - **Checked:** `tests/typed.shen` has a fixnum loop adding a frozen chain's value, which is a loop with no closure
   now (main made a closure and no loop), and `tests/kl/eval-cases.kl` such values going to slots, with a variable
   bound between the freeze and its thaws.
+- **Rejected: typed entry points** (later the same day, load 1.2 to 5, against the grammar above). Under `(tc +)`,
+  `<rule>.parse`, `.match?`, `.parse-at` and `.end-at` were stubs like a rule's loops, compiled after the rule in
+  `grammar.finish`, as checked against their declared types, so that each took in the rule, its loop and
+  `buffer.check`. They were register code, and slower: `.parse` 16.4 to 16.5 ns against 14.5 to 15.1, `.parse-at`
+  15.3 to 16.2 against 14.7 to 15.0. The JIT works out a loop's memory, its base and lengths, once on the way in,
+  only for a parameter of a function that makes no calls (`choose_cached_memory` in `src/runtime/jit.c`). In the
+  rule's own function the storage is a parameter, and each byte is one compare and one load; taken into the entry,
+  the storage is a let's, and the inlined `buffer.check` calls to make its errors' messages, so each byte read
+  loads the slot, then the header, then its length. The alternatives read their bytes again, so this costs more than
+  the call saves. The same entry given the storage as a parameter, which the JIT then caches, took 10.9 to 11.1 ns
+  against 15.9 to 16.0. The hand loop's driver, which takes `buffer.check` and its loop in, reads uncached the same
+  way. Caching memory a function reads from a view, at an inlined loop's head, would serve only these: a report of
+  every compiled loop over memory in the library suites, this benchmark and the typed numeric programs found 151
+  already cached, 23 that make calls whose results they use, 29 streaming variants calling `refill`, 20,055 plans
+  Datalog generated, none with calls that only raise, and only the hand loop, its driver and `buffer-loop.sum`
+  (whose loop reads the view's storage at each step, which would need hoisting) with calls that only raise. Not worth
+  JIT work for one entry.
+- **Rejected: the memory cache rebuilt after every call,** so that functions that call, without handlers, cache
+  memory too: two lines, choosing memory despite calls and working it out again after each one returns. test-core and
+  test-libs passed. Only 14 functions gained a cache in these workloads: JSON's value and member loops and their
+  streaming variants, `http.trim-start`, `http.trim-end`, `http.lower-bytes` and a loop of the request line; no
+  Datalog plan, as theirs write their parameters or loop with copied arguments. Load 4.3 to 5.6, three rounds in turn
+  against the JIT as it is: JSON decoding 1 MB 5.50 to 5.59 ms against 5.41 to 5.49, an HTTP head 1.61 to 1.62 µs
+  against 1.61 to 1.66, JSON read from a reader 5.7 to 5.8 ms against 5.6 to 5.8 in 1 MB chunks and 5.7 to 5.9
+  against 5.9 in 4 KiB chunks, and each of Datalog's workloads level. Those loops spend their time in their calls,
+  not in bounds checks.
 
 ### Rejected: a module's arities recorded before its sources load (2026-11-16, Apple M3 Max)
 
