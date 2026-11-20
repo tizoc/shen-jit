@@ -148,7 +148,9 @@ if its first byte matches. When a loop compiles, it evaluates each class's guard
 table from then on, so a class's guard must depend only on its byte; one that raises for some byte, or calls a
 function defined after the rule, stays a test. Other small rules that do not name themselves are compiled in place too, up to three
 deep. So define a grammar's parts before the rules that use them; a rule redefined later is not seen where an
-earlier definition was compiled in place.
+earlier definition was compiled in place. A rule's alternatives are tried in turn, each failing straight to the
+next, and a rule compiled in place hands its end and its value to what follows it, which is copied into each of
+its alternatives while the copies stay small, so that nothing goes through the parse's state.
 
 ## Reading as input arrives
 

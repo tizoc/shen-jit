@@ -301,6 +301,8 @@
   [(typed.reads typed-failed-read) (shen-jit.apply (shen-jit.function typed-failed-read) [(typed.spot)])])
 
 (typed.check "a loop of fixnums" [true true 385] [(typed.has? again word-sum) (typed.has? fix* word-sum) (word-sum 10 0)])
+(typed.check "a frozen chain's value in a loop" [true false 96]
+  [(typed.has? again word-chain) (typed.has? closure word-chain) (word-chain 10 0)])
 
 \\ A definition made while sealing is on over one made unsealed, as a grammar's rule replaces its
 \\ stub, is sealed as it is installed: its own tail calls loop, and a caller inlines it as a loop.

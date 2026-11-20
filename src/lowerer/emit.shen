@@ -25,6 +25,8 @@
   B Env [let G [freeze E] Body] Target Top
   -> (expr B Env (thaw-in G E Body) Target Top)
       where (inline-thaw? G E Body)
+  B Env [let G [freeze E] Body] D Top -> (frozen-value B Env G E Body slot D Top)
+      where (and (number? D) (> (thaws G Body true) 0))
   B Env [apply [var G]] Target _ -> (emit B [jump (goto-label G Env)])
       where (and (final? Target) (in-kind? goto G Env))
   B Env [let inlining [const F] Body] Target Top
@@ -123,6 +125,14 @@
        (do (released B (freeze (expr B [[G goto L] | Env] Body Target Top)))
            (emit B [label L])
            (expr B Env E Target Top))))
+
+\\ The same where the let's value goes to a slot or a register Dest of Kind: Body and E give it there
+\\ as at an exit of an inlined loop, and go on past both.
+(define frozen-value
+  B Env G E Body Kind Dest Top
+  -> (let End (new-label B)
+       (do (released B (freeze (alone B (freeze (shen-jit.lower.goto B Env G E Body [exit Kind Dest End] Top)))))
+           (emit B [label End]))))
 
 \\ A target that never falls through: a tail position, or an exit of an inlined loop.
 \\ A store into bytes from registers, for its value, which is the bytes: the store, then them.

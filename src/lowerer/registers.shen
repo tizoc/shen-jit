@@ -367,6 +367,8 @@
   _ [call F Args] -> (if (foreign-float? F Args) float slot)
   Env [let inlining _ Body] -> (kind Env Body)
   _ [let shen-jit.lower.loop [const Info] _] -> (loop-result Info)
+  Env [let G [freeze E] Body] -> (kind [[G frozen (kind Env E)] | Env] Body)
+  Env [apply [var G]] -> (frozen-kind (assoc G Env)) where (in-kind? frozen G Env)
   Env [let X V Body] -> (kind [[X | (kind-of Env V)] | Env] Body)
   Env [do _ Y] -> (kind Env Y)
   Env [if _ X Y] -> (kind Env Y) where (raises? X)
@@ -374,6 +376,11 @@
   Env [if _ X Y] -> (let KX (kind Env X)
                       (if (and (not (= KX slot)) (= KX (kind Env Y))) KX slot))
   _ _ -> slot)
+
+\\ What thawing a frozen value gives: what it gives.
+(define frozen-kind
+  [_ frozen K | _] -> K
+  _ -> slot)
 
 \\ Whether X raises, on every way through it, as a check's error does: it gives no value, so an if
 \\ with such a branch gives what its other branch does.
@@ -629,6 +636,13 @@
        (do (emit B [label End]) R))
       where (= (loop-result Info) Kind)
   B Kind Env [let shen-jit.lower.loop C Body] Top -> (converted B Kind Env [let shen-jit.lower.loop C Body] Top)
+  B Kind Env [let G [freeze E] Body] Top -> (register-of B Kind Env (thaw-in G E Body) Top)
+      where (inline-thaw? G E Body)
+  B Kind Env [let G [freeze E] Body] Top
+  -> (let R (new-register B Kind)
+          Done (frozen-value B Env G E Body Kind R Top)
+       R)
+      where (> (thaws G Body true) 0)
   B Kind Env [let X V Body] Top -> (down B Kind Env [let X V Body] Top)
       where (unboxed? B Env V)
   B Kind Env [let X V Body] Top
@@ -1078,6 +1092,10 @@
                  (word-kind? Env X) (word-kind? Env Y))
   B Env Kind [let inlining [const F] Body] R Top
   -> (mark B F (freeze (into B Env Kind Body R Top)))
+  B Env Kind [let G [freeze E] Body] R Top -> (into B Env Kind (thaw-in G E Body) R Top)
+      where (inline-thaw? G E Body)
+  B Env Kind [let G [freeze E] Body] R Top -> (frozen-value B Env G E Body Kind R Top)
+      where (> (thaws G Body true) 0)
   \\ A let whose body is an if whose else does not read X: X is dead there (into-if).
   B Env Kind [let X V [if C Then Else]] R Top
   -> (released B (freeze (into-if B (bound-to B Env X V Top) Kind C Then Else R Top X)))
@@ -1417,6 +1435,8 @@
   Env [do _ Y] Branch -> (exact-in? Env Y Branch)
   Env [if _ X Y] _ -> (and (exact-in? Env X true) (exact-in? Env Y true))
   _ [let shen-jit.lower.loop _ _] _ -> false
+  Env [let G [freeze E] Body] Branch -> (and (exact-in? Env E Branch) (exact-in? [[G frozen] | Env] Body Branch))
+  Env [apply [var G]] _ -> true where (in-kind? frozen G Env)
   Env [let X V Body] Branch -> (exact-in? [[X | (tl (assoc (alias-of V) Env))] | Env] Body Branch)
       where (cons? (assoc (alias-of V) Env))
   Env [let X V Body] Branch

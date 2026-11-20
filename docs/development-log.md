@@ -4113,6 +4113,46 @@ pass through the state and so cannot be typechecked.
   spread. The grammar as it emits now, a value per alternative, compiles as before: 19.2 to 21.5 ns against 18.4 to 19.8,
   while the hand loop, whose code is the same, went 7.2 to 7.6 against 6.8 to 7.0.
   What is left against the hand loop is the alternatives testing their bytes again: about twice its work per option.
+- **The grammar in that form** (later the same day, load 1.2 to 6.7, against main with the change above). A rule's
+  function still returns its end, -1 or -2, with its value in the state, but inside it the alternatives are a chain of
+  frozen alternatives, each but the last failing to the next with `(thaw F)`, and the last as the rule fails; a guard
+  that fails fails the same way, where it gave -1 before. A rule compiled in place gives its end and value to K, the
+  rest of the caller's sequence made once, `(let K (lambda P (lambda V Rest)) Alternatives)`, which the lowerer copies
+  into each alternative that matches, so no value goes through the state and no -1 is tested there; its item
+  variables are renamed, as its parameters were, so that a copy captures none. A repetition's round goes on to the
+  next from inside K, and the last alternative's failure ends the loop. Where copying K would pass about 500 nodes of
+  the grammar's, measured with the copies of the continuations inside it (the lowerer makes a closure past 1500 of
+  its own), the rule in place gives its end as a value and its value in the state, as before, with its alternatives
+  still a chain. A rule called keeps the protocol, and so do `.parse` and the other entry points. 104 lines of code
+  for 43.
+- **Frozen alternatives in a value.** The lowerer compiled `(let G (freeze E) Body)` as a label only in a tail
+  position or at an inlined loop's exit, and a closure elsewhere. A typed rule with such a chain, inlined by the
+  lowerer where its value goes on, as the header's loop takes in the option, was then boxed: 23 ns. Now in a value
+  going to a slot or a register, Body and E give it there as at an exit, `alone` as a loop is, and go on past both,
+  and `kind` and `exact?` see through the thaws to E. Stage 0's output differs only in the lowerer's own files: the
+  kernel has no such value. 25 lines.
+- **Rules compiled in place up to 16 items, from 12.** The option, four alternatives of 13, was called and taken in
+  by the lowerer, its value joined through the state: 17.6 to 18.0 ns. Compiled in place, K goes into it: 14.9.
+  JSON and HTTP time the same at either limit. `tests/grammar_stream.shen`'s callee, which must not be compiled in
+  place, has 17 items.
+- **Numbers**, three rounds in turn, the second of two in each run:
+
+  | Case | Before | After | By hand |
+  | --- | --- | --- | --- |
+  | Options header, `.parse` | 19.6 to 21.0 ns | 14.9 to 15.0 | 6.9 to 7.2 |
+  | `.parse-at` | 19.7 to 20.3 ns | 15.2 | |
+  | Router Alert values summed by a recursive rule | 29.0 to 29.6 ns | 26.3 to 26.4 | |
+  | JSON, 1 MB of 11,000 objects, `json.decode` | 6.11 to 6.35 ms | 5.34 to 5.46 | |
+  | HTTP, a four-field request head, `http.parse-request` | 1.60 to 1.61 µs | 1.56 to 1.59 | |
+
+  1,000 and 2,000 `.parse-at` calls both make 2,088 collections under `SHEN_JIT_GC_STRESS=1`. The results of 27
+  parses over rules made to take each way, in place with K, in place as a value past the limit, nested three deep,
+  options, spans, requires around a rule in place and parameters, are those of main. What is left of `.parse` against
+  the hand loop, about 2 ns over the CPS header written by hand, is its entry, untyped: it checks the view out of
+  line, makes a state and calls the rule.
+- **Checked:** `tests/typed.shen` has a fixnum loop adding a frozen chain's value, which is a loop with no closure
+  now (main made a closure and no loop), and `tests/kl/eval-cases.kl` such values going to slots, with a variable
+  bound between the freeze and its thaws.
 
 ### Rejected: a module's arities recorded before its sources load (2026-11-16, Apple M3 Max)
 

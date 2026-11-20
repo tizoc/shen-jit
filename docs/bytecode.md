@@ -325,6 +325,13 @@ shifts, `bswap32`, `clz` and `ctz`. The others are calls to C.
   `(thaw G)`, and binds no variable of E: the thaw is replaced by E and the
   `let` dropped. E then runs exactly when the thaw would have, with the same
   values, since KLambda variables are immutable.
+- Otherwise, `(let G (freeze E) Body)` whose value goes to a slot or a
+  register, where Body uses G only as `(thaw G)` in positions whose value is
+  Body's, makes no closure either: Body and E, at a label after it, give their
+  values there as an inlined loop's exits do, and go on after both. Calls of
+  the functions of loops around it are calls there, as in a loop that is not in
+  tail position. Typed code takes the value's kind, float or fixnum, from
+  Body's and E's.
 - `(is X Y B L K (freeze E))` and `is!`, with L and K variables, numbers or `[]`: unification,
   which returns the variables it bound or false, then E, and undoing them if E gives
   false. No closure is made. E is then never a tail call.

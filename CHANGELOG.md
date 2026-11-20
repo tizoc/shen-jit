@@ -35,6 +35,11 @@ All notable changes to this project are documented in this file. The format is b
 - In typed code, the branches of an `if` and a frozen alternative thawed only in tail position give back the
   registers they took, so a chain of alternatives that each fail to the next keeps its values in registers rather
   than running out of them, as continuation-passing code did.
+- A grammar rule's alternatives fail straight to the next, and a rule compiled in place hands its end and value to
+  what follows it rather than through the parse's state; rules of up to 16 items, from 12, are compiled in place.
+  Typed and untyped grammars both parse faster.
+- `(let G (freeze E) Body)` whose value is used, where Body only thaws G as its value, compiles to a label rather
+  than a closure, so typed code with such a chain inlined where its value goes on keeps its values in registers.
 - `write-layout` checks the bytes it stores against the view once, before storing any, and then stores into the
   view's storage directly, which `buffer.offset-at` gives; a value too wide for its field raises naming the field.
 - A small sealed function whose code calls nothing but to make an error's message inlines at any depth, so a typed

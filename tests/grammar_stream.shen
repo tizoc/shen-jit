@@ -120,7 +120,7 @@
       [Got (io.position R)])))
 
 (defgrammar <s.callee>
-  "a" "b" "c" "d" "e" "f" "g" "h" "i" "j" "k" "l" "m" := one;)
+  "a" "b" "c" "d" "e" "f" "g" "h" "i" "j" "k" "l" "m" "n" "o" "p" "q" := one;)
 (defgrammar <s.parent> <s.callee> := <s.callee>;)
 
 (stream-test.check "streaming refreshes a redefined callee"
@@ -128,17 +128,17 @@
   (freeze
     (let Before
            (grammar.read <s.parent>
-             (stream-test.reader "abcdefghijklm" 1)
+             (stream-test.reader "abcdefghijklmnopq" 1)
              (function stream-test.fail))
          _ (eval (hd (read-from-string
-             "(defgrammar <s.callee> c#34;abcdefghijklmc#34; := two;)")))
+             "(defgrammar <s.callee> c#34;abcdefghijklmnopqc#34; := two;)")))
          After
            (grammar.read <s.parent>
-             (stream-test.reader "abcdefghijklm" 1)
+             (stream-test.reader "abcdefghijklmnopq" 1)
              (function stream-test.fail))
          Plain
            (grammar.parse <s.parent>
-             (buffer.from-string "abcdefghijklm")
+             (buffer.from-string "abcdefghijklmnopq")
              (function stream-test.fail))
       [Before After Plain])))
 

@@ -58,6 +58,13 @@
   0 Acc -> Acc
   N Acc -> (word-sum (fx- N 1) (fx+ Acc (fx* N N))))
 
+\\ A frozen alternative thawed twice where the let's value goes on: a label, not a closure.
+(define word-chain {fixnum --> fixnum --> fixnum}
+  0 Acc -> Acc
+  N Acc -> (word-chain (fx- N 1)
+             (fx+ Acc (let G (freeze (fx* N 2))
+                        (if (fx> N 5) (thaw G) (if (fx< N 2) (thaw G) N))))))
+
 (define word-bits {fixnum --> fixnum --> fixnum}
   A B -> (shen-jit.bit-xor (shen-jit.bit-and A B) (shen-jit.bit-or A 1)))
 

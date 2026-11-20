@@ -9,7 +9,9 @@
 \\ Each definition becomes (define Name Buf At End S -> ...), returning the position after its
 \\ match, -1 when it does not match, or -2 when a require failed, with that position and message in
 \\ S's slots 1 and 2. A rule with := leaves its value in slot 0. (* Item) becomes a function of its
-\\ own, Name/1 and so on, which loops by calling itself.
+\\ own, Name/1 and so on, which loops by calling itself. Inside, each alternative fails straight to
+\\ the next, and a rule compiled in place gives its end and value to the rest of the caller's
+\\ sequence, a continuation.
 
 (shen.x.namespace grammar
   (use result)
@@ -55,11 +57,12 @@
   Rule Buffer At End Fail -> (let S (state) (result ((fn Rule) Buffer At End S) S At End Fail)))
 
 \\ The compiler. A position is [Var Offset], known up to a constant; Fail is the code to give
-\\ when an item does not match: -1, or inside a require, its error. Done makes the code that
-\\ follows a match, given its position. A context is [Name Buf End S Count Values Stack Scope
-\\ Inner Rule], where Values maps each rule named in the semantics to the variable holding its value,
-\\ Stack lists the rules being inlined, Scope the variables bound so far, Inner is true inside a
-\\ repetition or an option, which bind no values, and Rule holds the captures the rule's end builds.
+\\ when an item does not match: -1, the next alternative thawed, a repetition's start, or inside a
+\\ require, its error. Done makes the code that follows a match, given its position. A context is
+\\ [Name Buf End S Count Values Stack Scope Inner Rule], where Values maps each rule named in the
+\\ semantics to the variable holding its value, Stack lists the rules being inlined, Scope the
+\\ variables bound so far, Inner is true inside a repetition or an option, which bind no values, and
+\\ Rule holds the captures the rule's end builds.
 
 (define nonterminal?
   X -> (and (symbol? X) (not (variable? X))
@@ -154,9 +157,10 @@
          S (gensym (protect S)) Count (address-> (absvector 1) 0 0)
          Def (append [define Name Buf At End S | Params]
                      [-> (alternatives
-                           (map (/. R (rule [Name Buf End S Count (values Name R) [] Params false []]
-                                                    R [At 0]))
-                                Rules))])
+                           (map (/. R (/. Fail (rule [Name Buf End S Count (values Name R) [] Params false []]
+                                                     R [At 0] Fail (stored S))))
+                                Rules)
+                           -1)])
          _ (put Name code Def)
          _ (restream Name)
          _ (if (tc?) (stub Name Name Def) skip)
@@ -375,7 +379,7 @@
 \\ three deep, instead of called.
 (define inlinable
   Name Rules -> (let Items (map (function hd) Rules)
-                  (if (and (<= (size Items) 12)
+                  (if (and (<= (size Items) 16)
                            (not (element? Name (map (function hd) (called (mapcan (/. X X) Items))))))
                       Rules
                       [])))
@@ -418,9 +422,13 @@
     where (not (or (= X (intern ":=")) (= X where)))
   Rest _ -> (error "defgrammar: expected Items := Value where Guard;, not ~R" Rest))
 
+\\ Alternatives in turn, each a function of the code it fails with: each but the last fails to the
+\\ next, frozen and thawed where it fails, which the lowerer makes a label; the last fails as Fail.
 (define alternatives
-  [Code] -> Code
-  [Code | Codes] -> (let R (gensym (protect R)) [let R Code [if [= R -1] (alternatives Codes) R]]))
+  [Alt] Fail -> (Alt Fail)
+  [Alt | Alts] Fail -> (let F (gensym (protect F))
+                            First (Alt [thaw F])
+                         [let F [freeze (alternatives Alts Fail)] First]))
 
 \\ The rules a rule's semantics name, each with a fresh variable for its value. Only a rule matched
 \\ outside a repetition has one, and only a rule with := gives one.
@@ -481,25 +489,27 @@
   used)
 
 (define rule
-  [Name Buf End S Count Values Stack Scope Inner _] [Items Sem Guard] Pos ->
+  [Name Buf End S Count Values Stack Scope Inner _] [Items Sem Guard] Pos Fail Give ->
     (let Cell (captures.make [] (symbols (mapcan (function item-uses) Items)))
          C [Name Buf End S Count Values Stack Scope Inner Cell]
-      (seq C Items Pos -1 (/. P (done C P Sem Guard)))))
+      (seq C Items Pos Fail (/. P (done C P Sem Guard Fail Give)))))
+
+\\ What a rule called from outside gives: its value in the state, and its end.
+(define stored
+  S -> (/. P V (if (= V grammar.none) P [do [address-> S 0 V] P])))
 
 \\ The captures left for the end are built before the guard if it names them, and after it if not.
+\\ Give makes the code that gives the match's end and its value, grammar.none for a rule with no :=.
 (define done
-  C P Sem Guard ->
+  C P Sem Guard Fail Give ->
     (let Cell (cell C)
          Deferred (if (captures? Cell) (reverse (captures.deferred Cell)) [])
          Checked (if (= Guard grammar.none) [] (subst C Guard))
          Named (symbols Checked)
          Early (mapcan (/. D (if (element? (hd D) Named) [D] [])) Deferred)
          Late (mapcan (/. D (if (element? (hd D) Named) [] [D])) Deferred)
-         Value (binds Late
-                 (if (= Sem grammar.none)
-                     (pos P)
-                     [do [address-> (s C) 0 (subst C Sem)] (pos P)]))
-      (binds Early (if (= Guard grammar.none) Value [if Checked Value -1]))))
+         Value (binds Late (Give (pos P) (if (= Sem grammar.none) grammar.none (subst C Sem))))
+      (binds Early (if (= Guard grammar.none) Value [if Checked Value Fail]))))
 
 (define cell
   [_ _ _ _ _ _ _ _ _ Cell | _] -> Cell)
@@ -536,13 +546,17 @@
       [if [= [shen-jit.u8 (buf C) (pos Pos)] Byte]
           (terminals C (@p Bytes Items) (next Pos) Fail Done)
           Fail])
-    where (cons? Fail)
+    where (required? Fail)
   C (@p Bytes Items) [Var Off] Fail Done ->
     (let N (length Bytes)
       [if (conj [[< (pos [Var (+ Off (- N 1))]) (end C)]
                          | (compares C Bytes Var Off)])
           (seq C Items [Var (+ Off N)] Fail Done)
           Fail]))
+
+(define required?
+  [grammar.error | _] -> true
+  _ -> false)
 
 (define compares
   _ [] _ _ -> []
@@ -577,7 +591,7 @@
            (nonterminal? X)
              (let Class (trap-error (get X class) (/. E []))
                (if (empty? Class)
-                   (call C X Pos Fail (/. P [<-address (s C) 0]) false Items Done)
+                   (call C X Pos Fail (/. P V V) false Items Done)
                    (inline C X Items Pos Fail Done)))
            (cons? X) (form C X Items Pos Fail Done)
            true (error "defgrammar: ~R is not an item" X)))
@@ -608,18 +622,83 @@
 (define args
   C Pos -> [(buf C) (pos Pos) (end C) (s C)])
 
-\\ Calls R, binds its value if the semantics name it, and goes on from where it stopped.
+\\ Calls R, binds its value if the semantics name it, and goes on from where it stopped: the rest,
+\\ made once, goes on from R's end P with R's value V.
 (define call
   C R Pos Fail Value Capture Items Done ->
-    (after (invoke C R Pos) Fail
-      (/. P (let Name (rule-name R)
-                 Found (assoc Name (subst-values C))
-                 Bind (and (cons? Found) (not (inner? C)))
-                 Defer (and Bind Capture (defer C Name (tl Found) (Value P)))
-                 Now (and Bind (not Defer))
-                 _ (if Now (forget C (tl Found)) skip)
-                 Rest (seq (if Now (bind C (tl Found)) C) Items [P 0] Fail Done)
-              (if Now [let (tl Found) (Value P) Rest] Rest)))))
+    (let Callee (invoke C R Pos)
+         P (gensym (protect P))
+         V (gensym (protect V))
+         Name (rule-name R)
+         Found (assoc Name (subst-values C))
+         Bind (and (cons? Found) (not (inner? C)))
+         Defer (and Bind Capture (defer C Name (tl Found) (Value P V)))
+         Now (and Bind (not Defer))
+         _ (if Now (forget C (tl Found)) skip)
+         Rest (seq (if Now (bind C (tl Found)) C) Items [P 0] Fail Done)
+      (joined (s C) Callee Fail P V (if Now [let (tl Found) (Value P V) Rest] Rest))))
+
+\\ R called: the rest after it, with R's value from the state. R in place: the rest is a
+\\ continuation K, which each of R's alternatives that matches applies to its end and value, and
+\\ which the lowerer copies into each, when the copies stay small; else R's alternatives give their
+\\ end, and their value in the state, as a call does.
+(define joined
+  S [called Call] Fail P V Rest -> (after-as P Call Fail (from-state S V Rest))
+  S [in-place K G Code] Fail P V Rest
+  -> (if (copies-fit? K Code Rest)
+         (failing G Fail [let K [lambda P [lambda V Rest]] Code])
+         (after-as P (failing G -1 (given-back S K Code)) Fail (from-state S V Rest))))
+
+(define from-state
+  S V Rest -> (if (> (occurrences V Rest) 0) [let V [<-address S 0] Rest] Rest))
+
+\\ Code whose alternatives fail with (thaw G), failing with Fail instead: in place when it is a
+\\ constant, a variable or a thaw, else frozen as G.
+(define failing
+  G Fail Code -> (substitute [thaw G] Fail Code) where (or (number? Fail) (symbol? Fail) (thawed? Fail))
+  G Fail Code -> [let G [freeze Fail] Code])
+
+(define thawed?
+  [thaw _] -> true
+  _ -> false)
+
+(define substitute
+  Old New Old -> New
+  Old New [X | Y] -> (map (/. Z (substitute Old New Z)) [X | Y])
+  _ _ X -> X)
+
+\\ Code whose alternatives apply K, giving their value in the state and their end instead.
+(define given-back
+  S K [K P V] -> [do [address-> S 0 V] P]
+  S K [X | Y] -> (map (/. Z (given-back S K Z)) [X | Y])
+  _ _ X -> X)
+
+\\ The lowerer copies a continuation into each use, up to 1500 nodes of its own copies, about 500 of
+\\ these, and makes a closure past that. Each continuation counts with what its body costs, and
+\\ uses, at each of its uses, as the lowerer copies from the inside out.
+(define copies-fit?
+  K Code Rest -> (<= (* (- (uses K [] Code) 1) (cost [] Rest)) 500))
+
+(define cost
+  Env [let K [lambda P [lambda V Body]] X] -> (cost [[K | (cost Env Body)] | Env] X)
+  Env [K | Args] -> (+ (tl (assoc K Env)) (costs Env Args)) where (cons? (assoc K Env))
+  Env [X | Y] -> (costs Env [X | Y])
+  _ _ -> 1)
+
+(define costs
+  Env [X | Y] -> (+ (cost Env X) (costs Env Y))
+  _ _ -> 0)
+
+(define uses
+  K Env [let K2 [lambda P [lambda V Body]] X] -> (uses K [[K2 | (uses K Env Body)] | Env] X)
+  K Env [K | Args] -> (+ 1 (uses-each K Env Args))
+  K Env [F | Args] -> (+ (tl (assoc F Env)) (uses-each K Env Args)) where (cons? (assoc F Env))
+  K Env [X | Y] -> (uses-each K Env [X | Y])
+  _ _ _ -> 0)
+
+(define uses-each
+  K Env [X | Y] -> (+ (uses K Env X) (uses-each K Env Y))
+  _ _ _ -> 0)
 
 \\ A capture that no later item names is left for the rule's end, so that a match that fails after
 \\ it does not build it. A rule's own value must be read at once, before the next call replaces it.
@@ -641,9 +720,12 @@
 (define subst-values
   [_ _ _ _ _ Values | _] -> Values)
 
-\\ R's alternatives in place, when it is small, or a call to it. In place, its parameters are
-\\ renamed and bound to the arguments, which are evaluated first. An argument is checked with the
-\\ rule that gives it when R is typed, and not at all when R is not.
+\\ R's alternatives in place, when it is small, as [in-place K G Code], or [called Call]. In place,
+\\ its parameters are renamed and bound to the arguments, which are evaluated first, and the
+\\ variables its items bind are renamed, so that a continuation copied into it captures none; each
+\\ alternative that matches applies K to its end and value, 0 for none, and the last fails with
+\\ (thaw G). An argument is checked with the rule that gives it when R is typed, and not at all when
+\\ R is not.
 (define invoke
   [Name Buf End S Count Values Stack Scope Inner _] R Pos ->
     (let Callee (rule-name R)
@@ -654,13 +736,21 @@
                (error "defgrammar ~A: ~A takes ~A arguments, not ~R" Name Callee (length Params) Args))
          Rules (trap-error (get Callee inline) (/. E []))
       (if (or (empty? Rules) (= Callee Name) (element? Callee Stack) (>= (length Stack) 3))
-          (append [Callee Buf (pos Pos) End S] Args)
+          [called (append [Callee Buf (pos Pos) End S] Args)]
           (let Fresh (map (/. X (gensym (protect A))) Params)
-            (lets Fresh Args
-              (alternatives
-                (map (/. Alt (rule [Name Buf End S Count (values Callee Alt) [Callee | Stack] Fresh false []]
-                                           Alt Pos))
-                     (replace (zip Params Fresh) Rules))))))))
+               K (gensym (protect K))
+               G (gensym (protect G))
+            [in-place K G
+              (lets Fresh Args
+                (alternatives
+                  (map (/. Alt (/. Fail (rule [Name Buf End S Count (values Callee Alt) [Callee | Stack] Fresh false []]
+                                              Alt Pos Fail (/. P V [K P (if (= V grammar.none) 0 V)]))))
+                       (map (function renamed) (replace (zip Params Fresh) Rules)))
+                  [thaw G]))]))))
+
+(define renamed
+  [Items Sem Guard] -> (replace (map (/. V [V | (gensym (protect Y))]) (unique (binders Items) []))
+                                [Items Sem Guard]))
 
 (define zip
   [] [] -> []
@@ -672,16 +762,16 @@
 
 \\ A call's result is a position, -1 or -2: -1 fails as this item fails, and -2 goes up as it is.
 (define after
-  Call Fail K ->
-    (let P (gensym (protect P))
-         Body (K P)
-      (if (and (= Body P) (= Fail -1))
-          Call
-          [let P Call [if [< P 0] (if (= Fail -1) P [if [= P -1] Fail P]) Body]])))
+  Call Fail K -> (let P (gensym (protect P)) (after-as P Call Fail (K P))))
+
+(define after-as
+  P Call Fail Body -> (if (and (= Body P) (= Fail -1))
+                          Call
+                          [let P Call [if [< P 0] (if (= Fail -1) P [if [= P -1] Fail P]) Body]]))
 
 (define form
   C [R | Args] Items Pos Fail Done ->
-    (call C [R | Args] Pos Fail (/. P [<-address (s C) 0]) false Items Done)
+    (call C [R | Args] Pos Fail (/. P V V) false Items Done)
     where (nonterminal? R)
   C [* X] Items Pos Fail Done ->
     (let Class (class-of X)
@@ -701,10 +791,10 @@
         (/. P (seq C Items [P 0] Fail Done))))
   C [text R] Items Pos Fail Done ->
     (call C R Pos Fail
-      (/. P [shen-jit.bytes->string (buf C) (pos Pos) [- P (pos Pos)]]) true Items Done)
+      (/. P V [shen-jit.bytes->string (buf C) (pos Pos) [- P (pos Pos)]]) true Items Done)
     where (rule-form? R)
   C [span R] Items Pos Fail Done ->
-    (call C R Pos Fail (/. P [buffer.make (buf C) (pos Pos) P]) true Items Done)
+    (call C R Pos Fail (/. P V [buffer.make (buf C) (pos Pos) P]) true Items Done)
     where (rule-form? R)
   C [require | Rest] Items Pos Fail Done ->
     (let Message (last Rest)
@@ -753,25 +843,35 @@
       (let Byte [shen-jit.u8 (buf C) (pos [Var Off])]
         (if (= Acc 0) Byte [+ [shen-jit.shift-left Acc 8] Byte]))))
 
-\\ (* X) as a function of its own: it stops where X no longer matches, or matches nothing. The
-\\ macro runs as its file is read, before the file's own functions exist, and a definition
-\\ compiled then would call them through fn; so it defines a stub, and the stub compiles the loop
-\\ at its first call.
+\\ (* X) as a function of its own: it stops where X no longer matches, or matches nothing, and a
+\\ match goes on to the next round from where it ended. The macro runs as its file is read, before
+\\ the file's own functions exist, and a definition compiled then would call them through fn; so
+\\ it defines a stub, and the stub compiles the loop at its first call.
 (define loop
   [Name Buf End S Count Values Stack Scope Inner _] X ->
     (let N (+ (<-address Count 0) 1)
          _ (address-> Count 0 N)
          H (intern (make-string "~A/~A" Name N))
          At (gensym (protect At))
-         P (gensym (protect P))
-         Body (seq [Name Buf End S Count Values Stack Scope true []] [X] [At 0] -1 (function pos))
+         Again (gensym (protect Again))
+         Body (seq [Name Buf End S Count Values Stack Scope true []] [X] [At 0] At (/. P (next-round Again At P)))
          Free (unique (intersection (symbols Body) Scope) [])
          Params [Buf At End S | Free]
          _ (grammar.arity [H | (length Params)])
          _ (put H inlined (cons? Stack))
          _ (stub H Name (append [define H | Params]
-                             [-> [let P Body [if [> P At] (append [H Buf P End S] Free) [if [= P -2] P At]]]]))
+                             [-> (rounds Again (/. Q (append [H Buf Q End S] Free)) Body)]))
       [H | Free]))
+
+\\ A round that matched up to P: the next, from P, if it took bytes, as one past At did, else the end.
+(define next-round
+  Again At [Var Off] -> [Again (pos [Var Off])] where (> Off 0)
+  Again At [Var 0] -> [if [> Var At] [Again Var] At])
+
+(define rounds
+  Again Next [Again Q] -> (Next Q)
+  Again Next [X | Y] -> (map (/. Z (rounds Again Next Z)) [X | Y])
+  _ _ X -> X)
 
 (define list
   [] -> []
