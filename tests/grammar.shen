@@ -287,4 +287,34 @@
   (freeze (map (/. T (grammar.parse <gd.mixed> (grammar-test.view T) (function grammar-test.fail)))
                ["ab" "a" "bc" "b" "z" "" "ax"])))
 
+\\ A rule whose last item matches itself, giving its value, followed only by alternatives that match
+\\ the end or nothing, ends in a tail call; with any other after it, it backtracks to that.
+(defgrammar (<gr.sum> Acc) "a" B (<gr.sum> (+ Acc B)) := <gr.sum>; <end> := Acc;)
+(defgrammar (<gr.count> N) "a" (<gr.count> (+ N 1)) := <gr.count>; <e> := N;)
+(defgrammar <gr.back> "a" <gr.back> := <gr.back>; "ab" := 1;)
+(defgrammar (<gr.guarded> N) "a" (<gr.guarded> (+ N 1)) := <gr.guarded> where (< N 9); <end> := N;)
+(defgrammar (<gr.end-guarded> N) "a" (<gr.end-guarded> (+ N 1)) := <gr.end-guarded>; <end> := N where (> N 1);)
+(defgrammar (<gr.empty> N) (where (< N 3)) (<gr.empty> (+ N 1)) := <gr.empty>; <end> := N;)
+(defgrammar (<gr.required> N) (require "a" "an a") (<gr.required> (+ N 1)) := <gr.required>; <end> := N;)
+
+(define gr.view
+  Text -> (grammar-test.view Text))
+
+(grammar-test.check "a tail call that sums to the end" [0 3 [error 0 "no match"] [error 0 "no match"]]
+  (freeze (map (/. T (grammar.parse (<gr.sum> 0) (gr.view T) (function grammar-test.fail)))
+               ["" "ac#1;ac#2;" "ac#1;x" "ac#1;a"])))
+(grammar-test.check "a tail call before a match of nothing" [0 2 [error 2 "trailing input"]]
+  (freeze (map (/. T (grammar.parse (<gr.count> 0) (gr.view T) (function grammar-test.fail))) ["" "aa" "aab"])))
+(grammar-test.check "backtracking past the call to another alternative" [1 1 [error 0 "no match"]]
+  (freeze (map (/. T (grammar.parse <gr.back> (gr.view T) (function grammar-test.fail))) ["ab" "aaab" "aaa"])))
+(grammar-test.check "a guard after the call, or on the end" [3 [error 0 "no match"] 2 [error 0 "no match"]]
+  (freeze [(grammar.parse (<gr.guarded> 0) (gr.view "aaa") (function grammar-test.fail))
+           (grammar.parse (<gr.guarded> 0) (gr.view "aaaaaaaaaaaa") (function grammar-test.fail))
+           (grammar.parse (<gr.end-guarded> 0) (gr.view "aa") (function grammar-test.fail))
+           (grammar.parse (<gr.end-guarded> 0) (gr.view "a") (function grammar-test.fail))]))
+(grammar-test.check "items that match nothing before the call" [3 [error 0 "no match"]]
+  (freeze (map (/. T (grammar.parse (<gr.empty> 0) (gr.view T) (function grammar-test.fail))) ["" "x"])))
+(grammar-test.check "a require before the call" [[error 2 "an a"] [error 1 "an a"]]
+  (freeze (map (/. T (grammar.parse (<gr.required> 0) (gr.view T) (function grammar-test.fail))) ["aa" "ab"])))
+
 (output "~A passed, ~A failed~%" (value grammar-test.passed) (value grammar-test.failed))

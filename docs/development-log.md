@@ -4208,6 +4208,18 @@ pass through the state and so cannot be typechecked.
   18.3 against 19.3 to 19.6, JSON decoding 1 MB 5.20 to 5.33 ms against 5.37 to 5.69, and an HTTP head level, 1.57
   to 1.61 µs against 1.58 to 1.61. 32 lines of code for 10. The header's own function is now about 8.5 of its 14.7
   ns; its untyped entry, `buffer.check` out of line and the driver's call take the rest.
+- **Tail-recursive rules as loops, kept** (load 1.5 to 2.4, three rounds in turn, against the commit before). A
+  rule's alternative whose last item matches the rule itself, giving that match's value as its own or none, with no
+  guard, where every alternative after it is `<end>`, `<e>` or nothing, guard-free, ends in a tail call: the call's
+  result is the rule's, its value in the state already, and the lowerer makes the rule a loop. Backtracking past such
+  a call could give nothing else: only the end matches `<end>`, so where the items before the call matched short of
+  it those after fail there too, and where they matched at it the call's own reaches one of them, which matches; an
+  alternative of `<e>` or nothing means the call cannot fail. The Router Alert values summed by `(<alerts> Acc)
+  <alert> (<alerts> (fx+ Acc <alert>)) := <alerts>; <end> := Acc;` took 15.1 to 15.4 ns against 23.9 to 24.1, its
+  accumulator in a register; the other rows, JSON and HTTP level. 14 lines of code for 1. `tests/grammar.shen`
+  checks the shapes that become tail calls, and that one backtracking to another alternative, or with a guard after
+  the call or on the end, does not, each with main's results, and `tests/grammar_stream.shen` such a rule read a byte
+  at a time.
 
 ### Rejected: a module's arities recorded before its sources load (2026-11-16, Apple M3 Max)
 

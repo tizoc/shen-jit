@@ -160,7 +160,7 @@
                            (map (/. R [R | (/. Alt Start Fail
                                              (rule [Name Buf End S Count (values Name Alt) [] Params false []]
                                                    Alt Start Fail (stored S)))])
-                                Rules)
+                                (tail-calls Name Rules))
                            -1)])
          _ (put Name code Def)
          _ (restream Name)
@@ -423,6 +423,28 @@
     where (not (or (= X (intern ":=")) (= X where)))
   Rest _ -> (error "defgrammar: expected Items := Value where Guard;, not ~R" Rest))
 
+\\ An alternative whose last item matches the rule itself, giving that match's value as its own or
+\\ none, with no guard, where each alternative after it matches only the end or nothing: what that
+\\ call gives is what the rule gives, as backtracking to those after it could give nothing else. Only
+\\ the end matches the end, so where the items before the call matched short of it, those after fail
+\\ there too; where they matched at the end, the call's own reaches one of them, which matches; and
+\\ one that matches nothing means the call cannot fail. The call ends the alternative, [again Call]:
+\\ the rule's own tail call, which makes it a loop.
+(define tail-calls
+  _ [] -> []
+  Name [R | Rules] -> [(if (tail-call? Name R Rules) (again-at-end R) R) | (tail-calls Name Rules)])
+
+(define tail-call?
+  Name [Items Sem Guard] Later -> (and (cons? Items) (= (rule-name (last Items)) Name)
+                                       (or (= Sem Name) (= Sem grammar.none)) (= Guard grammar.none)
+                                       (every? (function ends?) Later)))
+
+(define ends?
+  [Items _ Guard] -> (and (= Guard grammar.none) (element? Items [[<end>] [<e>] []])))
+
+(define again-at-end
+  [Items _ _] -> [(append (butlast Items) [[again (last Items)]]) grammar.none grammar.none])
+
 \\ Alternatives in turn, each [R | Make], where (Make R Start Fail) is R's code from Start, failing
 \\ with Fail: each but the last fails to the next, frozen and thawed where it fails, which the lowerer
 \\ makes a label; the last fails as Fail. Where two or more begin with a byte, the byte at Pos is read
@@ -487,6 +509,7 @@
   _ -> [])
 
 (define item-uses
+  [again R] -> (item-uses R)
   [where G] -> [G]
   [require | Rest] -> [(last Rest) | (mapcan (function item-uses) (butlast Rest))]
   [R | Args] -> Args where (nonterminal? R)
@@ -840,6 +863,7 @@
   C [u16-be V] Items Pos Fail Done -> (fixed C V 2 Items Pos Fail Done) where (variable? V)
   C [u32-be V] Items Pos Fail Done -> (fixed C V 4 Items Pos Fail Done) where (variable? V)
   C [skip N] Items Pos Fail Done -> (skip-bytes C N Items Pos Fail Done)
+  C [again R] _ Pos _ _ -> (hd (tl (invoke C R Pos)))
   _ [F | Items] _ _ _ _ -> (error "defgrammar: (~A Item) takes one item: name a sequence as a rule, in ~R"
                                    F [F | Items]) where (element? F [* + ?])
   _ X _ _ _ _ -> (error "defgrammar: ~R is not an item" X))

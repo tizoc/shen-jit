@@ -151,7 +151,10 @@ deep. So define a grammar's parts before the rules that use them; a rule redefin
 earlier definition was compiled in place. A rule's alternatives are tried in turn, each failing straight to the
 next, those that begin with a byte comparing it after one read of it, and a rule compiled in place hands its end
 and its value to what follows it, which is copied into each of its alternatives while the copies stay small, so
-that nothing goes through the parse's state.
+that nothing goes through the parse's state. A rule that ends in a match of itself, giving that match's value, with
+no guard, and has after that alternative only ones that match the end or nothing, runs as a loop, as a
+repetition does: an accumulator such as `(<sum> Acc) <item> (<sum> (+ Acc <item>)) := <sum>; <end> := Acc;`
+takes no stack however long its input.
 
 ## Reading as input arrives
 

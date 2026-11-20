@@ -149,6 +149,13 @@
   (freeze (map (/. T (grammar.read <s.mixed> (stream-test.reader T 1) (function stream-test.fail)))
                ["ab" "a" "bc" "b" ""])))
 
+\\ A rule that ends in its own tail call waits for each round's bytes, and for the end.
+(defgrammar (<s.sum> Acc) "a" B (<s.sum> (+ Acc B)) := <s.sum>; <end> := Acc;)
+(stream-test.check "a tail call that sums to the end, read a byte at a time"
+  [(:result.ok [3]) [fail 3 "input ended"]]
+  (freeze [(grammar.read (<s.sum> 0) (stream-test.reader "ac#1;ac#2;" 1) (function stream-test.fail))
+           (grammar.read (<s.sum> 0) (stream-test.reader "ac#1;a" 1) (function stream-test.fail))]))
+
 \\ A counted skip waits for its bytes as any other item does.
 (defgrammar <s.counted> Length (skip Length) ";" := Length;)
 (stream-test.check "a counted skip, read a byte at a time" (:result.ok [5])
