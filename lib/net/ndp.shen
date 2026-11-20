@@ -88,9 +88,7 @@
   D Mac IdHigh IdLow Slots ->
     (let Mtu (net-link.mtu D)
       (if (and (fx>= Mtu (net-ipv6.minimum-mtu)) (fx>= Slots 0) (fx<= Slots 256)
-               (fx>= Mac 0) (fx<= Mac 281474976710655)
-               (= (shen-jit.bit-and Mac 1099511627776) 0)
-               (or (= Mac 0) (fx> Slots 0))
+               (or (= Mac 0) (and (wire.station-mac? Mac) (fx> Slots 0)))
                (not (and (= IdHigh 0) (= IdLow 0))))
           (:host
             option-state <- (grammar.state)
@@ -218,10 +216,6 @@
              (fx< Now (host.router-until H)) (claim H (host.router H) Now)
              true 0)))
 
-(define valid-mac?
-  {fixnum --> boolean}
-  Mac -> (and (fx> Mac 0) (= (shen-jit.bit-and Mac 1099511627776) 0)))
-
 (define write-option
   {buffer.view --> fixnum --> fixnum --> fixnum --> buffer.view}
   B I Kind Mac -> (write-layout wire.ndp-link-address B I (type Kind) (length 1) (address Mac)))
@@ -231,16 +225,12 @@
 \\ is stored in H as it is matched.
 (defgrammar (<options> H) {host ==> boolean}
   <end> := true;
-  1 1 (u16-be High) (u32-be Low) (<options> (source-link H (link-address High Low))) := <options>;
-  2 1 (u16-be High) (u32-be Low) (<options> (target-link H (link-address High Low))) := <options>;
+  1 1 (u16-be High) (u32-be Low) (<options> (source-link H (wire.mac High Low))) := <options>;
+  2 1 (u16-be High) (u32-be Low) (<options> (target-link H (wire.mac High Low))) := <options>;
   Kind Units (where (and (fx> Units 0) (not (= Kind 1)) (not (= Kind 2))))
     (skip (fx- (fx* 8 Units) 2)) (<options> H) := <options>;)
 
 (grammar.finish)
-
-(define link-address
-  {fixnum --> fixnum --> fixnum}
-  High Low -> (fx+ (shen-jit.shift-left High 32) Low))
 
 (define source-link
   {host --> fixnum --> host}
@@ -259,7 +249,7 @@
 \\ A link-layer address the options gave, if it is a unicast one, or 0.
 (define link-mac
   {fixnum --> fixnum}
-  Mac -> (if (valid-mac? Mac) Mac 0))
+  Mac -> (if (wire.station-mac? Mac) Mac 0))
 
 (define set-neighbor
   {neighbor --> fixnum --> fixnum --> boolean}
@@ -271,14 +261,14 @@
 (define learn
   {host --> net-ipv6.address --> fixnum --> fixnum --> boolean}
   H IP Mac Now ->
-    (and (valid-mac? Mac)
+    (and (wire.station-mac? Mac)
          (let I (claim H IP Now)
            (and (fx> I 0) (set-neighbor (neighbor-at H I) Mac Now)))))
 
 (define advertise-neighbor
   {host --> net-ipv6.address --> fixnum --> fixnum --> fixnum --> boolean}
   H IP Mac Override Now ->
-    (and (valid-mac? Mac)
+    (and (wire.station-mac? Mac)
          (let I (find H IP (host.slots H))
            (and (fx> I 0)
                 (let N (neighbor-at H I)
@@ -577,10 +567,6 @@
             H)
         (neighbor-probes H (host.slots H) Now)))
 
-(define earlier
-  {fixnum --> fixnum --> fixnum}
-  A B -> (if (or (fx< A 0) (and (fx>= B 0) (fx< B A))) B A))
-
 (define due
   {fixnum --> fixnum --> boolean --> fixnum}
   At Now Free ->
@@ -592,11 +578,11 @@
   H I Now Free At ->
     (let N (neighbor-at H I)
          Next (if (net-link.ready? (neighbor.pending N) 0)
-                  (earlier (neighbor.expires N)
+                  (net-link.earlier (neighbor.expires N)
                            (if (and (= (neighbor.mac N) 0) (local-ready? H))
                                (due (neighbor.probe-at N) Now Free) (fixnum -1)))
                   (fixnum -1))
-      (probe-deadline H (fx- I 1) Now Free (earlier At Next))))
+      (probe-deadline H (fx- I 1) Now Free (net-link.earlier At Next))))
 
 (define dad-deadline
   {address-state --> fixnum --> fixnum --> boolean --> fixnum}
@@ -615,7 +601,7 @@
                 (due (host.rs-at H) Now Free) (fixnum -1))
          Lifetime (if (and (not (host.static H)) (not (= (host.global-state H) absent)))
                       (host.valid-until H) (fixnum -1))
-      (probe-deadline H (host.slots H) Now Free (earlier (earlier Local Global) (earlier Rs Lifetime)))))
+      (probe-deadline H (host.slots H) Now Free (net-link.earlier (net-link.earlier Local Global) (net-link.earlier Rs Lifetime)))))
 
 (preclude [host.%match neighbor.%match])
 )

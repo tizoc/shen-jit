@@ -122,14 +122,6 @@
   (options-state : grammar.state)
   (segment : segment))
 
-(define smaller
-  {fixnum --> fixnum --> fixnum}
-  A B -> (if (fx< A B) A B))
-
-(define larger
-  {fixnum --> fixnum --> fixnum}
-  A B -> (if (fx> A B) A B))
-
 (define minimum-header
   {peer --> fixnum}
   P -> (fx+ (peer.ip-header P) (wire.tcp.size)))
@@ -170,7 +162,7 @@
 
 (define peer-mss
   {net-link.device --> fixnum}
-  D -> (smaller (default-mss (wire.ipv4.size)) (fx- (net-link.mtu D) (fx+ (wire.ipv4.size) (wire.tcp.size)))))
+  D -> (net-link.smaller (default-mss (wire.ipv4.size)) (fx- (net-link.mtu D) (fx+ (wire.ipv4.size) (wire.tcp.size)))))
 
 (define scale-for
   {fixnum --> fixnum --> fixnum}
@@ -354,7 +346,7 @@
               (peer.remote-scale-> P -1)
               (peer.path-mtu-> P (net-link.mtu (peer.device P)))
               (peer.aborting-> P false)
-              (peer.send-mss-> P (smaller (peer.mss P) (fx- (peer.path-mtu P) (minimum-header P))))
+              (peer.send-mss-> P (net-link.smaller (peer.mss P) (fx- (peer.path-mtu P) (minimum-header P))))
               (peer.recv-next-> P (seq-of 0))
               (peer.rx-start-> P 0)
               (if (fx> (peer.rx-pending P) 0) (net-marks.clear (peer.rx-present P) (peer.capacity P)) true)
@@ -400,12 +392,12 @@
   {peer --> fixnum --> fixnum}
   P Window ->
     (let Final (peer.rx-fin P)
-      (if (fx< Final 0) Window (smaller Window (seq-distance (seq-of Final) (peer.recv-next P))))))
+      (if (fx< Final 0) Window (net-link.smaller Window (seq-distance (seq-of Final) (peer.recv-next P))))))
 
 (define copy-into-ring
   {buffer.view --> fixnum --> fixnum --> buffer.view --> fixnum --> fixnum --> buffer.view}
   Ring At Capacity Source Start Count ->
-    (let First (smaller Count (fx- Capacity At))
+    (let First (net-link.smaller Count (fx- Capacity At))
       (do (buffer.copy-into! Ring At Source Start First)
           (if (= First Count) Ring
               (buffer.copy-into! Ring 0 Source (fx+ Start First) (fx- Count First))))))
@@ -413,7 +405,7 @@
 (define copy-from-ring
   {buffer.view --> fixnum --> buffer.view --> fixnum --> fixnum --> fixnum --> buffer.view}
   Out Start Ring At Capacity Count ->
-    (let First (smaller Count (fx- Capacity At))
+    (let First (net-link.smaller Count (fx- Capacity At))
       (do (buffer.copy-into! Out Start Ring At First)
           (if (= First Count) Out
               (buffer.copy-into! Out (fx+ Start First) Ring 0 (fx- Count First))))))
@@ -430,7 +422,7 @@
          Phase (state P)
          Capacity (peer.capacity P)
          Length (peer.tx-length P)
-         N (smaller Limit (fx- Capacity Length))
+         N (net-link.smaller Limit (fx- Capacity Length))
       (if (and (can-send? Phase) (fx> N 0))
           (let Tail (wrap-offset (fx+ (peer.tx-head P) Length) Capacity)
             (do (copy-into-ring (peer.tx P) Tail Capacity Payload At N)
@@ -447,7 +439,7 @@
   P Out At Count ->
     (let Limit (buffer.index Count)
          _ (buffer.range (buffer.length Out) At Limit)
-         N (smaller Limit (peer.rx-length P))
+         N (net-link.smaller Limit (peer.rx-length P))
       (cases (fx> N 0)
                (let Left (fx- (peer.rx-length P) N)
                  (do (copy-from-ring Out At (peer.rx P) (peer.rx-start P) (peer.capacity P) N)

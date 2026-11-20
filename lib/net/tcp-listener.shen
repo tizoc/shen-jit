@@ -105,7 +105,7 @@
   {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum -->
    fixnum --> listener}
   D IP Port Slots Initial Key0 Key1 Bytes WaitSlots ->
-    (let Mss (if (= Bytes 0) (peer-mss D) (smaller Bytes (fx- (net-link.mtu D) (headers4))))
+    (let Mss (if (= Bytes 0) (peer-mss D) (net-link.smaller Bytes (fx- (net-link.mtu D) (headers4))))
          Capacity (if (= Bytes 0) (fx* Mss 8) Bytes)
          N (buffer.index Slots)
          _ (if (and (net-ipv4.unicast? IP) (fx>= Port 0) (fx<= Port 65535) (fx> Mss 0) (fx> N 0)) true
@@ -534,11 +534,6 @@
     (and (fx>= Count (headers4)) (= (wire.tcp.destination-port B (fx+ I (wire.ipv4.size))) (listener.port L))
          (table-ingress L B I Count Now true)))
 
-(define bound-port?
-  {(list fixnum) --> fixnum --> boolean}
-  [] _ -> false
-  [P | Rest] Port -> (or (= P Port) (bound-port? Rest Port)))
-
 (define local-port-in-use?
   {listener --> fixnum --> fixnum --> boolean}
   L Port I ->
@@ -565,7 +560,7 @@
   L Reserved Left ->
     (let Port (listener.next-port L)
       (do (listener.next-port-> L (if (= Port 65535) 49152 (fx+ Port 1)))
-          (if (or (bound-port? Reserved Port) (local-port-in-use? L Port 1) (wait-port-in-use? L Port 1))
+          (if (or (element? Port Reserved) (local-port-in-use? L Port 1) (wait-port-in-use? L Port 1))
               (claim-port L Reserved (fx- Left 1))
               Port))))
 
@@ -706,16 +701,12 @@
               (listener.wait-first-> L (not First))
               true))))
 
-(define earlier
-  {fixnum --> fixnum --> fixnum}
-  A B -> (if (fx< A 0) B (if (fx< B 0) A (smaller A B))))
-
 (define output-ready?
   {peer --> boolean}
   P ->
     (let Flight (peer.tx-flight P)
          Window (peer.remote-window P)
-         End (smaller Flight (if (= Window 0) 1 Window))
+         End (net-link.smaller Flight (if (= Window 0) 1 Window))
          Replay (peer.tx-replay P)
          Repair (peer.sack-next-repair P)
          Credit (fx- (peer.cwnd P) (peer.sack-pipe P))
@@ -723,14 +714,14 @@
           (peer.ack-needed P)
           (fx> (peer.rx-duplicate-acks P) 0)
           (if (not (= (peer.tx-flags P) 0)) (fx< (peer.tx-due P) 0)
-              (or (and (fx>= Replay 0) (fx< Replay (smaller End (peer.cwnd P))))
+              (or (and (fx>= Replay 0) (fx< Replay (net-link.smaller End (peer.cwnd P))))
                   (and (fx> Window 0)
                        (or (and (peer.tx-fast-retransmit P) (fx> End 0)
                                 (or (not (sack-recovering? P)) (fx> Credit 0)))
                            (and (fx>= Repair 0) (fx< Repair End) (fx> Credit 0))))
                   (and (fx> (peer.tx-length P) Flight)
                        (or (and (= Flight 0) (= Window 0))
-                           (fx> (smaller Window (peer.cwnd P)) (larger Flight (peer.sack-pipe P))))))))))
+                           (fx> (net-link.smaller Window (peer.cwnd P)) (net-link.larger Flight (peer.sack-pipe P))))))))))
 
 (define peer-deadline
   {peer --> fixnum --> boolean --> fixnum}
@@ -739,7 +730,7 @@
          Wait (if (and (= (state P) time-wait) (not (peer.ack-needed P)))
                   (peer.wait-until P) (fixnum -1))
       (if (and Writable (output-ready? P)) Now
-          (earlier Wait (if (or Writable (fx>= (peer.tx-retries P) (max-retries))) Due (fixnum -1))))))
+          (net-link.earlier Wait (if (or Writable (fx>= (peer.tx-retries P) (max-retries))) Due (fixnum -1))))))
 
 (define table-deadline
   {listener --> fixnum --> boolean --> fixnum --> fixnum --> fixnum}
@@ -749,7 +740,7 @@
           (if (= (listener-slot.lease S) vacant)
               (table-deadline L Now Writable (skip-vacant L I (listener.capacity L)) At)
               (table-deadline L Now Writable (fx+ I 1)
-                              (earlier At (peer-deadline (listener-slot.peer S) Now Writable)))))))
+                              (net-link.earlier At (peer-deadline (listener-slot.peer S) Now Writable)))))))
 
 (define listener-deadline
   {listener --> fixnum --> fixnum}
@@ -766,7 +757,7 @@
           (if (fx< (wait-entry.until W) 0)
               (wait-deadline L Now Writable (skip-free L I (listener.wait-slots L)) At)
               (let Due (if (wait-entry.ack-needed W) (if Writable Now (fixnum -1)) (wait-entry.until W))
-                (wait-deadline L Now Writable (fx+ I 1) (earlier At Due)))))))
+                (wait-deadline L Now Writable (fx+ I 1) (net-link.earlier At Due)))))))
 
 (define listener-poll
   {listener --> fixnum --> fixnum}
@@ -870,7 +861,7 @@
            (and (fx< (seq-distance (seq-of Seq) (send-una P)) (peer.tx-flight P))
                 (fx< Mtu (peer.path-mtu P))
                 (do (peer.path-mtu-> P Mtu)
-                    (peer.send-mss-> P (smaller (peer.send-mss P) (fx- Mtu (minimum-header P))))
+                    (peer.send-mss-> P (net-link.smaller (peer.send-mss P) (fx- Mtu (minimum-header P))))
                     (peer.tx-due-> P Now)
                     true)))))
 

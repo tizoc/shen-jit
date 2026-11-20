@@ -391,10 +391,6 @@
     (let Seed (shen-jit.bit-and (fx+ (fx* (membership.seed M) 1664525) 1013904223) 4294967295)
       (do (membership.seed-> M Seed) (fxremainder Seed (fx+ Span 1)))))
 
-(define earlier
-  {fixnum --> fixnum --> fixnum}
-  A B -> (if (or (fx< A 0) (and (fx>= B 0) (fx< B A))) B A))
-
 (define arm-query
   {membership --> group --> fixnum --> fixnum --> boolean}
   M G Span Now ->
@@ -852,7 +848,7 @@
   M Ready6 I At ->
     (let G (at M I)
          Next (if (or (= (group.family G) 4) (and Ready6 (= (group.family G) 6)))
-                  (earlier At (earlier (group.change-at G) (group.query-at G)))
+                  (net-link.earlier At (net-link.earlier (group.change-at G) (group.query-at G)))
                   At)
       (pending M Ready6 (fx- I 1) Next)))
 

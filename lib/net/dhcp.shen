@@ -67,8 +67,7 @@
 (define make
   {net-link.device --> fixnum --> fixnum --> client}
   D Mac Id ->
-    (if (and (fx>= (net-link.mtu D) 576) (fx> Mac 0) (fx<= Mac 281474976710655)
-             (= (shen-jit.bit-and Mac 1099511627776) 0)
+    (if (and (fx>= (net-link.mtu D) 576) (wire.station-mac? Mac)                  \\ RFC 2131 2: 576-byte messages.
              (fx>= Id 0) (fx<= Id 4294967295))
         (:client
           device <- D

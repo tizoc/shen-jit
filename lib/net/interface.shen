@@ -129,15 +129,10 @@
       tcp-ports <- [TcpPort]
       udp-bindings <- [(udp.make-inbox D IP UdpPort UdpSlots)]))
 
-(define list-has-port?
-  {(list fixnum) --> fixnum --> boolean}
-  [] _ -> false
-  [P | Rest] Port -> (or (= P Port) (list-has-port? Rest Port)))
-
 (define check-ports
   {(list fixnum) --> boolean}
   [] -> true
-  [P | Rest] -> (if (and (fx>= P 1) (fx<= P 65535) (not (list-has-port? Rest P)))
+  [P | Rest] -> (if (and (fx>= P 1) (fx<= P 65535) (not (element? P Rest)))
                    (check-ports Rest)
                    (error "net/interface: ports must be distinct within each transport and in 1..65535")))
 
@@ -489,7 +484,7 @@
              Multicast false                                     \\ A group's datagrams are UDP.
              (and (= Proto (wire.tcp-protocol)) (fx>= N (fx+ (wire.ipv4.size) (wire.tcp.size))))
                (tcp.table-ingress (interface.listener F) B I N Now
-                                  (list-has-port? (interface.tcp-ports F) (wire.tcp.destination-port B T)))
+                                  (element? (wire.tcp.destination-port B T) (interface.tcp-ports F)))
              (= Proto (wire.icmp-protocol)) (icmp-ingress F B I N Now)
              (or (= Proto (wire.tcp-protocol)) (= Proto (wire.udp-protocol))) false
              true (unreachable F B I N protocol-unreachable Now))))
@@ -538,14 +533,6 @@
                (and (not (= Groups [])) (net-multicast.ingress4 (membership-of Groups) B I N Now)))
              (ipv4-data F B I N Now))))
 
-(define smaller
-  {fixnum --> fixnum --> fixnum}
-  A B -> (if (fx< A B) A B))
-
-(define earlier
-  {fixnum --> fixnum --> fixnum}
-  A B -> (if (or (fx< A 0) (and (fx>= B 0) (fx< B A))) B A))
-
 (define emit-icmp6
   {interface --> net-ipv6.address --> net-ipv6.address --> buffer.view --> fixnum -->
    fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
@@ -587,7 +574,7 @@
     (let Remote (net-ipv6.read-address (ipv6-state.remote S) B (wire.ipv6.source-at I))
       (and (net-ipv6.unicast? Remote) (net-ipv6-headers.can-report? B I N)
            (fx> (refill-errors (ipv6-state.errors S) Now) 0)
-           (emit-icmp6 F Local Remote B I (smaller N (net-ipv6.error-quote)) (error-type Error) (error-code Error) Pointer Now)
+           (emit-icmp6 F Local Remote B I (net-link.smaller N (net-ipv6.error-quote)) (error-type Error) (error-code Error) Pointer Now)
            (spend-error (ipv6-state.errors S)))))
 
 \\ An error about the packet being received, sent from Local.
@@ -665,7 +652,7 @@
                              (not (= Scope unicast)) false
                              (and (= Proto (wire.tcp-protocol)) (fx>= Count (wire.tcp.size)))
                                (tcp.table-ingress6-at (interface.listener F) B I N At (arrival.now A)
-                                 (list-has-port? (interface.tcp-ports F) (wire.tcp.destination-port B At))
+                                 (element? (wire.tcp.destination-port B At) (interface.tcp-ports F))
                                  (arrival.local A))
                              (= Proto (wire.icmp6-protocol)) (icmp6 F S Remote At)
                              true false)))))))
@@ -871,7 +858,7 @@
 (define ipv6-deadline
   {(list ipv6-state) --> fixnum --> fixnum}
   [] _ -> -1
-  [S] Now -> (earlier (net-ndp.next-deadline (ipv6-state.ndp S) Now)
+  [S] Now -> (net-link.earlier (net-ndp.next-deadline (ipv6-state.ndp S) Now)
                      (net-fragments6.next-deadline (ipv6-state.fragments S))))
 
 (define multicast-source
@@ -920,8 +907,8 @@
             Now (net-link.now D)
             Rx (net-link.head-deadline (net-link.device.rx D))
             Tcp (tcp.listener-deadline (interface.listener F) Now)
-         (earlier (multicast-deadline (interface.groups F) (interface.ipv6 F))
-                  (earlier (ipv6-deadline (interface.ipv6 F) Now) (earlier Rx Tcp)))))
+         (net-link.earlier (multicast-deadline (interface.groups F) (interface.ipv6 F))
+                  (net-link.earlier (ipv6-deadline (interface.ipv6 F) Now) (net-link.earlier Rx Tcp)))))
 
 (preclude [interface.%match ipv6-state.%match arrival.%match])
 )

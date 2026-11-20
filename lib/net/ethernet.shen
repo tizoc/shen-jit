@@ -37,7 +37,7 @@
   {fixnum --> fixnum --> fixnum}
   High Low ->
     (if (and (fx>= High 0) (fx<= High 65535) (fx>= Low 0) (fx<= Low 4294967295))
-        (fx+ (shen-jit.shift-left High 32) Low)
+        (wire.mac High Low)
         (error "net/ethernet: MAC address is wider than 48 bits")))
 
 \\ ff:ff:ff:ff:ff:ff, every station on the link.
@@ -49,11 +49,6 @@
 (define neighbor-lifetime
   {--> fixnum}
   -> 60000)
-
-(define unicast-mac?
-  {fixnum --> boolean}
-  Mac -> (and (fx> Mac 0) (fx<= Mac 281474976710655)
-              (= (shen-jit.bit-and Mac 1099511627776) 0)))
 
 (define setup
   {(vector neighbor) --> fixnum --> fixnum --> (vector neighbor)}
@@ -73,7 +68,7 @@
   Frames Packets Mac IP Routes Slots ->
     (let Mtu (net-link.mtu Packets)
       (if (and (fx>= Mtu 68) (fx>= (net-link.mtu Frames) (fx+ Mtu (wire.ethernet.size)))
-               (unicast-mac? Mac) (or (= IP 0) (net-ipv4.unicast? IP))
+               (wire.station-mac? Mac) (or (= IP 0) (net-ipv4.unicast? IP))
                (fx>= Slots 1) (fx<= Slots 256))
           (:adapter
             frames <- Frames
@@ -220,7 +215,7 @@
            (let Op (wire.arp.operation B S)
                 Mac (wire.arp.sender-hardware B S)
                 IP (wire.arp.sender-protocol B S)
-             (and (unicast-mac? Mac) (= Mac (wire.ethernet.source B I))
+             (and (wire.station-mac? Mac) (= Mac (wire.ethernet.source B I))
                 (cases (= Op 1)
                          (do (if (net-ipv4.unicast? IP) (learn A IP Mac Now) true)
                              (arp A IP Mac Mac 2 Now))
@@ -424,21 +419,17 @@
          Queued (tx-packets A (net-link.device.rx (adapter.packets A)) Now Limit 0)
       (fx+ (fx+ Received Queued) Sent)))
 
-(define earlier
-  {fixnum --> fixnum --> fixnum}
-  A B -> (if (or (fx< A 0) (and (fx>= B 0) (fx< B A))) B A))
-
 (define neighbor-deadline
   {adapter --> fixnum --> boolean --> fixnum --> fixnum --> fixnum}
   _ _ _ 0 At -> At
   A Now Free I At ->
     (let N (neighbor-at A I)
          Due (if (net-link.ready? (neighbor.pending N) 0)
-                 (earlier (neighbor.expires N)
+                 (net-link.earlier (neighbor.expires N)
                           (if Free (if (fx> (neighbor.mac N) 0) Now (neighbor.request-at N))
                               (fixnum -1)))
                  (fixnum -1))
-      (neighbor-deadline A Now Free (fx- I 1) (earlier At Due))))
+      (neighbor-deadline A Now Free (fx- I 1) (net-link.earlier At Due))))
 
 (define pending-ipv6?
   {net-ndp.host --> fixnum --> fixnum --> boolean}
@@ -460,8 +451,8 @@
          Rx (net-link.head-deadline (net-link.device.rx Frames))
          Free (not (net-link.full? (net-link.device.tx Frames)))
          Tx (if Free (net-link.head-deadline (net-link.device.rx (adapter.packets A))) (fixnum -1))
-      (if (and Free (ready6? (adapter.ipv6 A) Now)) (earlier (earlier Rx Tx) Now)
-          (neighbor-deadline A Now Free (adapter.slots A) (earlier Rx Tx)))))
+      (if (and Free (ready6? (adapter.ipv6 A) Now)) (net-link.earlier (net-link.earlier Rx Tx) Now)
+          (neighbor-deadline A Now Free (adapter.slots A) (net-link.earlier Rx Tx)))))
 
 (preclude [neighbor.%match adapter.%match])
 )

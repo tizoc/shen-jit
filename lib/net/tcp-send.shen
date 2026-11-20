@@ -59,7 +59,7 @@
   P B At ->
     (let Tail (receive-tail P)
          Limit (receive-limit P (window P))
-         Max (smaller 4 (fxquotient (fx- (peer.path-mtu P) (fx+ (minimum-header P) (wire.tcp-sack-option.size)))
+         Max (net-link.smaller 4 (fxquotient (fx- (peer.path-mtu P) (fx+ (minimum-header P) (wire.tcp-sack-option.size)))
                                     (wire.tcp-sack-block.size)))
          Recent (seq-distance (seq-of (peer.rx-sack-recent P)) (peer.recv-next P))
          First (if (and (fx>= (peer.rx-sack-recent P) 0)
@@ -103,7 +103,7 @@
          End (fx+ (fx+ M (wire.tcp-mss-option.size)) (if Scale (wire.tcp-scale-option.size) (fixnum 0)))
       (if (fx< Room (wire.tcp-mss-option.size)) 0
           (do (if Sack (write-layout wire.tcp-sack-permitted-option B At (kind 4) (length 2) (no-ops 257)) B)
-              (write-layout wire.tcp-mss-option B M (kind 2) (length 4) (segment-size (smaller (peer.capacity P) Room)))
+              (write-layout wire.tcp-mss-option B M (kind 2) (length 4) (segment-size (net-link.smaller (peer.capacity P) Room)))
               (if Scale
                   (write-layout wire.tcp-scale-option B (fx+ M (wire.tcp-mss-option.size))
                     (kind 3) (length 3) (shift (peer.window-scale P)))
@@ -123,7 +123,7 @@
     (let Space (window P)
          Shift (if (or (flag? Flags (flag-bits control syn)) (fx< (peer.remote-scale P) 0))
                    (fixnum 0) (peer.window-scale P))
-      (smaller 65535 (shen-jit.shift-right Space Shift))))
+      (net-link.smaller 65535 (shen-jit.shift-right Space Shift))))
 
 (define write-segment
   {peer --> buffer.view --> fixnum --> fixnum --> seq --> fixnum --> fixnum --> fixnum --> buffer.view}
@@ -197,7 +197,7 @@
 (define backoff
   {peer --> fixnum --> boolean}
   P Now ->
-    (let Rto (smaller (max-rto) (fx* 2 (peer.tx-rto P)))
+    (let Rto (net-link.smaller (max-rto) (fx* 2 (peer.tx-rto P)))
       (do (peer.tx-rto-> P Rto)
           (peer.tx-due-> P (fx+ Now Rto))
           (peer.tx-retries-> P (fx+ (peer.tx-retries P) 1))
@@ -247,7 +247,7 @@
 
 (define loss-threshold
   {peer --> fixnum --> fixnum}
-  P Flight -> (larger (fx* (peer.send-mss P) 2) (fxquotient Flight 2)))
+  P Flight -> (net-link.larger (fx* (peer.send-mss P) 2) (fxquotient Flight 2)))
 
 (define congestion-timeout
   {peer --> fixnum --> boolean}
@@ -264,7 +264,7 @@
     (if (= (peer.recovery-bytes P) 0)
         (let Threshold (loss-threshold P Flight)
           (do (peer.ssthresh-> P Threshold)
-              (peer.cwnd-> P (smaller (peer.cwnd P) Threshold))
+              (peer.cwnd-> P (net-link.smaller (peer.cwnd P) Threshold))
               (peer.ca-acked-> P 0)
               (peer.recovery-bytes-> P Flight)
               true))
@@ -274,8 +274,8 @@
   {peer --> net-link.ring --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
   P R Now Offset End Retry ->
     \\ The replay cursor tracks the retransmitted prefix still awaiting an ACK.
-    (let Limit (smaller End (peer.cwnd P))
-         N (smaller (peer.send-mss P) (fx- Limit Offset))
+    (let Limit (net-link.smaller End (peer.cwnd P))
+         N (net-link.smaller (peer.send-mss P) (fx- Limit Offset))
          Next (fx+ Offset N)
       (do (retransmit-data P R Now Offset N)
           (peer.tx-replay-> P (if (fx< Next (peer.tx-flight P)) Next -1))
@@ -342,7 +342,7 @@
     (if (fx>= I Flight) Count
         (let From (fx+ I (send-run P (peer.tx-sacked P) I (fx- Flight I) true))
              To (fx+ From (send-run P (peer.tx-sacked P) From (fx- Flight From) false))
-             Lost (larger 0 (fx- To (larger From LostEnd)))
+             Lost (net-link.larger 0 (fx- To (net-link.larger From LostEnd)))
              Repaired (send-count P (peer.tx-repaired P) From (fx- To From))
           (measure-sack-pipe P To Flight LostEnd (fx+ Count (fx+ Lost Repaired))))))
 
@@ -351,7 +351,7 @@
   {peer --> fixnum --> fixnum --> fixnum}
   P I End ->
     (if (fx>= I End) -1
-        (let Skip (larger (send-run P (peer.tx-sacked P) I (fx- End I) true)
+        (let Skip (net-link.larger (send-run P (peer.tx-sacked P) I (fx- End I) true)
                           (send-run P (peer.tx-repaired P) I (fx- End I) true))
           (if (= Skip 0) I (find-sack-repair P (fx+ I Skip) End)))))
 
@@ -374,13 +374,13 @@
   {peer --> fixnum --> fixnum --> fixnum}
   P I Limit ->
     (if (fx>= I Limit) I
-        (fx+ I (smaller (send-run P (peer.tx-sacked P) I (fx- Limit I) false)
+        (fx+ I (net-link.smaller (send-run P (peer.tx-sacked P) I (fx- Limit I) false)
                         (send-run P (peer.tx-repaired P) I (fx- Limit I) false)))))
 
 (define fast-retry-length
   {peer --> fixnum --> fixnum}
   P End ->
-    (let Limit (smaller (peer.send-mss P) End)
+    (let Limit (net-link.smaller (peer.send-mss P) End)
       \\ Always retry the cumulative gap, even if the peer reneged on that byte.
       (if (fx> (peer.tx-sack-high P) 0) (sack-hole-end P 1 Limit) Limit)))
 
@@ -399,8 +399,8 @@
   {peer --> net-link.ring --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
   P R Now Offset End Credit ->
     (let LostEnd (peer.sack-loss-end P)
-         Limit (smaller (smaller End LostEnd)
-                        (fx+ Offset (smaller Credit (peer.send-mss P))))
+         Limit (net-link.smaller (net-link.smaller End LostEnd)
+                        (fx+ Offset (net-link.smaller Credit (peer.send-mss P))))
          Next (sack-hole-end P (fx+ Offset 1) Limit)
          Count (fx- Next Offset)
       (do (retransmit-data P R Now Offset Count)
@@ -415,21 +415,21 @@
     (let Flight (peer.tx-flight P)
          Replay (peer.tx-replay P)
          Window (peer.remote-window P)
-         End (smaller Flight (if (= Window 0) 1 Window))
+         End (net-link.smaller Flight (if (= Window 0) 1 Window))
          Repair (peer.sack-next-repair P)
          Pipe (peer.sack-pipe P)
          Credit (fx- (peer.cwnd P) Pipe)
-         FastEnd (if (sack-recovering? P) (smaller End Credit) End)
+         FastEnd (if (sack-recovering? P) (net-link.smaller End Credit) End)
          Available (if (and (= Window 0) (= Flight 0)) (fixnum 1)
-                       (fx- (smaller Window (peer.cwnd P)) (larger Flight Pipe)))
-         N (smaller (fx- (peer.tx-length P) Flight) (smaller (peer.send-mss P) Available))
+                       (fx- (net-link.smaller Window (peer.cwnd P)) (net-link.larger Flight Pipe)))
+         N (net-link.smaller (fx- (peer.tx-length P) Flight) (net-link.smaller (peer.send-mss P) Available))
       (cases (and Expired (fx> End 0))
                (do (clear-sack P)
                    (clear-sack-recovery P)
                    (if (fx> Window 0) (congestion-timeout P Flight)
                        (do (peer.recovery-bytes-> P 0) true))
                    (replay-data P R Now 0 End true))
-             (and (fx>= Replay 0) (fx< Replay (smaller End (peer.cwnd P))))
+             (and (fx>= Replay 0) (fx< Replay (net-link.smaller End (peer.cwnd P))))
                (replay-data P R Now Replay End false)
              (and (peer.tx-fast-retransmit P) (fx> FastEnd 0) (fx> Window 0))
                (fast-retransmit P R Now Flight FastEnd)

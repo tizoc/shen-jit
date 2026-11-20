@@ -3,6 +3,7 @@
 \\ (wire.ipv4.protocol B I) is the read of byte I+9 that one would write by hand. See lib/layout.shen.
 (shen.x.namespace net-wire
   (use buffer)
+  (use shen-jit)
   (import layout deflayout)
 
 \\ RFC 791.
@@ -242,4 +243,14 @@
 (define ipv4-type {--> fixnum} -> 2048)
 (define arp-type {--> fixnum} -> 2054)
 (define ipv6-type {--> fixnum} -> 34525)
+
+\\ IEEE 802: a 48-bit address from its high 16 bits and low 32, and whether it names one station, with
+\\ its group bit, the lowest of its first byte, clear.
+(define mac
+  {fixnum --> fixnum --> fixnum}
+  High Low -> (fx+ (shen-jit.shift-left High 32) Low))
+
+(define station-mac?
+  {fixnum --> boolean}
+  Mac -> (and (fx> Mac 0) (fx<= Mac 281474976710655) (= (shen-jit.bit-and Mac 1099511627776) 0)))
 )

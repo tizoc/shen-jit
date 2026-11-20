@@ -4,7 +4,21 @@
   (import struct defstruct)
   (export link device ring ring.data ring.mtu ring.slots device.rx device.tx make make-ring left right mtu now delivery
           sent would-block too-large send-result
-          head-offset head-length head-deadline tail-offset ready? full? publish consume packet-send packet-recv-into)
+          head-offset head-length head-deadline tail-offset ready? full? publish consume packet-send packet-recv-into
+          smaller larger earlier)
+
+(define smaller
+  {fixnum --> fixnum --> fixnum}
+  A B -> (if (fx< A B) A B))
+
+(define larger
+  {fixnum --> fixnum --> fixnum}
+  A B -> (if (fx< A B) B A))
+
+\\ The earlier of two deadlines, each an absolute time or -1 for none.
+(define earlier
+  {fixnum --> fixnum --> fixnum}
+  A B -> (if (or (fx< A 0) (and (fx>= B 0) (fx< B A))) B A))
 
 \\ A packet is sent, or waits for room, or is larger than the link carries.
 (datatype send-results

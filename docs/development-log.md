@@ -4013,6 +4013,14 @@ A review of the networking code after it had been rewritten found what still rea
   shifted byte. DHCP's magic cookie, ports, message types and size, and DNS's record types, class, codes
   and port are named. TCP's lossy run 157.0 against 157.4 ms, lossless 10.9 and 10.7, UDP echo 21.8 and
   21.9, nine rounds at load 3.1; Linux's TAP suites, DHCP and DNS among them, pass with no heap words.
+- **One copy of each helper.** The earlier of two deadlines was defined five times, the smaller and the
+  larger of two fixnums three times, a test that a MAC address names one station four times, and a
+  search of a list of ports twice. `net-link` has `earlier`, `smaller` and `larger`, `net-wire` has
+  `mac` and `station-mac?`, and the ports are `element?`; `net-marks` and `net-fragments6`, which do
+  not require the link, keep theirs. A namespace's `use` only keeps a prefix from being qualified again,
+  so the calls are written `net-link.earlier`. TCP's lossy run 155.8 against 156.7 ms, lossless 10.6 and
+  10.7, UDP echo 21.5 and 21.5, nine rounds at load 1.4; a poll and deadline query with 256 connections
+  open 7,736 against 7,852 ns, ranges overlapping.
 
 ### Limited ICMPv4 errors, and a page on the networking code (2026-11-20)
 

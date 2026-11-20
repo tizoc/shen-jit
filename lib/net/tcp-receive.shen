@@ -27,7 +27,7 @@
   (where (and (= Kind 2) (= Length 4))) (u16-be Size) (where (fx> Size 0))
     := (do (offer-mss Seg Size) true);
   (where (and (= Kind 3) (= Length 3))) Shift
-    := (do (segment.scale-> Seg (smaller 14 Shift)) true);
+    := (do (segment.scale-> Seg (net-link.smaller 14 Shift)) true);
   (where (and (= Kind 4) (= Length 2))) := (do (segment.sack-permitted-> Seg true) true);
   (where (and (= Kind 5) (sack-length? Length))) (at At) (skip (fx- Length 2))
     := (do (sack-blocks Seg At (fx+ At (fx- Length 2))) true);
@@ -50,7 +50,7 @@
 
 (define offer-mss
   {segment --> fixnum --> segment}
-  Seg Size -> (let Mss (segment.mss Seg) (segment.mss-> Seg (if (fx< Mss 0) Size (smaller Mss Size)))))
+  Seg Size -> (let Mss (segment.mss Seg) (segment.mss-> Seg (if (fx< Mss 0) Size (net-link.smaller Mss Size)))))
 
 \\ One to four blocks, of two edges each.
 (define sack-length?
@@ -124,17 +124,17 @@
 (define record-rtt
   {peer --> fixnum --> boolean}
   P Ms ->
-    (let Sample (fx* (larger 1 (smaller (max-rto) Ms)) 8)
+    (let Sample (fx* (net-link.larger 1 (net-link.smaller (max-rto) Ms)) 8)
          Previous (peer.srtt P)
          Delta (fx- Previous Sample)
-         Error (larger Delta (fx- 0 Delta))
+         Error (net-link.larger Delta (fx- 0 Delta))
          Variation (if (= Previous 0) (fxquotient Sample 2)
                        (fxquotient (fx+ (fx* (peer.rttvar P) 3) Error) 4))
          Smoothed (if (= Previous 0) Sample (fxquotient (fx+ (fx* Previous 7) Sample) 8))
-         Rto (fxquotient (fx+ (fx+ Smoothed (larger 8 (fx* Variation 4))) 7) 8)
+         Rto (fxquotient (fx+ (fx+ Smoothed (net-link.larger 8 (fx* Variation 4))) 7) 8)
       (do (peer.srtt-> P Smoothed)
           (peer.rttvar-> P Variation)
-          (peer.tx-rto-> P (larger (min-rto) (smaller (max-rto) Rto)))
+          (peer.tx-rto-> P (net-link.larger (min-rto) (net-link.smaller (max-rto) Rto)))
           true)))
 
 (define take-rtt-sample
@@ -200,15 +200,15 @@
          Recovery (peer.recovery-bytes P)
       (cases (fx> Recovery 0)
                (do (if (fx>= N Recovery) (clear-sack-recovery P) true)
-                   (peer.recovery-bytes-> P (larger 0 (fx- Recovery N)))
+                   (peer.recovery-bytes-> P (net-link.larger 0 (fx- Recovery N)))
                    true)
              (= Cwnd Capacity) true
              (fx< Cwnd Threshold)
-               (do (peer.cwnd-> P (smaller Threshold (fx+ Cwnd (smaller N Mss)))) true)
+               (do (peer.cwnd-> P (net-link.smaller Threshold (fx+ Cwnd (net-link.smaller N Mss)))) true)
              true
                (let Credit (fx+ (peer.ca-acked P) N)
                  (if (fx>= Credit Cwnd)
-                     (do (peer.cwnd-> P (smaller Capacity (fx+ Cwnd Mss)))
+                     (do (peer.cwnd-> P (net-link.smaller Capacity (fx+ Cwnd Mss)))
                          (peer.ca-acked-> P (fx- Credit Cwnd))
                          true)
                      (do (peer.ca-acked-> P Credit) true))))))
@@ -232,7 +232,7 @@
          SampleEnd (peer.rtt-sample-end P)
          Blocked (peer.rtt-blocked-bytes P)
       (do (if (or (= Ack SampleEnd) (seq-after? Ack SampleEnd)) (take-rtt-sample P Now) false)
-          (if (fx> Blocked 0) (peer.rtt-blocked-bytes-> P (larger 0 (fx- Blocked N))) P)
+          (if (fx> Blocked 0) (peer.rtt-blocked-bytes-> P (net-link.larger 0 (fx- Blocked N))) P)
           (retire-sack P N)
           (if (and (sack-recovering? P) (fx< N (peer.recovery-bytes P)))
               (net-marks.mark (peer.tx-repaired P) (peer.tx-head P) (peer.capacity P) N false)
@@ -303,7 +303,7 @@
       (do (if (and (fx> Left 0) (fx< Left Right) (fx<= Right (peer.tx-flight P)))
               (do (net-marks.mark (peer.tx-sacked P) (wrap-offset (fx+ (peer.tx-head P) Left) Capacity)
                                     Capacity (fx- Right Left) true)
-                  (peer.tx-sack-high-> P (larger (peer.tx-sack-high P) Right))
+                  (peer.tx-sack-high-> P (net-link.larger (peer.tx-sack-high P) Right))
                   true)
               false)
           (read-sack-blocks P B (fx+ I (wire.tcp-sack-block.size)) End Una))))
@@ -391,10 +391,10 @@
                (peer.rx-fin-> P (seq-number (seq-add Next End))) P)
          Final (peer.rx-fin P)
          Limit (receive-limit P Window)
-         Count (smaller N (fx- Limit Offset))
+         Count (net-link.smaller N (fx- Limit Offset))
       \\ Keep up to three gap ACKs across polls even when several segments arrive together.
       (do (if (= Offset 0) (peer.ack-needed-> P true)
-              (peer.rx-duplicate-acks-> P (smaller 3 (fx+ (peer.rx-duplicate-acks P) 1))))
+              (peer.rx-duplicate-acks-> P (net-link.smaller 3 (fx+ (peer.rx-duplicate-acks P) 1))))
           (if (fx> Count 0)
               (do (receive-bytes P B Start Offset Count Limit)
                   (if (and (fx> Offset 0) (peer.sack-enabled P))
@@ -468,7 +468,7 @@
          Ahead (seq-distance Seq Next)
          Skip (seq-distance Next Seq)
          Fin (flag? (segment.flags Seg) (flag-bits control fin))
-         Win (shen-jit.shift-left (segment.window Seg) (larger 0 (peer.remote-scale P)))
+         Win (shen-jit.shift-left (segment.window Seg) (net-link.larger 0 (peer.remote-scale P)))
       (do (acknowledge P Seq Ack Win Now (and (= (segment.flags Seg) (flag-bits control ack)) (= N 0)))
           (if (peer.sack-enabled P) (accept-sack P Seg Ack Previous) false)
           (if (and (fx> (span Seg) 0) (not (peer.recv-eof P)))
@@ -519,8 +519,8 @@
   P Seg Listening ->
     (let Seq (segment.sequence Seg)
          Offered (segment.mss Seg)
-         Limit (smaller (peer.mss P) (fx- (peer.path-mtu P) (minimum-header P)))
-         Mss (smaller Limit (if (fx>= Offered 0) Offered (default-mss (peer.ip-header P))))
+         Limit (net-link.smaller (peer.mss P) (fx- (peer.path-mtu P) (minimum-header P)))
+         Mss (net-link.smaller Limit (if (fx>= Offered 0) Offered (default-mss (peer.ip-header P))))
          Sacked (and (sack-capable? P) (segment.sack-permitted Seg))
       (do (peer.recv-next-> P (seq-add Seq 1))
           (remember-window P Seq (segment.acknowledgement Seg) (segment.window Seg))
