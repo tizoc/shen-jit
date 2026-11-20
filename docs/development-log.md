@@ -3948,6 +3948,19 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   e41c023), about 300 lines for under 1% in its own HTTP benchmark (TUN 40,102 to 40,384 requests/s),
   which is the kind of machinery for little gain this project declines; and a cache of Ethernet egress
   routes, which it reverted itself (66cde9e, 5b203e8) when native runs showed no gain.
+- TCP's presence maps, a bit for each byte of its windows received, sacked and repaired, were walked a bit
+  at a time: the SACK scans and their `buffer.u8` were about a third of the lossy run's samples. A module of
+  their own now, `lib/net/marks.shen`, walks a ring's map a run at a time, 32 positions to a read in the
+  machine's order, with `ctz`, `clz` and `popcount` at a run's end, after checking the map once; it marks
+  and clears runs the same way. Every SACK loop is a few runs now: the pipe is runs of sacked and unsacked
+  bytes and a count of repairs, a hole's end the nearer of two runs, and a received segment is copied and
+  marked a run of missing bytes at a time. The maps have three bytes more, so that a word read at any
+  position's byte stays in them. Its test drives three rings, of 203, 64 and 9 positions, by random runs
+  across their ends, against a byte for each position, and fails at its first step when the backward
+  run is off by one. The lossy run (mode 1) took 244.1–246.5 against 186.9–188.8 ms, UDP echo 24.5–25.3
+  against 24.5–25.5, at a load near 2; the scans are gone from the profile, and the calls to C for
+  `ctz`, `clz` and `popcount`, which the JIT does not inline, are part of the 16% `sj_primitive` now is.
+  Linux's TUN and TAP suites pass with no heap words.
 
 ### Source-specific multicast (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
 

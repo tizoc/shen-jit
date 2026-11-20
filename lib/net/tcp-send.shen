@@ -3,6 +3,7 @@
   (use buffer)
   (use net-link)
   (use net-ipv4)
+  (use net-marks)
   (use net-ipv6)
   (use shen-jit)
   (use net-wire => wire)
@@ -15,19 +16,25 @@
 
 (define receive-marked?
   {peer --> fixnum --> fixnum --> boolean}
-  P Tail Offset -> (marked? (peer.rx-present P) (wrap-offset (fx+ Tail Offset) (peer.capacity P))))
+  P Tail Offset -> (net-marks.marked? (peer.rx-present P) (wrap-offset (fx+ Tail Offset) (peer.capacity P))))
+
+\\ The run of positions received, or not, from offset I of the window on, to Limit.
+(define receive-run
+  {peer --> fixnum --> fixnum --> fixnum --> boolean --> fixnum}
+  P Tail I Limit Mark ->
+    (net-marks.run-length (peer.rx-present P) (wrap-offset (fx+ Tail I) (peer.capacity P)) (peer.capacity P) (fx- Limit I) Mark))
 
 (define sack-run-start
   {peer --> fixnum --> fixnum --> fixnum}
   P Tail I ->
-    (if (and (fx> I 0) (receive-marked? P Tail (fx- I 1)))
-        (sack-run-start P Tail (fx- I 1)) I))
+    (if (fx> I 0)
+        (fx- I (net-marks.run-length-back (peer.rx-present P) (wrap-offset (fx+ Tail (fx- I 1)) (peer.capacity P))
+                              (peer.capacity P) I true))
+        I))
 
 (define sack-run-end
   {peer --> fixnum --> fixnum --> fixnum --> fixnum}
-  P Tail I Limit ->
-    (if (and (fx< I Limit) (receive-marked? P Tail I))
-        (sack-run-end P Tail (fx+ I 1) Limit) I))
+  P Tail I Limit -> (if (fx< I Limit) (fx+ I (receive-run P Tail I Limit true)) I))
 
 (define write-sack-block
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> buffer.view}
@@ -39,14 +46,13 @@
 (define write-sack-runs
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
   P B At Tail I Limit Skip Used Max ->
-    (cases (or (fx>= I Limit) (= Used Max)) Used
-           (not (receive-marked? P Tail I))
-             (write-sack-runs P B At Tail (fx+ I 1) Limit Skip Used Max)
-           true
-             (let End (sack-run-end P Tail (fx+ I 1) Limit)
-               (if (= I Skip) (write-sack-runs P B At Tail End Limit Skip Used Max)
-                   (do (write-sack-block P B (fx+ At (fx* Used (wire.tcp-sack-block.size))) I End)
-                       (write-sack-runs P B At Tail End Limit Skip (fx+ Used 1) Max))))))
+    (if (or (fx>= I Limit) (= Used Max)) Used
+        (let Start (fx+ I (receive-run P Tail I Limit false))
+          (if (fx>= Start Limit) Used
+              (let End (sack-run-end P Tail Start Limit)
+                (if (= Start Skip) (write-sack-runs P B At Tail End Limit Skip Used Max)
+                    (do (write-sack-block P B (fx+ At (fx* Used (wire.tcp-sack-block.size))) Start End)
+                        (write-sack-runs P B At Tail End Limit Skip (fx+ Used 1) Max))))))))
 
 (define write-sack
   {peer --> buffer.view --> fixnum --> fixnum}
@@ -287,43 +293,62 @@
 
 (define sacked?
   {peer --> fixnum --> boolean}
-  P I -> (marked? (peer.tx-sacked P) (send-ring-offset P I)))
+  P I -> (net-marks.marked? (peer.tx-sacked P) (send-ring-offset P I)))
 
 (define repaired?
   {peer --> fixnum --> boolean}
-  P I -> (marked? (peer.tx-repaired P) (send-ring-offset P I)))
+  P I -> (net-marks.marked? (peer.tx-repaired P) (send-ring-offset P I)))
 
-\\ Walk back from the highest SACK. Evidence only increases to the left.
+\\ The run of positions of the send window, sacked or repaired as Map says, or not, from offset I on or
+\\ down, N at most, and how many of them are marked.
+(define send-run
+  {peer --> buffer.view --> fixnum --> fixnum --> boolean --> fixnum}
+  P Map I N Mark -> (net-marks.run-length Map (send-ring-offset P I) (peer.capacity P) N Mark))
+
+(define send-run-back
+  {peer --> buffer.view --> fixnum --> fixnum --> boolean --> fixnum}
+  P Map I N Mark -> (net-marks.run-length-back Map (send-ring-offset P I) (peer.capacity P) N Mark))
+
+(define send-count
+  {peer --> buffer.view --> fixnum --> fixnum --> fixnum}
+  P Map I N -> (net-marks.count Map (send-ring-offset P I) (peer.capacity P) N))
+
+\\ Walk back from the highest SACK, a run at a time. Evidence only increases to the left.
 (define sack-loss-frontier
-  {peer --> fixnum --> fixnum --> fixnum --> boolean --> fixnum}
-  P I Bytes Runs InRun ->
+  {peer --> fixnum --> fixnum --> fixnum --> fixnum}
+  P I Bytes Runs ->
     (cases (fx< I 0) 0
-           (sacked? P I) (sack-loss-frontier P (fx- I 1) (fx+ Bytes 1)
-                                             (if InRun Runs (fx+ Runs 1)) true)
+           (sacked? P I) (let Run (send-run-back P (peer.tx-sacked P) I (fx+ I 1) true)
+                           (sack-loss-frontier P (fx- I Run) (fx+ Bytes Run) (fx+ Runs 1)))
            (or (fx>= Runs 3) (fx> Bytes (fx* (peer.send-mss P) 2))) (fx+ I 1)
-           true (sack-loss-frontier P (fx- I 1) Bytes Runs false)))
+           true (sack-loss-frontier P (fx- I (send-run-back P (peer.tx-sacked P) I (fx+ I 1) false))
+                                    Bytes Runs)))
 
-\\ Count unsacked originals not inferred lost, plus unacknowledged repairs.
+\\ Count unsacked originals not inferred lost, plus unacknowledged repairs, a run of sacked and one of
+\\ unsacked positions at a time.
 (define measure-sack-pipe
   {peer --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
   P I Flight LostEnd Count ->
-    (if (= I Flight) Count
-        (let Next (if (sacked? P I) Count
-                      (fx+ (if (fx>= I LostEnd) (fx+ Count 1) Count)
-                           (if (repaired? P I) 1 0)))
-          (measure-sack-pipe P (fx+ I 1) Flight LostEnd Next))))
+    (if (fx>= I Flight) Count
+        (let From (fx+ I (send-run P (peer.tx-sacked P) I (fx- Flight I) true))
+             To (fx+ From (send-run P (peer.tx-sacked P) From (fx- Flight From) false))
+             Lost (larger 0 (fx- To (larger From LostEnd)))
+             Repaired (send-count P (peer.tx-repaired P) From (fx- To From))
+          (measure-sack-pipe P To Flight LostEnd (fx+ Count (fx+ Lost Repaired))))))
 
+\\ The first offset from I on, before End, neither sacked nor repaired, or -1.
 (define find-sack-repair
   {peer --> fixnum --> fixnum --> fixnum}
   P I End ->
-    (cases (fx>= I End) -1
-           (or (sacked? P I) (repaired? P I)) (find-sack-repair P (fx+ I 1) End)
-           true I))
+    (if (fx>= I End) -1
+        (let Skip (larger (send-run P (peer.tx-sacked P) I (fx- End I) true)
+                          (send-run P (peer.tx-repaired P) I (fx- End I) true))
+          (if (= Skip 0) I (find-sack-repair P (fx+ I Skip) End)))))
 
 (define refresh-sack-recovery
   {peer --> boolean}
   P ->
-    (let LostEnd (sack-loss-frontier P (fx- (peer.tx-sack-high P) 1) 0 0 false)
+    (let LostEnd (sack-loss-frontier P (fx- (peer.tx-sack-high P) 1) 0 0)
       (do (peer.sack-loss-end-> P LostEnd)
           (peer.sack-next-repair-> P (find-sack-repair P 0 LostEnd))
           (peer.sack-pipe-> P (measure-sack-pipe P 0 (peer.tx-flight P) LostEnd 0))
@@ -332,13 +357,15 @@
 (define mark-repair
   {peer --> fixnum --> fixnum --> boolean}
   P Offset Count ->
-    (write-sack-marks (peer.tx-repaired P) (send-ring-offset P Offset) (peer.capacity P) Count true))
+    (net-marks.mark (peer.tx-repaired P) (send-ring-offset P Offset) (peer.capacity P) Count true))
 
+\\ The first offset from I on, before Limit, sacked or repaired, or I at or past Limit.
 (define sack-hole-end
   {peer --> fixnum --> fixnum --> fixnum}
   P I Limit ->
-    (if (or (fx>= I Limit) (sacked? P I) (repaired? P I))
-        I (sack-hole-end P (fx+ I 1) Limit)))
+    (if (fx>= I Limit) I
+        (fx+ I (smaller (send-run P (peer.tx-sacked P) I (fx- Limit I) false)
+                        (send-run P (peer.tx-repaired P) I (fx- Limit I) false)))))
 
 (define fast-retry-length
   {peer --> fixnum --> fixnum}

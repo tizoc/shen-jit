@@ -4,6 +4,7 @@
   (use net-link)
   (use net-ipv4)
   (use net-ipv6)
+  (use net-marks)
   (use shen-jit)
   (import struct defstruct)
   (export setup checks verify exercise window-case make-window-case exercise-window
@@ -1360,9 +1361,71 @@
                       (expect (= (tcp.listener-deadline L 120056) -1)
                               "withdrawn IPv6 addresses clear their waiting tuples"))))))))
 
+\\ Presence maps against a byte for each position: rings that are not a whole number of bytes or words,
+\\ marked and cleared by random runs that may cross the end, whose runs both ways and counts must agree.
+(define next-random
+  {fixnum --> fixnum}
+  X -> (fxremainder (fx* X 48271) 2147483647))
+
+(define shadow-mark
+  {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> buffer.view}
+  S _ _ 0 _ -> S
+  S Pos Cap N Bit -> (shadow-mark (buffer.u8-> S Pos Bit) (if (= (fx+ Pos 1) Cap) 0 (fx+ Pos 1)) Cap (fx- N 1) Bit))
+
+(define shadow-at
+  {buffer.view --> fixnum --> fixnum --> fixnum}
+  S Pos Cap -> (buffer.u8 S (cases (fx< Pos 0) (fx+ Pos Cap) (fx>= Pos Cap) (fx- Pos Cap) true Pos)))
+
+(define shadow-run
+  {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
+  S Pos Cap N Bit Step Count ->
+    (if (and (fx< Count N) (= (shadow-at S (fx+ Pos (fx* Step Count)) Cap) Bit))
+        (shadow-run S Pos Cap N Bit Step (fx+ Count 1))
+        Count))
+
+(define shadow-count
+  {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
+  _ _ _ 0 Count -> Count
+  S Pos Cap N Count -> (shadow-count S (fx+ Pos 1) Cap (fx- N 1) (fx+ Count (shadow-at S Pos Cap))))
+
+(define same-marks?
+  {buffer.view --> buffer.view --> fixnum --> fixnum --> boolean}
+  Map S Cap I -> (or (= I Cap)
+                     (and (= (net-marks.marked? Map I) (= (buffer.u8 S I) 1))
+                          (same-marks? Map S Cap (fx+ I 1)))))
+
+(define presence-steps
+  {buffer.view --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  _ _ _ 0 _ -> true
+  Map S Cap Steps X ->
+    (let A (next-random X) B (next-random A) C (next-random B) D (next-random C)
+         Pos (fxremainder A Cap)
+         N (fxremainder (shen-jit.shift-right B 4) (fx+ Cap 1))
+         Mark (= (shen-jit.bit-and C 1) 1)
+         Bit (if Mark (fixnum 1) (fixnum 0))
+         At (fxremainder (shen-jit.shift-right D 4) Cap)
+         M (fxremainder (shen-jit.shift-right C 8) (fx+ Cap 1))
+         Name (make-string "presence map of ~A, step ~A" Cap Steps)
+      (and (expect (and (net-marks.mark Map Pos Cap N Mark) (= (shadow-mark S Pos Cap N Bit) S)) Name)
+           (expect (same-marks? Map S Cap 0) Name)
+           (expect (= (net-marks.run-length Map At Cap M true) (shadow-run S At Cap M 1 1 0)) Name)
+           (expect (= (net-marks.run-length Map At Cap M false) (shadow-run S At Cap M 0 1 0)) Name)
+           (expect (= (net-marks.run-length-back Map At Cap M true) (shadow-run S At Cap M 1 -1 0)) Name)
+           (expect (= (net-marks.run-length-back Map At Cap M false) (shadow-run S At Cap M 0 -1 0)) Name)
+           (expect (= (net-marks.count Map At Cap M) (shadow-count S At Cap M 0)) Name)
+           (presence-steps Map S Cap (fx- Steps 1) D))))
+
+(define presence-maps
+  {fixnum --> boolean}
+  Cap -> (and (presence-steps (buffer.new (net-marks.bytes Cap)) (buffer.new Cap) Cap 400 Cap)
+              (let Map (buffer.new (net-marks.bytes Cap))
+                (and (net-marks.mark Map 0 Cap Cap true) (= (net-marks.count Map 0 Cap Cap) Cap)
+                     (net-marks.clear Map Cap) (= (net-marks.count Map 0 Cap Cap) 0)))))
+
 (define checks
   {fixnum --> boolean}
-  Mtu -> (and (fixture Mtu) (option-fixtures Mtu) (receive-window 41) (partial-read 45)
+  Mtu -> (and (presence-maps 203) (presence-maps 64) (presence-maps 9)
+              (fixture Mtu) (option-fixtures Mtu) (receive-window 41) (partial-read 45)
               (ring-wrap 43) (overlapping-replay 43) (receive-window-edge 43) (reordered-fin 43) (reset-staged-slot 43)
               (timeout-after-syn-loss Mtu) (listener-reuse Mtu) (listener-fairness Mtu)
               (listener-half-open-timeout Mtu) (exercise-time-wait (make-wait-fixture Mtu))

@@ -3,6 +3,7 @@
   (use buffer)
   (use net-link)
   (use net-ipv4)
+  (use net-marks)
   (use net-ipv6)
   (use shen-jit)
   (use net-wire => wire)
@@ -201,7 +202,7 @@
     (let High (peer.tx-sack-high P)
       (cases (= High 0) true
              (fx>= N High) (clear-sack P)
-             true (do (write-sack-marks (peer.tx-sacked P) (peer.tx-head P) (peer.capacity P) N false)
+             true (do (net-marks.mark (peer.tx-sacked P) (peer.tx-head P) (peer.capacity P) N false)
                       (peer.tx-sack-high-> P (fx- High N))
                       true))))
 
@@ -217,7 +218,7 @@
           (if (fx> Blocked 0) (peer.rtt-blocked-bytes-> P (larger 0 (fx- Blocked N))) P)
           (retire-sack P N)
           (if (and (sack-recovering? P) (fx< N (peer.recovery-bytes P)))
-              (write-sack-marks (peer.tx-repaired P) (peer.tx-head P) (peer.capacity P) N false)
+              (net-marks.mark (peer.tx-repaired P) (peer.tx-head P) (peer.capacity P) N false)
               true)
           (peer.tx-head-> P (wrap-offset (fx+ (peer.tx-head P) N) (peer.capacity P)))
           (peer.tx-length-> P (fx- (peer.tx-length P) N))
@@ -283,7 +284,7 @@
          Right (seq-distance (seq-of (wire.tcp-sack-block.right B I)) Una)
          Capacity (peer.capacity P)
       (do (if (and (fx> Left 0) (fx< Left Right) (fx<= Right (peer.tx-flight P)))
-              (do (write-sack-marks (peer.tx-sacked P) (wrap-offset (fx+ (peer.tx-head P) Left) Capacity)
+              (do (net-marks.mark (peer.tx-sacked P) (wrap-offset (fx+ (peer.tx-head P) Left) Capacity)
                                     Capacity (fx- Right Left) true)
                   (peer.tx-sack-high-> P (larger (peer.tx-sack-high P) Right))
                   true)
@@ -303,35 +304,29 @@
               false))
         false))
 
-\\ Store the first byte received at each position and count only newly marked bytes.
+\\ Store the first byte received at each position and count only newly marked bytes: a run of positions
+\\ not yet received is copied and marked at once, and a run of those received is passed over.
 (define store-missing
   {buffer.view --> buffer.view --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
-  _ _ _ _ _ _ 0 Added -> Added
   Rx Map B Start At Capacity N Added ->
-    (let I (shen-jit.shift-right At 3)
-         Bits (buffer.u8 Map I)
-         Mask (presence-mask At)
-         Next (wrap-offset (fx+ At 1) Capacity)
-         Fresh (= (shen-jit.bit-and Bits Mask) 0)
-      (do (if Fresh
-              (do (buffer.u8-> Rx At (buffer.u8 B Start))
-                  (buffer.u8-> Map I (shen-jit.bit-or Bits Mask)))
-              Rx)
-          (store-missing Rx Map B (fx+ Start 1) Next Capacity (fx- N 1)
-                         (if Fresh (fx+ Added 1) Added)))))
+    (if (fx<= N 0) Added
+        (let Absent (net-marks.run-length Map At Capacity N false)
+             _ (if (fx> Absent 0)
+                   (do (copy-into-ring Rx At Capacity B Start Absent)
+                       (net-marks.mark Map At Capacity Absent true))
+                   true)
+             After (wrap-offset (fx+ At Absent) Capacity)
+             Present (net-marks.run-length Map After Capacity (fx- N Absent) true)
+          (store-missing Rx Map B (fx+ Start (fx+ Absent Present)) (wrap-offset (fx+ After Present) Capacity)
+                         Capacity (fx- (fx- N Absent) Present) (fx+ Added Absent)))))
 
 \\ Contiguous bytes are already at the end of the readable data in the same ring.
 (define promote-contiguous
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
-  _ _ _ 0 Count -> Count
   Map At Capacity Limit Count ->
-    (let I (shen-jit.shift-right At 3)
-         Bits (buffer.u8 Map I)
-         Mask (presence-mask At)
-      (if (= (shen-jit.bit-and Bits Mask) 0) Count
-          (do (buffer.u8-> Map I (shen-jit.bit-xor Bits Mask))
-              (promote-contiguous Map (wrap-offset (fx+ At 1) Capacity) Capacity
-                                  (fx- Limit 1) (fx+ Count 1))))))
+    (let Ready (net-marks.run-length Map At Capacity Limit true)
+      (do (net-marks.mark Map At Capacity Ready false)
+          (fx+ Count Ready))))
 
 (define advance-receive
   {peer --> fixnum --> boolean}

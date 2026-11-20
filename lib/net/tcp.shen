@@ -4,6 +4,7 @@
   (use net-link)
   (use net-ipv4)
   (use net-ipv6)
+  (use net-marks)
   (use shen-jit)
   (use net-wire => wire)
   (use grammar)
@@ -75,7 +76,6 @@
   (tx-repaired : buffer.view)
   (mss : fixnum)
   (capacity : fixnum)
-  (map-bytes : fixnum)
   (window-scale : fixnum)
   (mutable remote-scale : fixnum)
   (mutable path-mtu : fixnum)
@@ -185,7 +185,7 @@
 (define new-peer
   {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> peer}
   D LocalIP LocalPort RemoteIP RemotePort Mss Capacity ->
-    (let MapBytes (fxquotient (fx+ Capacity 7) 8)
+    (let MapBytes (net-marks.bytes Capacity)
       (:peer
         device <- D
         local-address <- (net-ipv6.map-ipv4 (net-ipv6.make-address 0 0 0 0) LocalIP)
@@ -200,7 +200,6 @@
         tx-repaired <- (buffer.new MapBytes)
         mss <- Mss
         capacity <- Capacity
-        map-bytes <- MapBytes
         options-state <- (grammar.state)
         segment <- (blank-segment)
         window-scale <- (scale-for Capacity 0)
@@ -269,25 +268,10 @@
   {fixnum --> fixnum --> boolean}
   Flags Bit -> (not (= (shen-jit.bit-and Flags Bit) 0)))
 
-(define clear-presence
-  {buffer.view --> fixnum --> boolean}
-  _ 0 -> true
-  Map N -> (let I (fx- N 1)
-             (do (buffer.u8-> Map I 0)
-                 (clear-presence Map I))))
-
-(define presence-mask
-  {fixnum --> fixnum}
-  At -> (shen-jit.shift-left 1 (shen-jit.bit-and At 7)))
-
-(define marked?
-  {buffer.view --> fixnum --> boolean}
-  Map At -> (flag? (buffer.u8 Map (shen-jit.shift-right At 3)) (presence-mask At)))
-
 (define clear-sack
   {peer --> boolean}
   P -> (if (fx> (peer.tx-sack-high P) 0)
-           (do (clear-presence (peer.tx-sacked P) (peer.map-bytes P))
+           (do (net-marks.clear (peer.tx-sacked P) (peer.capacity P))
                (peer.tx-sack-high-> P 0)
                true)
            true))
@@ -298,7 +282,7 @@
 
 (define clear-sack-recovery
   {peer --> boolean}
-  P -> (do (if (sack-recovering? P) (clear-presence (peer.tx-repaired P) (peer.map-bytes P)) true)
+  P -> (do (if (sack-recovering? P) (net-marks.clear (peer.tx-repaired P) (peer.capacity P)) true)
            (peer.sack-loss-end-> P 0)
            (peer.sack-next-repair-> P -1)
            (peer.sack-pipe-> P 0)
@@ -345,7 +329,7 @@
               (peer.send-mss-> P (smaller (peer.mss P) (fx- (peer.path-mtu P) (minimum-header P))))
               (peer.recv-next-> P (seq-of 0))
               (peer.rx-start-> P 0)
-              (if (fx> (peer.rx-pending P) 0) (clear-presence (peer.rx-present P) (peer.map-bytes P)) true)
+              (if (fx> (peer.rx-pending P) 0) (net-marks.clear (peer.rx-present P) (peer.capacity P)) true)
               (peer.rx-pending-> P 0)
               (peer.rx-fin-> P -1)
               (peer.recv-eof-> P false)
@@ -379,17 +363,6 @@
 (define wrap-offset
   {fixnum --> fixnum --> fixnum}
   At Capacity -> (if (fx>= At Capacity) (fx- At Capacity) At))
-
-(define write-sack-marks
-  {buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
-  _ _ _ 0 _ -> true
-  Map At Capacity N Mark ->
-    (let I (shen-jit.shift-right At 3)
-         Bits (buffer.u8 Map I)
-         Mask (presence-mask At)
-      (do (if (= (flag? Bits Mask) Mark) Map
-              (buffer.u8-> Map I (shen-jit.bit-xor Bits Mask)))
-          (write-sack-marks Map (wrap-offset (fx+ At 1) Capacity) Capacity (fx- N 1) Mark))))
 
 (define receive-tail
   {peer --> fixnum}
