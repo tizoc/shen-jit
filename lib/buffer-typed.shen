@@ -84,11 +84,17 @@
                     (do (shen-jit.u8! (view.owner Checked) (fx+ Start At) Byte) V)
                     (error "buffer: range ~A + ~A exceeds ~A bytes" At 1 Length))))
 
+\\ Where a field of Width bytes at I starts in the storage: range's tests for a width that is not
+\\ negative, made here as u8 makes them, so that an accessor's code calls nothing.
 (define field-offset
   {view --> fixnum --> fixnum --> fixnum}
   Checked I Width ->
     (let Start (view.start Checked)
-      (fx+ Start (range (fx- (view.end Checked) Start) I Width))))
+         Length (fx- (view.end Checked) Start)
+         At (index I)
+      (if (fx<= Width (fx- Length At))
+          (fx+ Start At)
+          (error "buffer: range ~A + ~A exceeds ~A bytes" At Width Length))))
 
 (define swap16
   {fixnum --> fixnum}

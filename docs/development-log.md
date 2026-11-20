@@ -3775,6 +3775,14 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
 - Buffer stores follow Shen's `vector->` convention. `copy-into!`, `append!`, and `append-byte!`
   mark operations that modify a destination view or builder. Tests cover typed calls, unaligned
   fields, subview bounds, invalid values and read-only foreign storage.
+- **A field's bounds tested in one step** (load near 2, executables alternated against the commit
+  before). The 16- and 32-bit accessors found a field's offset through `range`, which took `index` of
+  both its arguments: three levels under the accessor, one past what the lowerer inlines into code
+  that calls, so each accessor's own code called `check` and `field-offset` and kept nothing in
+  registers. `field-offset` now makes the test itself, as `u8` does, with the same message. In the
+  TCP stack on the `net-dsl` branch, the two were 21.5% of a lossy run's samples and are gone from
+  it; the run took 248.7–249.2 against 243.1–244.1 ms, its UDP echo 25.7–25.8 against 24.5–24.6, and
+  the TCP executable is 12 KB smaller.
 
 ### Independent bounded chunk I/O (2026-11-07, M3 Max, macOS arm64)
 
