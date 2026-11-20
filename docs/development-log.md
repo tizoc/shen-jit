@@ -3792,6 +3792,16 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   TCP stack on the `net-dsl` branch, the two were 21.5% of a lossy run's samples and are gone from
   it; the run took 248.7–249.2 against 243.1–244.1 ms, its UDP echo 25.7–25.8 against 24.5–24.6, and
   the TCP executable is 12 KB smaller.
+- **`write-layout` checks its bytes once** (2026-11-19, Apple M3 Max, load near 3, executables alternated against
+  the commit before). Each store of a layout written whole went through `buffer.u32-be->`, `u16-be->` or `u8->`,
+  each checking the view and the range again, and in a caller that calls, such as TCP's `write-segment` and IPv4's
+  `write-header`, each was a call: 16% of the TCP stack's lossy run, with `bswap32` already inline. Now the bytes
+  from the first store's to the end of the last's are checked against the view once, with a new
+  `buffer.offset-at`, and the stores go to its storage with the primitives, a constant's bytes swapped as the code
+  is read. Every value given is checked against its field's width as it is bound, where one stored alone was left
+  to its store's check, so that a 16-bit value stored swapped cannot lose bits; nothing is stored before every
+  check has passed. On the `net-dsl` branch, TCP's lossy run 170.8–171.2 against 162.0–162.8 ms, its UDP echo
+  22.4–22.5 against 21.6–21.7.
 
 ### Independent bounded chunk I/O (2026-11-07, M3 Max, macOS arm64)
 

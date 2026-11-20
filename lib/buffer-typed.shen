@@ -6,7 +6,7 @@
 (shen.x.namespace buffer
   (use shen-jit)
   (shadow index length)
-  (export check end index length new offset owner range u8 u8-> u16-be u16-be-> u32-be u32-be-> wrap)
+  (export check end index length new offset offset-at owner range u8 u8-> u16-be u16-be-> u32-be u32-be-> wrap)
 
 \\ An index: a fixnum that is not negative. The bit operation raises for a number that is not one.
 (define index
@@ -95,6 +95,12 @@
       (if (fx<= Width (fx- Length At))
           (fx+ Start At)
           (error "buffer: range ~A + ~A exceeds ~A bytes" At Width Length))))
+
+\\ Where N bytes at I of V start in V's storage, V and the range checked, for a caller that writes
+\\ them there itself, as write-layout does, with one check for all its stores.
+(define offset-at
+  {view --> fixnum --> fixnum --> fixnum}
+  V I N -> (field-offset (check V) I N))
 
 (define swap16
   {fixnum --> fixnum}

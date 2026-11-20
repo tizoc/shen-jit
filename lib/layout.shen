@@ -214,8 +214,9 @@
 \\ (write-layout Layout B I (Field Value) ...) writes a whole layout at offset I of B, in as few
 \\ stores as its bytes allow: 32 bits at a time, then 16 and 8, each the given fields' values shifted
 \\ into place, so constants fold into one number. Fields not given are 0. A field of 64 bits or more
-\\ is left as it is, for the caller to write. A value that is not stored alone is checked against its
-\\ field's width, as a store checks its own. It gives B.
+\\ is left as it is, for the caller to write. Each value is checked against its field's width, and
+\\ the bytes the stores cover against B, once, before any is stored; the stores then go to B's
+\\ storage. It gives B.
 (defmacro layout.write-macro
   [write-layout Name B I | Values] -> (layout.write (layout.literal Name) B I (map (fn layout.value) Values)))
 
@@ -230,12 +231,24 @@
          Spans (layout.spans Fields 0)
          _ (map (/. V (layout.known Name Spans V)) Values)
          Chunks (layout.chunks (layout.runs Spans 0 (layout.bits-of Fields)))
-         Stored (layout.stored-alone Spans Chunks)
-         Bound (map (/. V (layout.bind Name Spans Stored V)) Values)
+         Bound (map (/. V (layout.bind Name Spans V)) Values)
          Vars (gensym (protect V))
          Ip (if (or (number? I) (variable? I)) I (gensym (protect At)))
-         Body (layout.lets Bound [do | (append (map (/. C (layout.store Vars Ip Spans Bound C)) Chunks) [Vars])])
+         Body (layout.lets Bound (layout.stores Vars Ip Spans Bound Chunks))
       [let Vars B (if (= Ip I) Body [let Ip I Body])]))
+
+\\ The stores, once the bytes from the first's to the end of the last's are checked against B.
+(define layout.stores
+  B _ _ _ [] -> B
+  B I Spans Bound Chunks ->
+    (let Lo (shen-jit.quotient (hd (hd Chunks)) 8)
+         Last (hd (reverse Chunks))
+         Hi (shen-jit.quotient (+ (hd Last) (hd (tl Last))) 8)
+         Base (gensym (protect Base))
+         Storage (gensym (protect Storage))
+      [let Base [buffer.offset-at B (layout.at-of I Lo) (- Hi Lo)]
+        [let Storage [buffer.owner B]
+          [do | (append (map (/. C (layout.store Storage Base Lo Spans Bound C)) Chunks) [B])]]]))
 
 (define layout.bits-of
   [] -> 0
@@ -275,19 +288,14 @@
   S E -> [[S 16] | (layout.chunk (+ S 16) E)] where (>= (- E S) 16)
   S E -> [[S 8] | (layout.chunk (+ S 8) E)])
 
-\\ Fields that are exactly one store, whose store checks them.
-(define layout.stored-alone
-  Spans Chunks -> (mapcan (/. Span (if (element? [(nth 2 Span) (nth 3 Span)] Chunks) [(hd Span)] [])) Spans))
-
-\\ A value as [Field Atom Binding]: a number is itself, and anything else is bound once, checked unless
-\\ its field is stored alone. A binding is typed fixnum, as a literal bound by let, such as one branch of
+\\ A value as [Field Atom Binding]: a number is itself, and anything else is bound once and checked
+\\ against its field's width. A binding is typed fixnum, as a literal bound by let, such as one branch of
 \\ (if Ack 4 20), would otherwise be a number.
 (define layout.bind
-  Name Spans Stored [Field Value] ->
+  Name Spans [Field Value] ->
     (let Bits (nth 3 (layout.span Field Spans))
       (cases (and (number? Value) (>= Value 0) (< Value (shen-jit.shift-left 1 Bits))) [Field Value []]
              (number? Value) (error "write-layout: ~A does not fit ~A.~A, of ~A bits" Value Name Field Bits)
-             (element? Field Stored) (let V (gensym (protect V)) [Field V [[V [type Value fixnum]]]])
              true (let R (gensym (protect R))
                        V (gensym (protect V))
                     [Field V [[R [type Value fixnum]]
@@ -304,14 +312,30 @@
   [] Body -> Body
   [[V Value] | Pairs] Body -> [let V Value (layout.let-pairs Pairs Body)])
 
-\\ One store: the parts of the given fields that fall in it, shifted into place.
+\\ One store into Storage, whose byte Base is the layout's byte Lo: the parts of the given fields
+\\ that fall in it, shifted into place, in the order that makes them big-endian there.
 (define layout.store
-  B I Spans Bound [Start Width] ->
+  Storage Base Lo Spans Bound [Start Width] ->
     (let Parts (mapcan (/. Given (layout.part Spans Start Width Given)) Bound)
          Constant (layout.sum (mapcan (/. P (if (number? P) [P] [])) Parts))
          Exprs (mapcan (/. P (if (number? P) [] [P])) Parts)
          Value (layout.combine Constant Exprs)
-      [(layout.writer Width) B (layout.at-of I (shen-jit.quotient Start 8)) Value]))
+      [(layout.raw-writer Width) Storage (layout.at-of Base (- (shen-jit.quotient Start 8) Lo))
+                                 (layout.big-endian Width Value)]))
+
+(define layout.raw-writer
+  8 -> shen-jit.u8!
+  16 -> shen-jit.u16!
+  32 -> shen-jit.u32!)
+
+\\ A value's bytes reversed, as the machine's order, little-endian on every platform this runs on,
+\\ stores them, so that they are big-endian in the storage: a constant's as the code is read.
+(define layout.big-endian
+  8 X -> X
+  16 X -> (+ (* 256 (shen-jit.bit-and X 255)) (shen-jit.shift-right X 8)) where (number? X)
+  16 X -> [shen-jit.shift-right [shen-jit.bswap32 X] 16]
+  32 X -> (shen-jit.bswap32 X) where (number? X)
+  32 X -> [shen-jit.bswap32 X])
 
 (define layout.at-of
   I 0 -> I

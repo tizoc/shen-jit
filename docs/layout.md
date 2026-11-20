@@ -57,8 +57,9 @@ the given fields shifted into place, so that constants fold into one number:
 ```
 
 stores IPv4's first word as `0x45000000` combined with the count. Fields not given are 0; fields of 64 bits or
-more are left as they are, for the caller to write. A value that shares a store with others is checked against
-its field's width, as a store checks its own. It gives B.
+more are left as they are, for the caller to write. Each value is checked against its field's width, and the
+bytes the stores cover against B, once and before any is stored; the stores then go straight to B's storage. It
+gives B.
 
 ## Named bits
 

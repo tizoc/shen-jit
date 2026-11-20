@@ -19,6 +19,7 @@ transport EOF declaration. Failed captures and movement leave its position uncha
 | `buffer.wrap Storage` | Borrow an existing managed buffer or sized pointer |
 | `buffer.slice V Start Count` | A subview relative to V, bounded by V rather than the whole owner |
 | `buffer.length V`, `buffer.owner V`, `buffer.offset V`, `buffer.end V` | Logical length, original owner and owner-relative start/exclusive end |
+| `buffer.offset-at V I N` | Owner-relative offset of the N bytes at relative offset I, checked, for code that then stores into the owner itself, as `write-layout` does |
 | `buffer.u8 V I`, `buffer.u8-> V I Byte` | Checked relative byte access. A store returns V. |
 | `buffer.u16-be V I`, `buffer.u32-be V I` | Read an unsigned 16- or 32-bit fixnum in big-endian order at relative byte offset I |
 | `buffer.u16-be-> V I X`, `buffer.u32-be-> V I X` | Store an unsigned fixnum in big-endian order at relative byte offset I and return V |

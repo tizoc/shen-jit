@@ -30,6 +30,8 @@ All notable changes to this project are documented in this file. The format is b
   `(let Step (if Up (fixnum 1) (fixnum -1)) ...)`, costs nothing; of anything else it still checks at run time.
 - `shen-jit.bswap32`, `shen-jit.clz` and `shen-jit.ctz` compile inline, so a buffer's big-endian 32-bit reads and
   stores no longer call C.
+- `write-layout` checks the bytes it stores against the view once, before storing any, and then stores into the
+  view's storage directly, which `buffer.offset-at` gives; a value too wide for its field raises naming the field.
 - A small sealed function whose code calls nothing but to make an error's message inlines at any depth, so a typed
   loop that reads a buffer through such helpers keeps its values in registers. An error's message inlines only
   primitives, which makes code smaller and raising an error with a formatted message a little slower.
