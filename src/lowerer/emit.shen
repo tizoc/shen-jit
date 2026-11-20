@@ -115,11 +115,12 @@
 \\ GoTo bindings do: E becomes code at a label after Body and each (thaw G) a
 \\ jump to it, so no closure is made. E's variables keep their slots, since
 \\ Body only writes at or above Top and ends in a return, a tail call or a
-\\ jump out of the loop on every other path.
+\\ jump out of the loop on every other path. For the same reason the registers Body took go
+\\ back before E, which sees only those bound before.
 (define shen-jit.lower.goto
   B Env G E Body Target Top
   -> (let L (new-label B)
-       (do (expr B [[G goto L] | Env] Body Target Top)
+       (do (released B (freeze (expr B [[G goto L] | Env] Body Target Top)))
            (emit B [label L])
            (expr B Env E Target Top))))
 
@@ -310,6 +311,8 @@
                  (Sealed [call-sealed Target A F N])
                  (true [call Target A F N])))))
 
+\\ What the test and each branch took in registers goes back after it: the else and what follows
+\\ see only what was bound before.
 (define shen-jit.lower.if
   \\ An else that jumps to a label: the test jumps there itself.
   B Env C X [apply [var G]] Target Top
@@ -319,11 +322,11 @@
   B Env C X Y Target Top
   -> (let Else (new-label B)
           End (end-label B Target)
-       (do (test B Env C Else Top)
-           (expr B (bounded B Env C true) X Target Top)
+       (do (released B (freeze (do (test B Env C Else Top)
+                                   (expr B (bounded B Env C true) X Target Top))))
            (jump-to-end B End)
            (emit B [label Else])
-           (expr B (bounded B Env C false) Y Target Top)
+           (released B (freeze (expr B (bounded B Env C false) Y Target Top)))
            (place-end B End))))
 
 \\ Code in tail position, or at an exit, never falls through, so it needs no join label.

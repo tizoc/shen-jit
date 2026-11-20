@@ -32,6 +32,9 @@ All notable changes to this project are documented in this file. The format is b
   stores no longer call C.
 - Typed code with a chain of alternatives, each tried when the one before gave nothing, holds one register for the
   chain rather than two for each, so a typed grammar's rule takes in its loops and the rules they match.
+- In typed code, the branches of an `if` and a frozen alternative thawed only in tail position give back the
+  registers they took, so a chain of alternatives that each fail to the next keeps its values in registers rather
+  than running out of them, as continuation-passing code did.
 - `write-layout` checks the bytes it stores against the view once, before storing any, and then stores into the
   view's storage directly, which `buffer.offset-at` gives; a value too wide for its field raises naming the field.
 - A small sealed function whose code calls nothing but to make an error's message inlines at any depth, so a typed

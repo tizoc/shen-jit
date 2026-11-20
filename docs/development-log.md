@@ -4089,6 +4089,31 @@ pass through the state and so cannot be typechecked.
   against 18.9 for `<rule>.parse-at`. What remains of the gap is the protocol: an alternative tried after another
   checks its bytes again, each value goes through the state, and the entry checks the view, makes a state and calls.
 
+### Typed rules in continuation-passing form (2026-11-20, Apple M3 Max at load 1.8 to 3.9, against main at 6158be4)
+
+- **By hand first.** The options header above, written as the grammar would emit it in continuation-passing form:
+  each alternative applies a let-bound continuation K to its position and value, and fails by thawing the next
+  alternative, a let-bound freeze; the repetition is a function whose K goes on with it when the option took bytes,
+  and `.parse` takes the header in, with K its own end. Under the lowerer as it was, K was copied into its four uses
+  and each freeze was a label, so no closure was made, but the loop ran out of word registers and was boxed, called
+  out of line: 18.1 to 18.5 ns, against 18.4 to 19.2 for `<rule>.parse` and 7.1 for the hand loop called as `.parse`
+  is, with a Fail function from a boxed driver (6.8 to 7.0 inlined into a typed one). In tail position an `if`'s
+  branches, and the body of a frozen thunk's label, kept every register they took, so each alternative held those of
+  all before it.
+- **Registers given back in tail position.** The emitter's `if` now gives back what its test and then branch took
+  before the else, and what the else took after it, and a frozen thunk's label gives back what the body before it
+  took: neither falls through to what follows, and the else and the label's code see only the variables bound before.
+  This is the change rejected above, when the alternatives were a value computed into a register and it made nothing
+  fit. The CPS header then compiles to one register function with the loop and the option in it, 12.7 to 13.2 ns, and
+  1,000 and 2,000 parses both make 86 collections under `SHEN_JIT_GC_STRESS=1`, so a parse allocates nothing. Boxed
+  code is unchanged: stage 0's output differs only in the lowerer's own files, as it is boxed, and the kernel,
+  `make bench` and `make bench-independent` run boxed code. The typed programs of `make bench-numeric`, three rounds
+  in turn, give the same checks, best of three old against new: matmul 39.6 against 39.7 ms, mandelbrot 16.8 and
+  16.9, spectral 10.6 and 10.7, nbody 1.6 and 1.6, heat 42.1 and 42.7, the path tracer 382 and 387, within the runs'
+  spread. The grammar as it emits now, a value per alternative, compiles as before: 19.2 to 21.5 ns against 18.4 to 19.8,
+  while the hand loop, whose code is the same, went 7.2 to 7.6 against 6.8 to 7.0.
+  What is left against the hand loop is the alternatives testing their bytes again: about twice its work per option.
+
 ### Rejected: a module's arities recorded before its sources load (2026-11-16, Apple M3 Max)
 
 Scanning every source first would cost a second read and could miss macro-expanded definitions or names that
