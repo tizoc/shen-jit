@@ -28,8 +28,10 @@ writes and partial reads with the same preallocated buffers.
 | `tcp.poll Peer Budget` | Check the clock, consume at most `Budget` queued packets and send at most one segment. Returns the number of incoming packets consumed. Poll both peers to drive the connection. |
 | `tcp.state Peer` | Inspect the connection state, such as `tcp.established`, `tcp.close-wait`, `tcp.time-wait`, `tcp.closed`, `tcp.timed-out`, or `tcp.reset`. |
 
-The MTU must be at least 41. Each peer reserves two circular byte buffers of
-`8 × min(536, Mtu - 40)` bytes each, up to 4,288 bytes for sending and 4,288 for receiving.
+The MTU must be at least 41. A peer sends segments of at most `min(536, Mtu - 40)` bytes, IPv4's default
+size, even on a larger link, and offers that size; a table made with a buffer size `N`, as
+`net-interface.make-host-sized` makes one, sends `min(N, Mtu - 40)`. Each peer reserves two circular byte
+buffers of `8 × min(536, Mtu - 40)` bytes each, up to 4,288 bytes for sending and 4,288 for receiving.
 Three bitmaps track out-of-order data, SACKed data, and repairs. Each bitmap uses one
 bit per buffer byte and three padding bytes so that a 32-bit read can start at its last
 data byte. A peer with the default 4,288-byte windows reserves 10,193 bytes for its

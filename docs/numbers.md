@@ -107,6 +107,21 @@ of doubles indexed by element ([Arrays of doubles](floats.md)).
 sealed, so a conversion that changes nothing costs nothing. Once the module is loaded, these names are system
 functions, which a program cannot redefine.
 
+## Types of a program's own
+
+A type a program defines over fixnums, such as a sequence number that wraps, is a type of its own to the type
+checker, which then refuses the fixnum operators on its values; the compiler, which does not know what it is
+underneath, keeps them in slots. `(shen-jit.represent Type fixnum)` says what it is: in the definitions that
+typecheck after it, a value of that type is compiled as a fixnum, in word registers, while the type checker keeps
+the type apart. Its conversions from and to `fixnum` are the identity, loaded unchecked and given types by
+rules, as TCP's sequence numbers are in [lib/net/seq.shen](../lib/net/seq.shen):
+
+```shen
+(define seq-of X -> X)
+(define seq-number X -> X)
+(shen-jit.represent seq fixnum)
+```
+
 ## Where the rules apply
 
 A module that requires `numbers`, directly or through another, sees its rules, and others do not

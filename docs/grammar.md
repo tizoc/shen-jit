@@ -111,6 +111,12 @@ require, though not what it requires:
 For `port=x`, this reports `"port wants digits"` at position 5. `(where Guard)` puts a check on values
 inside a require, as in `(require <digit> (where (<= <digit> 1)) "unsupported version")`.
 
+A guard after `where`, at the end of an alternative, is tested once all of the alternative has matched, and
+when it fails, the next alternative reads the same input again. In a rule that matches the rest of a list by
+matching itself, each level can then double the work of refusing bad input. Test what decides an alternative
+with a `(where Guard)` item as soon as what it needs is read, or make the rest of the alternative a `require`
+once it is known.
+
 A grammar parses a complete span: it does not tell input that ended early from input that is wrong. A
 caller that reads in pieces collects one unit first, such as a line or a frame, and parses that. A require
 that fails because the span ended reports the span's end as its position.

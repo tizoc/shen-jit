@@ -90,6 +90,17 @@ packets while ARP retries. The pending entries expire after three seconds and
 learned addresses expire after 60 seconds. The Ethernet adapter exposes its
 next deadline in monotonic milliseconds.
 
+| Operation | Meaning |
+| --- | --- |
+| `net-ethernet.make Frames Packets Mac IP Routes Slots` | An adapter between the frame link `Frames`, whose MTU must hold the packet link's and 14 bytes more, and the packet link `Packets`, of an MTU of at least 68. `Mac` is a station's 48-bit address, `IP` a unicast address or 0 until one is configured, and `Slots` the neighbors kept, 1 through 256. |
+| `net-ethernet.hardware High Low` | A MAC address from its high 16 bits and low 32. |
+| `net-ethernet.configure Adapter IP Routes` | Change the address and the routes, as after a DHCP lease, and forget the neighbors learned. |
+| `net-ethernet.enable-ipv6 Adapter Host` | Carry IPv6 too, with the neighbor discovery host of the interface's IPv6. |
+| `net-ethernet.pump Adapter Budget` | Move at most `Budget` frames and packets each way, answering ARP. Returns how many moved. |
+| `net-ethernet.next-deadline Adapter` | When it next has work, a frame or packet waiting or a neighbor's ARP retry or expiry, in monotonic milliseconds, or `-1`. |
+| `net-ethernet.adapter.dropped Adapter` | How many packets were dropped, for want of a route, a neighbor or room. |
+| `net-routes.make Network Prefix Gateway` | A route to `Network`/`Prefix` through `Gateway`, or directly connected when `Gateway` is 0. |
+
 Run `make test-net-tap` under the same Linux requirements as the TUN check. The
 test uses a separate subnet and measures the Ethernet, ARP, and IPv4 echo path
 with the same direct Shen heap probe.
@@ -127,6 +138,23 @@ release the terminal connection. [The outbound HTTP example and allocation fixtu
 uses this API to send a request, check the reply, and perform a clean shutdown.
 The TAP test runs it with a DHCP lease and a DNS server on a different subnet
 so both DNS and HTTP exercise gateway resolution. [DHCP](https://www.rfc-editor.org/rfc/rfc2131.html), [DNS](https://www.rfc-editor.org/rfc/rfc1035.html)
+
+| Operation | Meaning |
+| --- | --- |
+| `net-dhcp.make Device Mac Id` | A client on the interface's packet link, with the station's MAC and a first transaction ID. The link's MTU must be at least 576. |
+| `net-dhcp.poll Client Budget` | While selecting or requesting, take at most `Budget` replies from the link and send what is due. Returns the state: `net-dhcp.selecting`, `requesting`, `bound`, `renewing`, `rebinding` or `expired`. |
+| `net-dhcp.maintain Client Inbox Budget` | Once bound, read at most `Budget` replies from the UDP inbox of port 68 and renew or rebind when due. Returns the state. |
+| `net-dhcp.client.address`, `.mask`, `.gateway`, `.dns`, `.deadline`, `.expires` | The lease, and when the client next acts and when the lease ends. |
+| `net-dns.make Inbox Bytes` | A resolver over a dedicated UDP inbox, with a reply buffer of 512 through 65,507 bytes. |
+| `net-dns.start Resolver Server Id Name Now` | Ask `Server` for the A record of `Name`, 1 through 255 bytes in wire format. |
+| `net-dns.poll Resolver Now` | Read replies and send again when due, four tries in all. Returns `net-dns.pending`, `resolved`, `not-found` or `failed`. |
+| `net-dns.resolver.ip`, `.ttl`, `.deadline` | The address found and its lifetime, and when the resolver next sends. |
+| `net-stream.make Interface` | A handle for one stream, holding no connection. |
+| `net-stream.connect Handle IP Port`, `net-stream.connect6 Handle IP Port` | Open a connection. Returns false when the handle holds one or none can be opened. |
+| `net-stream.accept Handle Port` | Take the next established connection to `Port`, 0 for any. |
+| `net-stream.state Handle`, `readable?`, `writable?` | The connection's state, `tcp.closed` for none, and whether a read or write can progress. |
+| `net-stream.read-into Handle Buffer At Count`, `net-stream.write-from Handle Buffer At Count` | Read into, or write from, `Count` bytes of a view at `At`. A read gives -1 with no connection or after the end; a write gives 0 with none. |
+| `net-stream.shutdown-write Handle`, `net-stream.abort Handle`, `net-stream.release Handle` | Close the sending side, reset the connection, or give a finished connection's slot back so the handle can hold another. |
 
 The TAP echo test uses four 128 KiB TCP slots. Each slot reserves 311,305 bytes for the
 send and receive buffers and three bitmaps, plus fixed metadata. The two links

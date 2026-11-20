@@ -15,9 +15,31 @@ buffers when it is set up, and once it runs it allocates nothing on the Shen hea
 | `net/ethernet` | Ethernet frames, ARP and IPv4 routes, between a TAP device and an interface | [Linux TUN and TAP](net-tun.md#ethernet-and-tap) |
 | `net/dhcp`, `net/dns`, `net/stream` | An address lease, A lookups, and application streams over TCP | [Linux TUN and TAP](net-tun.md#dhcp-dns-and-outbound-streams) |
 
-A program drives an interface by calling `net-interface.poll` with how many packets it may take in, and
-waits until `net-interface.next-deadline`, an absolute time in milliseconds, or for the device when that is
-`-1`. Every call does a bounded amount of work.
+## Driving it
+
+Every call does a bounded amount of work, and only the device's wait blocks. A program over TUN repeats:
+
+- `net-tun.pump Device Budget`, which moves at most `Budget` packets each way between the device and the link;
+- `net-interface.poll Interface Budget`, which takes in at most `Budget` packets and then does what is due;
+- `net-tun.wait Device Millis`, which waits until the device can be read or written, or `Millis` milliseconds pass.
+
+`net-interface.next-deadline` says how long to wait: an absolute time in milliseconds of the link's clock, or
+`-1` when only the device can make progress. `net-tun.wait` takes milliseconds from now, up to 2,147,483,647,
+so a program waits for the deadline less the time, and for a bound of its own when there is none. Over TAP,
+`net-ethernet.pump` runs between the device and the interface, and the wait is bounded too by
+`net-ethernet.next-deadline`, and by `net-dhcp.client.deadline` and `net-dns.resolver.deadline` while a
+lease or a lookup runs. [tests/net_host.shen](../tests/net_host.shen) drives TUN and TAP so.
+
+## What it does not do
+
+- **TCP** has no timestamps, no keepalive and no delayed acknowledgments, and declines ECN. A segment with
+  URG set is dropped, so a peer that sends urgent data stalls.
+- **IPv4** drops a packet with options, but IGMP's, and fragments nothing it sends.
+- **IPv6** takes one prefix and one router from advertisements, and processes no routing header with segments
+  left.
+- **DNS** asks for A records over UDP, with no fallback to TCP, and gives up after four tries, 1, 2, 4 and 8
+  seconds apart.
+- **DHCP** sends no RELEASE or DECLINE, and a client whose lease expired stays expired: a new one asks again.
 
 ## How it is written
 

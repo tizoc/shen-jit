@@ -202,13 +202,23 @@ and a descriptor's `(typed)` compiles the module with them ([Typed programs](mod
 ```
 
 A call of `orbit` runs its iterations as a loop in registers and allocates nothing. To check that a definition
-got registers, look at its code: `float*`, `float+` and the other `float` instructions are arithmetic in
-registers, and `float-box` is where a float leaves them. The same arithmetic as `prim` instructions is boxed.
+got registers, look at its code, `(shen-jit.code F)`: `float*`, `float+` and the other `float` instructions are
+arithmetic in registers, and `float-box` is where a float leaves them. The same arithmetic as `prim` instructions
+is boxed. A program built with `shen-jit build` is sealed; to see from `eval` the code it gets, set
+`SHEN_JIT_SEAL=1`.
+
+Fixnums stay in word registers the same way, through `fx+`, `fx-` and `fx*`, which raise on overflow, their
+comparisons, `shen-jit.bit-and`, `bit-or` and `bit-xor`, `shen-jit.shift-left` and `shift-right` by any count,
+`shen-jit.clz`, `ctz` and `popcount`, and reads of bytes; `word-` and `fix-` instructions are those, and
+`word-box` is where a fixnum leaves them. A type of the program's own that is a fixnum underneath stays in them
+too, once [declared so](numbers.md#types-of-a-programs-own).
 These keep a definition's floats boxed:
 
 - **A call to a function that is not inlined,** other than those that make an error's message. A typed helper
   that keeps its own values in registers is inlined unless it is very large, loops included, so this is a call to
-  anything else, such as `output`.
+  anything else, such as `output`. Code that does not keep its values in registers, untyped code among it, takes
+  in only small definitions, of about fifteen symbols and numbers counting the end of each list, or of about
+  fifty when they call nothing; split a test that such a loop makes into a definition that small.
 - **`trap-error`** anywhere in the definition.
 - **A module it relies on that was loaded open.** A typed module loads what it requires sealed, unless it was
   already loaded open. `(optimise +)` at the REPL or in `load` keeps floats in registers only where `numbers` was
