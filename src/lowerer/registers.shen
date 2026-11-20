@@ -1078,10 +1078,17 @@
                  (word-kind? Env X) (word-kind? Env Y))
   B Env Kind [let inlining [const F] Body] R Top
   -> (mark B F (freeze (into B Env Kind Body R Top)))
+  \\ A let whose body is an if whose else does not read X: X is dead there (into-if).
+  B Env Kind [let X V [if C Then Else]] R Top
+  -> (released B (freeze (into-if B (bound-to B Env X V Top) Kind C Then Else R Top X)))
+      where (and (unboxed? B Env V) (not (element? X (vars-of Else)))
+                 (branch-of? Env Kind Then) (branch-of? Env Kind Else))
   B Env Kind [let X V Body] R Top
   -> (released B (freeze (into B (bound-to B Env X V Top)
                                                              Kind Body R Top)))
       where (unboxed? B Env V)
+  B Env Kind [if C X Y] R Top -> (into-if B Env Kind C X Y R Top none)
+      where (and (branch-of? Env Kind X) (branch-of? Env Kind Y))
   B Env Kind [let X [var Y] Body] R Top
   -> (into B [[X | (shen-jit.lower.slot Y Env)] | Env] Kind Body R Top)
       where (number? (shen-jit.lower.slot Y Env))
@@ -1095,6 +1102,43 @@
   -> (released B (freeze (let T (shen-jit.lower.word B Env X Top)
                                            (if (= T R) skip (emit B [word-move R T])))))
       where (element? Kind [word bits]))
+
+\\ An if into R: each branch's value to R, with the registers the test took and each branch takes
+\\ given back after it, so that the if holds none of its own. Dead, a let's variable that the if is the
+\\ body of and that the else does not read: when it has the last register of its kind taken, the
+\\ else takes that back too, knowing nothing of what it held, so that a chain of alternatives, each
+\\ tried when the one before gave nothing, holds one register and not one each.
+(define into-if
+  B Env Kind C X Y R Top Dead
+  -> (let Else (new-label B)
+          End (new-label B)
+          Tested (released B (freeze (test B Env C Else Top)))
+          Then (released B (freeze (branch-into B Kind Env X R Top)))
+          Jump (emit B [jump End])
+          Label (emit B [label Else])
+          Freed (if (= Dead none) [] (last-register B Env Dead))
+          EnvY (if (and (cons? Freed) (= (hd Freed) 14)) (forget Env (hd (tl Freed))) Env)
+          Other (released B (freeze (do (if (cons? Freed) (address-> B (hd Freed) (hd (tl Freed))) skip)
+                                        (branch-into B Kind EnvY Y R Top))))
+       (emit B [label End])))
+
+\\ [Field R] when X is in register R, the last of its kind taken: field 14 counts the word registers,
+\\ which hold bits too, and field 12 the float registers. Else [].
+(define last-register
+  B Env X -> (let Binding (assoc X Env)
+               (if (and (cons? Binding) (cons? (tl Binding)) (cons? (tl (tl Binding))))
+                   (let Kind (hd (tl Binding))
+                        R (hd (tl (tl Binding)))
+                        Field (cases (element? Kind [word bits]) 14 (= Kind float) 12 true none)
+                     (if (and (number? Field) (= R (- (<-address B Field) 1))) [Field R] []))
+                   [])))
+
+\\ Env without what tests found of word register R.
+(define forget
+  [] _ -> []
+  [[[below R] | _] | Env] R -> (forget Env R)
+  [[[past R] | _] | Env] R -> (forget Env R)
+  [E | Env] R -> [E | (forget Env R)])
 
 \\ ---------------------------------------------------------------------------
 \\ Inline forms of code in registers. A typed function that keeps its values in registers is

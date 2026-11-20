@@ -434,7 +434,11 @@ shifts, `bswap32`, `clz` and `ctz`. The others are calls to C.
     captured, or an operand of anything else. Registers are counted as a stack: those an expression
     took for its own temporaries go back once it is done, and those a statement took, once it is. A
     value that is a `let`, as an inlined body is, is computed into the first register free, and what its
-    variables took goes back once it is.
+    variables took goes back once it is. An `if` computed into a register gives each branch's value to
+    it, with none of its own, and what its test and each branch took goes back after each; and in `(let X V (if C Then Else))`
+    computed so, where Else does not read X and X has the last register taken, Else takes that register
+    back, knowing nothing of what it held, so that a chain of alternatives, each tried when the one
+    before gave nothing, holds one register and not two for each.
   - A sealed call of a C function of one to three doubles giving a double, which `lib/ffi.shen` marks with
     the property `shen-jit.foreign-floats` paired with that installed procedure, gives a float:
     `(float-call1 R F A)`, `float-call2` or `float-call3`,

@@ -4066,6 +4066,28 @@ pass through the state and so cannot be typechecked.
   expression, one whose class's guard stays a test, one whose check failed and one defined again under `(tc -)` do
   not. `tests/typed.shen` checks that a typed loop defined sealed over an unsealed definition is inlined as a loop.
   Without the marks, the first three of those compiled typed.
+- **Alternatives in one register** (later the same day, load near 3, against the commit before). What ran out
+  of registers was the header taking in its loop, which had taken in the option, not the loop: the lowerer said so
+  once it was asked, as `shen-jit.code`, lowering a rule's KLambda again without its types, shows boxed code that
+  never runs. In register code an `if` whose value goes to a register took one of its own for its result, each
+  branch's moved there, and each alternative's variable held its register through the alternatives after it: two
+  registers a level. Now an `if` computed into a register gives each branch's value to it, with none of its own,
+  giving back what its test and each branch took, and in `(let X V (if C Then Else))` where Else does not read X,
+  Else takes X's register back when X has the last one taken, forgetting what tests found of it (`into-if` in
+  `src/lowerer/registers.shen`). The header now takes in the loop and the option, and has a typed inline form. Three
+  rounds of 3,000,000 parses in turn: the parse with `(grammar.finish)`, 21.0 to 21.3 against 19.6 ns, by hand 6.6
+  to 6.9; the summed rule, 28.8 to 29.0 against 29.3 to 29.7. The typed numeric programs of `make bench-numeric`,
+  best of three: the same within 1%, with the same checks. Each branch computed straight into the register, rather
+  than moved there, made four instructions fewer and no difference, 19.6 to 19.8, and the summed rule 29.6 to 30.2.
+  **Rejected: a branch's registers given back in the emitter's `if`, and a let's register freed for an else there,**
+  which compiles ifs in tail position: neither made the header fit, as the alternatives are a value computed into a
+  register. **Rejected: the first byte of the alternatives read once,** where two or more begin with a byte, each
+  testing it: the option read its kind once, but the parse stayed at 18.5 to 18.8 ns, the summed rule went 29.9 to
+  30.4 against 27.7 to 27.8, and JSON, whose grammar is untyped, decoded 1 MB of objects in 4.0 to 4.2 ms either way:
+  45 lines for one case. The same written by hand, a kind read then a rule taking it, took 16.8 against 18.7.
+  **Measured, left:** a typed entry written after `(grammar.finish)`, calling the rule, which it now takes in, 17.5
+  against 18.9 for `<rule>.parse-at`. What remains of the gap is the protocol: an alternative tried after another
+  checks its bytes again, each value goes through the state, and the entry checks the view, makes a state and calls.
 
 ### Rejected: a module's arities recorded before its sources load (2026-11-16, Apple M3 Max)
 
