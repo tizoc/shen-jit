@@ -98,7 +98,6 @@
   {address --> boolean}
   A -> (and (not (unspecified? A)) (not (multicast? A))))
 
-\\ RFC 4291 2.7: ff02::, the first word of a group of link scope, and the group ff02::Id.
 \\ RFC 4291 2.5.5.2: an IPv4 address as an IPv6 one, ::ffff:a.b.c.d, as tables keep both kinds.
 (define map-ipv4
   {address --> fixnum --> address}
@@ -108,6 +107,7 @@
   {address --> boolean}
   A -> (and (= (address.c A) 65535) (= (address.b A) 0) (= (address.a A) 0)))
 
+\\ RFC 4291 2.7: ff02::, the first word of a group of link scope, and the group ff02::Id.
 (define link-scope
   {--> fixnum}
   -> 4278321152)

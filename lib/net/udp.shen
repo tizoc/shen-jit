@@ -11,7 +11,7 @@
   (shadow bind)
   (export link device peer peer.port recv-info recv-info.source recv-info.destination recv-info.family recv-info.source6 recv-info.destination6 recv-info.port recv-info.length
           make-link left right ipv4 bind make-recv-info packet-send packet-recv-into
-          send send6 recv-into echo-step valid-datagram6? valid-datagram6-at? inbox-ingress6 inbox-ingress6-at reserve-inbox
+          send send6 recv-into echo-step valid-datagram6-at? inbox-ingress6-at reserve-inbox
           sent would-block too-large received empty budget-exhausted too-small send-result receive-result
           inbox inbox.peer inbox.dropped make-inbox inbox-ingress inbox-recv-into inbox-ready? inbox-discard inbox-ingress-broadcast inbox-ingress-multicast valid-datagram? write-packet)
 
@@ -205,11 +205,6 @@
            (not (= (wire.udp.checksum B T) 0))
            (= (net-ipv6.transport-checksum-at B I T (wire.udp-protocol) Length) 0))))
 
-(define valid-datagram6?
-  {buffer.view --> fixnum --> fixnum --> boolean}
-  B I N -> (and (fx>= N (headers6)) (= (wire.ipv6.next-header B I) (wire.udp-protocol))
-                (valid-datagram6-at? B I N (datagram6 I))))
-
 \\ Length checks precede reading the transport header.
 (define valid-datagram?
   {buffer.view --> fixnum --> fixnum --> boolean}
@@ -351,12 +346,6 @@
   Q B I N T ->
     (and (valid-datagram6-at? B I N T) (= (wire.udp.destination-port B T) (peer.port (inbox.peer Q)))
          (store-inbox6 Q B I N T)))
-
-(define inbox-ingress6
-  {inbox --> buffer.view --> fixnum --> fixnum --> boolean}
-  Q B I N ->
-    (and (fx>= N (headers6)) (= (wire.ipv6.next-header B I) (wire.udp-protocol))
-         (inbox-ingress6-at Q B I N (datagram6 I))))
 
 (define inbox-ingress-multicast
   {inbox --> buffer.view --> fixnum --> fixnum --> boolean}

@@ -64,14 +64,19 @@
   (mutable now : fixnum)
   (mutable fragmented : boolean))
 
+\\ RFC 1812 4.3.2.8 and RFC 4443 2.4 (f): the ICMP errors a family sends, apart from echo replies and
+\\ discovery, are limited to 8 at once, and then one each 100 ms.
+(defstruct error-budget
+  (mutable at : fixnum)
+  (mutable tokens : fixnum))
+
 (defstruct ipv6-state
   (ndp : net-ndp.host)
   (arrival : arrival)
   (remote : net-ipv6.address)
   (headers : net-ipv6-headers.cursor)
   (fragments : net-fragments6.table)
-  (mutable error-at : fixnum)
-  (mutable error-tokens : fixnum))
+  (errors : error-budget))
 
 (defstruct interface
   (device : net-link.device)
@@ -79,9 +84,30 @@
   (mutable ipv6 : (list ipv6-state))
   (mutable groups : (list net-multicast.membership))
   (fragments : net-fragments.table)
+  (errors : error-budget)
   (listener : tcp.listener)
   (tcp-ports : (list fixnum))
   (udp-bindings : (list udp.inbox)))
+
+(define full-budget
+  {--> error-budget}
+  -> (:error-budget at <- 0 tokens <- 8))
+
+\\ How many errors E may send at Now, after one more for each 100 ms since it last had one more.
+(define refill-errors
+  {error-budget --> fixnum --> fixnum}
+  E Now ->
+    (let At (error-budget.at E)
+         Units (fxquotient (fx- Now At) 100)
+         Sum (fx+ (error-budget.tokens E) Units)
+         Tokens (if (fx< Sum 8) Sum (fixnum 8))
+      (do (error-budget.at-> E (fx+ At (fx* Units 100)))
+          (error-budget.tokens-> E Tokens)
+          Tokens)))
+
+(define spend-error
+  {error-budget --> boolean}
+  E -> (do (error-budget.tokens-> E (fx- (error-budget.tokens E) 1)) true))
 
 (define make
   {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> interface}
@@ -92,6 +118,7 @@
       ipv6 <- []
       groups <- []
       fragments <- (net-fragments.make 2 (net-link.mtu D))
+      errors <- (full-budget)
       listener <- (tcp.make-listener D IP TcpPort TcpSlots InitialSequence)
       tcp-ports <- [TcpPort]
       udp-bindings <- [(udp.make-inbox D IP UdpPort UdpSlots)]))
@@ -142,6 +169,7 @@
           ipv6 <- []
           groups <- []
           fragments <- (net-fragments.make 2 (net-link.mtu D))
+          errors <- (full-budget)
           listener <- L
           tcp-ports <- TcpPorts
           udp-bindings <- (bind-udp D IP UdpPorts UdpSlots))))
@@ -284,8 +312,7 @@
                       remote <- (net-ipv6.make-address 0 0 0 0)
                       headers <- (net-ipv6-headers.make)
                       fragments <- (net-fragments6.make Slots Bytes)
-                      error-at <- 0
-                      error-tokens <- 8)
+                      errors <- (full-budget))
           (do (reserve-inboxes (interface.udp-bindings F) Bytes)
               (interface.ipv6-> F [State])
               true))
@@ -390,7 +417,7 @@
          Headers (fx+ (wire.ipv4.size) (wire.icmp.size))
          Quote (if (fx< N Headers) N Headers)                \\ The IP header and 8 bytes after it.
          Count (fx+ Quote Headers)
-      (if (and (fx<= Count (net-link.mtu D)) (not (net-link.full? Tx)))
+      (if (and (fx<= Count (net-link.mtu D)) (not (net-link.full? Tx)) (fx> (refill-errors (interface.errors F) Now) 0))
           (let Out (net-link.ring.data Tx)
                At (net-link.tail-offset Tx)
                Body (fx+ At (wire.ipv4.size))
@@ -398,7 +425,8 @@
                 (write-layout wire.icmp Out Body (type 3) (code (unreachable-code Error)))   \\ Destination unreachable.
                 (buffer.copy-into! Out (fx+ Body (wire.icmp.size)) B I Quote)
                 (wire.icmp.checksum-> Out Body (net-ipv4.packet-checksum Out Body (fx+ Quote (wire.icmp.size))))
-                (net-link.publish Tx Count (net-link.delivery D Now))))
+                (net-link.publish Tx Count (net-link.delivery D Now))
+                (spend-error (interface.errors F))))
           false)))
 
 (define udp-ingress
@@ -511,17 +539,6 @@
                 (net-link.publish Tx Count (net-link.delivery D Now))))
           false)))
 
-\\ Rate-limit ICMPv6 errors independently of echo replies and discovery.
-(define refill-errors
-  {ipv6-state --> fixnum --> fixnum}
-  S Now ->
-    (let At (ipv6-state.error-at S)
-         Units (fxquotient (fx- Now At) 100)
-         Tokens (smaller 8 (fx+ (ipv6-state.error-tokens S) Units))
-      (do (ipv6-state.error-at-> S (fx+ At (fx* Units 100)))
-          (ipv6-state.error-tokens-> S Tokens)
-          Tokens)))
-
 \\ An ICMPv6 error's type and code.
 (define error-type
   {icmp6-error --> fixnum}
@@ -544,9 +561,9 @@
   F S Local B I N Error Pointer Now ->
     (let Remote (net-ipv6.read-address (ipv6-state.remote S) B (wire.ipv6.source-at I))
       (and (net-ipv6.unicast? Remote) (net-ipv6-headers.can-report? B I N)
-           (fx> (refill-errors S Now) 0)
+           (fx> (refill-errors (ipv6-state.errors S) Now) 0)
            (emit-icmp6 F Local Remote B I (smaller N (net-ipv6.error-quote)) (error-type Error) (error-code Error) Pointer Now)
-           (do (ipv6-state.error-tokens-> S (fx- (ipv6-state.error-tokens S) 1)) true))))
+           (spend-error (ipv6-state.errors S)))))
 
 \\ An error about the packet being received, sent from Local.
 (define report6

@@ -7,7 +7,7 @@ emits 20-byte IPv4 headers, advertises and honors MSS, negotiates scaled windows
 TCP headers. TCP runs entirely in managed Shen/JIT. The shared interface can use IPv4 and IPv6 together with one
 connection table.
 [Linux TUN](net-tun.md) connects the link to kernel TCP sockets. To share a link
-with UDP and ICMP, use [the shared IPv4 interface](net-tun.md#shared-ipv4-interface).
+with UDP and ICMP, use [the shared interface](net-tun.md#shared-interface).
 
 ```sh
 shen-jit eval -m tools/tcp-echo.shenmod -e '(tcp-echo.run "hello")'
@@ -103,7 +103,7 @@ until the affected flight is acknowledged. [TCP slow start and congestion avoida
 | --- | --- |
 | `tcp.send Peer Payload Count` | Accept up to `Count` bytes from the view's prefix into the send buffer. Returns the accepted count, bounded by the space left for queued and unacknowledged bytes. |
 | `tcp.recv-into Peer Out Count` | Copy up to `Count` bytes into the view's prefix. Returns the copied count, zero when no bytes are available, or `-1` on a nonempty read after the peer's FIN and the last buffered byte. |
-| `tcp.shutdown-write Peer` | Queue FIN after all accepted bytes have been acknowledged. Returns true if queued. Continue calling `tcp.poll` to drive shutdown and read remaining bytes in the other direction. |
+| `tcp.shutdown-write Peer` | Queue a FIN, once every accepted byte has been acknowledged. Returns true if it queued one, and false while bytes remain unacknowledged or the connection is not established or in CLOSE-WAIT, so call it again after polling. Continue calling `tcp.poll` to drive shutdown and read remaining bytes in the other direction. |
 
 An active close leaves the peer in TIME-WAIT for two minutes of link time, during which it acknowledges a repeated
 FIN. A closed peer with its receive buffer drained can be initialized again with a fresh sequence number.
@@ -118,7 +118,7 @@ their cost follows the connections open more than `Slots`.
 
 | Operation | Meaning |
 | --- | --- |
-| `tcp.make-listener Device LocalIP LocalPort Slots InitialSequence` | Allocate `Slots` connection records and buffers and 16 TIME-WAIT records. `InitialSequence` is the first initial sequence number, in 0 through 4294967295. |
+| `tcp.make-listener Device LocalIP LocalPort Slots InitialSequence` | Allocate `Slots` connection records and buffers and 16 TIME-WAIT records. `InitialSequence` is the first initial sequence number, in 0 through 4294967295, and each connection's is 65,537 more than the one before, which a peer can predict: use it for tests and links you trust, and [the shared interface](net-tun.md#shared-interface)'s `make-host` with secret keys elsewhere. |
 | `tcp.listener-poll Listener Budget` | Consume at most `Budget` incoming packets and return the number examined. Check timers and rotate output among streams and TIME-WAIT acknowledgments. |
 | `tcp.accept Listener` | Return the next established connection's fixnum token, or `0` if none is ready. |
 | `tcp.connection-index Listener Token` | Return the physical slot index in 1 through `Slots` for caller-owned preallocated buffers. |
@@ -142,7 +142,7 @@ ACK until expiry. On an active open, the local port stays reserved while the
 record exists. If the table fills, `tcp.release` returns false and the caller
 keeps its token and stream slot. Retry when a TIME-WAIT record expires or the
 connection reaches `tcp.closed`. `net-stream.release` uses the same rule.
-The shared interface can [set the TIME-WAIT capacity](net-tun.md#shared-ipv4-interface).
+The shared interface can [set the TIME-WAIT capacity](net-tun.md#shared-interface).
 [TCP closing rules](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.6)
 
 `make test-net-tcp` builds a typed executable and checks independent SYN bytes, segmentation at

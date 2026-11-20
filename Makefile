@@ -270,7 +270,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words option result buffers layout grammar io fs processes parallel tree-sitter framing io-sockets net-udp net-tcp net-tun deadlines http-head http http-streaming http-listener json datalog curl
+GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words option result buffers layout grammar io fs processes parallel tree-sitter framing io-sockets networking net-udp net-tcp net-tun deadlines http-head http http-streaming http-listener json datalog curl
 PANDOC ?= pandoc
 GUIDE_PANDOC := $(PANDOC) -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
@@ -495,8 +495,8 @@ test-net-tcp: $(BUILD)/shen-jit
 # Shared ingress, UDP overflow and ICMP wire checks.
 .PHONY: test-net-interface
 test-net-interface: $(BUILD)/shen-jit
-	$(BUILD)/shen-jit eval -m tests/net_interface.shenmod -e '(do (net-interface-test.run) (net-interface-test.host) (net-interface-test.multiport) (net-interface-test.fragments) (net-interface-test.errors) (net-interface-test.window-scale) (net-interface-test.pmtu) (net-interface-test.default-mss))' \
-	  | grep -a '^FAIL \|^[0-9]* passed' | awk '{ print } / 0 failed/ { n++ } END { exit n != 8 }' # Each suite reports.
+	$(BUILD)/shen-jit eval -m tests/net_interface.shenmod -e '(do (net-interface-test.run) (net-interface-test.host) (net-interface-test.multiport) (net-interface-test.fragments) (net-interface-test.errors) (net-interface-test.error-limit) (net-interface-test.window-scale) (net-interface-test.pmtu) (net-interface-test.default-mss))' \
+	  | grep -a '^FAIL \|^[0-9]* passed' | awk '{ print } / 0 failed/ { n++ } END { exit n != 9 }' # Each suite reports.
 
 # Portable DHCP and DNS state and wire checks.
 .PHONY: test-net-clients

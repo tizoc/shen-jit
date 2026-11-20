@@ -3839,7 +3839,8 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   VPRI's STEPS, which drew TCP/IP's headers from the RFCs' diagrams. `deflayout` declares a header as
   its rows are drawn and defines typed accessors that inline, `write-layout` writes a whole header in
   packed stores with its constants folded, and `defflags` names a field's bits as constants made when
-  the code is read. `lib/net/wire.shen` declares 21 formats.
+  the code is read. `lib/net/wire.shen` declares 21 formats. [Networking](networking.md) describes
+  the code as it is written now.
 - Offsets written by hand in `lib/net` went from 192 to 11, and numeric flag tests in TCP from 36 to
   0; lines of code from 4,475 to 4,602, 96 of them declarations. TCP's handshake became rules on state
   and segment.
@@ -3986,6 +3987,21 @@ Entering the repetition before testing the TCP end made empty and padded lists 4
 Using the end rule in both places was tested too. Testing the two end alternatives directly at
 entry was faster on this compiler. Both parsers gave the same outcomes, retained fields and error
 offsets for 8,678 generated cases, including sliced views and truncated options.
+
+### Limited ICMPv4 errors, and a page on the networking code (2026-11-20)
+
+- A review found that the interface sent an ICMPv4 port or protocol unreachable for every datagram to a
+  closed port, where ICMPv6's errors were limited, so a flood of datagrams drew as many replies. Both
+  families now keep a budget of the same shape, 8 at once and then one each 100 ms (RFC 1812 4.3.2.8, RFC
+  4443 2.4 (f)), a record of two fixnums each; a test sends ten datagrams at once, then two before and two
+  after 100 ms, and gets 8, none and one replies.
+- `tcp.make-listener` and `net-interface.make` give initial sequence numbers that step by 65,537 from the
+  one given, which a peer can predict; `make-host` and `make-table` hash each tuple with two secret keys, as
+  RFC 6528 asks. With no source of random numbers in the stack, the unkeyed constructors stay as they are,
+  for tests and links one trusts, and their pages say so, and what the keys are for.
+- `udp.valid-datagram6?`, `udp.inbox-ingress6` and `tcp.headers6` were called nowhere and are gone; the raw
+  calls into the TUN adapter are no longer exported, so `(use net-tun)` gives only its checked API.
+- [Networking](networking.md), a guide page, documents the modules and how their code is written.
 
 ### Vacant TCP slots passed over (2026-11-20, Apple M3 Max, against 6802e81)
 

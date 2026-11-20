@@ -301,7 +301,8 @@
             I (next-slot (listener.slot-map L) N 1 N true)
          (if (fx> I N) 0 I)))
 
-\\ HalfSipHash-2-4 over the fixed 12-byte IPv4 TCP tuple.
+\\ HalfSipHash-2-4, over a connection's tuple as tuple-hash gives it: both addresses as IPv6 ones, an IPv4
+\\ address mapped, and both ports, 36 bytes.
 (define rotate32
   {fixnum --> fixnum --> fixnum}
   X Bits -> (add32 (shen-jit.shift-left X Bits) (shen-jit.shift-right X (fx- 32 Bits))))

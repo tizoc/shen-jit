@@ -1,9 +1,9 @@
 # Linux TUN and TAP packet I/O
 
 The optional `net/tun` module attaches a Linux TUN descriptor to one side of a `net/link` packet queue.
-A protocol peer or a shared IPv4 interface uses the other side. TUN carries whole IP packets between Shen
+A protocol peer or a shared interface uses the other side. TUN carries whole IP packets between Shen
 and the Linux kernel. The native adapter opens and polls the descriptor and reads or writes bytes.
-IPv4, TCP, UDP, and ICMP echo run in Shen. [Linux TUN/TAP documentation](https://docs.kernel.org/networking/tuntap.html)
+IPv4, IPv6, ICMP, TCP and UDP run in Shen. [Linux TUN/TAP documentation](https://docs.kernel.org/networking/tuntap.html)
 
 Build the adapter with `make tun` on Linux. Use a Shen/JIT build that can load shared libraries. Configure
 a named TUN interface, addresses, and routes in Linux. Set the same MTU on the interface and on the Shen
@@ -29,16 +29,17 @@ The link preallocates both packet rings. TUN ingress uses one MTU-sized buffer p
 truncation. Egress writes directly from the outgoing ring and consumes a slot only after the full write.
 The typed packet path reuses this storage and returns immediate values.
 
-## Shared IPv4 interface
+## Shared interface
 
-Load `net/interface` to serve multiple TCP and UDP ports on a single IPv4 address. It owns
+Load `net/interface` to serve multiple TCP and UDP ports on one IPv4 address, and on IPv6 once
+[enabled](#dual-stack-interfaces). It owns
 ingress for one side of a packet link. The other side can be a TUN adapter, an Ethernet
 adapter, or an in-memory peer. Call only `net-interface.poll` to drive this side of the link.
 
 | Operation | Meaning |
 | --- | --- |
-| `net-interface.make Device IP TcpPort TcpSlots InitialSequence UdpPort UdpSlots` | Preallocate the TCP listener and a UDP receive queue. Each UDP slot holds one packet of up to the link MTU. |
-| `net-interface.make-host Device IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots` | Set up listener and UDP bindings from lists of port fixnums. All TCP connections share `TcpSlots`. UDP uses `UdpSlots` per port. Supply two independently randomized unsigned 32-bit key words at setup. |
+| `net-interface.make Device IP TcpPort TcpSlots InitialSequence UdpPort UdpSlots` | Preallocate the TCP listener and a UDP receive queue. Each UDP slot holds one packet of up to the link MTU. Its initial sequence numbers are `tcp.make-listener`'s, which a peer can predict, so use it for tests and links you trust. |
+| `net-interface.make-host Device IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots` | Set up listener and UDP bindings from lists of port fixnums. All TCP connections share `TcpSlots`. UDP uses `UdpSlots` per port. Supply two independently randomized unsigned 32-bit key words at setup, and keep them secret: they key the hash that gives each connection its initial sequence number (RFC 6528) and the first ephemeral port. |
 | `net-interface.make-host-sized Device IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots Bytes` | Choose 1 through 1,048,576 bytes per TCP send and receive buffer. Setup also reserves the appropriate presence and SACK bitmaps. |
 | `net-interface.make-host-limits Device IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots Bytes WaitSlots` | Also choose 0 through 1,024 detached TCP TIME-WAIT records. The other constructors reserve 16. At zero, TIME-WAIT connections hold their stream slot until expiry. |
 | `net-interface.connect Interface RemoteIP RemotePort` | Claim a TCP slot, pick an unused ephemeral port, and start an active open. Returns a token, or zero when no slot or port is free. |
@@ -51,7 +52,8 @@ adapter, or an in-memory peer. Call only `net-interface.poll` to drive this side
 | `net-interface.udp-dropped Interface` | Count valid datagrams dropped because this port's receive queue was full. |
 
 A full UDP queue drops the newest datagram, preserving the queued datagrams and allowing TCP and ICMP
-to continue. ICMP handles echo requests plus protocol and UDP port unreachable replies. A valid
+to continue. ICMP handles echo requests plus protocol and UDP port unreachable replies; the
+unreachables are limited to 8 at once, then one each 100 ms. A valid
 fragmentation-needed message quoting outstanding TCP data can reduce its segment size. Two
 preallocated IPv4 assembly slots each hold up to one link-MTU datagram. They accept fragments
 out of order, reject overlaps, and expire after 30 seconds. [ICMP echo format](https://www.rfc-editor.org/rfc/rfc792.html)
@@ -99,23 +101,26 @@ and an empty route list. During address acquisition, alternate Ethernet and devi
 with `net-dhcp.poll` on the IPv4 link. Create the DHCP client with a setup-time
 transaction ID. When it returns `net-dhcp.bound`, read `net-dhcp.client.address`,
 `net-dhcp.client.mask`, `net-dhcp.client.gateway`, and `net-dhcp.client.dns`.
-Configure the Ethernet adapter and create the shared IPv4 interface with those
+Configure the Ethernet adapter and create the shared interface with those
 settings. To maintain the lease, bind UDP port 68 at setup and call
 `net-dhcp.maintain` with that inbox after polling the interface. The client handles
-renewal, rebinding, and lease expiry. Stop using the interface when the lease
-expires and reacquire an address before configuring it again.
+renewal, rebinding, and lease expiry. A client whose lease expired stays in
+`net-dhcp.expired`: stop using the interface, and make a new client with
+`net-dhcp.make` to acquire an address before configuring it again.
 
 `net-dns.make` reserves storage for one lookup. Pass it a dedicated UDP inbox
-and the maximum size of the response buffer. `net-dns.start` takes a resolver IP,
-an unsigned 16-bit transaction ID, and a buffer containing a DNS wire-format
-name. For instance, `"c#4;testc#0;"` encodes the name `test`. Pass the
-monotonic clock to `net-dns.poll` until it reports a result. The UDP resolver
+and the maximum size of the response buffer. `net-dns.start Resolver Server Id Name Now`
+takes a resolver IP, an unsigned 16-bit transaction ID, a buffer containing a DNS wire-format
+name, and the time in monotonic milliseconds. For instance, `"c#4;testc#0;"` encodes the
+name `test`. Call `net-dns.poll Resolver Now` with the time until it reports a result. The UDP resolver
 follows bounded CNAME chains and exposes the IPv4 address and TTL on success.
 A truncated reply reports failure. Choose the source port and a fresh transaction
 ID at the application boundary.
 
 Allocate a `net-stream.make` handle for each application stream. Open it with
-`net-stream.connect` or attach an accepted connection with `net-stream.accept`.
+`net-stream.connect`, or give it the next established connection to a local port
+with `net-stream.accept Handle Port`, 0 for any port, which accepts it from the
+interface's table and returns false while none is ready.
 The read and write calls work with offsets and partial counts in existing
 buffer views. Continue polling the interface while the stream is live, then
 release the terminal connection. [The outbound HTTP example and allocation fixture](../tests/net_host.shen)
@@ -163,7 +168,7 @@ and Fragment headers. The walker limits each chain to eight headers and 256 byte
 of extensions. It processes option actions in order and ignores trailing bytes
 after No Next Header. Unsupported routing, ESP, and AH receive no transport
 processing. ICMPv6 handles echo, neighbor discovery, UDP port errors, and TCP
-Packet Too Big feedback. [IPv6 specification](https://www.rfc-editor.org/rfc/rfc8200.html),
+Packet Too Big feedback. Its errors are limited as IPv4's are. [IPv6 specification](https://www.rfc-editor.org/rfc/rfc8200.html),
 [ICMPv6](https://www.rfc-editor.org/rfc/rfc4443.html)
 
 ### IPv6 reassembly

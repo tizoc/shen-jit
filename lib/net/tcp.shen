@@ -139,10 +139,6 @@
   {--> fixnum}
   -> (fx+ (wire.ipv4.size) (wire.tcp.size)))
 
-(define headers6
-  {--> fixnum}
-  -> (fx+ (wire.ipv6.size) (wire.tcp.size)))
-
 \\ The IP header of a segment between two addresses, with IpBytes of it.
 (define write-ip-header
   {buffer.view --> fixnum --> fixnum --> fixnum --> net-ipv6.address --> net-ipv6.address --> buffer.view}

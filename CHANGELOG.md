@@ -34,7 +34,7 @@ All notable changes to this project are documented in this file. The format is b
 - `net/interface` serves TCP, UDP, and ICMP echo on one IPv4 link. When the bounded UDP receive queue fills,
   TCP and ICMP continue to make progress.
 - The IPv4 interface shares a bounded TCP table across listeners and outbound connections, with separate UDP
-  queues per port. It handles IPv4 fragment reassembly, ICMP errors, TCP path MTU updates, scaled windows,
+  queues per port. It handles IPv4 fragment reassembly, ICMP errors, limited in rate, TCP path MTU updates, scaled windows,
   and closed-port resets.
 - `net/ethernet` adds IPv4 routing and ARP over Linux TAP. `net/dhcp`, `net/dns`, and `net/stream` support address
   acquisition and renewal, DNS A lookups, and application streams. The Linux tests exercise outbound HTTP and

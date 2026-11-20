@@ -215,6 +215,44 @@
            (output "1 passed, 0 failed~%")
            true)))
 
+(define net-interface-test.send-closed
+  {udp.peer --> fixnum --> buffer.view --> fixnum --> boolean}
+  _ _ _ 0 -> true
+  U B P N -> (do (udp.send U B 81 P 5) (net-interface-test.send-closed U B P (fx- N 1))))
+
+(define net-interface-test.arrivals
+  {net-link.device --> buffer.view --> fixnum --> fixnum}
+  D Wire Count -> (if (fx< (net-link.packet-recv-into D Wire) 0) Count
+                      (net-interface-test.arrivals D Wire (fx+ Count 1))))
+
+\\ RFC 1812 4.3.2.8: port unreachables are limited to 8 at once, then one each 100 ms.
+(define net-interface-test.error-limit
+  {--> boolean}
+  -> (let Time (net-interface-test.clock 1000)
+          Link (net-link.make 16 128 0 (freeze (fx<-vector Time 1)))
+          A (net-ipv4.address 192 0 2 1)
+          B (net-ipv4.address 192 0 2 2)
+          Server (net-interface.make-host (net-link.right Link) B [80] 1 30 40 [] 0)
+          U (udp.bind (net-link.left Link) A 2000)
+          P (buffer.from-string "hello")
+          Wire (buffer.new 128)
+       (do (net-interface-test.send-closed U B P 10)
+           (net-interface.poll Server 16)
+           (net-interface-test.expect (= (net-interface-test.arrivals (net-link.left Link) Wire 0) 8)
+                                      "eight unreachables at once")
+           (fxvector-> Time 1 1099)
+           (net-interface-test.send-closed U B P 2)
+           (net-interface.poll Server 16)
+           (net-interface-test.expect (= (net-interface-test.arrivals (net-link.left Link) Wire 0) 0)
+                                      "none before 100 ms")
+           (fxvector-> Time 1 1100)
+           (net-interface-test.send-closed U B P 2)
+           (net-interface.poll Server 16)
+           (net-interface-test.expect (= (net-interface-test.arrivals (net-link.left Link) Wire 0) 1)
+                                      "one more after 100 ms")
+           (output "1 passed, 0 failed~%")
+           true)))
+
 (define net-interface-test.pump-pair
   {net-interface.interface --> net-interface.interface --> fixnum --> boolean}
   _ _ 0 -> true

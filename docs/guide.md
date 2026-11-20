@@ -698,12 +698,16 @@ strings: bytes go through a socket endpoint.
 [Socket I/O endpoints](https://github.com/tizoc/shen-jit/blob/main/docs/io-sockets.md), the module `io/socket`, put a
 connection behind the I/O library's readers and writers, with deadlines.
 
+[Networking](https://github.com/tizoc/shen-jit/blob/main/docs/networking.md), the `net` modules, is a TCP/IP stack in
+typed Shen that allocates nothing once it is set up: TCP, UDP and ICMP over IPv4 and IPv6 on one link, with
+multicast, DHCP and DNS, and how its code is written.
 [In-memory IPv4 and UDP](https://github.com/tizoc/shen-jit/blob/main/docs/net-udp.md) sends datagrams between
 two typed Shen peers over bounded packet queues, with a caller-supplied clock.
 [In-memory TCP](https://github.com/tizoc/shen-jit/blob/main/docs/net-tcp.md) uses the same link for
 individual connections and bounded listeners with preallocated TCP sliding windows.
 [Linux TUN and TAP packet I/O](https://github.com/tizoc/shen-jit/blob/main/docs/net-tun.md) connects the packet queues
-to a Linux kernel network interface. The shared IPv4 interface serves TCP, UDP, and ICMP echo on one link.
+to a Linux kernel network interface, and its shared interface serves TCP, UDP and ICMP over IPv4 and IPv6 on
+one link.
 
 ### HTTP
 

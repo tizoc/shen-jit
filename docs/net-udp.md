@@ -1,13 +1,14 @@
 # In-memory IPv4 and UDP
 
 The optional `net/udp` module, [lib/net/udp.shen](../lib/net/udp.shen), connects two typed Shen peers over
-an in-memory packet link. It handles unfragmented unicast IPv4 with a 20-byte header and one bound UDP port
-per peer. It writes and checks IPv4 and UDP checksums and accepts a zero UDP checksum as permitted for IPv4.
+an in-memory packet link. A peer receives unfragmented unicast IPv4 with a 20-byte header on one bound UDP
+port, and sends to a unicast or multicast IPv4 address; `udp.send6` sends over IPv6. The shared interface
+receives IPv6 and multicast datagrams. It writes and checks IPv4 and UDP checksums and accepts a zero UDP checksum as permitted for IPv4.
 The sender sets the IPv4 Don't Fragment flag and uses ID zero for these datagrams. The link and application
 buffers work on static builds. [UDP checksum format](https://www.rfc-editor.org/rfc/rfc768.html) ·
 [IPv4 identification field](https://www.rfc-editor.org/rfc/rfc6864.html#section-4.1)
 
-To receive UDP alongside TCP and ICMP on one link, use [the shared IPv4 interface](net-tun.md#shared-ipv4-interface).
+To receive UDP alongside TCP and ICMP on one link, use [the shared interface](net-tun.md#shared-interface).
 
 ```sh
 shen-jit eval -m tools/udp-echo.shenmod -e '(udp-echo.run "hello")'
