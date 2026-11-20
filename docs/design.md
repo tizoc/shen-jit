@@ -165,7 +165,9 @@ field positions and foreign functions' raw-call signatures pair their claims wit
 the lowerer checks its identity before using them. Publication follows successful installation, so a failed
 redefinition cannot change the old definition's claims. A definition evaluated
 unchecked, as a datatype's Prolog or a macro's output under `(tc +)`, is not marked, since its types are not known
-to hold. The lowerer takes the annotations out before anything else ([bytecode.md](bytecode.md)), after reading
+to hold, but for a typed grammar rule's definitions, which `lib/grammar.shen` evaluates so once the function that
+checks the rule's alternatives has passed, and only if all the code they hold did ([grammar.md](grammar.md#types)).
+The lowerer takes the annotations out before anything else ([bytecode.md](bytecode.md)), after reading
 from them which parameters are `float`, `fixnum` or `word.t`. A definition with such a parameter, with one of those
 anywhere among its annotations, that reads a typed struct's `fixnum` or `float` field, or with a float it makes
 itself, is lowered first with its floats, fixnums and 64-bit

@@ -224,6 +224,15 @@ produces `(:result.ok [[]])`. Clean EOF produces `(:result.ok [])`. See [optiona
 type, so under `(tc +)` each rule is compiled as a repetition is. Under `(tc -)` a
 signature changes nothing in how a rule runs.
 
+In a [typed program](modules.md#typed-programs), or wherever `(optimise +)` holds as the rules load, a typed
+rule whose alternatives typechecked compiles as the program's own definitions do, with its types: its positions
+and the bytes it reads stay in machine registers, its repetitions are loops there, and the typed rules they match
+are compiled into them. A rule that holds code that did not typecheck compiles as before: an untyped rule's guard
+compiled in place, an argument given to an untyped rule that is not a variable or a constant, or a class's guard
+that stays a test. A rule compiles at its first call, which in a running program is not sealed, so that its
+repetitions call themselves; `(grammar.finish)`, called as the typed source loads, compiles every rule sealed, in
+the order they were defined, so that a rule defined after those it matches can take them in.
+
 Code that parses again and again without allocating, as a server does for each packet, has two more entry
 points, which take a `grammar.state`, made once with `(grammar.state)` and kept, and a range of a view, from
 offset A to offset E in it:

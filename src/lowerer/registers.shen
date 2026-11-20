@@ -95,7 +95,7 @@
                                (binders Body) 1)
                       (layout-env Params Layout))
           Loop (if (and (cons? (self-calls F (length Params) Body))
-                        (or (element? F Sealed) (shen-jit.sealed? F)))
+                        (or (element? F Sealed) (shen-jit.sealed? F) (sealing?)))
                    (let L (new-label B)
                      (do (emit B [loop L]) (address-> B 13 [[L Layout Params F]])))
                    skip)
@@ -103,6 +103,12 @@
        (if (and (keeps-nothing-across? (<-address B 3)) (computes? (<-address B 3)))
            (code-form B)
            [])))
+
+\\ Whether what is defined now is sealed as it is installed: while sealing is on, a name with no
+\\ definition counts as sealed, and this one never has one. F's own calls then reach the code made
+\\ now, even where F was defined before unsealed, as a stub that the definition replaces is.
+(define sealing?
+  -> (shen-jit.sealed? shen-jit.lower.sealing))
 
 \\ Where each parameter is: [float R], [word W] or [bits W], read from its slot, or the slot.
 (define layout

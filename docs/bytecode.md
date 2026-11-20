@@ -442,7 +442,8 @@ the shifts. The others are calls to C.
     as the stub does. C keeps nothing of the registers, which the JIT saves around it, and such a call
     is no call of a function in the sense below.
   - A tail call of the definition itself, sealed, goes back to a `loop` after the entry reads, with
-    `again`. An argument for a register is computed straight into its parameter's register when no
+    `again`. A definition made while sealing is on counts as sealed here, as it is once installed, even
+    where it replaces one made unsealed, as a grammar's rule replaces its stub. An argument for a register is computed straight into its parameter's register when no
     later argument reads that register, through the parameter or a variable bound to it, as a loop's
     counters and sums are; otherwise into a new one, moved to its parameter's last. The others go to
     their slots as for any named tail call. An argument that cannot raise or write, a variable, a

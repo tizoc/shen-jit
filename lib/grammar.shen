@@ -111,7 +111,19 @@
   _ -> [])
 
 (define subst
-  [_ _ _ _ _ Values | _] X -> (replace Values X))
+  C X -> (by (current C) (replace (subst-values C) X)))
+
+\\ The rule whose alternative is being compiled: the one being inlined, or the one defined.
+(define current
+  [Name _ _ _ _ _ [] | _] -> Name
+  [_ _ _ _ _ _ [R | _] | _] -> R)
+
+\\ An expression whose types hold only if R's alternatives typechecked, marked [by R X], which the
+\\ macro takes off: one written in R, an argument given to R when R is untyped, or the guard of R, a
+\\ class. A variable or a constant needs no mark.
+(define by
+  R X -> X where (or (symbol? X) (number? X) (string? X) (boolean? X))
+  R X -> [by R X])
 
 (define replace
   Values [X | Y] -> (map (/. Z (replace Values Z)) [X | Y])
@@ -131,6 +143,7 @@
          _ (if (empty? Rules) (error "defgrammar ~A: no rules" Name) skip)
          _ (map (/. R (rebinds Name Params (binders (hd R)))) Rules)
          _ (put Name type Sig)
+         _ (put Name stale (types-made Name))
          _ (put Name value (every? (/. R (not (= (hd (tl R)) grammar.none))) Rules))
          _ (put Name class (if (empty? Params) (class Rules) []))
          _ (put Name params Params)
@@ -155,7 +168,8 @@
 \\ (type ...), whose body has the value's type and checks the guards, the messages and the
 \\ arguments; the loader checks it under (tc +). A rule cannot be checked itself, as values pass
 \\ through the state, so under (tc +) every rule is defined as a stub, which the loader does not
-\\ see, and compiled at its first call, as a loop is. Typed code parses with <rule>.parse and
+\\ see, and compiled at its first call, as a loop is, with its types once that function passed
+\\ (compile-loop). Typed code parses with <rule>.parse and
 \\ <rule>.match?. The stub is made before them, as they call it: a call compiled while sealing is
 \\ on to a function not defined yet binds what is there at its first call, and keeps it.
 
@@ -310,6 +324,7 @@
   H Owner Def -> (let Params (parameters Def)
                       _ (shen.shendef->kldef H (tl (tl Def)))
                       _ (put H loop Def)
+                      _ (put H owner Owner)
                       _ (add-pending loops [H Owner])
                    (unsealed (freeze (eval (append [define H | Params] [-> [compile H (list Params)]]))))))
 
@@ -339,7 +354,7 @@
   -> (let Loops (pending loops)
           Ready (keep-if (/. E (defined? (hd (tl E)))) Loops)
           _ (put pending loops (difference Loops Ready))
-          _ (map (/. E (compile-loop (hd E))) Ready)
+          _ (map (/. E (compile-loop (hd E))) (reverse Ready))
           Reads (pending reads)
           _ (put pending reads (keep-if (/. R (not (trap-error (do (prepare R) true) (/. E false)))) Reads))
        true))
@@ -577,7 +592,7 @@
 \\ A class's test, as a form that the macro turns into its guard, or that a loop compiled at its
 \\ first call turns into a lookup in a table of the 256 bytes.
 (define in-class
-  X B -> (let Class (get X class) [in-class X B (replace [[(hd Class) | B]] (hd (tl Class)))]))
+  X B -> (let Class (get X class) [in-class X B (by X (replace [[(hd Class) | B]] (hd (tl Class))))]))
 
 \\ A loop over a byte class tests its first byte in place, and is called only if it matches.
 (define class-of
@@ -627,11 +642,13 @@
   [_ _ _ _ _ Values | _] -> Values)
 
 \\ R's alternatives in place, when it is small, or a call to it. In place, its parameters are
-\\ renamed and bound to the arguments, which are evaluated first.
+\\ renamed and bound to the arguments, which are evaluated first. An argument is checked with the
+\\ rule that gives it when R is typed, and not at all when R is not.
 (define invoke
   [Name Buf End S Count Values Stack Scope Inner _] R Pos ->
     (let Callee (rule-name R)
-         Args (replace Values (rule-args R))
+         Checker (cases (untyped? Callee) Callee (cons? Stack) (hd Stack) true Name)
+         Args (map (/. A (by Checker A)) (replace Values (rule-args R)))
          Params (trap-error (get Callee params) (/. E Args))
          _ (if (= (length Params) (length Args)) skip
                (error "defgrammar ~A: ~A takes ~A arguments, not ~R" Name Callee (length Params) Args))
@@ -751,6 +768,7 @@
          Free (unique (intersection (symbols Body) Scope) [])
          Params [Buf At End S | Free]
          _ (grammar.arity [H | (length Params)])
+         _ (put H inlined (cons? Stack))
          _ (stub H Name (append [define H | Params]
                              [-> [let P Body [if [> P At] (append [H Buf P End S] Free) [if [= P -2] P At]]]]))
       [H | Free]))
@@ -764,8 +782,53 @@
                 (do (compile-loop H) (put pending loops (unpend H (pending loops))) (apply (fn H) Args))
                 (error "grammar: ~A was not compiled before isolates started: call (grammar.finish) in the builder first" H)))
 
+\\ A typed rule whose alternatives typechecked under (optimise +), as a typed program's do, compiles
+\\ as the definitions that typechecked there do (shen-jit.*checked*), with its types, and so do its
+\\ loops: its position and end are fixnums, and its parameters have its signature's types, declared
+\\ while it compiles, for the kernel's annotator, and not after. The code is the grammar's own, and
+\\ expressions that typechecked: each marked (by) is a typed rule's that did too. A class's guard
+\\ that stays a test, marked by the class, which is untyped, keeps it from compiling so.
 (define compile-loop
-  H -> (eval (tables (get H loop))))
+  H -> (let Def (tables (get H loop))
+            Owner (get H owner)
+         (if (and (checked? Owner) (every? (function checked?) (marks Def)))
+             (typed-eval H Def (param-types H Owner (tl (tl (tl (tl (parameters Def)))))))
+             (eval Def))))
+
+\\ Whether R is typed and its R.types, made since R was, is the definition the typechecker passed:
+\\ one that failed, or a definition under (tc -), leaves R.types as it was.
+(define checked?
+  R -> (and (cons? (sig-of R))
+            (let Types (types-made R)
+              (and (not (shen-jit.same? Types (get R stale)))
+                   (trap-error (let Claim (get (client-name R ".types") shen-jit.annotated)
+                                 (and (shen-jit.same? (hd Claim) Types) (tl Claim)))
+                               (/. E false))))))
+
+(define types-made
+  R -> (trap-error (shen-jit.function (client-name R ".types")) (/. E none)))
+
+(define marks
+  [by R X] -> [R | (marks X)]
+  [X | Y] -> (append (marks X) (marks Y))
+  _ -> [])
+
+\\ A loop made inside a rule compiled in place takes that rule's variables, which have no types here.
+(define param-types
+  H Owner Params -> (let Own (if (trap-error (get H inlined) (/. E false))
+                                 []
+                                 (zip (get Owner params) (hd (sig-of Owner))))
+                      (map (/. P (let Found (assoc P Own) (if (cons? Found) (tl Found) (gensym (protect T)))))
+                           Params)))
+
+(define typed-eval
+  H Def Types ->
+    (let Type (arrows (append [buffer.storage fixnum fixnum state] Types) fixnum)
+         Checked (value shen-jit.*checked*)
+         Optimising (if (optimise?) + -)
+      (shen-jit.finally
+        (freeze (do (destroy H) (declare H Type) (set shen-jit.*checked* H) (optimise +) (eval Def)))
+        (freeze (do (set shen-jit.*checked* Checked) (optimise Optimising) (destroy H))))))
 
 (define unpend
   _ [] -> []
@@ -797,6 +860,7 @@
     where (and (nonterminal? Name) (every? (function variable?) Params))
   [defgrammar | Form] -> (error "defgrammar: expected <name> or (<name> Parameters...), and rules, in ~R" Form)
   [in-class _ _ Guard] -> Guard
+  [by _ X] -> X
   [at-position X] -> X
   [parse Rule View Fail] -> (client Rule ".parse" [View Fail] (parse-form Rule View Fail))
     where (rule-form? Rule)

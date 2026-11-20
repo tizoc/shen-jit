@@ -69,6 +69,47 @@ refused 'free variables in <bad.x>' '(defgrammar <bad.x> {==> number} (where (> 
 grep -qxF 'read: #<result.ok [[1 22 333]]>' "$dir/read.out" || { cat "$dir/read.out"; exit 1; }
 passed=$((passed + 1))
 
+# Under (optimise +), typed rules compile with their types, as their loops do, and parse the same.
+"$SHEN" eval -m grammar -e '(tc +)' -e '(optimise +)' -l tests/grammar_typed.shen > "$dir/optimised.out" 2>&1
+grep -q '^[1-9][0-9]* passed, 0 failed$' "$dir/optimised.out" || { cat "$dir/optimised.out"; exit 1; }
+passed=$((passed + 1))
+
+# Only a typed rule whose alternatives typechecked does, and only if what it compiles in place did
+# too: not with an untyped rule's guard or argument, nor a class's guard that stays a test, nor
+# after a definition that failed to typecheck or one under (tc -).
+cat > "$dir/annotated.shen" <<'EOF'
+(defgrammar <ta.digit> B where (and (>= B 48) (<= B 57));)
+(defgrammar <ta.spaces> (* 32);)
+(defgrammar <ta.number> {==> fixnum} <ta.spaces> (at A) (+ <ta.digit>) (at Z) := (fx- Z A);)
+(defgrammar <ta.ab> 97 B where (= B 98);)
+(defgrammar <ta.inlined> {==> fixnum} <ta.ab> := 1;)
+(defgrammar (<ta.skip> N) (skip N);)
+(defgrammar <ta.argument> {==> fixnum} (<ta.skip> (+ 1 1)) := 1;)
+(defgrammar <ta.odd> B where (> (/ 10 (- B 48)) 1);)
+(defgrammar <ta.test> {==> fixnum} (+ <ta.odd>) := 1;)
+(defgrammar <ta.stale> {==> fixnum} (+ <ta.digit>) := 1;)
+(defgrammar <ta.untyped> {==> fixnum} (+ <ta.digit>) := 1;)
+EOF
+cat > "$dir/stale.shen" <<'EOF'
+(defgrammar <ta.stale> {==> fixnum} (+ <ta.digit>) := "one";)
+EOF
+cat > "$dir/untyped.shen" <<'EOF'
+(defgrammar <ta.untyped> {==> fixnum} (+ <ta.digit>) := 2;)
+EOF
+"$SHEN" eval -m grammar -e '(tc +)' -e '(optimise +)' -l "$dir/annotated.shen" \
+  -e "(trap-error (load \"$dir/stale.shen\") (/. E skip))" -e '(tc -)' -l "$dir/untyped.shen" \
+  -e '(output "parsed: ~S~%" (map (/. Case (grammar.parse (hd Case) (buffer.from-string (tl Case)) (/. P M -1)))
+        [[<ta.number> | "  12"] [<ta.inlined> | "ab"] [<ta.argument> | "xy"] [<ta.test> | "5"]
+         [<ta.stale> | "12"] [<ta.untyped> | "12"]]))' \
+  -e '(output "annotated: ~A~%" (map (/. F (trap-error (tl (get F shen-jit.annotated)) (/. E none)))
+        [<ta.number> <ta.number>/1 <ta.number>/2 <ta.inlined> <ta.argument> <ta.test> <ta.test>/1
+         <ta.stale>/1 <ta.untyped>/1]))' \
+  > "$dir/annotated.out" 2>&1
+grep -qxF 'parsed: [2 1 1 1 "one" 2]' "$dir/annotated.out" &&
+  grep -qxF 'annotated: [true true true false false false false false false]' "$dir/annotated.out" ||
+  { cat "$dir/annotated.out"; exit 1; }
+passed=$((passed + 1))
+
 # Both copies share one default source budget.
 cat tests/grammar_typed.shen > "$dir/two-grammars.shen"
 sed 's/gt\./gt2./g' tests/grammar_typed.shen >> "$dir/two-grammars.shen"

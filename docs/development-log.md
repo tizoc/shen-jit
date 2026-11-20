@@ -3983,6 +3983,63 @@ program was saved. Nothing failed. The stub is defined before them now.
   parses as for 1,000, 250 for both, against 259 and 1,249 before, and one that calls `(grammar.finish)` from its
   typed source and reads.
 
+### Typed rules compiled with their types (2026-11-19, Apple M3 Max at load 1.3 to 3.5, against main)
+
+A typed grammar in a typed program kept its positions, ends and bytes boxed, and its rules called each other as
+generic code. The port marks a definition as typechecked, so that `shen.record-and-evaluate` annotates it under
+`(optimise +)`, only while `shen.work-through` evaluates a form it has just checked. A typed rule's checked form is
+`<rule>.types`; the rule itself, and each repetition's loop, is a stub that `eval` defines as the file is read, and
+`eval` compiles at its first call or in `grammar.finish`, outside the loader and with no signature, as its values
+pass through the state and so cannot be typechecked.
+
+- **Compiled as checked.** A typed rule whose `<rule>.types` passed under `(optimise +)`, and was made since the rule
+  was, is evaluated with `shen-jit.*checked*` naming it, and so are its loops, each with its type declared for the
+  kernel's annotator while it compiles and taken away after: `buffer.storage --> fixnum --> fixnum --> grammar.state
+  --> T1 ... --> fixnum`, the parameters' types from the signature, and a variable's type for what else a loop takes.
+  A failed check, or a definition under `(tc -)`, leaves `<rule>.types` as it was, which a property recorded as the
+  rule is read tells apart. Untyped grammars, such as JSON's and HTTP's, compile as before.
+- **Only code that typechecked.** Each expression an alternative writes, guards, values, messages, counts and
+  arguments, is marked `[by R X]` with the rule R it is written in, which the macro takes off; an argument given to
+  an untyped rule is marked with that rule, and a class's guard with the class, which is untyped, so a guard left a
+  test rather than a table keeps the rule boxed. A variable or a constant needs no mark, so an untyped rule compiled
+  in place without expressions, as `(* 32)` or `_ Len (skip Len)` are, does not stop it. A value taken from another
+  rule is trusted by that rule's signature, as typed code calling `<rule>.parse` already trusts it.
+- **Definition order.** `grammar.finish` compiled the newest first, callers before the rules they call. It compiles
+  in the order rules were defined now, so a typed loop finds the typed rule it matches made, and takes it in.
+- **Loops over stubs.** The lowerer counted a definition made while sealing is on as sealed for its own tail calls
+  only where its name was new, so a loop replacing its unsealed stub made a tail call by name at each step, and had
+  no loop's inline form. It counts as sealed now, as it is once installed (`sealing?` in
+  `src/lowerer/registers.shen`); stage 0's output changes only in the lowerer's own files.
+- **Numbers**, a sealed typed program parsing an IPv6-style options header, next header, length, then `(* <option>)`
+  of Pad1, PadN, Router Alert as `5 2 (u16-be V)` and a catch-all `_ Len (skip Len)`, all typed, through
+  `<header>.parse`, against a typed loop written by hand over the view; the second of two rounds in each run, five
+  runs of each build in turn:
+
+  | Case | Before | Grammar | Grammar and lowerer | By hand |
+  | --- | --- | --- | --- | --- |
+  | Two options, rules compiled at their first call | 29.0 to 30.6 ns | 25.5 to 26.1 | 25.5 to 26.1 | 6.9 |
+  | Two options, `(grammar.finish)` as the source loads | 28.9 to 29.3 ns | 21.3 to 21.7 | 20.3 to 21.3 | 6.9 |
+  | 200 PadN options, at their first call | 1,413 to 1,492 ns | | 1,086 to 1,155 | 313 to 369 |
+  | 200 PadN options, with `(grammar.finish)` | 1,438 to 1,488 ns | 883 to 1,022 | 565 to 579, one 713 | 309 to 324 |
+  | Router Alert values summed by a recursive rule, with `(grammar.finish)` | 34.5 to 36.3 ns | 29.0 to 29.2 | 29.0 to 29.2 | |
+
+  Each option took about 7.3 ns before and 2.9 after, against 1.55 by hand. A rule compiled at its first call in a
+  running program is not sealed, so its loops call themselves by name. `grammar.finish` of the five typed rules and
+  their loops took 2.3 ms against 0.9: declaring a type and taking it away cost 0.026 ms, and the rest is the
+  annotator and the lowering for registers, as for any typed definition.
+- **Left, measured:** the rule does not take its loop in, as the 16 word registers run out: each of the option's four
+  alternatives is `(let R Alt (if (= R -1) Next R))`, which holds R and each `if`'s result across the alternatives
+  after it. With two alternatives it fits, and the parse took 16.7 to 17.4 ns, for less work. Alternatives in tail
+  position as labels, a frozen next alternative that each failure thaws, as pattern matching's chains are, would hold
+  fewer; `rule`, `done` and `seq` would pass the failure as code rather than -1. `<rule>.parse` is defined against the
+  rule's stub as the rule is read, so it calls the rule; made after the rule and typed, it still called it, at 17.0
+  ns against 17.0, and was not looked into further.
+- **Checked:** `tests/grammar_typed.sh` runs `tests/grammar_typed.shen` under `(optimise +)`, and checks which of
+  nine rules and loops compile typed: a rule whose untyped rule's guard is in place, one giving an untyped rule an
+  expression, one whose class's guard stays a test, one whose check failed and one defined again under `(tc -)` do
+  not. `tests/typed.shen` checks that a typed loop defined sealed over an unsealed definition is inlined as a loop.
+  Without the marks, the first three of those compiled typed.
+
 ### Rejected: a module's arities recorded before its sources load (2026-11-16, Apple M3 Max)
 
 Scanning every source first would cost a second read and could miss macro-expanded definitions or names that

@@ -31,6 +31,12 @@ All notable changes to this project are documented in this file. The format is b
 - A small sealed function whose code calls nothing but to make an error's message inlines at any depth, so a typed
   loop that reads a buffer through such helpers keeps its values in registers. An error's message inlines only
   primitives, which makes code smaller and raising an error with a formatted message a little slower.
+- In a typed program, a typed grammar rule whose alternatives typechecked compiles with its types, as the program's
+  own definitions do: its positions and bytes stay in registers, and its repetitions, with the typed rules they
+  match, are loops there once `(grammar.finish)` compiles them as the typed source loads. A rule that holds code
+  that did not typecheck, such as an untyped rule's guard, compiles as before.
+- A definition made while sealing is on over one made unsealed, as a grammar's rule replaces its stub, loops in
+  registers and inlines as a loop, as it does where its name was new.
 
 ### Fixed
 

@@ -301,6 +301,17 @@
   [(typed.reads typed-failed-read) (shen-jit.apply (shen-jit.function typed-failed-read) [(typed.spot)])])
 
 (typed.check "a loop of fixnums" [true true 385] [(typed.has? again word-sum) (typed.has? fix* word-sum) (word-sum 10 0)])
+
+\\ A definition made while sealing is on over one made unsealed, as a grammar's rule replaces its
+\\ stub, is sealed as it is installed: its own tail calls loop, and a caller inlines it as a loop.
+(define typed-replaced-loop N Acc -> Acc)
+(shen-jit.seal +)
+(optimise +)
+(typed.check "an unsealed definition replaced" loaded (typed.load-typed "tests/typed/replaced-loop.shen"))
+(optimise -)
+(shen-jit.seal -)
+(typed.check "replaced, a loop, inlined as one" [true true 56]
+  [(typed.has? loop typed-replaced-loop) (typed.has? loop typed-replaced-caller) (typed-replaced-caller 10)])
 (typed.check "bit operations" [true 5] [(typed.has? word-xor word-bits) (word-bits 6 3)])
 (typed.check "fixnum comparisons" [true 5 5] [(typed.has? word-unless>= word-max) (word-max 5 3) (word-max 3 5)])
 (typed.check "overflow raises" "integer overflow" (trap-error (word-double 1) (/. E (error-to-string E))))
