@@ -433,6 +433,7 @@ static V h_not_integer(VM *vm, V v) { return sj_raise_value(vm, "~S is not an in
 static V h_overflow(VM *vm) { return sj_raise(vm, "integer overflow"); }
 static V h_divide(VM *vm) { return sj_raise(vm, "division by zero"); }
 static V h_not_fit(VM *vm, sljit_sw value) { return sj_raise_value(vm, "bytes: ~S does not fit", fix(value)); }
+static V h_bad_shift(VM *vm, sljit_sw count) { return sj_raise_value(vm, "bit operation: ~S is not a valid shift", fix(count)); }
 
 /* The address of the C function in cell, for float-call1 and the rest. */
 static V h_foreign_address(VM *vm, V *cell)
@@ -574,7 +575,7 @@ static void *h_compile(VM *vm)
 
 typedef enum { SLOW_PRIM, SLOW_ALLOC, SLOW_BOOLEAN, SLOW_NOT_PROC, SLOW_GROW, SLOW_LOOP, SLOW_RESOLVE, SLOW_GUARD,
                SLOW_RETURN, SLOW_POINTER, SLOW_NOT_NUMBER, SLOW_NOT_INTEGER, SLOW_TOO_BIG, SLOW_MEMORY,
-               SLOW_OVERFLOW, SLOW_FOREIGN, SLOW_DIVIDE, SLOW_FIT } SlowKind;
+               SLOW_OVERFLOW, SLOW_FOREIGN, SLOW_DIVIDE, SLOW_FIT, SLOW_SHIFT } SlowKind;
 
 typedef struct Slow {
     SlowKind kind;
@@ -2337,6 +2338,50 @@ static void emit_raw(Emit *e, const uint32_t *p)
         sljit_emit_op1(c, SLJIT_MOV, RAW(e, p[1]), R1);
         break;
     }
+    case OP_FIX_SHL: case OP_FIX_SAR:
+        /* shen-jit.shift-left and shift-right of fixnums, in word registers: a count from 0 to 63,
+           tested as unsigned, or the primitive's error. A shift left keeps the low 62 bits, by
+           shifting 2 further and back with the sign, as for a constant count (registers.shen). */
+        sljit_emit_op1(c, SLJIT_MOV, R2, WORD_OPERAND(e, p[3]));
+        slow_path(e, SLOW_SHIFT, sljit_emit_cmp(c, SLJIT_GREATER, R2, IMM(63)))->insn = p;
+        if (p[0] == OP_FIX_SHL) {
+            sljit_emit_op2(c, SLJIT_MSHL, R0, WORD_OPERAND(e, p[2]), R2);
+            sljit_emit_op2(c, SLJIT_SHL, R0, R0, IMM(2));
+            sljit_emit_op2(c, SLJIT_ASHR, RAW(e, p[1]), R0, IMM(2));
+        } else {
+            sljit_emit_op2(c, SLJIT_MASHR, RAW(e, p[1]), WORD_OPERAND(e, p[2]), R2);
+        }
+        break;
+    case OP_FIX_CLZ: case OP_FIX_CTZ:
+        /* As the primitives count, in a fixnum's word (prims.c), whose tag is two zeros below the
+           value, and where a zero counts 62. SLJIT counts 64 in a zero word, which bit 1 makes 62
+           for clz, as the tag's bits do for ctz. */
+        sljit_emit_op2(c, SLJIT_SHL, R0, WORD_OPERAND(e, p[2]), IMM(2));
+        if (p[0] == OP_FIX_CLZ) {
+            sljit_emit_op2(c, SLJIT_OR, R0, R0, IMM(2));
+            sljit_emit_op1(c, SLJIT_CLZ, RAW(e, p[1]), R0);
+        } else {
+            sljit_emit_op1(c, SLJIT_CTZ, R0, R0);
+            sljit_emit_op2(c, SLJIT_SUB, RAW(e, p[1]), R0, IMM(2));
+        }
+        break;
+    case OP_FIX_POPCOUNT:
+        /* The ones of a fixnum's word, as the primitive counts them, which SLJIT has no instruction
+           for: counts of 2 bits side by side, of 4, of 8, then their sum in the top byte of a product. */
+        sljit_emit_op2(c, SLJIT_SHL, R0, WORD_OPERAND(e, p[2]), IMM(2));
+        sljit_emit_op2(c, SLJIT_LSHR, R1, R0, IMM(1));
+        sljit_emit_op2(c, SLJIT_AND, R1, R1, IMM(0x5555555555555555));
+        sljit_emit_op2(c, SLJIT_SUB, R0, R0, R1);
+        sljit_emit_op2(c, SLJIT_LSHR, R1, R0, IMM(2));
+        sljit_emit_op2(c, SLJIT_AND, R1, R1, IMM(0x3333333333333333));
+        sljit_emit_op2(c, SLJIT_AND, R0, R0, IMM(0x3333333333333333));
+        sljit_emit_op2(c, SLJIT_ADD, R0, R0, R1);
+        sljit_emit_op2(c, SLJIT_LSHR, R1, R0, IMM(4));
+        sljit_emit_op2(c, SLJIT_ADD, R0, R0, R1);
+        sljit_emit_op2(c, SLJIT_AND, R0, R0, IMM(0x0f0f0f0f0f0f0f0f));
+        sljit_emit_op2(c, SLJIT_MUL, R0, R0, IMM(0x0101010101010101));
+        sljit_emit_op2(c, SLJIT_LSHR, RAW(e, p[1]), R0, IMM(56));
+        break;
     case OP_WORD_UNLESS_LT: case OP_WORD_UNLESS_GT: case OP_WORD_UNLESS_LE: case OP_WORD_UNLESS_GE:
     case OP_WORD_UNLESS_EQ: case OP_WORD_UNLESS_ULT: case OP_WORD_UNLESS_UGT: case OP_WORD_UNLESS_ULE:
     case OP_WORD_UNLESS_UGE: {
@@ -3715,10 +3760,11 @@ static void emit_slow_paths(Emit *e)
             to_unwind(e, sljit_emit_jump(c, SLJIT_JUMP));
             break;
         case SLOW_FIT: /* the value, in R2 */
+        case SLOW_SHIFT: /* the count, in R2 */
             publish(e);
             sljit_emit_op1(c, SLJIT_MOV, R1, R2);
             sljit_emit_op1(c, SLJIT_MOV, R0, VMR, 0);
-            call_c_raising(e, s, SLJIT_ARGS2(W, P, W), (void *)h_not_fit);
+            call_c_raising(e, s, SLJIT_ARGS2(W, P, W), s->kind == SLOW_FIT ? (void *)h_not_fit : (void *)h_bad_shift);
             to_unwind(e, sljit_emit_jump(c, SLJIT_JUMP));
             break;
         case SLOW_DIVIDE: /* a NaN, which the test may take with zero, divides */

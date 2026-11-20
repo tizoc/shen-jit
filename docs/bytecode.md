@@ -387,13 +387,15 @@ shifts, `bswap32`, `clz` and `ctz`. The others are calls to C.
     `word.t` parameter, a word of `lib/word.shen`, with `word-load64` from its 8 bytes.
   - An expression gives a fixnum in a word register when it is a fixnum literal, a fixnum variable, or
     `+`, `-`, `*`, `shen-jit.bit-and`, `shen-jit.bit-or` or
-    `shen-jit.bit-xor` over two of them, `shen-jit.shift-left` of one by a constant count up to 61 or
-    `shen-jit.shift-right` by one up to 63, a read of `shen-jit.u8`, `u16`, `u32` or `s32`, which is
+    `shen-jit.bit-xor` over two of them, `shen-jit.shift-left` or `shen-jit.shift-right` of one by
+    another, `shen-jit.clz`, `shen-jit.ctz` or `shen-jit.popcount` of one, a read of `shen-jit.u8`, `u16`, `u32` or `s32`, which is
     `word-load8` and the others at a fixnum index, `shen-jit.truncate` of a float, which is
     `fix-from-float`, or a `let`, `do` or `if` whose value does. Arithmetic is `fix+`, `fix-` and `fix*`, which raise "integer
     overflow" as `+` does, and comparisons of two are `word-unless` jumps. `shen-jit.quotient` and
-    `shen-jit.remainder` are boxed, as any other primitive there. A shift right is `word-sar`; a shift left is `word-shl` by the count and 2 more, then `word-sar`
-    by 2, which drops what leaves the 62 bits, as the primitive does. Two sums of a fixnum variable `P`, as a loop's
+    `shen-jit.remainder` are boxed, as any other primitive there. A shift right by a constant count up to 63 is
+    `word-sar`; a shift left by one up to 61 is `word-shl` by the count and 2 more, then `word-sar` by 2, which drops what
+    leaves the 62 bits, as the primitive does. A shift by any other count is `fix-sar` or `fix-shl`, which test it, and
+    the counts of bits are `fix-clz`, `fix-ctz` and `fix-popcount`. Two sums of a fixnum variable `P`, as a loop's
     steps, are `word+`, with no check: in the branch of an `if` where its test says that `P` is less
     than another fixnum, `(< P E)` or `(> E P)` true, or `(>= P E)` or `(<= E P)` false, `P` plus a
     constant that is not negative; and in the arguments of a loop's own call that read or write bytes
@@ -808,7 +810,10 @@ The builder turns these into instructions that `shen-jit.install-code` takes too
 The lowerer also uses `(fix+ D A B)`, `(fix- D A B)` and `(fix* D A B)`, as `word+` and the others but raising
 "integer overflow" for a result that is no fixnum, for typed code's fixnums, `(fix-store8 M W V)`, with `16`, `32`
 and `-s32`, as `word-store8` and the others but raising "bytes: V does not fit" for a value the width does not hold,
-after the buffer and the index are checked, as `shen-jit.u8!` and the others do, `(fix-from-float W F)`, as
+after the buffer and the index are checked, as `shen-jit.u8!` and the others do, `(fix-shl D X K)` and
+`(fix-sar D X K)`, as `shen-jit.shift-left` and `shen-jit.shift-right` of fixnums, raising their error out of line for a
+count outside 0 to 63, `(fix-clz D X)`, `(fix-ctz D X)` and `(fix-popcount D X)`, as `shen-jit.clz` and the others
+count a fixnum's bits, `(fix-from-float W F)`, as
 `word-from-float` but raising "integer overflow" out of line for a float outside the fixnums, a NaN or an infinity
 among them, as `shen-jit.truncate` does, `(float-divide D A B)`, as `float/` but
 raising "division by zero" for a divisor of zero, out of line, `(float-load-index F M W)` and

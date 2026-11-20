@@ -99,7 +99,12 @@
     X(OP_FIX_STORE_S32, "fix-store-s32", 3)   \
     X(OP_FIX_FROM_FLOAT, "fix-from-float", 2) \
     X(OP_WORD_LOAD_INDEX, "word-load-index", 3) \
-    X(OP_WORD_STORE_INDEX, "word-store-index", 3)
+    X(OP_WORD_STORE_INDEX, "word-store-index", 3) \
+    X(OP_FIX_SHL, "fix-shl", 3)               \
+    X(OP_FIX_SAR, "fix-sar", 3)               \
+    X(OP_FIX_CLZ, "fix-clz", 2)               \
+    X(OP_FIX_CTZ, "fix-ctz", 2)               \
+    X(OP_FIX_POPCOUNT, "fix-popcount", 2)
 
 enum {
 #define SJ_OP_ENUM(op, name, n) op,
@@ -158,7 +163,8 @@ static inline const char *raw_kinds(unsigned op)
         return "woW";
     case OP_WORD_STORE8: case OP_WORD_STORE16: case OP_WORD_STORE32: case OP_WORD_STORE64: case OP_WORD_STORE_INDEX:
     case OP_FIX_STORE8: case OP_FIX_STORE16: case OP_FIX_STORE32: case OP_FIX_STORE_S32: return "oWW";
-    case OP_FIX_ADD: case OP_FIX_SUB: case OP_FIX_MUL: return "wWW";
+    case OP_FIX_ADD: case OP_FIX_SUB: case OP_FIX_MUL: case OP_FIX_SHL: case OP_FIX_SAR: return "wWW";
+    case OP_FIX_CLZ: case OP_FIX_CTZ: case OP_FIX_POPCOUNT: return "wW";
     case OP_FIX_FROM_FLOAT: return "wr";
     case OP_FLOAT_CALL1: return "rfr";
     case OP_FLOAT_CALL2: return "rfrr";

@@ -74,6 +74,12 @@
   X Y -> [(shen-jit.shift-left X 3) (shen-jit.shift-right Y 2) (shen-jit.shift-left X 61)
           (shen-jit.shift-right Y 63) (shen-jit.bit-xor (shen-jit.shift-left X 20) (shen-jit.shift-right Y 1))])
 
+\\ Shifts by a count computed, and counts of bits, in registers too: the count is tested as the
+\\ primitive tests it, which raises its error for one outside 0 to 63.
+(define loop-bits {fixnum --> fixnum --> (list fixnum)}
+  X K -> [(shen-jit.shift-left X K) (shen-jit.shift-right X K) (shen-jit.clz X) (shen-jit.ctz X)
+          (shen-jit.popcount X)])
+
 \\ A body with more lets than a loop has word registers for, twice in one value: their registers go
 \\ back once each value is computed.
 (define loop-mix {fixnum --> fixnum}

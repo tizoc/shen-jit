@@ -430,6 +430,15 @@
   [(typed.has? word-shl loop-shifts)
    (= (loop-shifts 5 -9) [(shen-jit.shift-left 5 3) (shen-jit.shift-right -9 2) (shen-jit.shift-left 5 61)
                           (shen-jit.shift-right -9 63) (shen-jit.bit-xor (shen-jit.shift-left 5 20) (shen-jit.shift-right -9 1))])])
+(define typed.bits
+  X K -> [(shen-jit.shift-left X K) (shen-jit.shift-right X K) (shen-jit.clz X) (shen-jit.ctz X) (shen-jit.popcount X)])
+(typed.check "counted shifts and bit counts in registers, as the primitives" [true true true true true true true]
+  [(typed.has? fix-shl loop-bits) (typed.has? fix-sar loop-bits) (typed.has? fix-popcount loop-bits)
+   (= (loop-bits 5 61) (typed.bits 5 61)) (= (loop-bits -9 2) (typed.bits -9 2))
+   (= (loop-bits 0 63) (typed.bits 0 63)) (= (loop-bits (shen-jit.shift-left -1 61) 1) (typed.bits (shen-jit.shift-left -1 61) 1))])
+(typed.check "a shift's count tested in registers" ["bit operation: 64 is not a valid shift"
+                                                    "bit operation: -1 is not a valid shift"]
+  [(trap-error (loop-bits 1 64) (/. E (error-to-string E))) (trap-error (loop-bits 1 -1) (/. E (error-to-string E)))])
 (typed.check "lets that give their registers back" [true 840] [(typed.has? again loop-mixes) (loop-mixes 3 0)])
 (typed.check "repeated products" 3.0 (loop-row (typed.doubles [1.0 2.0 4.0 0.5 1.0 1.5]) 1))
 (typed.check "a product in a branch and after it" [30 15] [(loop-branchy 5 true) (loop-branchy 5 false)])

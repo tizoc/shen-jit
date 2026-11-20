@@ -4503,6 +4503,25 @@ every index was a tagged fixnum in a slot.
   `make bench`, three rounds: geomean 0.99, no result differences. `make bench-independent`, 7 rounds: every row
   within 2%. The n-body force function is in registers but called once per pair, and its loop is not, which is
   what stands between it and the hand-written version.
+- **Shifts by a computed count, and counts of bits** (2026-11-20, Apple M3 Max, against 43f4ae5). Register code
+  shifted only by a constant and had no `clz`, `ctz` or `popcount`, so each of those boxed its words, called
+  the primitive and read its result back. A presence map's walk on the networking branch, `net/marks`, does all
+  of them at every read of the map, which then cost about 11 ns. The JIT has five more instructions: `fix-shl`
+  and `fix-sar`, which test the count as unsigned against 63 and raise the primitive's error out of line, as
+  `fix+` raises for overflow, and `fix-clz`, `fix-ctz` and `fix-popcount`, which count as the primitives do in a
+  fixnum's word, the last by adding counts side by side, as SLJIT has no instruction for it. A constant count in
+  range keeps `word-shl` and `word-sar`; one past it is tested as any other. A typed loop of a computed shift
+  right and left and a `ctz` each round, 20 million rounds sealed: 55 to 60 ms against 25. On the networking
+  branch's own code, built by each compiler, seven rounds alternated at load 10 to 15 (another job ran), ns per
+  idle poll and deadline query: 256 slots with 4 open 294 against 270, 4 of 8 open 346 against 327, all 256 open
+  7507 against 7452, TCP's lossy run 160.4 against 159.9 ms: the maps are read seldom there, as each scan tests
+  the next slot before reading one. On the Ryzen 5 5600X (Hyper-V guest, Ubuntu 20.04, gcc 9.4), pinned to one
+  core at load 0.5, seven rounds alternated: the loop 77.8 against 43.3 ms, and the same networking rows level
+  within 5% either way (396.5 against 380.2 ns, 459.5 against 481.3, TCP's lossy run 304.2 against 305.7 ms).
+  So the gain is in typed loops that do such bit work themselves; the code that showed the gap no longer leans
+  on it. `test-core` passes there and under Rosetta, with cases that compare each instruction with the
+  primitive, a count of 64 and of -1 among them. Boxed code and the generated files but the lowerer's own are
+  unchanged.
 
 ### C functions of doubles called in registers, and registers across calls (2026-11-14 and 15, Apple M3 Max, against the commit before)
 

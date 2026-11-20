@@ -19,7 +19,8 @@
     tail-call tail-call-sealed tail-call-value
     float float* float+ float- float-box float-call1 float-call2 float-call3 float-divide float-from-word
     float-load float-load-at float-load-index float-move float-number float-sqrt float-store float-store-at
-    float-store-index fix-store8 fix-store16 fix-store32 fix-store-s32 fix-from-float word-load-index word-store-index word-store64 float-unless<
+    float-store-index fix-store8 fix-store16 fix-store32 fix-store-s32 fix-from-float fix-shl fix-sar fix-clz
+    fix-ctz fix-popcount word-load-index word-store-index word-store64 float-unless<
     float-unless<= float-unless= float-unless> float-unless>= skip slot contained typed calling var word word+ word- word-and
     word-box word-load-s32 word-load16 word-load32 word-load8 word-move word-number word-or word-sar
     word-shl word-unless< word-unless<= word-unless= word-unless> word-unless>= word-xor
@@ -203,7 +204,7 @@
                                              fix-from-float word-load-index word-store-index float-call1 float-call2 float-call3
                                              float-unless< float-unless> float-unless<=
                                              float-unless>= float-unless= fix+ fix- fix* word+ word- word-and word-or word-xor
-                                             word-shl word-sar
+                                             word-shl word-sar fix-shl fix-sar fix-clz fix-ctz fix-popcount
                                              word-load8 word-load16 word-load32 word-load-s32
                                              word-unless< word-unless> word-unless<= word-unless>= word-unless=])
   [_ | Is] -> (computes? Is))
@@ -360,6 +361,9 @@
   _ [prim Op _] -> word where (element? Op [shen-jit.field-word shen-jit.bytes-length])
   _ [prim shen-jit.field-float _] -> float
   Env [prim Op [X [const K]]] -> (if (= word (kind Env X)) word slot) where (shift? Op K)
+  Env [prim Op [X Y]] -> (if (and (= word (kind Env X)) (= word (kind Env Y))) word slot)
+      where (element? Op [shen-jit.shift-left shen-jit.shift-right])
+  Env [prim Op [X]] -> (if (= word (kind Env X)) word slot) where (element? Op [shen-jit.clz shen-jit.ctz shen-jit.popcount])
   _ [prim shen-jit.f64 _] -> float
   Env [prim shen-jit.truncate [X]] -> (if (= float (kind Env X)) word slot)
   _ [prim shen-jit.float _] -> float
@@ -571,6 +575,17 @@
                    (emit B [word-sar W W [const (constant B 2)]])))
            W))
       where (and (shift? Op K) (word-kind? Env X))
+  \\ Any other count is tested, as the primitive tests it, and so is a constant past what one may be.
+  B Env [prim Op [X Y]] Top
+  -> (word-instruction-to B Env (if (= Op shen-jit.shift-left) fix-shl fix-sar) X Y Top new)
+      where (and (element? Op [shen-jit.shift-left shen-jit.shift-right]) (word-kind? Env X) (word-kind? Env Y))
+  B Env [prim Op [X]] Top
+  -> (let Mark (<-address B 14)
+          OX (shen-jit.lower.word B Env X Top)
+          Back (address-> B 14 Mark)
+          W (word-register B)
+       (do (emit B [(bit-count Op) W OX]) W))
+      where (and (element? Op [shen-jit.clz shen-jit.ctz shen-jit.popcount]) (word-kind? Env X))
   B Env [prim shen-jit.word-op [[const Op] X Y]] Top -> (word-op-to B Env Op X Y Top new)
       where (element? (word-op-kind Env Op X Y) [word bits])
   \\ A float truncated, raising out of line for one outside the fixnums.
@@ -605,6 +620,11 @@
           W (word-to B To)
        (do (emit B [(if Scaled word-load-index word-load64) W OM OI]) W))
   B Env Op X Y Top To -> (word-instruction-to B Env (word-instruction Op) X Y Top To))
+
+(define bit-count
+  shen-jit.clz -> fix-clz
+  shen-jit.ctz -> fix-ctz
+  shen-jit.popcount -> fix-popcount)
 
 (define word-into
   _ O new -> O

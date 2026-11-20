@@ -30,6 +30,8 @@ All notable changes to this project are documented in this file. The format is b
   `(let Step (if Up (fixnum 1) (fixnum -1)) ...)`, costs nothing; of anything else it still checks at run time.
 - `shen-jit.bswap32`, `shen-jit.clz` and `shen-jit.ctz` compile inline, so a buffer's big-endian 32-bit reads and
   stores no longer call C.
+- In typed code, `shen-jit.shift-left` and `shen-jit.shift-right` by a count computed rather than written, and
+  `shen-jit.clz`, `shen-jit.ctz` and `shen-jit.popcount`, keep their fixnums in registers.
 - Typed code with a chain of alternatives, each tried when the one before gave nothing, holds one register for the
   chain rather than two for each, so a typed grammar's rule takes in its loops and the rules they match.
 - In typed code, the branches of an `if` and a frozen alternative thawed only in tail position give back the
