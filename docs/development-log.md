@@ -4179,6 +4179,24 @@ pass through the state and so cannot be typechecked.
   against 1.61 to 1.66, JSON read from a reader 5.7 to 5.8 ms against 5.6 to 5.8 in 1 MB chunks and 5.7 to 5.9
   against 5.9 in 4 KiB chunks, and each of Datalog's workloads level. Those loops spend their time in their calls,
   not in bounds checks.
+- **Rejected: labels with parameters** (load 3.6 to 6.6, three rounds in turn, against the grammar above). The
+  lowerer compiled `(let K (lambda P1 ... (lambda Pn Inner)) E)`, where E applies K only to n arguments in tail
+  position and K is in none of them, as a label after E: Inner reads its parameters from places of their own, in
+  typed code a register of the kind every application gives, float, word or bits, and a slot otherwise, which E
+  leaves alone; each application puts its arguments there in order and jumps, and Inner sees only the variables bound
+  before the let, so a lambda whose free variable E binds again needs no copy either. In a value going to a slot or a
+  register it went through an exit, as frozen alternatives do. `thaws` counted a label's body as tail position,
+  `kind` and `exits` saw through labels to Inner, and a fixnum parameter carried the fact that it may be past the
+  greatest fixnum, as a let bound to an unchecked sum does. A continuation small enough to copy was still copied. The
+  grammar then made every rule in place a continuation, without its estimate of the copies' size and the value join
+  past it. 134 lines of code in the lowerer, 70 in `emit.shen` and 64 in `registers.shen`, for 28 fewer in the
+  grammar. A typed record whose kind, one of six alternatives compiled in place, is followed by a rest too long to
+  copy parsed in 18.6 to 18.7 ns against 19.5 to 20.2; the options header, whose continuations are copied, in 15.0
+  to 15.4 against 15.0 to 15.1; JSON decoded 1 MB in 5.39 to 5.48 ms against 5.40 to 5.65, and an HTTP head in
+  1.57 to 1.60 µs against 1.59 to 1.60. No label was made in the kernel, the programs of `make bench` or the kernel's
+  tests, Prolog included, where a let-bound lambda is copied or used otherwise; only grammars made them. About 5% on
+  a grammar shaped for it, where the value join already worked, is not worth the code. A thaw is an application of
+  no arguments: one mechanism for both kinds of label might cost less, and was not tried.
 
 ### Rejected: a module's arities recorded before its sources load (2026-11-16, Apple M3 Max)
 
