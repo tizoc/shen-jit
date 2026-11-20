@@ -51,6 +51,19 @@
   (mutable attempts : fixnum)
   (option-state : grammar.state))
 
+\\ RFC 2131 3 and 4.1: the magic cookie, the ports, the messages a client sends and takes, and the end
+\\ of the options; RFC 1542 2.1: a message of at least 300 bytes.
+(define cookie {--> fixnum} -> 1669485411)
+(define server-port {--> fixnum} -> 67)
+(define client-port {--> fixnum} -> 68)
+(define discover-message {--> fixnum} -> 1)
+(define offer-message {--> fixnum} -> 2)
+(define request-message {--> fixnum} -> 3)
+(define ack-message {--> fixnum} -> 5)
+(define nak-message {--> fixnum} -> 6)
+(define end-option {--> fixnum} -> 255)
+(define message-size {--> fixnum} -> 300)
+
 (define make
   {net-link.device --> fixnum --> fixnum --> client}
   D Mac Id ->
@@ -60,9 +73,9 @@
         (:client
           device <- D
           mac <- Mac
-          out <- (buffer.new 300)
+          out <- (buffer.new (message-size))
           option-state <- (grammar.state)
-          in <- (buffer.new (fx- (net-link.mtu D) 28))
+          in <- (buffer.new (fx- (net-link.mtu D) (fx+ (wire.ipv4.size) (wire.udp.size))))
           info <- (udp.make-recv-info)
           options <- (:options
                         kind <- 0
@@ -173,14 +186,14 @@
          Server (options.server O)
          Match (and (net-ipv4.unicast? Server)
                     (or (= Phase rebinding) (= Server (client.server C))))
-      (cases (and (= Phase selecting) (= Kind 2) (net-ipv4.unicast? IP) (net-ipv4.unicast? Server))
+      (cases (and (= Phase selecting) (= Kind (offer-message)) (net-ipv4.unicast? IP) (net-ipv4.unicast? Server))
                (do (client.address-> C IP) (client.server-> C Server) (begin C requesting Now))
-             (and (= Phase requesting) (= Kind 5) Match (= IP (client.address C)))
+             (and (= Phase requesting) (= Kind (ack-message)) Match (= IP (client.address C)))
                (commit-lease C O IP Now)
-             (and (or (= Phase renewing) (= Phase rebinding)) (= Kind 5) Match
+             (and (or (= Phase renewing) (= Phase rebinding)) (= Kind (ack-message)) Match
                   (or (= IP 0) (= IP (client.address C))))
                (commit-lease C O (client.address C) Now)
-             (and Match (= Kind 6) (not (= Phase selecting)))
+             (and Match (= Kind (nak-message)) (not (= Phase selecting)))
                (do (client.address-> C 0)
                    (client.mask-> C 0)
                    (client.gateway-> C 0)
@@ -198,7 +211,7 @@
          (= (wire.dhcp.hardware-type B I) 1) (= (wire.dhcp.hardware-length B I) 6)   \\ over Ethernet,
          (= (wire.dhcp.transaction-id B I) (client.id C))
          (= (wire.dhcp.client-hardware B I) (client.mac C))   \\ to us.
-         (= (wire.dhcp.magic-cookie B I) 1669485411)
+         (= (wire.dhcp.magic-cookie B I) (cookie))
          (let O (reset-options (client.options C))
            (and (<options>.parse-at O (client.option-state C) B (fx+ I (wire.dhcp.size)) (fx+ I N) (/. At Message false))
                 (accept-options C O (wire.dhcp.your-address B I) Now)))))
@@ -214,7 +227,7 @@
               T (fx+ At (wire.ipv4.size))
               Headers (fx+ (wire.ipv4.size) (wire.udp.size))
               OK (and (udp.valid-datagram? B At N)
-                      (= (wire.udp.source-port B T) 67) (= (wire.udp.destination-port B T) 68)  \\ Server to client.
+                      (= (wire.udp.source-port B T) (server-port)) (= (wire.udp.destination-port B T) (client-port))
                       (accept C B (fx+ At Headers) (fx- N Headers) Now))
            (do (net-link.consume R)
                (or OK (init-input C R Now (fx- Left 1)))))))
@@ -229,13 +242,12 @@
       (cases (= Status udp.empty) false
              (= Status udp.too-small) (do (udp.inbox-discard Inbox)
                                            (bound-input C Inbox Now (fx- Left 1)))
-             (and (= (udp.recv-info.port Info) 67) (accept C B 0 (udp.recv-info.length Info) Now)) true
+             (and (= (udp.recv-info.port Info) (server-port)) (accept C B 0 (udp.recv-info.length Info) Now)) true
              true (bound-input C Inbox Now (fx- Left 1)))))
 
 (define clear
   {buffer.view --> fixnum --> buffer.view}
-  B 300 -> B
-  B I -> (clear (buffer.u32-be-> B I 0) (fx+ I 4)))
+  B I -> (if (= I (message-size)) B (clear (buffer.u32-be-> B I 0) (fx+ I 4))))
 
 (define write-payload
   {client --> boolean --> boolean --> buffer.view}
@@ -248,18 +260,18 @@
             (broadcast (if Broadcast 1 0))
             (client-address (if Configured (client.address C) 0))
             (client-hardware (client.mac C))
-            (magic-cookie 1669485411))
-          (buffer.u16-be-> B 240 13569)
-          (buffer.u8-> B 242 (if (= State selecting) 1 3))
-          (buffer.u32-be-> B 243 923140355) \\ Parameter request list, mask and router.
-          (buffer.u32-be-> B 247 104020539) \\ DNS, lease, T1 and T2.
-          (if (= State requesting)
-              (do (buffer.u16-be-> B 251 12804)
-                  (buffer.u32-be-> B 253 (client.address C))
-                  (buffer.u16-be-> B 257 13828)
-                  (buffer.u32-be-> B 259 (client.server C))
-                  (buffer.u8-> B 263 255))
-              (buffer.u8-> B 251 255)))))
+            (magic-cookie (cookie)))
+          (write-layout wire.dhcp-request-options B (wire.dhcp.size)
+            (type-code 53) (type-length 1)
+            (message-type (if (= State selecting) (discover-message) (request-message)))
+            (list-code 55) (list-length 6) (mask 1) (router 3) (dns 6) (lease 51) (renewal 58) (rebinding 59))
+          (let At (fx+ (wire.dhcp.size) (wire.dhcp-request-options.size))
+            (if (= State requesting)
+                (let Server (fx+ At (wire.dhcp-address-option.size))
+                  (do (write-layout wire.dhcp-address-option B At (code 50) (length 4) (address (client.address C)))
+                      (write-layout wire.dhcp-address-option B Server (code 54) (length 4) (address (client.server C)))
+                      (buffer.u8-> B (fx+ Server (wire.dhcp-address-option.size)) (end-option))))
+                (buffer.u8-> B At (end-option)))))))
 
 (define transmit
   {client --> fixnum --> boolean}
@@ -274,10 +286,11 @@
          Deadline (fx+ Now Delay)
       (if (net-link.full? Tx) false
           (do (udp.write-packet (net-link.ring.data Tx) (net-link.tail-offset Tx)
-                                (if Configured (client.address C) 0) 68
-                                (if Broadcast (net-ipv4.broadcast) (client.server C)) 67
-                                (write-payload C Configured Broadcast) 0 300)
-              (net-link.publish Tx 328 (net-link.delivery D Now))
+                                (if Configured (client.address C) 0) (client-port)
+                                (if Broadcast (net-ipv4.broadcast) (client.server C)) (server-port)
+                                (write-payload C Configured Broadcast) 0 (message-size))
+              (net-link.publish Tx (fx+ (message-size) (fx+ (wire.ipv4.size) (wire.udp.size)))
+                                (net-link.delivery D Now))
               (client.attempts-> C (fx+ Attempts 1))
               (client.deadline-> C
                 (cases (and (= State renewing) (fx> Deadline (client.rebinding C))) (client.rebinding C)

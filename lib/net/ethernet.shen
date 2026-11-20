@@ -285,7 +285,7 @@
                At (net-link.tail-offset Tx)
                N (net-link.head-length R)
                Len (fx+ N (wire.ethernet.size))
-               Wire (if (fx>= Len 60) Len (fixnum 60))
+               Wire (if (fx>= Len (minimum-frame)) Len (minimum-frame))
             (do (ethernet-header A B At Mac Kind)
                 (buffer.copy-into! B (fx+ At (wire.ethernet.size)) (net-link.ring.data R) (net-link.head-offset R) N)
                 (pad B (fx+ At Len) (fx+ At Wire))
@@ -303,8 +303,8 @@
 (define emit-ipv4
   {adapter --> net-link.ring --> fixnum --> boolean}
   A R Now ->
-    (if (fx< (net-link.head-length R) 20) (note-drop A)
-        (let Dst (buffer.u32-be (net-link.ring.data R) (fx+ (net-link.head-offset R) 16))
+    (if (fx< (net-link.head-length R) (wire.ipv4.size)) (note-drop A)
+        (let Dst (wire.ipv4.destination (net-link.ring.data R) (net-link.head-offset R))
              Hop (net-routes.lookup (adapter.routes A) Dst)
           (cases (= Dst (net-ipv4.broadcast)) (send-ip A R (broadcast-mac) (wire.ipv4-type) Now)
                  (net-ipv4.multicast? Dst) (send-ip A R (net-ipv4.multicast-mac Dst) (wire.ipv4-type) Now)
@@ -321,9 +321,9 @@
   {adapter --> (list net-ndp.host) --> net-link.ring --> fixnum --> boolean}
   A [] _ _ -> (note-drop A)
   A [H] R Now ->
-    (if (fx< (net-link.head-length R) 40) (note-drop A)
+    (if (fx< (net-link.head-length R) (wire.ipv6.size)) (note-drop A)
         (let B (net-link.ring.data R)
-             At (fx+ (net-link.head-offset R) 24)
+             At (wire.ipv6.destination-at (net-link.head-offset R))
           (if (net-ipv6.multicast-at? B At)
               (send-ip A R (net-ipv6.multicast-mac-at B At) (wire.ipv6-type) Now)
               (let I (net-ndp.route H B At Now)
@@ -338,7 +338,7 @@
   {adapter --> net-link.ring --> fixnum --> boolean}
   A R Now ->
     (if (= (net-link.head-length R) 0) (note-drop A)
-        (let Version (shen-jit.shift-right (buffer.u8 (net-link.ring.data R) (net-link.head-offset R)) 4)
+        (let Version (wire.ipv4.version (net-link.ring.data R) (net-link.head-offset R))   \\ Where IPv6's is too.
           (cases (= Version 4) (emit-ipv4 A R Now)
                  (= Version 6) (emit-ipv6 A (adapter.ipv6 A) R Now)
                  true (note-drop A)))))

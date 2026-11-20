@@ -4005,6 +4005,14 @@ A review of the networking code after it had been rewritten found what still rea
   writes still had them. TCP's lossy run 159.3 against 159.1 ms, its lossless run 10.9 and 10.9, UDP
   echo 22.5 and 22.5, nine rounds alternated at load 2.6; the suites pass, and Linux's TUN and TAP
   suites with no heap words.
+- **The last bytes by hand.** DHCP wrote its request's options as packed numbers, 13569, 923140355,
+  104020539, 12804 and 13828; two layouts, the request's message type and parameter list and an address
+  option, write them now, with RFC 2132's codes as their values, and the DISCOVER and REQUEST a client
+  sends are the same 328 bytes. DNS reads a compression pointer through a layout, and Ethernet IPv4's
+  and IPv6's destinations and their version through theirs, where they read offsets 16 and 24 and a
+  shifted byte. DHCP's magic cookie, ports, message types and size, and DNS's record types, class, codes
+  and port are named. TCP's lossy run 157.0 against 157.4 ms, lossless 10.9 and 10.7, UDP echo 21.8 and
+  21.9, nine rounds at load 3.1; Linux's TAP suites, DHCP and DNS among them, pass with no heap words.
 
 ### Limited ICMPv4 errors, and a page on the networking code (2026-11-20)
 

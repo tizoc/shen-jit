@@ -188,6 +188,16 @@
   (boot-file 1024)
   (magic-cookie 32))
 
+\\ RFC 2132 9.6 and 9.8: a request's message type, and the list of what it asks for: the mask, the
+\\ router, DNS servers, the lease, and the renewal and rebinding times.
+(deflayout dhcp-request-options
+  (type-code 8) (type-length 8) (message-type 8)
+  (list-code 8) (list-length 8) (mask 8) (router 8) (dns 8) (lease 8) (renewal 8) (rebinding 8))
+
+\\ RFC 2132 9.1 and 9.7: an address option, the address a client asks for or the server's identifier.
+(deflayout dhcp-address-option
+  (code 8) (length 8) (address 32))
+
 \\ RFC 1035: a message's header; then each question's name and these, and each record's name and these.
 (deflayout dns
   (id 16) (response 1) (opcode 4) (authoritative 1) (truncated 1) (recursion-desired 1)
@@ -202,6 +212,10 @@
   (type 16) (class 16)
   (ttl 32)
   (length 16))
+
+\\ RFC 1035 4.1.4: a pointer to a name earlier in the message, its top two bits set.
+(deflayout dns-pointer
+  (marker 2) (offset 14))
 
 \\ IEEE 802.3.
 (deflayout ethernet

@@ -64,6 +64,15 @@
 (grammar.finish)
 
 \\ Where the name at I ends, before End, or -1.
+\\ RFC 1035 3.2.2, 3.2.4 and 4.1.1: the record types read here, the class, the codes of an answer, and
+\\ the port.
+(define a-type {--> fixnum} -> 1)
+(define cname-type {--> fixnum} -> 5)
+(define internet {--> fixnum} -> 1)
+(define no-error {--> fixnum} -> 0)
+(define name-error {--> fixnum} -> 3)
+(define dns-port {--> fixnum} -> 53)
+
 (define after-name
   {grammar.state --> buffer.view --> fixnum --> fixnum --> boolean --> fixnum}
   S B I End Compressed -> (<name>.end-at Compressed S B I End))
@@ -78,7 +87,7 @@
                (= (after-name (resolver.names R) Name 0 N false) N))
           (do (write-layout wire.dns Q 0 (id Id) (recursion-desired 1) (questions 1))
               (buffer.copy-into! Q (wire.dns.size) Name 0 N)
-              (write-layout wire.dns-question Q (fx+ (wire.dns.size) N) (type 1) (class 1))   \\ A, IN.
+              (write-layout wire.dns-question Q (fx+ (wire.dns.size) N) (type (a-type)) (class (internet)))
               (resolver.server-> R Server)
               (resolver.id-> R Id)
               (resolver.query-length-> R (fx+ N (fx+ (wire.dns.size) (wire.dns-question.size))))
@@ -107,8 +116,8 @@
     (if (or (fx< At 0) (fx>= At End) (= Left 0)) -1
         (let Head (buffer.u8 B At)
           (cases (fx<= Head 63) At
-                 (and (fx>= Head 192) (fx< (fx+ At 1) End))
-                   (let Target (shen-jit.bit-and (buffer.u16-be B At) 16383)
+                 (and (= (wire.dns-pointer.marker B At) 3) (fx< (fx+ At 1) End))
+                   (let Target (wire.dns-pointer.offset B At)
                      (if (fx< Target At) (label-offset B Target End (fx- Left 1)) (fixnum -1)))
                  true -1))))
 
@@ -145,9 +154,9 @@
                Next (fx+ Data Size)
                Kind (wire.dns-record.type B Fields)
             (cases (fx> Next N) -1
-                   (and (= (wire.dns-record.class B Fields) 1)             \\ IN, and A or CNAME.
-                        (or (and (= Kind 1) (= Size 4))
-                            (and (= Kind 5) (fx> Size 0) (= (after-name S B Data Next true) Next)))
+                   (and (= (wire.dns-record.class B Fields) (internet))
+                        (or (and (= Kind (a-type)) (= Size (wire.ipv4-address.size)))
+                            (and (= Kind (cname-type)) (fx> Size 0) (= (after-name S B Data Next true) Next)))
                         (name-equal? Name Owner EndName B I N 255))
                      Fields
                    true (find-answer S Name Owner B N Next EndName (fx- Count 1)))))))
@@ -162,8 +171,8 @@
           (let Data (fx+ Fields (wire.dns-record.size))
                Lifetime (wire.dns-record.ttl B Fields)
                Min (if (fx< Lifetime Ttl) Lifetime Ttl)
-            (if (= (wire.dns-record.type B Fields) 1)
-                (do (resolver.ip-> R (buffer.u32-be B Data))
+            (if (= (wire.dns-record.type B Fields) (a-type))
+                (do (resolver.ip-> R (wire.ipv4-address.address B Data))
                     (resolver.ttl-> R Min)
                     (finish R resolved)
                     true)
@@ -180,12 +189,12 @@
                 Stop (after-name (resolver.names R) B (wire.dns.size) N true)
                 Rcode (wire.dns.rcode B 0)
              (and (fx>= Stop 0) (fx<= (fx+ Stop (wire.dns-question.size)) N)
-                  (= (wire.dns-question.type B Stop) 1) (= (wire.dns-question.class B Stop) 1)   \\ A, IN.
+                  (= (wire.dns-question.type B Stop) (a-type)) (= (wire.dns-question.class B Stop) (internet))
                   (name-equal? Q (wire.dns.size) (resolver.query-length R) B (wire.dns.size) N 255)
                   (cases (or (= (wire.dns.truncated B 0) 1)
-                             (and (not (= Rcode 0)) (not (= Rcode 3))))
+                             (and (not (= Rcode (no-error))) (not (= Rcode (name-error)))))
                            (= (finish R failed) failed)
-                         (= Rcode 3) (= (finish R not-found) not-found)        \\ No such name.
+                         (= Rcode (name-error)) (= (finish R not-found) not-found)
                          true (or (resolve-answer R Q (wire.dns.size) (resolver.query-length R)
                                                   N (fx+ Stop (wire.dns-question.size)) 4294967295 9)
                                   (= (finish R not-found) not-found))))))))
@@ -200,7 +209,7 @@
       (cases (= Status udp.empty) false
              (= Status udp.too-small) (do (udp.inbox-discard S) (receive-reply R (fx- Left 1)))
              (and (= (udp.recv-info.source Info) (resolver.server R))
-                  (= (udp.recv-info.port Info) 53)
+                  (= (udp.recv-info.port Info) (dns-port))
                   (accept R (udp.recv-info.length Info))) true
              true (receive-reply R (fx- Left 1)))))
 
@@ -211,7 +220,7 @@
            (receive-reply R 4) (resolver.state R)
            (fx< Now (resolver.deadline R)) pending
            (= (resolver.attempts R) 4) (finish R failed)
-           true (let Status (udp.send (udp.inbox.peer (resolver.socket R)) (resolver.server R) 53
+           true (let Status (udp.send (udp.inbox.peer (resolver.socket R)) (resolver.server R) (dns-port)
                                        (resolver.query R) (resolver.query-length R))
                   (cases (= Status udp.sent)
                            (let N (resolver.attempts R)
