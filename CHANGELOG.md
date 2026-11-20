@@ -85,6 +85,7 @@ All notable changes to this project are documented in this file. The format is b
   that did not typecheck, such as an untyped rule's guard, compiles as before.
 - A definition made while sealing is on over one made unsealed, as a grammar's rule replaces its stub, loops in
   registers and inlines as a loop, as it does where its name was new.
+- TCP and IPv6 parse option lists faster by matching one option per iteration.
 
 ### Fixed
 

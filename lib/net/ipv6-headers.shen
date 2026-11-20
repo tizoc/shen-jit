@@ -5,7 +5,7 @@
   (use grammar)
   (use net-wire => wire)
   (import struct defstruct)
-  (externals [defgrammar <end> skip at u16-be])
+  (externals [defgrammar <end> <e> skip at u16-be])
   (export cursor make parse after-fragment can-report?
           cursor.protocol cursor.at cursor.next-field cursor.problem
           cursor.multicast-error cursor.router-alert
@@ -116,18 +116,26 @@
   Type -> (shen-jit.shift-right Type 6))
 
 \\ RFC 8200 4.2: options, each a type and a length but Pad1. All are skipped as unrecognized but the
-\\ router alert, RFC 2711, which has 2 bytes in a hop-by-hop header, and whose value is kept. Each
-\\ alternative takes the rest of the options too, so that a problem's alternative ends the parse.
-(defgrammar (<options> C Hop) {cursor --> boolean ==> outcome}
+\\ router alert, RFC 2711, which has 2 bytes in a hop-by-hop header, and whose value is kept.
+\\ The common case consumes one option. The final rule handles the end and terminal options.
+(defgrammar (<advance-option> C Hop) {cursor --> boolean ==> boolean}
+  0 := true;
+  5 2 (where Hop) (u16-be Value) := (do (cursor.router-alert-> C Value) true);
+  Kind Length (where (and (= (action Kind) 0) (not (and Hop (= Kind 5))))) (skip Length) := true;)
+
+(defgrammar (<terminal-body> C Hop At Kind Length)
+  {cursor --> boolean --> fixnum --> fixnum --> fixnum ==> outcome}
+  (where (and Hop (= Kind 5) (not (= Length 2)))) := (fail-at C (fx+ At 1) erroneous-field false);
+  (skip Length) := (if (= (action Kind) 1) ignored (fail-at C At unrecognized-option (= (action Kind) 2)));
+  <e> := (fail-at C (fx+ At 1) erroneous-field false);)
+
+(defgrammar (<terminal-option> C Hop) {cursor --> boolean ==> outcome}
   <end> := upper;
-  0 (<options> C Hop) := <options>;                                      \\ Pad1.
-  (at At) 5 Length (where (and Hop (not (= Length 2)))) (* _) := (fail-at C (fx+ At 1) erroneous-field false);
-  5 2 (where Hop) (u16-be Value) (<options> (cursor.router-alert-> C Value) Hop) := <options>;
-  Type Length (where (= (action Type) 0)) (skip Length) (<options> C Hop) := <options>;
-  Type Length (where (= (action Type) 1)) (skip Length) (* _) := ignored;
-  (at At) Type Length (skip Length) (* _) := (fail-at C At unrecognized-option (= (action Type) 2));
-  (at At) _ _ (* _) := (fail-at C (fx+ At 1) erroneous-field false);                   \\ Past the header's end.
-  (at At) _ := (fail-at C At erroneous-field false);)                                  \\ A type and no length.
+  (at At) Kind Length (<terminal-body> C Hop At Kind Length) (* _) := <terminal-body>;
+  (at At) _ := (fail-at C At erroneous-field false);)
+
+(defgrammar (<options> C Hop) {cursor --> boolean ==> outcome}
+  (* (<advance-option> C Hop)) (<terminal-option> C Hop) := <terminal-option>;)
 
 (grammar.finish)
 

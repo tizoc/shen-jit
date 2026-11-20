@@ -3962,6 +3962,31 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   `ctz`, `clz` and `popcount`, which the JIT does not inline, are part of the 16% `sj_primitive` now is.
   Linux's TUN and TAP suites pass with no heap words.
 
+### Scan one network option at a time (2026-11-20, Apple M3 Max)
+
+IPv6 and TCP consume one option per repetition, then handle the end or the option that stops the
+scan. Their earlier rules called themselves and could retry an alternative after a later no-match.
+TCP shares the kind and length across its payload alternatives. Its first two alternatives still
+handle an empty option list and an immediate end marker before entering the repetition.
+
+Five interleaved runs on the networking branch, load 2.25 to 2.39, against the original grammars
+with the same compiler. The table gives median ns in the IPv6 header walker or TCP's `read-segment`.
+
+| Input | Before | After |
+| --- | ---: | ---: |
+| IPv6 Router Alert and PadN | 66.9 | 56.1 |
+| IPv6 header with 19 short options | 266.9 | 134.3 |
+| TCP SYN with MSS, SACK-permitted and window scale | 92.7 | 86.3 |
+| TCP SACK | 75.9 | 70.7 |
+| TCP timestamp option | 72.3 | 64.7 |
+| TCP without options | 40.9 | 40.4 |
+| TCP end marker with 39 bytes of padding | 64.6 | 64.6 |
+
+Entering the repetition before testing the TCP end made empty and padded lists 4 to 6 ns slower.
+Using the end rule in both places was tested too. Testing the two end alternatives directly at
+entry was faster on this compiler. Both parsers gave the same outcomes, retained fields and error
+offsets for 8,678 generated cases, including sliced views and truncated options.
+
 ### Source-specific multicast (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
 
 - Extended the group table with preallocated INCLUDE filters. Sources stop

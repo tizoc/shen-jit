@@ -21,19 +21,32 @@
 \\ TCP's options, RFC 9293 3.1: a kind, then, but for the end of the list and a no-op, a length that
 \\ counts both bytes. What they offer is stored in the segment as they are matched. A known kind with
 \\ the wrong length, a size of 0, or a length past the end does not match; SACK blocks of a length that
-\\ is not whole blocks are passed over. Each alternative tests its kind and length before the rest of
-\\ the list, so that none parses it again after another.
+\\ is not whole blocks are passed over.
+\\ Match one option that continues the scan. Only EOL and the end can stop successfully.
+(defgrammar (<option-body> Seg Kind Length) {segment --> fixnum --> fixnum ==> boolean}
+  (where (and (= Kind 2) (= Length 4))) (u16-be Size) (where (fx> Size 0))
+    := (do (offer-mss Seg Size) true);
+  (where (and (= Kind 3) (= Length 3))) Shift
+    := (do (segment.scale-> Seg (smaller 14 Shift)) true);
+  (where (and (= Kind 4) (= Length 2))) := (do (segment.sack-permitted-> Seg true) true);
+  (where (and (= Kind 5) (sack-length? Length))) (at At) (skip (fx- Length 2))
+    := (do (sack-blocks Seg At (fx+ At (fx- Length 2))) true);
+  (where (and (fx> Kind 4) (fx>= Length 2))) (skip (fx- Length 2)) := true;)
+
+(defgrammar (<advance-option> Seg) {segment ==> boolean}
+  1 := true;
+  Kind (where (fx>= Kind 2)) Length (<option-body> Seg Kind Length) := <option-body>;)
+
+(defgrammar <options-end> {==> boolean}
+  <end> := true;
+  0 (* _) := true;)
+
+\\ Test for the end before entering the repetition, including an early EOL.
+\\ Check again where the repetition stops, after it has matched any options.
 (defgrammar (<options> Seg) {segment ==> boolean}
   <end> := true;
-  0 (* _) := true;                                                       \\ The end; padding follows.
-  1 (<options> Seg) := <options>;                                        \\ No-op.
-  2 4 (u16-be Size) (where (fx> Size 0)) (<options> (offer-mss Seg Size)) := <options>;
-  3 3 Shift (<options> (segment.scale-> Seg (smaller 14 Shift))) := <options>;     \\ RFC 7323.
-  4 2 (<options> (segment.sack-permitted-> Seg true)) := <options>;      \\ RFC 2018.
-  5 Length (where (sack-length? Length)) (at At) (skip (fx- Length 2))
-    (<options> (sack-blocks Seg At (fx+ At (fx- Length 2)))) := <options>;
-  Kind Length (where (and (fx> Kind 4) (fx>= Length 2))) (skip (fx- Length 2)) (<options> Seg)
-    := <options>;)
+  0 (* _) := true;
+  (* (<advance-option> Seg)) <options-end> := true;)
 
 (define offer-mss
   {segment --> fixnum --> segment}
