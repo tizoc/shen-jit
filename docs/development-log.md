@@ -4235,6 +4235,38 @@ pass through the state and so cannot be typechecked.
   storage held in several slots, worked out on entering the loop rather than at each write, without taking registers
   from the loop's words; by the report of compiled loops above, nothing else would use it.
 
+### Checked ranges, option loops and lookahead (2026-11-20, Apple M3 Max)
+
+- **Typed entry over a checked range.** Giving the rule storage, absolute bounds and reusable state
+  kept the whole-range check and failure callback. With two options, five interleaved rounds at load
+  2.2 gave 10.9 to 11.4 ns over storage and 14.9 to 15.4 through `.parse-at`. In five rounds near load
+  3, checking an IPv6 packet once and using the typed entry took 63.4 against 63.0 ns for one extension
+  header and 295.3 against 322.5 for eight. Checking once and still using `.parse-at` took 67.7 and
+  325.4 ns. The gain depended on sharing the bounds check across parses.
+- **Repetition and recursion.** With `main`'s compiler, the original annotated networking option
+  rules ran boxed because recursive alternatives could retry after a later no-match. Matching one
+  option per iteration produced register loops with cached storage. In seven interleaved rounds
+  at load 2.6 to 2.7, the IPv6 Router Alert case took 50.8 against 66.0 ns (42.7 by hand), 19 options
+  took 111.5 against 211.4 (91.4 by hand), and TCP SYN took 54.2 against 80.1 (54.7 by hand). Sharing
+  the kind and length also helped TCP. Forcing tail calls in the original rules gave TCP a register
+  loop and about the same SYN time. The forced-tail IPv6 rule ran boxed and took 57 ns for Router
+  Alert and 179 ns for 19 options.
+- **Smaller trials.** Sending `(* _)` directly to the end of a complete view cut TCP's 39-byte padding
+  case from 52 to 42 ns and did little with three bytes. Proving progress took a 200-PadN scan from
+  362 to 338 ns and made little difference on ordinary packets. A simpler skip comparison took
+  329 ns and changed the failure for an untyped fractional count. A native load and byte swap per
+  binary field slowed a loop over 60 pairs of fields from 171 to 205 ns. JSON and HTTP controls
+  varied by a few percent. A TCP shortcut for an empty options range saved 9 ns in `read-segment`
+  and 0.5 to 0.9% of wall time in simulated 128 KiB transfers.
+- **Shared first-byte regressions.** An earlier empty alternative could complete a streaming match.
+  Peeking for later literal alternatives first made that match fail on a read error or window limit.
+  Deferring the peek until the first literal alternative was tried fixed that case. A guard that
+  changed the byte and then failed still left the old byte for the next alternative. Disabling
+  sharing passed both reproducers and the grammar and streaming suites. In three interleaved pairs
+  at load 2.4, extending the deferred peek to fallback variables and wildcards gave no clear IPv6
+  speedup. One extension header took about 60 to 63 ns and eight took 310 to 318 ns in the two
+  steadier pairs.
+
 ### Rejected: a module's arities recorded before its sources load (2026-11-16, Apple M3 Max)
 
 Scanning every source first would cost a second read and could miss macro-expanded definitions or names that
