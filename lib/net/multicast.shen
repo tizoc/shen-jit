@@ -19,6 +19,35 @@
   _____________________________________________
   State : source-state;)
 
+\\ The messages a member takes: a query, a report another member sent, which an older version's member
+\\ suppresses its own for, and the rest.
+(datatype message-kinds
+  if (element? Kind [membership-query older-report other-message])
+  ________________________________________________________________
+  Kind : message-kind;)
+
+\\ RFC 3376 4.2.12 and RFC 3810 5.2.12: what a report's record says of its group's sources.
+(datatype record-kinds
+  if (element? Kind [mode-is-include mode-is-exclude change-to-include change-to-exclude
+                     allow-new-sources block-old-sources])
+  ________________________________________________________________________________
+  Kind : record-kind;)
+
+\\ RFC 2236 and RFC 3376: IGMP's messages by type, a v1 and a v2 report both older ones.
+(define igmp-message
+  {fixnum --> message-kind}
+  17 -> membership-query
+  18 -> older-report
+  22 -> older-report
+  _ -> other-message)
+
+\\ RFC 2710 and RFC 3810: MLD's.
+(define mld-message
+  {fixnum --> message-kind}
+  130 -> membership-query
+  131 -> older-report
+  _ -> other-message)
+
 (defstruct source
   (address : net-ipv6.address)                           \\ IPv4's mapped.
   (mutable state : source-state)
@@ -485,12 +514,11 @@
               Source (wire.ipv4.source B I)
               Destination (wire.ipv4.destination B I)
            (and (fx>= Body (wire.igmp.size)) (= (net-ipv4.packet-checksum B At Body) 0)
-                (let Kind (wire.igmp.type B At)
+                (let Kind (igmp-message (wire.igmp.type B At))
                      Group (wire.igmp.group B At)
-                  (cases (and (= Kind 17) (net-ipv4.unicast? Source) (not (= Source (membership.ip M))))
-                           (igmp-query M B At Body Destination Now)                         \\ A query.
-                         (and (or (= Kind 18) (= Kind 22)) (= Body (wire.igmp.size)) (= Destination Group)  \\ A v1 or
-                                                                                         \\ v2 report.
+                  (cases (and (= Kind membership-query) (net-ipv4.unicast? Source) (not (= Source (membership.ip M))))
+                           (igmp-query M B At Body Destination Now)
+                         (and (= Kind older-report) (= Body (wire.igmp.size)) (= Destination Group)
                               (or (= Source 0) (net-ipv4.unicast? Source))
                               (not (= Source (membership.ip M))) (fx< (igmp-version M Now) 3))
                            (suppress M (find M (group4 M Group) (membership.slots M)))
@@ -535,23 +563,33 @@
       (and (= Alert 0) (fx>= Bytes (wire.mld.size)) (= (wire.ipv6.hop-limit B I) 1) (= (wire.mld.code B At) 0)
            (= (net-ipv6.transport-checksum-at B I At (wire.icmp6-protocol) Bytes) 0)
            (let Source (net-ipv6.read-address (membership.sender6 M) B (wire.ipv6.source-at I))
-                Kind (wire.mld.type B At)
+                Kind (mld-message (wire.mld.type B At))
              (and (not (net-ipv6.same? Source Local))
-                  (cases (and (= Kind 130) (net-ipv6.link-local? Source))                 \\ A query.
+                  (cases (and (= Kind membership-query) (net-ipv6.link-local? Source))
                            (mld-query M B I At Bytes Now)
-                         (and (= Kind 131) (= Bytes (wire.mld.size)) (= (mld-version M Now) 1)   \\ A v1 report.
+                         (and (= Kind older-report) (= Bytes (wire.mld.size)) (= (mld-version M Now) 1)
                               (or (net-ipv6.link-local? Source) (net-ipv6.unspecified? Source)))
                            (let IP (net-ipv6.read-address (membership.scratch6 M) B (wire.mld.group-at At))
                              (and (net-ipv6.address-at? IP B (wire.ipv6.destination-at I))
                                   (suppress M (find M IP (membership.slots M)))))
                          true false))))))
 
-(define record-type
-  {group --> boolean --> fixnum}
+(define record-number
+  {record-kind --> fixnum}
+  mode-is-include -> 1
+  mode-is-exclude -> 2
+  change-to-include -> 3
+  change-to-exclude -> 4
+  allow-new-sources -> 5
+  block-old-sources -> 6)
+
+\\ A record of no sources: excluding none, as a joined group answers a query, or a change of mode.
+(define change-record
+  {group --> boolean --> record-kind}
   G Change ->
-    (cases (not Change) 2                       \\ MODE_IS_EXCLUDE with no sources
-           (group.joined G) 4                   \\ CHANGE_TO_EXCLUDE_MODE
-           true 3))                              \\ CHANGE_TO_INCLUDE_MODE
+    (cases (not Change) mode-is-exclude
+           (group.joined G) change-to-exclude
+           true change-to-include))
 
 \\ RFC 2236 and RFC 3376: a v3 report of one record, a v1 or v2 report, or a v2 leave.
 (define igmp-body
@@ -560,7 +598,7 @@
     (cases (= Version 3)
              (do (write-layout wire.membership-report B At (type 34) (records 1))
                  (write-layout wire.igmp3-record B (fx+ At (wire.membership-report.size))
-                   (record-type (record-type G Change)) (group (net-ipv6.address.d (group.address G)))))
+                   (record-type (record-number (change-record G Change))) (group (net-ipv6.address.d (group.address G)))))
            (= Version 1) (write-layout wire.igmp B At (type 18) (group (net-ipv6.address.d (group.address G))))
            (group.joined G) (write-layout wire.igmp B At (type 22) (group (net-ipv6.address.d (group.address G))))
            true (write-layout wire.igmp B At (type 23) (group (net-ipv6.address.d (group.address G))))))
@@ -575,7 +613,7 @@
   M B I Size Dst ->
     (do (write-layout wire.ipv4 B I
           (version 4) (header-length 6) (total-length Size)
-          (dont-fragment 1) (time-to-live 1) (protocol 2)
+          (dont-fragment 1) (time-to-live 1) (protocol (wire.igmp-protocol))
           (source (membership.ip M)) (destination Dst))
         (write-layout wire.ipv4-router-alert B (fx+ I (wire.ipv4.size)) (type 148) (length 4))   \\ Copied.
         (wire.ipv4.checksum-> B I (net-ipv4.packet-checksum B I (igmp-offset)))))
@@ -608,7 +646,7 @@
     (if (= Version 2)
         (let R (fx+ At (wire.membership-report.size))
           (do (write-layout wire.membership-report B At (type 143) (records 1))
-              (write-layout wire.mld2-record B R (record-type (record-type G Change)))
+              (write-layout wire.mld2-record B R (record-type (record-number (change-record G Change))))
               (net-ipv6.write-address B (wire.mld2-record.group-at R) (group.address G))))
         (do (if (group.joined G) (write-layout wire.mld B At (type 131)) (write-layout wire.mld B At (type 132)))
             (net-ipv6.write-address B (wire.mld.group-at At) (group.address G)))))
@@ -623,7 +661,7 @@
   B I Size Source Dst ->
     (do (net-ipv6.write-header B I Size 0 1 Source Dst)
         (write-layout wire.ipv6-router-alert B (fx+ I (wire.ipv6.size))
-          (next-header 58) (type 5) (option-length 2) (pad 1))))
+          (next-header (wire.icmp6-protocol)) (type 5) (option-length 2) (pad 1))))
 
 (define mld-publish
   {membership --> net-link.ring --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
@@ -648,22 +686,22 @@
 
 \\ SSM records carry the selected sources, never an EXCLUDE mode.
 (define selected?
-  {group --> source --> fixnum --> boolean}
+  {group --> source --> record-kind --> boolean}
   G S Kind ->
     (let State (source.state S)
-      (cases (= Kind 1) (and (= State included) (or (group.query-all G) (source.queried S)))
-             (= Kind 5) (and (= State included) (fx> (source.reports S) 0))
+      (cases (= Kind mode-is-include) (and (= State included) (or (group.query-all G) (source.queried S)))
+             (= Kind allow-new-sources) (and (= State included) (fx> (source.reports S) 0))
              true (and (= State blocked) (fx> (source.reports S) 0)))))
 
 (define count-sources
-  {group --> fixnum --> fixnum --> fixnum --> fixnum}
+  {group --> record-kind --> fixnum --> fixnum --> fixnum}
   _ _ 0 Count -> Count
   G Kind I Count ->
     (count-sources G Kind (fx- I 1)
                    (if (selected? G (source-at G I) Kind) (fx+ Count 1) Count)))
 
 (define write-sources
-  {group --> buffer.view --> fixnum --> boolean --> fixnum --> fixnum --> buffer.view}
+  {group --> buffer.view --> fixnum --> boolean --> record-kind --> fixnum --> buffer.view}
   _ B _ _ _ 0 -> B
   G B At Four Kind I ->
     (let S (source-at G I)
@@ -674,18 +712,18 @@
                                  (fx+ At (wire.ipv6-address.size)) Four Kind (fx- I 1)))))
 
 (define write-source-record
-  {group --> buffer.view --> fixnum --> boolean --> fixnum --> fixnum --> buffer.view}
+  {group --> buffer.view --> fixnum --> boolean --> record-kind --> fixnum --> buffer.view}
   G B At Four Kind Count ->
     (if Four
-        (write-sources G (write-layout wire.igmp3-record B At (record-type Kind) (sources Count) (group (net-ipv6.address.d (group.address G))))
+        (write-sources G (write-layout wire.igmp3-record B At (record-type (record-number Kind)) (sources Count) (group (net-ipv6.address.d (group.address G))))
                        (fx+ At (wire.igmp3-record.size)) Four Kind (group.source-limit G))
-        (do (write-layout wire.mld2-record B At (record-type Kind) (sources Count))
+        (do (write-layout wire.mld2-record B At (record-type (record-number Kind)) (sources Count))
             (net-ipv6.write-address B (wire.mld2-record.group-at At) (group.address G))
             (write-sources G B (fx+ At (wire.mld2-record.size)) Four Kind (group.source-limit G)))))
 
-\\ A v3 or v2 report of the sources a query asked about (1), or of those allowed (5) and blocked (6).
+\\ A v3 or v2 report of the sources a query asked about, or of those allowed and blocked.
 (define send-source-report
-  {membership --> group --> net-link.ring --> net-ipv6.address --> fixnum --> fixnum -->
+  {membership --> group --> net-link.ring --> net-ipv6.address --> record-kind --> fixnum -->
    fixnum --> fixnum --> boolean}
   M G Tx Source Kind First Blocks Now ->
     (let Four (= (group.family G) 4)
@@ -704,7 +742,7 @@
           (if Four (write-layout wire.membership-report B At (type 34) (records Records))
               (write-layout wire.membership-report B At (type 143) (records Records)))
           (if (fx> First 0) (write-source-record G B Body Four Kind First) B)
-          (if (fx> Blocks 0) (write-source-record G B (fx+ Body One) Four 6 Blocks) B)
+          (if (fx> Blocks 0) (write-source-record G B (fx+ Body One) Four block-old-sources Blocks) B)
           (if Four (igmp-publish M Tx B I Size Now) (mld-publish M Tx B I Size Now)))))
 
 (define clear-query
@@ -727,10 +765,10 @@
   {membership --> group --> net-link.ring --> net-ipv6.address --> fixnum --> boolean}
   M G Tx Source Now ->
     (let Limit (group.source-limit G)
-         Allowed (count-sources G 5 Limit 0)
-         Blocked (count-sources G 6 Limit 0)
+         Allowed (count-sources G allow-new-sources Limit 0)
+         Blocked (count-sources G block-old-sources Limit 0)
          Sent (or (= (fx+ Allowed Blocked) 0)
-                  (send-source-report M G Tx Source 5 Allowed Blocked Now))
+                  (send-source-report M G Tx Source allow-new-sources Allowed Blocked Now))
       (and Sent
            (let Pending (note-reports G Limit false)
              (cases Pending (do (group.change-at-> G (fx+ Now (fx+ 1 (jitter M 999)))) true)
@@ -741,8 +779,8 @@
   {membership --> group --> net-link.ring --> net-ipv6.address --> fixnum --> boolean}
   M G Tx Source Now ->
     (let Limit (group.source-limit G)
-         Count (count-sources G 1 Limit 0)
-      (and (or (= Count 0) (send-source-report M G Tx Source 1 Count 0 Now))
+         Count (count-sources G mode-is-include Limit 0)
+      (and (or (= Count 0) (send-source-report M G Tx Source mode-is-include Count 0 Now))
            (do (group.query-at-> G -1)
                (group.query-all-> G false)
                (clear-query G Limit)))))

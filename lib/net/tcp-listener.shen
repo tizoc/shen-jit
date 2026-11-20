@@ -105,7 +105,7 @@
   {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum -->
    fixnum --> listener}
   D IP Port Slots Initial Key0 Key1 Bytes WaitSlots ->
-    (let Mss (if (= Bytes 0) (peer-mss D) (smaller Bytes (fx- (net-link.mtu D) 40)))
+    (let Mss (if (= Bytes 0) (peer-mss D) (smaller Bytes (fx- (net-link.mtu D) (headers4))))
          Capacity (if (= Bytes 0) (fx* Mss 8) Bytes)
          N (buffer.index Slots)
          _ (if (and (net-ipv4.unicast? IP) (fx>= Port 0) (fx<= Port 65535) (fx> Mss 0) (fx> N 0)) true
@@ -433,7 +433,7 @@
 (define opening-index
   {listener --> buffer.view --> fixnum --> fixnum --> fixnum}
   L B T Count ->
-    (if (and (= (segment-flags B T) 2) (= Count (header-length B T))) (find-vacant L)
+    (if (and (= (segment-flags B T) (flag-bits control syn)) (= Count (header-length B T))) (find-vacant L)
         (fixnum 0)))
 
 (define write-reset
@@ -739,7 +739,7 @@
          Wait (if (and (= (state P) time-wait) (not (peer.ack-needed P)))
                   (peer.wait-until P) (fixnum -1))
       (if (and Writable (output-ready? P)) Now
-          (earlier Wait (if (or Writable (fx>= (peer.tx-retries P) 6)) Due (fixnum -1))))))
+          (earlier Wait (if (or Writable (fx>= (peer.tx-retries P) (max-retries))) Due (fixnum -1))))))
 
 (define table-deadline
   {listener --> fixnum --> boolean --> fixnum --> fixnum --> fixnum}
@@ -786,7 +786,7 @@
           (cases (= (listener-slot.lease S) vacant) (accept-ready L Port (skip-vacant L I Last) Last)
                  (and (= (listener-slot.lease S) pending)
                       (or (= Port 0) (= Port (peer.local-port P)))
-                      (or (= Phase established) (= Phase close-wait)))
+                      (can-send? Phase))
                    (do (listener-slot.lease-> S leased)
                        (listener.next-accept-> L (next-index L I))
                        (listener-slot.token S))
@@ -831,8 +831,7 @@
 (define connection-writable?
   {listener --> fixnum --> boolean}
   L Token -> (let P (listener-slot.peer (lease-slot L Token)) Phase (state P)
-               (and (or (= Phase established) (= Phase close-wait))
-                    (fx< (peer.tx-length P) (peer.capacity P)))))
+               (and (can-send? Phase) (fx< (peer.tx-length P) (peer.capacity P)))))
 
 (define connection-send
   {listener --> fixnum --> buffer.view --> fixnum --> fixnum}
@@ -884,7 +883,7 @@
            (= (wire.ipv4.protocol B I) (wire.tcp-protocol))
            (= (wire.ipv4.source B I) (listener.ip L))
            (= (net-ipv4.packet-checksum B I (wire.ipv4.size)) 0)
-           (fx>= Mtu 68) (fx< Mtu (wire.ipv4.total-length B I))
+           (fx>= Mtu 68) (fx< Mtu (wire.ipv4.total-length B I))              \\ RFC 791: every link carries 68 bytes.
            (reduce-mtu L (find-peer L (wire.tcp.source-port B T) (listener.local4 L)
                                     (net-ipv6.map-ipv4 (listener.input-remote L) (wire.ipv4.destination B I))
                                     (wire.tcp.destination-port B T) 1)
@@ -898,7 +897,7 @@
            (= (wire.ipv6.version B I) 6)
            (= (wire.ipv6.next-header B I) (wire.tcp-protocol))
            (net-ipv6.address-at? LocalIP B (wire.ipv6.source-at I))
-           (fx>= Mtu 1280) (fx< Mtu (fx+ (wire.ipv6.size) (wire.ipv6.payload-length B I)))
+           (fx>= Mtu (net-ipv6.minimum-mtu)) (fx< Mtu (fx+ (wire.ipv6.size) (wire.ipv6.payload-length B I)))
            (let Remote (net-ipv6.read-address (listener.input-remote L) B (wire.ipv6.destination-at I))
              (reduce-mtu L (find-peer L (wire.tcp.source-port B T) LocalIP Remote
                                        (wire.tcp.destination-port B T) 1)

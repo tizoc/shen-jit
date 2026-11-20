@@ -53,7 +53,7 @@
   {--> cursor}
   ->
     (:cursor
-      protocol <- 59
+      protocol <- (wire.no-next-header)
       at <- 0
       next-field <- 0
       left <- 0

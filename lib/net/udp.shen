@@ -211,7 +211,7 @@
   B I N ->
     (let T (datagram4 I)
       (and (fx>= N (headers4))
-           (net-ipv4.valid? B I N 17)
+           (net-ipv4.valid? B I N (wire.udp-protocol))
            (net-ipv4.unicast? (wire.ipv4.source B I))
            (port? (wire.udp.source-port B T))
            (port? (wire.udp.destination-port B T))
@@ -338,7 +338,7 @@
                             (do (buffer.copy-into! Out At B I (wire.ipv6.size))
                                 (buffer.copy-into! Out (datagram6 At) B T Length)
                                 (wire.ipv6.payload-length-> Out At Length)
-                                (wire.ipv6.next-header-> Out At 17)))
+                                (wire.ipv6.next-header-> Out At (wire.udp-protocol))))
                         (net-link.publish R Size 0))))))
 
 (define inbox-ingress6-at

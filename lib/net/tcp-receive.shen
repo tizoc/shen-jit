@@ -81,7 +81,7 @@
   B I N ->
     (let T (fx+ I (wire.ipv4.size))
          Count (fx- N (wire.ipv4.size))
-      (and (net-ipv4.valid? B I N 6) (valid-tcp? B T Count)
+      (and (net-ipv4.valid? B I N (wire.tcp-protocol)) (valid-tcp? B T Count)
            (= (net-ipv4.transport-checksum B I (wire.tcp-protocol) Count) 0))))
 
 (define addressed-to?
@@ -104,6 +104,14 @@
   P Now -> (do (peer.wait-until-> P (wait-expiry Now))
                (peer.phase-> P time-wait)
                true))
+
+\\ Moves P from Phase to Next, with what entering TIME-WAIT or CLOSED takes.
+(define enter
+  {peer --> phase --> phase --> fixnum --> boolean}
+  _ Phase Phase _ -> true
+  P _ time-wait Now -> (enter-time-wait P Now)
+  P _ closed _ -> (stop-peer P closed)
+  P _ Next _ -> (do (peer.phase-> P Next) true))
 
 (define acknowledge?
   {peer --> seq --> boolean}
@@ -179,11 +187,7 @@
           (do (remember-window P Seq Ack Window)
               (peer.tx-flags-> P 0)
               (if (= Phase syn-received) (finish-syn P Now) (restart-timer P 0 Now))
-              (cases (= Phase syn-received) (do (peer.phase-> P established) true)
-                     (= Phase fin-wait-1) (do (peer.phase-> P fin-wait-2) true)
-                     (= Phase closing) (enter-time-wait P Now)
-                     (= Phase last-ack) (stop-peer P closed)
-                     true true)))
+              (enter P Phase (on-acknowledged Phase) Now)))
         false))
 
 (define congestion-ack
@@ -376,10 +380,7 @@
           (peer.recv-next-> P (seq-add (peer.recv-next P) 1))
           (peer.ack-needed-> P true)
           (peer.rx-duplicate-acks-> P 0)
-          (cases (= Phase established) (do (peer.phase-> P close-wait) true)
-                 (= Phase fin-wait-1) (do (peer.phase-> P closing) true)
-                 (= Phase fin-wait-2) (enter-time-wait P Now)
-                 true true))))
+          (enter P Phase (on-fin Phase) Now))))
 
 (define receive-text
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> fixnum --> fixnum --> boolean}
@@ -551,6 +552,15 @@
           (segment.sack-at-> Seg -1)
           (<options>.parse-at Seg State B (fx+ I (wire.tcp.size)) Start (/. At Message false)))))
 
+\\ A segment to a connection, by the state it is in: the handshake, a listener's half-open connection,
+\\ and the rest.
+(define dispatch
+  {phase --> fixnum --> peer --> segment --> fixnum --> boolean}
+  listen-state Flags P Seg Now -> (opening listen-state Flags P Seg Now)
+  syn-sent Flags P Seg Now -> (opening syn-sent Flags P Seg Now)
+  syn-received Flags P Seg Now -> (half-open Flags P Seg Now)
+  Phase Flags P Seg Now -> (connected Phase Flags P Seg Now))
+
 (define receive-valid
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   P B I Count Now ->
@@ -559,9 +569,7 @@
          (let Seg (peer.segment P)
               Phase (state P)
               Flags (segment.flags Seg)
-           (cases (or (= Phase listen-state) (= Phase syn-sent)) (opening Phase Flags P Seg Now)
-                  (= Phase syn-received) (half-open Flags P Seg Now)
-                  true (connected Phase Flags P Seg Now)))))
+           (dispatch Phase Flags P Seg Now))))
 
 (define receive-segment
   {peer --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}

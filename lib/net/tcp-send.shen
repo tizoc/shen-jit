@@ -82,7 +82,12 @@
 
 (define sack-capable?
   {peer --> boolean}
-  P -> (fx>= (peer.path-mtu P) (fx+ (minimum-header P) 12)))
+  P -> (fx>= (peer.path-mtu P) (fx+ (minimum-header P) (syn-options-size))))
+
+\\ A SYN's options, SACK permitted, the size and the window scale.
+(define syn-options-size
+  {--> fixnum}
+  -> (fx+ (wire.tcp-sack-permitted-option.size) (fx+ (wire.tcp-mss-option.size) (wire.tcp-scale-option.size))))
 
 \\ A SYN's options, a word each: SACK permitted, the size, and the window scale. A path with room for
 \\ SACK has room for all three.
@@ -95,7 +100,7 @@
                     (if (= Flags (flag-bits control syn)) (fx> (peer.window-scale P) 0)
                         (fx>= (peer.remote-scale P) 0)))
          M (if Sack (fx+ At (wire.tcp-sack-permitted-option.size)) At)
-         End (if Scale (fx+ M 8) (fx+ M 4))
+         End (fx+ (fx+ M (wire.tcp-mss-option.size)) (if Scale (wire.tcp-scale-option.size) (fixnum 0)))
       (if (fx< Room (wire.tcp-mss-option.size)) 0
           (do (if Sack (write-layout wire.tcp-sack-permitted-option B At (kind 4) (length 2) (no-ops 257)) B)
               (write-layout wire.tcp-mss-option B M (kind 2) (length 4) (segment-size (smaller (peer.capacity P) Room)))
@@ -157,7 +162,7 @@
     (let Pending (peer.rx-duplicate-acks P)
       (do (if (and (not (peer.ack-needed P)) (fx> Pending 0))
               (peer.rx-duplicate-acks-> P (fx- Pending 1)) P)
-          (emit-segment P R Now 16 (peer.send-next P) 0 0))))
+          (emit-segment P R Now (flag-bits control ack) (peer.send-next P) 0 0))))
 
 (define stop-peer
   {peer --> phase --> boolean}
@@ -183,6 +188,11 @@
 (define max-rto
   {--> fixnum}
   -> 60000)
+
+\\ How many times a segment is sent again before the connection is given up.
+(define max-retries
+  {--> fixnum}
+  -> 6)
 
 (define backoff
   {peer --> fixnum --> boolean}
@@ -225,7 +235,7 @@
   P R Now Offset Count ->
     (let Seq (seq-add (peer.send-next P) (fx- Offset (peer.tx-flight P)))
          At (wrap-offset (fx+ (peer.tx-head P) Offset) (peer.capacity P))
-      (emit-segment P R Now 24 Seq At Count)))
+      (emit-segment P R Now (flag-bits control psh ack) Seq At Count)))
 
 \\ A cumulative ACK across a retransmitted flight cannot give a clean sample.
 (define retransmit-data
@@ -437,9 +447,9 @@
          Due (peer.tx-due P)
          Expired (and (fx>= Due 0) (fx<= Due Now))
          Control (not (= (peer.tx-flags P) 0))
-      (cases (and Expired (fx>= (peer.tx-retries P) 6)) (do (stop-peer P timed-out) false)
+      (cases (and Expired (fx>= (peer.tx-retries P) (max-retries))) (do (stop-peer P timed-out) false)
              (net-link.full? R) false
-             (peer.aborting P) (do (emit-segment P R Now 20 (peer.send-next P) 0 0)
+             (peer.aborting P) (do (emit-segment P R Now (flag-bits control rst ack) (peer.send-next P) 0 0)
                                    (peer.aborting-> P false)
                                    (stop-peer P reset))
              (and Control (or (fx< Due 0) Expired)) (send-control P R Now)

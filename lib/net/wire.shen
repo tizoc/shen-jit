@@ -223,6 +223,7 @@
 (define tcp-protocol {--> fixnum} -> 6)
 (define udp-protocol {--> fixnum} -> 17)
 (define icmp6-protocol {--> fixnum} -> 58)
+(define no-next-header {--> fixnum} -> 59)                              \\ RFC 8200 4.7.
 
 (define ipv4-type {--> fixnum} -> 2048)
 (define arp-type {--> fixnum} -> 2054)

@@ -36,6 +36,12 @@
   ___________________________________________________________
   Error : icmp-error;)
 
+\\ RFC 792, RFC 1191 and RFC 4443: the ICMP and ICMPv6 messages this host acts on, and the rest.
+(datatype icmp-kinds
+  if (element? Kind [echo-request fragmentation-needed packet-too-big ignored])
+  ____________________________________________________________________________
+  Kind : icmp-kind;)
+
 \\ A packet for one of the host's addresses, for a group it listens to, or for an address it is still
 \\ checking for duplicates.
 (datatype scopes
@@ -379,6 +385,20 @@
   F -> (udp.inbox.dropped (default-udp (interface.udp-bindings F))))
 
 \\ Write the reply straight into an available packet slot.
+\\ An ICMP message by its type and code.
+(define icmp-message
+  {fixnum --> fixnum --> icmp-kind}
+  8 0 -> echo-request
+  3 4 -> fragmentation-needed
+  _ _ -> ignored)
+
+\\ An ICMPv6 message by its type and code.
+(define icmp6-message
+  {fixnum --> fixnum --> icmp-kind}
+  128 0 -> echo-request
+  2 0 -> packet-too-big
+  _ _ -> ignored)
+
 (define echo-request
   {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   F B I N Now ->
@@ -388,10 +408,9 @@
          Start (fx+ I (wire.ipv4.size))
          Count (fx- N (wire.ipv4.size))
       (if (and (not (net-link.full? Tx)) (fx>= Count (wire.icmp.size))
-               (net-ipv4.valid? B I N 1)
+               (net-ipv4.valid? B I N (wire.icmp-protocol))
                (= (wire.ipv4.destination B I) IP)
                (net-ipv4.unicast? (wire.ipv4.source B I))
-               (= (wire.icmp.type B Start) 8) (= (wire.icmp.code B Start) 0)       \\ An echo request.
                (= (net-ipv4.packet-checksum B Start Count) 0))
           (let Out (net-link.ring.data Tx)
                At (net-link.tail-offset Tx)
@@ -439,20 +458,26 @@
         (if Multicast (udp.inbox-ingress-multicast Q B I N) (udp.inbox-ingress Q B I N))
         (udp-ingress F Rest Port B I N Now Multicast)))
 
+\\ An echo request is answered; fragmentation needed, quoting our header, may lower a connection's
+\\ segment size.
+(define icmp-received
+  {interface --> icmp-kind --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  F echo-request B I N Now -> (echo-request F B I N Now)
+  F fragmentation-needed B I N Now ->
+    (let T (fx+ I (wire.ipv4.size))
+         Headers (fx+ (wire.ipv4.size) (wire.icmp.size))
+      (and (fx>= N (fx+ Headers Headers))
+           (= (net-ipv4.packet-checksum B T (fx- N (wire.ipv4.size))) 0)
+           (tcp.path-mtu (interface.listener F) B (fx+ I Headers) (fx- N Headers)
+                         (wire.icmp-too-big.next-hop-mtu B T) Now)))
+  _ _ _ _ _ _ -> false)
+
 (define icmp-ingress
   {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   F B I N Now ->
     (let T (fx+ I (wire.ipv4.size))
-         Headers (fx+ (wire.ipv4.size) (wire.icmp.size))
-      (if (fx< N Headers) false
-          (let Type (wire.icmp.type B T)
-               Code (wire.icmp.code B T)
-            (cases (and (= Type 8) (= Code 0)) (echo-request F B I N Now)
-                   (and (= Type 3) (= Code 4) (fx>= N (fx+ Headers Headers))   \\ Fragmentation needed,
-                        (= (net-ipv4.packet-checksum B T (fx- N (wire.ipv4.size))) 0))  \\ quoting our header.
-                     (tcp.path-mtu (interface.listener F) B (fx+ I Headers) (fx- N Headers)
-                                   (wire.icmp-too-big.next-hop-mtu B T) Now)
-                   true false)))))
+      (and (fx>= N (fx+ (wire.ipv4.size) (wire.icmp.size)))
+           (icmp-received F (icmp-message (wire.icmp.type B T) (wire.icmp.code B T)) B I N Now))))
 
 (define dispatch
   {interface --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
@@ -583,12 +608,11 @@
          Body (fx+ At (wire.icmp.size))
       (and (fx>= Count (wire.icmp.size))
            (= (net-ipv6.transport-checksum-at B (arrival.start A) At (wire.icmp6-protocol) Count) 0)
-           (let Type (wire.icmp.type B At)
-                Code (wire.icmp.code B At)
-             (cases (and (= Type 128) (= Code 0))                \\ An echo request, answered with its rest.
+           (let Kind (icmp6-message (wire.icmp.type B At) (wire.icmp.code B At))
+             (cases (= Kind echo-request)                        \\ Answered with its rest, in an echo reply.
                       (emit-icmp6 F Local Remote B Body (fx- Count (wire.icmp.size))
                                    129 0 (wire.icmp.rest B At) Now)
-                    (and (= Type 2) (= Code 0))                  \\ Packet too big.
+                    (= Kind packet-too-big)
                       (tcp.path-mtu6 (interface.listener F) B Body (fx- Count (wire.icmp.size))
                                      (wire.icmp6-too-big.mtu B At) Now Local)
                     true false)))))

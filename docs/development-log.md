@@ -3988,6 +3988,24 @@ Using the end rule in both places was tested too. Testing the two end alternativ
 entry was faster on this compiler. Both parsers gave the same outcomes, retained fields and error
 offsets for 8,678 generated cases, including sliced views and truncated options.
 
+### The networking code's last numbers named (2026-11-20, Apple M3 Max, against 60e58e1)
+
+A review of the networking code after it had been rewritten found what still read as numbers.
+
+- **TCP's state diagram as functions.** Where a connection goes when this end closes, when a FIN
+  arrives and when what this end sent last is acknowledged were `cases` chains in three places; they
+  are `on-close`, `on-fin` and `on-acknowledged`, each a function from state to state as RFC 9293
+  3.3.2 draws them, and `enter` does what entering TIME-WAIT or CLOSED takes. `can-send?` names the
+  test of ESTABLISHED or CLOSE-WAIT made four times, the dispatch of a segment by state is rules, and
+  the flag words 16, 24, 20 and 2, the retry limit, the first retransmission timeout and the SYN's
+  option sizes have names. ICMP's and ICMPv6's messages, neighbor discovery's, and IGMP's and MLD's
+  on receipt are each a table from type to a typed symbol, with rules on the answer, as IPv6's next
+  headers were; IGMPv3's and MLDv2's record kinds are symbols, with a table to their numbers, where
+  1, 5 and 6 went through four functions; and IP's protocol numbers are named where five checks and
+  writes still had them. TCP's lossy run 159.3 against 159.1 ms, its lossless run 10.9 and 10.9, UDP
+  echo 22.5 and 22.5, nine rounds alternated at load 2.6; the suites pass, and Linux's TUN and TAP
+  suites with no heap words.
+
 ### Limited ICMPv4 errors, and a page on the networking code (2026-11-20)
 
 - A review found that the interface sent an ICMPv4 port or protocol unreachable for every datagram to a

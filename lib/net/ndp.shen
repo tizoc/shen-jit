@@ -21,6 +21,13 @@
   _______________________________________________________
   State : address-state;)
 
+\\ RFC 4861 4: neighbor discovery's messages, and any other.
+(datatype messages
+  if (element? Message [router-solicitation router-advertisement neighbor-solicitation
+                        neighbor-advertisement other])
+  ______________________________________________________________________________________
+  Message : message;)
+
 (defstruct neighbor
   (ip : net-ipv6.address)
   (pending : net-link.ring)
@@ -280,9 +287,31 @@
                            (= Override 1))
                        (set-neighbor N Mac Now)))))))
 
+\\ A message by its ICMPv6 type, the table of RFC 4861 4.
+(define message-of
+  {fixnum --> message}
+  133 -> router-solicitation
+  134 -> router-advertisement
+  135 -> neighbor-solicitation
+  136 -> neighbor-advertisement
+  _ -> other)
+
+\\ How long each message is before its options.
+(define message-size
+  {message --> fixnum}
+  router-solicitation -> (wire.ndp-router-solicitation.size)
+  router-advertisement -> (wire.ndp-router-advertisement.size)
+  neighbor-solicitation -> (wire.ndp-neighbor-solicitation.size)
+  _ -> (wire.ndp-neighbor-advertisement.size))
+
+\\ RFC 4861 4.6: the options read here, by type.
+(define source-address-option {--> fixnum} -> 1)
+(define target-address-option {--> fixnum} -> 2)
+(define prefix-option {--> fixnum} -> 3)
+
 (define emit
   {host --> net-ipv6.address --> net-ipv6.address --> net-ipv6.address -->
-   fixnum --> fixnum --> fixnum --> fixnum --> boolean}
+   message --> fixnum --> fixnum --> fixnum --> boolean}
   H Source Destination Target Kind Solicited Override Now ->
     (let D (host.device H)
          Tx (net-link.device.tx D)
@@ -291,20 +320,21 @@
           (let B (net-link.ring.data Tx)
                At (net-link.tail-offset Tx)
                Body (fx+ At (wire.ipv6.size))
-               Base (cases (= Kind 133) (wire.ndp-router-solicitation.size)
-                           (= Kind 135) (wire.ndp-neighbor-solicitation.size)
-                           true (wire.ndp-neighbor-advertisement.size))
+               Base (message-size Kind)
                IncludeMac (and (fx> Mac 0) (not (net-ipv6.unspecified? Source)))
                N (if IncludeMac (fx+ Base (wire.ndp-link-address.size)) Base)
                Count (fx+ N (wire.ipv6.size))
             (do (net-ipv6.write-header B At Count (wire.icmp6-protocol) 255 Source Destination)
-                (cases (= Kind 133) (write-layout wire.ndp-router-solicitation B Body (type 133))
-                       (= Kind 135) (do (write-layout wire.ndp-neighbor-solicitation B Body (type 135))
+                (cases (= Kind router-solicitation) (write-layout wire.ndp-router-solicitation B Body (type 133))
+                       (= Kind neighbor-solicitation) (do (write-layout wire.ndp-neighbor-solicitation B Body (type 135))
                                         (net-ipv6.write-address B (wire.ndp-neighbor-solicitation.target-at Body) Target))
                        true (do (write-layout wire.ndp-neighbor-advertisement B Body
                                   (type 136) (solicited Solicited) (override Override))
                                 (net-ipv6.write-address B (wire.ndp-neighbor-advertisement.target-at Body) Target)))
-                (if IncludeMac (write-option B (fx+ Body Base) (if (= Kind 136) 2 1) Mac) B)   \\ Target or source address.
+                (if IncludeMac
+                    (write-option B (fx+ Body Base)
+                                  (if (= Kind neighbor-advertisement) (target-address-option) (source-address-option)) Mac)
+                    B)
                 (wire.icmp.checksum-> B Body (net-ipv6.transport-checksum B At (wire.icmp6-protocol) N))
                 (net-link.publish Tx Count (net-link.delivery D Now)))))))
 
@@ -342,8 +372,8 @@
            (or (and Dad (duplicate-if-probing H Target))
                (and (local-target? H Target Now)
                     (do (if Dad false (learn H Source (link-mac (host.source-link H)) Now))
-                        (if Dad (emit H Target (host.all-nodes H) Target 136 0 1 Now)     \\ Override,
-                            (emit H Target Source Target 136 1 1 Now))))))))           \\ and solicited.
+                        (if Dad (emit H Target (host.all-nodes H) Target neighbor-advertisement 0 1 Now)   \\ Override,
+                            (emit H Target Source Target neighbor-advertisement 1 1 Now))))))))         \\ and solicited.
 
 (define neighbor-advertisement
   {host --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
@@ -417,7 +447,7 @@
   H B I End Now ->
     (if (= I End) true
         (let Bytes (fx* 8 (wire.ndp-option.length B I))
-          (do (if (and (= (wire.ndp-option.type B I) 3) (= Bytes (wire.ndp-prefix.size)))   \\ Prefix information.
+          (do (if (and (= (wire.ndp-option.type B I) (prefix-option)) (= Bytes (wire.ndp-prefix.size)))
                   (set-prefix H B I Now)
                   false)
               (prefixes H B (fx+ I Bytes) End Now)))))
@@ -459,6 +489,20 @@
                       (ingress-at H B I N (fx+ I (wire.ipv6.size)) Now)))
 
 \\ A message at Body, after the base header and any extension headers.
+\\ The messages a host takes, and each to its handler.
+(define received?
+  {message --> boolean}
+  router-advertisement -> true
+  neighbor-solicitation -> true
+  neighbor-advertisement -> true
+  _ -> false)
+
+(define received
+  {host --> message --> buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
+  H router-advertisement B Body End Now -> (router-advertisement H B Body End Now)
+  H neighbor-solicitation B Body End Now -> (neighbor-solicitation H B Body End Now)
+  H _ B Body End Now -> (neighbor-advertisement H B Body End Now))
+
 (define ingress-at
   {host --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> boolean}
   H B I N Body Now ->
@@ -468,24 +512,20 @@
            (net-ipv6.valid-header? B I N)
            (= (wire.ipv6.hop-limit B I) 255)                    \\ From this link only.
            (= (wire.icmp.code B Body) 0)
-           (let Kind (wire.icmp.type B Body)
-             (and (cases (= Kind 134) (fx>= Message (wire.ndp-router-advertisement.size))
-                         (= Kind 135) (fx>= Message (wire.ndp-neighbor-solicitation.size))
-                         (= Kind 136) (fx>= Message (wire.ndp-neighbor-advertisement.size))
-                         true false)
+           (let Kind (message-of (wire.icmp.type B Body))
+             (and (received? Kind)
+                  (fx>= Message (message-size Kind))
                   (= (net-ipv6.transport-checksum-at B I Body (wire.icmp6-protocol) Message) 0)
                   (do (net-ipv6.read-address (host.source H) B (wire.ipv6.source-at I))
                       (net-ipv6.read-address (host.destination H) B (wire.ipv6.destination-at I))
-                      (cases (= Kind 134) (router-advertisement H B Body End Now)
-                             (= Kind 135) (neighbor-solicitation H B Body End Now)
-                             true (neighbor-advertisement H B Body End Now))))))))
+                      (received H Kind B Body End Now)))))))
 
 (define drive-dad
   {host --> net-ipv6.address --> fixnum --> fixnum --> fixnum}
   H Address At Now ->
     (if (fx< At 0)
         (if (emit H (host.unspecified H) (net-ipv6.solicited-node (host.group H) Address)
-                  Address 135 0 0 Now)
+                  Address neighbor-solicitation 0 0 Now)
             (fx+ Now 1000) At)
         At))
 
@@ -520,7 +560,7 @@
               (cases (fx<= (neighbor.expires N) Now) (free-queue Q)
                      (and (= (neighbor.mac N) 0) (fx<= (neighbor.probe-at N) Now) (local-ready? H))
                        (and (emit H (host.link-local H)
-                                  (net-ipv6.solicited-node (host.group H) Address) Address 135 0 0 Now)
+                                  (net-ipv6.solicited-node (host.group H) Address) Address neighbor-solicitation 0 0 Now)
                             (do (neighbor.probe-at-> N (fx+ Now 1000)) true))
                      true false)
               false)
@@ -531,7 +571,7 @@
   H Now ->
     (do (dad H Now)
         (if (and (fx> (host.rs-left H) 0) (local-ready? H) (fx>= Now (host.rs-at H))
-                 (emit H (host.link-local H) (host.all-routers H) (host.unspecified H) 133 0 0 Now))
+                 (emit H (host.link-local H) (host.all-routers H) (host.unspecified H) router-solicitation 0 0 Now))
             (do (host.rs-left-> H (fx- (host.rs-left H) 1))
                 (host.rs-at-> H (fx+ Now 4000)))
             H)

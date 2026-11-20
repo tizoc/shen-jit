@@ -185,7 +185,7 @@
         device <- D
         local-address <- (net-ipv6.map-ipv4 (net-ipv6.make-address 0 0 0 0) LocalIP)
         remote-address <- (net-ipv6.map-ipv4 (net-ipv6.make-address 0 0 0 0) RemoteIP)
-        ip-header <- 20
+        ip-header <- (wire.ipv4.size)
         local-port <- LocalPort
         remote-port <- RemotePort
         tx <- (buffer.new Capacity)
@@ -209,7 +209,7 @@
         tx-flight <- 0
         tx-replay <- -1
         tx-due <- -1
-        tx-rto <- 1000
+        tx-rto <- (initial-rto)
         tx-retries <- 0
         srtt <- 0
         rttvar <- 0
@@ -253,6 +253,39 @@
 (define state
   {peer --> phase}
   P -> (peer.phase P))
+
+\\ RFC 9293 3.3.2's state diagram: where a connection goes when this end closes, when the other end's
+\\ FIN arrives, and when what this end sent last, a SYN or a FIN, is acknowledged.
+(define on-close
+  {phase --> phase}
+  established -> fin-wait-1
+  close-wait -> last-ack
+  Phase -> Phase)
+
+(define on-fin
+  {phase --> phase}
+  established -> close-wait
+  fin-wait-1 -> closing
+  fin-wait-2 -> time-wait
+  Phase -> Phase)
+
+(define on-acknowledged
+  {phase --> phase}
+  syn-received -> established
+  fin-wait-1 -> fin-wait-2
+  closing -> time-wait
+  last-ack -> closed
+  Phase -> Phase)
+
+\\ The states in which this end may still send: synchronized, and not yet closed by it.
+(define can-send?
+  {phase --> boolean}
+  Phase -> (or (= Phase established) (= Phase close-wait)))
+
+\\ RFC 6298 2.1: until a round trip is measured, the retransmission timeout is a second.
+(define initial-rto
+  {--> fixnum}
+  -> 1000)
 
 \\ A 32-bit word's sum, as the hash of a connection's endpoints takes it.
 (define add32
@@ -302,7 +335,7 @@
               (peer.tx-flight-> P 0)
               (peer.tx-replay-> P -1)
               (peer.tx-due-> P -1)
-              (peer.tx-rto-> P 1000)
+              (peer.tx-rto-> P (initial-rto))
               (peer.tx-retries-> P 0)
               (peer.srtt-> P 0)
               (peer.rttvar-> P 0)
@@ -398,7 +431,7 @@
          Capacity (peer.capacity P)
          Length (peer.tx-length P)
          N (smaller Limit (fx- Capacity Length))
-      (if (and (or (= Phase established) (= Phase close-wait)) (fx> N 0))
+      (if (and (can-send? Phase) (fx> N 0))
           (let Tail (wrap-offset (fx+ (peer.tx-head P) Length) Capacity)
             (do (copy-into-ring (peer.tx P) Tail Capacity Payload At N)
                 (peer.tx-length-> P (fx+ Length N))
@@ -429,9 +462,9 @@
   {peer --> boolean}
   P ->
     (let Phase (state P)
-      (if (and (or (= Phase established) (= Phase close-wait)) (= (peer.tx-length P) 0))
+      (if (and (can-send? Phase) (= (peer.tx-length P) 0))
           (do (queue-control P (flag-bits control fin ack))
-              (peer.phase-> P (if (= Phase established) fin-wait-1 last-ack))
+              (peer.phase-> P (on-close Phase))
               true)
           false)))
 )
