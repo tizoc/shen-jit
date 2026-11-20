@@ -4197,6 +4197,17 @@ pass through the state and so cannot be typechecked.
   tests, Prolog included, where a let-bound lambda is copied or used otherwise; only grammars made them. About 5% on
   a grammar shaped for it, where the value join already worked, is not worth the code. A thaw is an application of
   no arguments: one mechanism for both kinds of label might cost less, and was not tried.
+- **The first byte read once, kept** (load 2.9 to 3.7, three rounds in turn, against the grammar above). Where two
+  or more of a rule's alternatives begin with a byte, a number or a string, the rule reads the byte at its position
+  once, or -1 at the end of the input, and each of those alternatives compares that with its byte and goes on from
+  the byte after; the others are tried as before, each in its turn. The chain of alternatives stays as it was, so
+  their order holds and no code is copied, and a streaming read waits for the byte once, as the first alternative's
+  test did. Rejected above under the old protocol, where each alternative was a value tested for -1 by the next, it
+  now saves what each alternative skipped would test: the options header 14.6 to 15.0 ns against 15.0 to 15.1, the
+  Router Alert values summed by a recursive rule 24.0 to 24.5 against 26.3 to 27.0, the typed record of six kinds
+  18.3 against 19.3 to 19.6, JSON decoding 1 MB 5.20 to 5.33 ms against 5.37 to 5.69, and an HTTP head level, 1.57
+  to 1.61 µs against 1.58 to 1.61. 32 lines of code for 10. The header's own function is now about 8.5 of its 14.7
+  ns; its untyped entry, `buffer.check` out of line and the driver's call take the rest.
 
 ### Rejected: a module's arities recorded before its sources load (2026-11-16, Apple M3 Max)
 

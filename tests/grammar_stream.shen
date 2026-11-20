@@ -142,6 +142,13 @@
              (function stream-test.fail))
       [Before After Plain])))
 
+\\ Alternatives that begin with a byte wait for it once, and then for the rest of each.
+(defgrammar <s.mixed> "ab" := 1; B := 2 where (= B 97); "b" "c" := 4; "b" := 5;)
+(stream-test.check "alternatives that begin with a byte, read a byte at a time"
+  [(:result.ok [1]) (:result.ok [2]) (:result.ok [4]) (:result.ok [5]) (:result.ok [])]
+  (freeze (map (/. T (grammar.read <s.mixed> (stream-test.reader T 1) (function stream-test.fail)))
+               ["ab" "a" "bc" "b" ""])))
+
 \\ A counted skip waits for its bytes as any other item does.
 (defgrammar <s.counted> Length (skip Length) ";" := Length;)
 (stream-test.check "a counted skip, read a byte at a time" (:result.ok [5])

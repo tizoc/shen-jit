@@ -278,4 +278,13 @@
            (grammar.parse <gk.records> (gk.bytes [1 5 97]) (/. At M [error At M]))
            (grammar.parse <gk.signed> (gk.bytes [5]) (/. At M [error At M]))]))
 
+\\ Alternatives that begin with a byte read it once: each still runs in its turn, before or after one
+\\ that does not begin with a byte, and none matches at the end of the input.
+(defgrammar <gd.mixed> "ab" := 1; B := 2 where (= B 97); "a" := 3; "b" "c" := 4; "b" := 5; _ := 6;)
+
+(grammar-test.check "alternatives that begin with a byte, in their turn"
+  [1 2 4 5 6 [error 0 "no match"] [error 1 "trailing input"]]
+  (freeze (map (/. T (grammar.parse <gd.mixed> (grammar-test.view T) (function grammar-test.fail)))
+               ["ab" "a" "bc" "b" "z" "" "ax"])))
+
 (output "~A passed, ~A failed~%" (value grammar-test.passed) (value grammar-test.failed))

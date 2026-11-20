@@ -156,9 +156,10 @@
          Buf (gensym (protect Buf)) At (gensym (protect At)) End (gensym (protect End))
          S (gensym (protect S)) Count (address-> (absvector 1) 0 0)
          Def (append [define Name Buf At End S | Params]
-                     [-> (alternatives
-                           (map (/. R (/. Fail (rule [Name Buf End S Count (values Name R) [] Params false []]
-                                                     R [At 0] Fail (stored S))))
+                     [-> (alternatives Buf End [At 0]
+                           (map (/. R [R | (/. Alt Start Fail
+                                             (rule [Name Buf End S Count (values Name Alt) [] Params false []]
+                                                   Alt Start Fail (stored S)))])
                                 Rules)
                            -1)])
          _ (put Name code Def)
@@ -422,13 +423,40 @@
     where (not (or (= X (intern ":=")) (= X where)))
   Rest _ -> (error "defgrammar: expected Items := Value where Guard;, not ~R" Rest))
 
-\\ Alternatives in turn, each a function of the code it fails with: each but the last fails to the
-\\ next, frozen and thawed where it fails, which the lowerer makes a label; the last fails as Fail.
+\\ Alternatives in turn, each [R | Make], where (Make R Start Fail) is R's code from Start, failing
+\\ with Fail: each but the last fails to the next, frozen and thawed where it fails, which the lowerer
+\\ makes a label; the last fails as Fail. Where two or more begin with a byte, the byte at Pos is read
+\\ once, into B, or -1 at the end, and each of those tests B and goes on from the byte after it.
 (define alternatives
-  [Alt] Fail -> (Alt Fail)
-  [Alt | Alts] Fail -> (let F (gensym (protect F))
-                            First (Alt [thaw F])
-                         [let F [freeze (alternatives Alts Fail)] First]))
+  Buf End Pos Alts Fail
+  -> (if (> (length (keep-if (/. A (number? (first-byte (hd (hd A))))) Alts)) 1)
+         (let B (gensym (protect B))
+           [let B [if [< (pos Pos) End] [shen-jit.u8 Buf (pos Pos)] -1]
+             (in-turn B Pos Alts Fail)])
+         (in-turn false Pos Alts Fail)))
+
+(define in-turn
+  B Pos [Alt] Fail -> (tried B Pos Alt Fail)
+  B Pos [Alt | Alts] Fail -> (let F (gensym (protect F))
+                                  First (tried B Pos Alt [thaw F])
+                               [let F [freeze (in-turn B Pos Alts Fail)] First]))
+
+(define tried
+  B Pos [[Items | Rest] | Make] Fail
+  -> (let Byte (first-byte Items)
+       (if (and (not (= B false)) (number? Byte))
+           [if [= B Byte] (Make [(after-first Items) | Rest] (next Pos) Fail) Fail]
+           (Make [Items | Rest] Pos Fail))))
+
+\\ The byte an alternative's items begin with, or none.
+(define first-byte
+  [N | _] -> N where (and (integer? N) (>= N 0) (<= N 255))
+  [S | _] -> (hd (bytes S)) where (and (string? S) (not (= S "")))
+  _ -> none)
+
+(define after-first
+  [N | Items] -> Items where (number? N)
+  [S | Items] -> (append (tl (bytes S)) Items))
 
 \\ The rules a rule's semantics name, each with a fresh variable for its value. Only a rule matched
 \\ outside a repetition has one, and only a rule with := gives one.
@@ -742,9 +770,10 @@
                G (gensym (protect G))
             [in-place K G
               (lets Fresh Args
-                (alternatives
-                  (map (/. Alt (/. Fail (rule [Name Buf End S Count (values Callee Alt) [Callee | Stack] Fresh false []]
-                                              Alt Pos Fail (/. P V [K P (if (= V grammar.none) 0 V)]))))
+                (alternatives Buf End Pos
+                  (map (/. R [R | (/. Alt Start Fail
+                                    (rule [Name Buf End S Count (values Callee Alt) [Callee | Stack] Fresh false []]
+                                          Alt Start Fail (/. P V [K P (if (= V grammar.none) 0 V)])))])
                        (map (function renamed) (replace (zip Params Fresh) Rules)))
                   [thaw G]))]))))
 
