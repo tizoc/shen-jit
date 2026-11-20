@@ -435,6 +435,15 @@ Lowering rules, the collector and the kernel port have their own sections.
 - **A bound missing in the inline `newpv`** (2026-11-10). It read element 1 of the bindings before checking that there
   were two elements, so on an absvector of one it read and wrote the word after it, there the head of the next pair. The
   C path and the inline `gc` checked. One comparison.
+- **`bswap32`, `clz` and `ctz` inline** (2026-11-19, Apple M3 Max, load near 3, executables alternated against the
+  commit before). Every big-endian 32-bit read and store on a buffer swaps its bytes with `bswap32`, which called C,
+  as `clz` and `ctz` did at the end of each run of a presence map in the TCP stack on the `net-dsl` branch: with
+  `popcount`, 16% of its lossy run's samples went to `sj_primitive`. Each is now an SLJIT instruction behind a test
+  of the tag, and of the range for `bswap32`, with C taking what fails, so the results and messages are C's, zero
+  and the extremes included; the differential test agrees on arm64 and on x86-64 under Rosetta. A typed loop of
+  3.3 million `buffer.u32-be` reads, 25.4 against 18.4 ms; the TCP lossy run 187.0–187.7 against 172.6–173.2 ms,
+  its UDP echo 24.8 against 23.0. `make bench` and `make bench-independent` were not run, as nothing they time
+  uses these primitives. `popcount` stays in C, as SLJIT has no instruction for it.
 
 ### Not tried yet
 

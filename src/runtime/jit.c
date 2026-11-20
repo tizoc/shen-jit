@@ -3074,6 +3074,33 @@ static void emit_prim(Emit *e, const uint32_t *p)
         sljit_emit_op2(c, SLJIT_XOR, R0, R0, IMM(~(sljit_sw)3));
         store_result(e, dst);
         break;
+    case P_CLZ:
+    case P_CTZ:
+        /* Counted in the word, as C counts them: the tag's two zeros are its lowest bits. SLJIT
+           counts 64 in a zero word, which bit 1 makes 62 for clz, as the tag's bits do for ctz. */
+        sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, arg[0]));
+        sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R0, IMM(3));
+        slow = slow_path(e, SLOW_PRIM, sljit_emit_jump(c, SLJIT_NOT_ZERO));
+        if (prim == P_CLZ) {
+            sljit_emit_op2(c, SLJIT_OR, R0, R0, IMM(2));
+            sljit_emit_op1(c, SLJIT_CLZ, R0, R0);
+        } else {
+            sljit_emit_op1(c, SLJIT_CTZ, R0, R0);
+            sljit_emit_op2(c, SLJIT_SUB, R0, R0, IMM(2));
+        }
+        sljit_emit_op2(c, SLJIT_SHL, R0, R0, IMM(2));
+        store_result(e, dst);
+        break;
+    case P_BSWAP32:
+        /* A fixnum from 0 to 2^32 - 1 is a word with no bit set outside bits 2 to 33. */
+        sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, arg[0]));
+        sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R0, IMM(~(sljit_sw)0x3fffffffc));
+        slow = slow_path(e, SLOW_PRIM, sljit_emit_jump(c, SLJIT_NOT_ZERO));
+        sljit_emit_op2(c, SLJIT_LSHR, R0, R0, IMM(2));
+        sljit_emit_op1(c, SLJIT_REV_U32, R0, R0);
+        sljit_emit_op2(c, SLJIT_SHL, R0, R0, IMM(2));
+        store_result(e, dst);
+        break;
     case P_SHIFT_LEFT:
     case P_SHIFT_RIGHT:
         /* A count from 0 to 63, which a mask tests along with its tag. */

@@ -300,8 +300,8 @@ one with no fraction.
 | `(shen-jit.bswap32 X)` | X, from 0 to 2^32 - 1, with its four bytes reversed. |
 | `(shen-jit.popcount X)`, `clz`, `ctz` | The bits set, and the leading and trailing zeros, of the 62 bits; `clz` and `ctz` of 0 are 62. |
 
-The JIT inlines the accesses named above, and `bit-and`, `bit-or`, `bit-xor`, `bit-not` and
-the shifts. The others are calls to C.
+The JIT inlines the accesses named above, and `bit-and`, `bit-or`, `bit-xor`, `bit-not`, the
+shifts, `bswap32`, `clz` and `ctz`. The others are calls to C.
 
 ## Lowering rules
 
