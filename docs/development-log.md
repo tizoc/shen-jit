@@ -4220,6 +4220,20 @@ pass through the state and so cannot be typechecked.
   checks the shapes that become tail calls, and that one backtracking to another alternative, or with a guard after
   the call or on the end, does not, each with main's results, and `tests/grammar_stream.shen` such a rule read a byte
   at a time.
+- **Rejected: a cheaper entry, two ways** (load 4.5 to 11, against the commit before). The header's untyped
+  `.parse` took about 6 of its 15 ns: itself about 3, `buffer.check` called out of line about 2, the driver's call
+  about 1. First, the JIT cached memory in a slot as well as a parameter, where an inlined loop reads through the
+  slot and does not write it, working it out again after each write of the slot and after each call; typed entry
+  points, compiled after their rule as above, took the rule in. The loop's reads were then one compare and one load,
+  but the hand loop's driver, which takes `buffer.check` and its loop in, holds the same storage in three slots, so
+  each parse worked out three caches, and their registers pushed words to the native frame: `.parse` took 16.5 to
+  17.2 ns against 14.7 to 15.1, and the hand loop 8.7 to 9.0 against 6.9 to 7.3. 42 lines of C for 11. Second, in the
+  grammar alone: an untyped `.parse` that checks the view and makes the state, then calls in tail position a typed
+  function that takes the rule in, with the storage a parameter, which the JIT caches as it is. The same driver
+  timed it 15.7 to 17.2 ns against 14.9 to 15.7: the untyped part, calling `buffer.check`, reading the view's fields
+  and passing boxed arguments, costs what the typed part saves. What would remain is the JIT's: one cache for a
+  storage held in several slots, worked out on entering the loop rather than at each write, without taking registers
+  from the loop's words; by the report of compiled loops above, nothing else would use it.
 
 ### Rejected: a module's arities recorded before its sources load (2026-11-16, Apple M3 Max)
 
