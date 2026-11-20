@@ -42,9 +42,9 @@ adapter, or an in-memory peer. Call only `net-interface.poll` to drive this side
 | `net-interface.make-host-sized Device IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots Bytes` | Choose 1 through 1,048,576 bytes per TCP send and receive buffer. Setup also reserves the appropriate presence and SACK bitmaps. |
 | `net-interface.make-host-limits Device IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots Bytes WaitSlots` | Also choose 0 through 1,024 detached TCP TIME-WAIT records. The other constructors reserve 16. At zero, TIME-WAIT connections hold their stream slot until expiry. |
 | `net-interface.connect Interface RemoteIP RemotePort` | Claim a TCP slot, pick an unused ephemeral port, and start an active open. Returns a token, or zero when no slot or port is free. |
-| `net-interface.next-deadline Interface` | Give the earliest ingress or TCP deadline in absolute monotonic milliseconds, or `-1` while waiting for external I/O. |
+| `net-interface.next-deadline Interface` | Give the earliest input, TCP, IPv6, or multicast deadline in absolute monotonic milliseconds, or `-1` while waiting for external I/O. |
 | `net-interface.udp-binding Interface Port` | Get an inbox for `udp.inbox-recv-into`, `udp.inbox-ready?`, or `udp.send` with `udp.inbox.peer`. |
-| `net-interface.poll Interface Budget` | Process at most `Budget` ingress packets and return the number examined. Drive TCP timers and output even with a zero ingress budget. |
+| `net-interface.poll Interface Budget` | Process at most `Budget` ingress packets and return the number examined. Advance IPv6, multicast, and TCP even with a zero ingress budget. |
 | `net-interface.interface.listener Interface` | Get the listener for `tcp.accept` and the [connection operations](net-tcp.md#bounded-listeners). |
 | `net-interface.udp-send Interface IP Port View Count` | Send from the bound port. Returns `udp.sent`, `udp.would-block`, or `udp.too-large`. |
 | `net-interface.udp-recv-into Interface Out Info` | Read the next queued datagram with reusable `udp.recv-info`. Returns `udp.received`, `udp.empty`, or `udp.too-small`. A short output leaves the datagram queued. |
@@ -123,7 +123,7 @@ uses this API to send a request, check the reply, and perform a clean shutdown.
 The TAP test runs it with a DHCP lease and a DNS server on a different subnet
 so both DNS and HTTP exercise gateway resolution. [DHCP](https://www.rfc-editor.org/rfc/rfc2131.html), [DNS](https://www.rfc-editor.org/rfc/rfc1035.html)
 
-The TAP test uses four 128 KiB TCP slots. Each slot reserves 311,296 bytes for the
+The TAP echo test uses four 128 KiB TCP slots. Each slot reserves 311,305 bytes for the
 send and receive buffers and three bitmaps, plus fixed metadata. The two links
 reserve 48,224 packet bytes and the four ARP pending queues reserve 24,000 more.
 

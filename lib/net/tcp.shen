@@ -26,7 +26,6 @@
 \\ RFC 9293's control bits, the most significant first.
 (defflags control cwr ece urg ack psh rst syn fin)
 
-\\ A received segment, read once into a record its peer keeps: where it lies, and what its header says.
 \\ RFC 9293 3.3.2: the states a connection passes through, and the three it can end in.
 (datatype phases
   if (element? Phase [closed listen-state syn-sent syn-received established close-wait fin-wait-1
@@ -40,8 +39,8 @@
   ___________________________________________
   Lease : lease;)
 
-\\ A segment received, and what its options offer: the smallest maximum segment size and a window scale,
-\\ -1 if not offered, whether SACK is permitted, and where its SACK blocks are, -1 if it has none.
+\\ A received segment, decoded once into a record the peer reuses. MSS is the smallest offered.
+\\ MSS, window scale, and SACK block bounds are -1 when absent. SACK permission is kept separately.
 (defstruct segment
   (mutable data : buffer.view)
   (mutable start : fixnum)

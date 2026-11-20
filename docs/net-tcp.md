@@ -30,10 +30,11 @@ writes and partial reads with the same preallocated buffers.
 
 The MTU must be at least 41. Each peer reserves two circular byte buffers of
 `8 × min(536, Mtu - 40)` bytes each, up to 4,288 bytes for sending and 4,288 for receiving.
-Three bitmaps each reserve one bit per buffer byte for out-of-order data, SACKed data,
-and repairs. A peer with the default 4,288-byte windows reserves 10,184 byte-buffer
-bytes. With a configured buffer size `N`, the total is `2 × N + 3 × ceil(N / 8)`
-per slot, plus the peer and view metadata.
+Three bitmaps track out-of-order data, SACKed data, and repairs. Each bitmap uses one
+bit per buffer byte and three padding bytes so that a 32-bit read can start at its last
+data byte. A peer with the default 4,288-byte windows reserves 10,193 bytes for its
+buffers and bitmaps. With a configured buffer size `N`, the total is
+`2 × N + 3 × (ceil(N / 8) + 3)` per slot, plus the peer and view metadata.
 The sender limits in-flight bytes by both the advertised receive window and the congestion window.
 It segments writes at the negotiated MSS. The link reserves `Slots × Mtu` packet bytes in each
 direction, plus fixed queue metadata. Reuse device handles, peer state, application buffers and a

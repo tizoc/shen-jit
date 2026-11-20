@@ -21,8 +21,6 @@
           enable-ipv6 enable-ipv6-sized connect6 udp-send6 no-address udp-binding udp-send udp-recv-into udp-dropped
           send-result)
 
-\\ A packet for one of the host's addresses, for a group it listens to, or for an address it is still
-\\ checking for duplicates.
 \\ RFC 4443 3: the errors this host sends over IPv6, port unreachable, reassembly timed out, and the
 \\ header walk's parameter problems; and RFC 792's over IPv4.
 (datatype icmp-errors
@@ -38,6 +36,8 @@
   ___________________________________________________________
   Error : icmp-error;)
 
+\\ A packet for one of the host's addresses, for a group it listens to, or for an address it is still
+\\ checking for duplicates.
 (datatype scopes
   if (element? Scope [unicast multicast tentative])
   _________________________________________________
