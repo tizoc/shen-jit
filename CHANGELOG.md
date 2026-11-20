@@ -37,7 +37,7 @@ All notable changes to this project are documented in this file. The format is b
   than running out of them, as continuation-passing code did.
 - A grammar rule's alternatives fail straight to the next, and a rule compiled in place hands its end and value to
   what follows it rather than through the parse's state; rules of up to 16 items, from 12, are compiled in place.
-  Alternatives that begin with a byte read it once between them. Typed and untyped grammars both parse faster.
+  Typed and untyped grammars both parse faster.
 - A grammar rule that ends in a match of itself, giving its value, followed only by alternatives that match the end
   or nothing, runs as a loop, in constant stack.
 - `(let G (freeze E) Body)` whose value is used, where Body only thaws G as its value, compiles to a label rather
@@ -56,6 +56,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- A streaming grammar can finish a match before later alternatives need more input. A later alternative also sees
+  input changes made by a guard that failed.
 - In a typed program, a sealed call of a function of no arguments that is not inlined, such as one written before
   the function's definition, or of a C function of no arguments, compiles: it failed with "partial function
   shen-jit.lower.float-call", and asked on standard input whether to track it.

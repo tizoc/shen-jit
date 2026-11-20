@@ -142,12 +142,24 @@
              (function stream-test.fail))
       [Before After Plain])))
 
-\\ Alternatives that begin with a byte wait for it once, and then for the rest of each.
+\\ Try mixed alternatives with input arriving one byte at a time.
 (defgrammar <s.mixed> "ab" := 1; B := 2 where (= B 97); "b" "c" := 4; "b" := 5;)
 (stream-test.check "alternatives that begin with a byte, read a byte at a time"
   [(:result.ok [1]) (:result.ok [2]) (:result.ok [4]) (:result.ok [5]) (:result.ok [])]
   (freeze (map (/. T (grammar.read <s.mixed> (stream-test.reader T 1) (function stream-test.fail)))
                ["ab" "a" "bc" "b" ""])))
+
+(defgrammar <s.empty-first> <e> := done; "a" := a; "b" := b;)
+(defgrammar <s.complete-token> "x" <s.empty-first> := <s.empty-first>;)
+
+(stream-test.check "later alternatives cannot read past an earlier match"
+  [(:result.ok [done]) 1 (:result.ok [done]) 1]
+  (freeze (let Limited (stream-test.reader "x" 1)
+               AtLimit (grammar.read-within <s.complete-token> Limited 1 (function stream-test.fail))
+               Endpoint (stream-test.feed (buffer.from-string "x") 1 (:result.err (io.error read "chunks" "broken")))
+               Reader (io.reader Endpoint [])
+               BeforeError (grammar.read <s.complete-token> Reader (function stream-test.fail))
+            [AtLimit (io.position Limited) BeforeError (io.position Reader)])))
 
 \\ A rule that ends in its own tail call waits for each round's bytes, and for the end.
 (defgrammar (<s.sum> Acc) "a" B (<s.sum> (+ Acc B)) := <s.sum>; <end> := Acc;)

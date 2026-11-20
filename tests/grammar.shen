@@ -278,14 +278,22 @@
            (grammar.parse <gk.records> (gk.bytes [1 5 97]) (/. At M [error At M]))
            (grammar.parse <gk.signed> (gk.bytes [5]) (/. At M [error At M]))]))
 
-\\ Alternatives that begin with a byte read it once: each still runs in its turn, before or after one
-\\ that does not begin with a byte, and none matches at the end of the input.
+\\ Literal and nonliteral alternatives run in order. None of these matches at the end of the input.
 (defgrammar <gd.mixed> "ab" := 1; B := 2 where (= B 97); "a" := 3; "b" "c" := 4; "b" := 5; _ := 6;)
 
 (grammar-test.check "alternatives that begin with a byte, in their turn"
   [1 2 4 5 6 [error 0 "no match"] [error 1 "trailing input"]]
   (freeze (map (/. T (grammar.parse <gd.mixed> (grammar-test.view T) (function grammar-test.fail)))
                ["ab" "a" "bc" "b" "z" "" "ax"])))
+
+(defgrammar (<gd.changed-byte> V)
+  "a" (where (do (buffer.u8-> V 0 98) false)) := first;
+  "b" := second;)
+
+(grammar-test.check "a later alternative reads the byte after a failed guard changes it" [second "b"]
+  (freeze (let V (grammar-test.view "a")
+               Result (grammar.parse (<gd.changed-byte> V) V (function grammar-test.fail))
+            [Result (buffer.string V)])))
 
 \\ A rule whose last item matches itself, giving its value, followed only by alternatives that match
 \\ the end or nothing, ends in a tail call; with any other after it, it backtracks to that.

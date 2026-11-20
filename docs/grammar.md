@@ -148,10 +148,10 @@ if its first byte matches. When a loop compiles, it evaluates each class's guard
 table from then on, so a class's guard must depend only on its byte; one that raises for some byte, or calls a
 function defined after the rule, stays a test. Other small rules that do not name themselves are compiled in place too, up to three
 deep. So define a grammar's parts before the rules that use them; a rule redefined later is not seen where an
-earlier definition was compiled in place. A rule's alternatives are tried in turn, each failing straight to the
-next, those that begin with a byte comparing it after one read of it, and a rule compiled in place hands its end
-and its value to what follows it, which is copied into each of its alternatives while the copies stay small, so
-that nothing goes through the parse's state. A rule that ends in a match of itself, giving that match's value, with
+earlier definition was compiled in place. A rule's alternatives read their input in turn, each failing straight
+to the next. A rule compiled in place hands its end and its value to what follows it, which is copied into each
+of its alternatives while the copies stay small, so that nothing goes through the parse's state. A rule that
+ends in a match of itself, giving that match's value, with
 no guard, and has after that alternative only ones that match the end or nothing, runs as a loop, as a
 repetition does: an accumulator such as `(<sum> Acc) <item> (<sum> (+ Acc <item>)) := <sum>; <end> := Acc;`
 takes no stack however long its input.

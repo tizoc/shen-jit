@@ -4266,6 +4266,22 @@ pass through the state and so cannot be typechecked.
   at load 2.4, extending the deferred peek to fallback variables and wildcards gave no clear IPv6
   speedup. One extension header took about 60 to 63 ns and eight took 310 to 318 ns in the two
   steadier pairs.
+- **Removed the shared read** (later the same day, load 2.76 to 2.91). Each alternative has its own
+  input tests again and keeps its failure label. The mutation and streaming cases fail on the old
+  compiler and pass with separate reads. `make test-libs` passes.
+  A narrower trial shared a byte across adjacent one-byte literals whose only remaining test, if
+  any, was a `require` over literals. The streaming version used separate reads. The trial found
+  one such group in these libraries, JSON's `null`, `true` and `false` alternatives.
+  Times are medians from seven interleaved rounds in sealed programs, in microseconds per decode or parse.
+
+  | Workload | Old sharing | Separate reads | Narrow sharing |
+  | --- | ---: | ---: | ---: |
+  | JSON with 64 objects | 19.63 | 20.24 | 20.05 |
+  | JSON with 192 literals | 3.62 | 4.09 | 3.91 |
+  | HTTP request head | 1.59 | 1.57 | 1.61 |
+
+  The narrow version recovered about 1% on the objects and 4.5% on the literal array. That gain
+  was too small for the extra compiler code and separate complete and streaming paths.
 
 ### Rejected: a module's arities recorded before its sources load (2026-11-16, Apple M3 Max)
 
