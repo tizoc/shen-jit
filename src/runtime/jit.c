@@ -38,8 +38,11 @@
 #define MANY_GPRS (WORD_GPRS >= 8)
 #define CACHED_MEMORY (MANY_GPRS ? 8 : 4)
 #define RAW_INTEGERS (WORD_REGISTERS + 3 * CACHED_MEMORY)
-#define SCRATCHES ((5 + WORD_GPRS) | SLJIT_ENTER_FLOAT(3 + FLOAT_FPRS))
-#define LOCALS ((FLOAT_REGISTERS + RAW_INTEGERS) * (sljit_s32)sizeof(sljit_sw))
+/* Vector registers are the float registers here, declared again as vectors for SLJIT's checks. */
+#define SCRATCHES ((5 + WORD_GPRS) | SLJIT_ENTER_FLOAT(3 + FLOAT_FPRS) | SLJIT_ENTER_VECTOR(3 + FLOAT_FPRS))
+/* Vectors wait in 16 bytes each, after the words of the float registers and raw integers. */
+#define VECTOR_HOMES ((FLOAT_REGISTERS + RAW_INTEGERS) * (sljit_s32)sizeof(sljit_sw))
+#define LOCALS (VECTOR_HOMES + VECTOR_REGISTERS * 16)
 /* Registers S4 and up hold the slots of a loop that keeps them in registers
    (Emit.homes): six on arm64, fewer where SLJIT has fewer saved registers. Where
    that leaves fewer than six, scratch registers R5 and up serve too, if code written
@@ -77,6 +80,10 @@
 #define RAW(e, n) raw_kind(e, n), raw_offset(e, n)
 #define RAW_SAVED(place) SLJIT_MEM1(SLJIT_SP), (sljit_sw)(FLOAT_REGISTERS + (place)) * WORD
 #define WORD_OPERAND(e, x) word_kind(e, x), word_offset(e, x)
+/* A vector register's 16 bytes in the native frame, where it lives or waits around a call to C. */
+#define VECTOR_HOME(n) SLJIT_MEM1(SLJIT_SP), (sljit_sw)VECTOR_HOMES + 16 * (sljit_sw)(n)
+/* Vectors as 16 bytes, at any alignment. */
+#define VECTOR_TYPE (SLJIT_SIMD_REG_128 | SLJIT_SIMD_ELEM_8)
 
 
 /* A branch that a redefinition of the name in cell rewrites: an open self
@@ -599,7 +606,7 @@ typedef struct {
     VM *vm;
     struct sljit_compiler *c;
     bool slow_prims;
-    uint32_t floats, word_regs; /* how many of each register the code uses */
+    uint32_t floats, word_regs, vectors; /* how many of each register the code uses */
     uint32_t memory[CACHED_MEMORY], nmemory; /* the slots whose memory is cached (emit_memory_caches) */
     bool uncached;                           /* for bytes-length, which must see what is there */
     /* Where memory is reached at one width and at word indices alone, the log2 of that width, and
@@ -611,6 +618,10 @@ typedef struct {
        saved ones, and past those a word of the native frame. */
     uint8_t float_place[FLOAT_REGISTERS], raw_place[RAW_INTEGERS];
     sljit_s32 raw_saved;
+    /* Vectors share the machine float registers: code using them gives the last vector_fprs of
+       those to the vectors used most, and float_fprs to floats. A vector's place is its rank by use. */
+    uint8_t vector_place[VECTOR_REGISTERS];
+    sljit_s32 float_fprs, vector_fprs;
     uint64_t frame, arity, cbase, nconst;
     struct sljit_label **labels;
     struct {
@@ -707,18 +718,47 @@ typedef struct {
 
 static sljit_s32 float_kind(const Emit *e, uint32_t n)
 {
-    return e->float_place[n] < FLOAT_FPRS ? SLJIT_FR(3 + e->float_place[n]) : SLJIT_MEM1(SLJIT_SP);
+    return e->float_place[n] < e->float_fprs ? SLJIT_FR(3 + e->float_place[n]) : SLJIT_MEM1(SLJIT_SP);
 }
 
 static sljit_sw float_offset(const Emit *e, uint32_t n)
 {
-    return e->float_place[n] < FLOAT_FPRS ? 0 : (sljit_sw)e->float_place[n] * WORD;
+    return e->float_place[n] < e->float_fprs ? 0 : (sljit_sw)e->float_place[n] * WORD;
 }
 
 /* The machine register that float register n is in, or FR0 for one to go through. */
 static sljit_s32 float_register(const Emit *e, uint32_t n)
 {
-    return e->float_place[n] < FLOAT_FPRS ? float_kind(e, n) : SLJIT_FR0;
+    return e->float_place[n] < e->float_fprs ? float_kind(e, n) : SLJIT_FR0;
+}
+
+/* The machine register vector n is in, or 0 when it lives in the native frame. */
+static sljit_s32 vector_machine(const Emit *e, uint32_t n)
+{
+    return e->vector_place[n] < e->vector_fprs ? SLJIT_FR(3 + e->float_fprs + e->vector_place[n]) : 0;
+}
+
+/* A register holding vector n to read: its own, or through, loaded from the frame. */
+static sljit_s32 vector_in(Emit *e, uint32_t n, sljit_s32 through)
+{
+    sljit_s32 r = vector_machine(e, n);
+    if (r)
+        return r;
+    sljit_emit_simd_mov(e->c, VECTOR_TYPE | SLJIT_SIMD_LOAD, through, VECTOR_HOME(n));
+    return through;
+}
+
+/* A register to compute vector n in, and then storing it where n lives. */
+static sljit_s32 vector_out(const Emit *e, uint32_t n, sljit_s32 through)
+{
+    sljit_s32 r = vector_machine(e, n);
+    return r ? r : through;
+}
+
+static void vector_done(Emit *e, uint32_t n, sljit_s32 r)
+{
+    if (!vector_machine(e, n))
+        sljit_emit_simd_mov(e->c, VECTOR_TYPE | SLJIT_SIMD_STORE, r, VECTOR_HOME(n));
 }
 
 /* C keeps saved registers, and these are the ones it does not. */
@@ -1017,6 +1057,8 @@ static void count_registers(Emit *e, const uint32_t *words, size_t nwords)
                 e->floats = x + 1;
             else if ((kinds[k] == 'w' || kinds[k] == 'W') && !(x & OPERAND_CONST) && x + 1 > e->word_regs)
                 e->word_regs = x + 1;
+            else if ((kinds[k] == 'v' || kinds[k] == 'V') && x + 1 > e->vectors)
+                e->vectors = x + 1;
         }
     }
 }
@@ -1035,11 +1077,11 @@ static uint32_t memory_operand(const uint32_t *p)
         }
     case OP_FLOAT_LOAD: case OP_FLOAT_STORE: return p[4];
     case OP_FLOAT_LOAD_AT: case OP_WORD_LOAD8: case OP_WORD_LOAD16: case OP_WORD_LOAD32: case OP_WORD_LOAD_S32:
-    case OP_WORD_LOAD64: case OP_FLOAT_LOAD_INDEX: case OP_WORD_LOAD_INDEX:
+    case OP_WORD_LOAD64: case OP_FLOAT_LOAD_INDEX: case OP_WORD_LOAD_INDEX: case OP_VEC_LOAD:
         return p[2];
     case OP_FLOAT_STORE_AT: case OP_WORD_STORE8: case OP_WORD_STORE16: case OP_WORD_STORE32: case OP_WORD_STORE64:
     case OP_FLOAT_STORE_INDEX: case OP_FIX_STORE8: case OP_FIX_STORE16: case OP_FIX_STORE32: case OP_FIX_STORE_S32:
-    case OP_WORD_STORE_INDEX:
+    case OP_WORD_STORE_INDEX: case OP_VEC_STORE:
         return p[1];
     default:
         return NONE;
@@ -1058,7 +1100,7 @@ static bool store_access(const uint32_t *p)
     case OP_PRIM: return store_prim(p[2]);
     case OP_FLOAT_STORE: case OP_FLOAT_STORE_AT: case OP_FLOAT_STORE_INDEX: case OP_WORD_STORE_INDEX:
     case OP_WORD_STORE8: case OP_WORD_STORE16: case OP_WORD_STORE32: case OP_WORD_STORE64:
-    case OP_FIX_STORE8: case OP_FIX_STORE16: case OP_FIX_STORE32: case OP_FIX_STORE_S32:
+    case OP_FIX_STORE8: case OP_FIX_STORE16: case OP_FIX_STORE32: case OP_FIX_STORE_S32: case OP_VEC_STORE:
         return true;
     default:
         return false;
@@ -1077,6 +1119,7 @@ static int word_access_size(uint32_t op)
     case OP_WORD_LOAD16: case OP_WORD_STORE16: case OP_FIX_STORE16: return 1;
     case OP_WORD_LOAD32: case OP_WORD_LOAD_S32: case OP_WORD_STORE32: case OP_FIX_STORE32: case OP_FIX_STORE_S32: return 2;
     case OP_WORD_LOAD64: case OP_WORD_STORE64: case OP_FLOAT_LOAD_AT: case OP_FLOAT_STORE_AT: return 3;
+    case OP_VEC_LOAD: case OP_VEC_STORE: return 4;
     case OP_FLOAT_LOAD_INDEX: case OP_FLOAT_STORE_INDEX: case OP_WORD_LOAD_INDEX: case OP_WORD_STORE_INDEX:
         return SCALED + 3;
     default: return -1;
@@ -1245,9 +1288,9 @@ static uint32_t carried_words(const uint32_t *words, size_t head, size_t end)
    have: its work is in these, and they need no saving around C. */
 static void assign_places(Emit *e, const uint32_t *words, size_t nwords)
 {
-    if (!e->floats && !e->word_regs && !e->nmemory)
+    if (!e->floats && !e->word_regs && !e->nmemory && !e->vectors)
         return;
-    uint64_t float_use[FLOAT_REGISTERS] = {0}, raw_use[RAW_INTEGERS] = {0};
+    uint64_t float_use[FLOAT_REGISTERS] = {0}, raw_use[RAW_INTEGERS] = {0}, vector_use[VECTOR_REGISTERS] = {0};
     size_t ends[8];
     uint32_t depth = 0;
     for (size_t i = 0; i < nwords; i += insn_length(words + i)) {
@@ -1273,6 +1316,8 @@ static void assign_places(Emit *e, const uint32_t *words, size_t nwords)
                 float_use[x] += use;
             else if ((kinds[k] == 'w' || kinds[k] == 'W') && !(x & OPERAND_CONST))
                 raw_use[x] += MANY_GPRS ? 2 * use : use;
+            else if (kinds[k] == 'v' || kinds[k] == 'V')
+                vector_use[x] += use;
         }
         uint32_t memory = memory_operand(p);
         for (uint32_t k = 0; k < e->nmemory; k++)
@@ -1286,6 +1331,12 @@ static void assign_places(Emit *e, const uint32_t *words, size_t nwords)
     }
     places_by_use(float_use, e->float_place, FLOAT_REGISTERS);
     places_by_use(raw_use, e->raw_place, RAW_INTEGERS);
+    places_by_use(vector_use, e->vector_place, VECTOR_REGISTERS);
+    sljit_s32 vectors_used = 0;
+    for (uint32_t k = 0; k < VECTOR_REGISTERS; k++)
+        vectors_used += vector_use[k] != 0;
+    e->vector_fprs = vectors_used < FLOAT_FPRS / 2 ? vectors_used : FLOAT_FPRS / 2;
+    e->float_fprs = FLOAT_FPRS - e->vector_fprs;
     sljit_s32 used = 0;
     for (uint32_t k = 0; k < RAW_INTEGERS; k++)
         used += raw_use[k] != 0;
@@ -1538,8 +1589,11 @@ static void spill(Emit *e)
 static void save_raw(Emit *e)
 {
     for (uint32_t k = 0; k < e->floats; k++)
-        if (e->float_place[k] < FLOAT_FPRS)
+        if (e->float_place[k] < e->float_fprs)
             sljit_emit_fop1(e->c, SLJIT_MOV_F64, FLOAT_SAVED(e->float_place[k]), FLOAT(e, k));
+    for (uint32_t k = 0; k < e->vectors; k++)
+        if (vector_machine(e, k))
+            sljit_emit_simd_mov(e->c, VECTOR_TYPE | SLJIT_SIMD_STORE, vector_machine(e, k), VECTOR_HOME(k));
     for (uint32_t k = 0; k < WORD_REGISTERS + 3 * e->nmemory; k++)
         if ((k < e->word_regs || k >= WORD_REGISTERS) && raw_scratch(e->raw_place[k]))
             sljit_emit_op1(e->c, SLJIT_MOV, RAW_SAVED(e->raw_place[k]), RAW(e, k));
@@ -1548,8 +1602,11 @@ static void save_raw(Emit *e)
 static void load_raw(Emit *e)
 {
     for (uint32_t k = 0; k < e->floats; k++)
-        if (e->float_place[k] < FLOAT_FPRS)
+        if (e->float_place[k] < e->float_fprs)
             sljit_emit_fop1(e->c, SLJIT_MOV_F64, FLOAT(e, k), FLOAT_SAVED(e->float_place[k]));
+    for (uint32_t k = 0; k < e->vectors; k++)
+        if (vector_machine(e, k))
+            sljit_emit_simd_mov(e->c, VECTOR_TYPE | SLJIT_SIMD_LOAD, vector_machine(e, k), VECTOR_HOME(k));
     for (uint32_t k = 0; k < WORD_REGISTERS + 3 * e->nmemory; k++)
         if ((k < e->word_regs || k >= WORD_REGISTERS) && raw_scratch(e->raw_place[k]))
             sljit_emit_op1(e->c, SLJIT_MOV, RAW(e, k), RAW_SAVED(e->raw_place[k]));
@@ -2150,6 +2207,32 @@ static void emit_sqrt(struct sljit_compiler *c, sljit_s32 d, sljit_s32 s)
 #endif
 }
 
+/* Vector d := 255 in each byte where a and b are equal, else 0, which SLJIT has no operation for. */
+static void emit_vector_eq(struct sljit_compiler *c, sljit_s32 d, sljit_s32 a, sljit_s32 b)
+{
+#if (defined SLJIT_CONFIG_ARM_64 && SLJIT_CONFIG_ARM_64)
+    sljit_u32 cmeq = 0x6E208C00u /* CMEQ Vd.16B, Vn.16B, Vm.16B */
+                   | (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, b) << 16
+                   | (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, a) << 5
+                   | (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, d);
+    sljit_emit_op_custom(c, &cmeq, sizeof cmeq);
+#elif (defined SLJIT_CONFIG_X86_64 && SLJIT_CONFIG_X86_64)
+    /* PCMPEQB d, s: equality commutes, so d may take either operand first. */
+    sljit_s32 s = b;
+    if (d == b)
+        s = a;
+    else if (d != a)
+        sljit_emit_simd_mov(c, VECTOR_TYPE | SLJIT_SIMD_LOAD, d, a, 0);
+    sljit_u32 rd = (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, d);
+    sljit_u32 rs = (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, s);
+    sljit_u8 pcmpeqb[] = {0x66, (sljit_u8)(0x40 | (rd >> 3) << 2 | rs >> 3), 0x0F, 0x74,
+                          (sljit_u8)(0xC0 | (rd & 7) << 3 | (rs & 7))};
+    sljit_emit_op_custom(c, pcmpeqb, sizeof pcmpeqb);
+#else
+#error "no vector comparison for this target"
+#endif
+}
+
 /* Instructions on float registers. They are only in code written by hand, which the checker
    holds to making no calls, and neither the collector nor a raise looks at the registers. */
 static void emit_raw(Emit *e, const uint32_t *p)
@@ -2314,6 +2397,60 @@ static void emit_raw(Emit *e, const uint32_t *p)
         sljit_emit_op2(c, op[p[0] - OP_WORD_ADD], RAW(e, p[1]), WORD_OPERAND(e, p[2]), WORD_OPERAND(e, p[3]));
         break;
     }
+    case OP_VEC_LOAD: case OP_VEC_STORE: {
+        /* 16 bytes at a checked index, at any alignment, through an address in R4. */
+        bool store = p[0] == OP_VEC_STORE;
+        sljit_s32 at = store ? emit_word_access(e, p[1], p[2], 4, true) : emit_word_access(e, p[2], p[3], 4, false);
+        sljit_emit_op2(c, SLJIT_ADD, R4, SLJIT_EXTRACT_REG(at), 0, SLJIT_EXTRACT_SECOND_REG(at), 0);
+        if (store) {
+            sljit_s32 s = vector_in(e, p[3], SLJIT_FR0);
+            sljit_emit_simd_mov(c, VECTOR_TYPE | SLJIT_SIMD_STORE, s, SLJIT_MEM1(SLJIT_R4), 0);
+        } else {
+            sljit_s32 d = vector_out(e, p[1], SLJIT_FR0);
+            sljit_emit_simd_mov(c, VECTOR_TYPE | SLJIT_SIMD_LOAD, d, SLJIT_MEM1(SLJIT_R4), 0);
+            vector_done(e, p[1], d);
+        }
+        break;
+    }
+    case OP_VEC_SPLAT: {
+        sljit_s32 d = vector_out(e, p[1], SLJIT_FR0);
+        sljit_emit_op1(c, SLJIT_MOV, R0, WORD_OPERAND(e, p[2]));
+        sljit_emit_simd_replicate(c, VECTOR_TYPE, d, SLJIT_R0, 0);
+        vector_done(e, p[1], d);
+        break;
+    }
+    case OP_VEC_MOVE: {
+        sljit_s32 s = vector_in(e, p[2], SLJIT_FR0), d = vector_machine(e, p[1]);
+        if (!d)
+            sljit_emit_simd_mov(c, VECTOR_TYPE | SLJIT_SIMD_STORE, s, VECTOR_HOME(p[1]));
+        else if (d != s)
+            sljit_emit_simd_mov(c, VECTOR_TYPE | SLJIT_SIMD_LOAD, d, s, 0);
+        break;
+    }
+    case OP_VEC_EQ: case OP_VEC_AND: case OP_VEC_OR: case OP_VEC_XOR: {
+        sljit_s32 a = vector_in(e, p[2], SLJIT_FR0), b = vector_in(e, p[3], SLJIT_FR1);
+        sljit_s32 d = vector_out(e, p[1], SLJIT_FR2);
+        if (p[0] == OP_VEC_EQ)
+            emit_vector_eq(c, d, a, b);
+        else
+            sljit_emit_simd_op2(c, VECTOR_TYPE | (p[0] == OP_VEC_AND ? SLJIT_SIMD_OP2_AND
+                                                  : p[0] == OP_VEC_OR ? SLJIT_SIMD_OP2_OR : SLJIT_SIMD_OP2_XOR),
+                                d, a, b, 0);
+        vector_done(e, p[1], d);
+        break;
+    }
+    case OP_VEC_MASK: {
+        /* Bit k of the word is the top bit of byte k. */
+        sljit_s32 s = vector_in(e, p[2], SLJIT_FR0);
+        sljit_emit_simd_sign(c, SLJIT_SIMD_STORE | VECTOR_TYPE, s, R0);
+        sljit_emit_op1(c, SLJIT_MOV, RAW(e, p[1]), R0);
+        break;
+    }
+    case OP_WORD_CTZ: case OP_WORD_CLZ:
+        /* Of 64 bits, where SLJIT counts 64 in a zero word. */
+        sljit_emit_op1(c, SLJIT_MOV, R0, WORD_OPERAND(e, p[2]));
+        sljit_emit_op1(c, p[0] == OP_WORD_CTZ ? SLJIT_CTZ : SLJIT_CLZ, RAW(e, p[1]), R0);
+        break;
     case OP_FIX_ADD: case OP_FIX_SUB: case OP_FIX_MUL: {
         /* As word+, word- and word*, but a result that is no fixnum raises "integer overflow", as + does:
            the lowerer keeps fixnums in word registers with these. Its operands are fixnums, whose sum
@@ -3939,7 +4076,7 @@ static void *compile_code(VM *vm, V code)
               .frame = co[CODE_FRAME],
               .arity = co[CODE_ARITY] & UINT32_MAX, .cbase = co[CODE_CBASE], .nconst = co[CODE_NCONST],
               .code = code, .cached = NONE, .post = NONE, .kept = {NONE, NONE}, .kept_post = {NONE, NONE},
-              .entry = NONE, .label_pos = label_pos};
+              .entry = NONE, .label_pos = label_pos, .float_fprs = FLOAT_FPRS};
     e.seen = calloc(nwords + 1, sizeof *e.seen);
     e.todo = malloc((nwords + 2) * sizeof *e.todo);
     e.labels = calloc(nlabels + 1, sizeof *e.labels);

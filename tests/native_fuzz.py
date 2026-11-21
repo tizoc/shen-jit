@@ -59,6 +59,11 @@ BASES = [
     "(code fuzz.f 2 8 (16 1.5 8) ((prim 4 shen-jit.bytes (const 0)) (float-number 0 (const 1)) (word-number 0 (const 2))"
     " (float-store-at 4 0 0) (float-load-at 1 4 0) (word-from-float 1 1) (float-from-word 2 1) (word-box 5 1) (float-box 6 2)"
     " (prim 7 cons 5 6) (return 7)) ())",
+    # Vectors: loads and stores at a word index, each bytewise operation, the mask and the counts, in a loop.
+    "(code fuzz.f 2 8 (32 7 3) ((prim 4 shen-jit.bytes (const 0)) (word-number 0 (const 2)) (word-number 1 (const 1))"
+    " (vec-splat 0 0) (loop 1) (vec-load 1 4 1) (vec= 2 1 0) (vec-and 3 2 1) (vec-or 3 3 2) (vec-xor 3 3 0)"
+    " (vec-move 4 3) (vec-store 4 1 4) (vec-mask 2 2) (word-ctz 3 2) (word-clz 2 2) (word+ 1 1 (const 2))"
+    " (word-unless-u< 1 (const 0) 0) (again 1) (label 0) (word-box 5 3) (return 5)) ())",
 ]
 ATOMS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, -1] + ['foo', 'fuzz.g', 'fuzz.f', 'reverse', 'hd', 'tl', 'cons', 'cons?', '+', '=', 'str']
 INSNS = ["(move 4 2)", "(const 4 0)", "(prim 4 cons? 2)", "(jump-if-false 4 0)", "(jump 0)", "(label 9)",
@@ -70,7 +75,8 @@ INSNS = ["(move 4 2)", "(const 4 0)", "(prim 4 cons? 2)", "(jump-if-false 4 0)",
          "(word-move 1 (const 0))", "(word+ 0 0 1)", "(word-shl 0 0 1)", "(word-box 4 0)", "(word-load8 0 2 1)",
          "(word-load64 0 2 1)", "(word-store8 2 1 0)", "(word-store64 2 1 0)", "(float-load-at 0 2 1)",
          "(float-store-at 2 1 0)", "(word-unless< 0 1 0)", "(word-unless-u>= 0 (const 0) 0)", "(word-from-float 0 0)",
-         "(float-from-word 0 0)"]
+         "(float-from-word 0 0)", "(vec-load 0 2 1)", "(vec-store 2 1 0)", "(vec-splat 1 0)", "(vec= 0 0 1)",
+         "(vec-xor 1 0 1)", "(vec-move 1 0)", "(vec-mask 0 1)", "(word-ctz 0 1)", "(word-clz 1 0)"]
 
 
 def parse(text):

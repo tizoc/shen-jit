@@ -6,16 +6,30 @@
 
 (shen.x.namespace bytes
   (use shen-jit)
-  (externals [buffer.storage fixnum bytes.class define-native word for when unless while return return-word u8 u8!
+  (externals [buffer.storage fixnum bytes.class define-native word vector splat v= v128 vmask ctz !=
+              for when unless while return return-word u8 u8!
               prim bit-and bit-or bit-not shift-right shift-left u< u> u<= u>=])
   (shadow find)
   (export class class-not find span span-back lower! lower hex unhex! decimal)
 
-\\ The first Byte from At, or End.
+\\ The first Byte from At, or End. A range of 16 bytes or more is read 16 at a time, and its last
+\\ 16 bytes once more at the end, which covers what is left over: what they hold before I was
+\\ read already, and held no Byte.
 (define-native find (B At End Byte)
+  (word I At)
+  (word Last (- End 16))
+  (when (<= I Last)
+    (vector Needle (splat Byte))
+    (while (< I Last)
+      (word Hits (vmask (v= (v128 B I) Needle)))
+      (when (!= Hits 0) (return-word (+ I (ctz Hits))))
+      (word I (+ I 16)))
+    (word Hits (vmask (v= (v128 B Last) Needle)))
+    (when (!= Hits 0) (return-word (+ Last (ctz Hits))))
+    (return End))
   (word X Byte)
-  (for I At End
-    (when (= (u8 B I) X) (return-word I)))
+  (for J I End
+    (when (= (u8 B J) X) (return-word J)))
   (return End))
 
 \\ A class is a string of 32 bytes, the set of bytes whose bits are set in it, made by class from a

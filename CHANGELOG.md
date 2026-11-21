@@ -12,6 +12,9 @@ All notable changes to this project are documented in this file. The format is b
   library use it in place of their own loops: parsing an HTTP head took 2.3 µs where it took 3.8.
 - A grammar's repetition of a byte class alone, such as `(+ <tchar>)`, runs as one native `bytes.span`, also when
   reading from a reader: about twice as fast on long runs, and JSON parses 11 to 13% faster.
+- Native code has vector registers of 16 bytes: `(vector X V)`, `v128` and `v128!`, `splat`, `v=`, `vand`, `vor`,
+  `vxor` and `vmask`, with `ctz` and `clz` on words. `bytes.find` reads 16 bytes at a time with them, ten times as
+  fast on long ranges.
 - The module `hyperloglog` estimates how many distinct keys a stream holds, with HyperLogLog++ sketches that start
   as a small sparse table, become one byte a register as the count grows, and merge. Strings, views, packed
   fixed-width keys and prehashed 64-bit words go in from typed code without allocating.

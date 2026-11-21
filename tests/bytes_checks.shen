@@ -46,7 +46,7 @@
 (define compare-random
   0 _ -> true
   K Seed ->
-    (let N (+ 1 (shen.mod Seed 97))
+    (let N (+ 1 (shen.mod Seed 300))
          B (random-bytes N Seed)
          At (shen.mod (* Seed 7) N)
          End (+ At (shen.mod (* Seed 13) (+ 1 (- N At))))

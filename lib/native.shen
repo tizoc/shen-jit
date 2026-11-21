@@ -48,6 +48,8 @@
   \\ This extends the runtime namespace, which stays open for its primitives and other libraries.
   (use shen-jit.lower)
   (externals [!= abs again back bit-and bit-not bit-or bit-xor block call-sealed call-value
+    vector vector! v128 v128! splat v= vand vor vxor vmask ctz clz vec-load vec-store vec-splat
+    vec-move vec= vec-and vec-or vec-xor vec-mask word-ctz word-clz
     capture closure code const dead define-native done entry exit f64 f64! for jump jump-if-false
     jump-unless jump-unless-entry jump-unless-test jump-unless-word label loop move neg nested
     new next none param pop-handler prim push-handler raise-cond float float! float* float+ float-
@@ -195,6 +197,13 @@
                                               word-unless-u< word-unless-u> word-unless-u<= word-unless-u>=])
   Op -> [word! tagged word] where (element? Op [word-load8 word-load16 word-load32 word-load-s32 word-load64])
   Op -> [tagged word word] where (element? Op [word-store8 word-store16 word-store32 word-store64])
+  Op -> [word! word] where (element? Op [word-ctz word-clz])
+  vec-load -> [vector! tagged word]
+  vec-store -> [tagged word vector]
+  vec-splat -> [vector! word]
+  vec-move -> [vector! vector]
+  Op -> [vector! vector vector] where (element? Op [vec= vec-and vec-or vec-xor])
+  vec-mask -> [word! vector]
   _ -> none)
 
 (define check.raw-valid?
@@ -204,7 +213,7 @@
                                        (check.raw-valid? Ctx Labels Ks As))
   _ _ _ _ -> false)
 
-\\ As FLOAT_REGISTERS and WORD_REGISTERS in ops.h.
+\\ As FLOAT_REGISTERS, WORD_REGISTERS and VECTOR_REGISTERS in ops.h.
 (define check.raw-operand?
   Ctx _ tagged A -> (check.operand? Ctx A)
   Ctx _ slot! A -> (check.write? Ctx A)
@@ -213,6 +222,8 @@
   _ _ word! A -> (check.below? A 16)
   Ctx _ word [const K] -> (and (check.below? K (nth 4 Ctx)) (integer? (nth (+ K 1) (nth 7 Ctx))))
   _ _ word A -> (check.below? A 16)
+  _ _ vector A -> (check.below? A 16)
+  _ _ vector! A -> (check.below? A 16)
   _ Labels label A -> (element? A Labels)
   _ _ head A -> (integer? A)
   _ Labels back A -> (element? A Labels))
@@ -422,6 +433,7 @@
   [float | Ks] [A | As] -> [[float A] | (check.raw-used Ks As)]
   [word | Ks] [[const _] | As] -> (check.raw-used Ks As)
   [word | Ks] [A | As] -> [[word A] | (check.raw-used Ks As)]
+  [vector | Ks] [A | As] -> [[vector A] | (check.raw-used Ks As)]
   [_ | Ks] [_ | As] -> (check.raw-used Ks As)
   _ _ -> [])
 
@@ -482,6 +494,8 @@
   -> (check.raw-step Where Ks As [(adjoin [float A] Defined) | Handlers] Pending)
   Where [word! | Ks] [A | As] [Defined | Handlers] Pending
   -> (check.raw-step Where Ks As [(adjoin [word A] Defined) | Handlers] Pending)
+  Where [vector! | Ks] [A | As] [Defined | Handlers] Pending
+  -> (check.raw-step Where Ks As [(adjoin [vector A] Defined) | Handlers] Pending)
   Where [slot! | Ks] [A | As] [Defined | Handlers] Pending
   -> (do (check.forget A Handlers Pending)
          (check.raw-step Where Ks As [(check.set A Defined) | Handlers] Pending))
@@ -912,17 +926,18 @@
 \\ Raw expressions, as flat instructions. A variable given a value by float or word is a
 \\ register of that kind, in a namespace of its own; any other variable in an expression is a
 \\ slot, whose number is read with a check. Intermediate values take registers of their own,
-\\ named by depth. Regs is [Floats Words].
+\\ named by depth. Regs is [Floats Words Vectors].
 
 (define float.expand
-  Body -> (let Regs [(float.names float Body) (float.names word Body)]
-               _ (map (/. Name (float.own Name)) (append (hd Regs) (hd (tl Regs))))
+  Body -> (let Regs [(float.names float Body) (float.names word Body) (float.names vector Body)]
+               _ (map (/. Name (float.own Name)) (append (hd Regs) (hd (tl Regs)) (hd (tl (tl Regs)))))
             (mapcan (/. I (float.statement Regs I)) Body)))
 
-\\ Float.N and Word.N are the temporaries' names, so no register written by hand may take one.
+\\ Float.N, Word.N and Vector.N are the temporaries' names, so no register written by hand may take one.
 (define float.own
   Name -> (simple-error (make-string "native code: ~A is the name of a temporary" Name))
-      where (or (float.numbered? "Float." (str Name)) (float.numbered? "Word." (str Name)))
+      where (or (float.numbered? "Float." (str Name)) (float.numbered? "Word." (str Name))
+                (float.numbered? "Vector." (str Name)))
   Name -> Name)
 
 (define float.numbered?
@@ -940,14 +955,21 @@
                  []))
 
 (define float.float?
-  [Floats _] E -> (element? E Floats))
+  [Floats | _] E -> (element? E Floats))
 
 (define float.word?
-  [_ Words] E -> (element? E Words))
+  [_ Words | _] E -> (element? E Words))
+
+(define vector.vector?
+  [_ _ Vectors] E -> (element? E Vectors))
 
 (define float.statement
   Regs [float X E] -> (float.into Regs 0 X E)
   Regs [word X E] -> (word.into Regs 0 X E)
+  Regs [vector X E] -> (vector.into Regs 0 X E)
+  Regs [v128! M I E] -> (let Value (vector.operand Regs 0 E)
+                             Index (word.operand Regs 0 I)
+                          (append (tl Value) (tl Index) [[vec-store M (hd Index) (hd Value)]]))
   Regs [f64! M I E] -> (let Value (float.operand Regs 0 E)
                              After (float.after Regs 0 E)
                          (if (word.index? Regs I)
@@ -1059,7 +1081,7 @@
 \\ What is written only with words.
 (define word.only
   -> [bit-and bit-or bit-xor bit-not shift-left shift-right shift-right-signed rotate-left rotate-right
-      u8 u16 u32 s32 u64 truncate])
+      u8 u16 u32 s32 u64 truncate ctz clz vmask])
 
 \\ What the operand of a word instruction can be as it is: a register, or a constant.
 (define word.direct?
@@ -1102,9 +1124,46 @@
   Regs N D [u64 M I] -> (word.load Regs N D word-load64 M I)
   Regs N D [truncate E] -> (let Value (float.operand Regs N E)
                              (append (tl Value) [[word-from-float D (hd Value)]]))
+  Regs N D [ctz A] -> (word.unary Regs N D word-ctz A)
+  Regs N D [clz A] -> (word.unary Regs N D word-clz A)
+  Regs N D [vmask V] -> (let Value (vector.operand Regs N V)
+                          (append (tl Value) [[vec-mask D (hd Value)]]))
   _ _ _ [Op | X] -> (simple-error (make-string "native code: not a word expression: ~R" [Op | X]))
   _ _ _ E -> (simple-error (make-string "native code: not an integer: ~R" E)) where (number? E)
   _ _ D O -> [[word-number D O]])
+
+(define word.unary
+  Regs N D Op A -> (let Value (word.operand Regs N A)
+                     (append (tl Value) [[Op D (hd Value)]])))
+
+\\ Vectors: 16 bytes in a register of their own kind, read and written as words are.
+(define vector.temporary
+  N -> (intern (cn "Vector." (str N))))
+
+(define vector.after
+  Regs N E -> (if (vector.vector? Regs E) N (+ N 1)))
+
+(define vector.operand
+  Regs N E -> [E] where (vector.vector? Regs E)
+  Regs N E -> (let T (vector.temporary N)
+                [T | (vector.into Regs N T E)]))
+
+(define vector.into
+  Regs _ D E -> [[vec-move D E]] where (vector.vector? Regs E)
+  Regs N D [v128 M I] -> (let Index (word.operand Regs N I)
+                           (append (tl Index) [[vec-load D M (hd Index)]]))
+  Regs N D [splat W] -> (let Value (word.operand Regs N W)
+                          (append (tl Value) [[vec-splat D (hd Value)]]))
+  Regs N D [v= A B] -> (vector.binary Regs N D vec= A B)
+  Regs N D [vand A B] -> (vector.binary Regs N D vec-and A B)
+  Regs N D [vor A B] -> (vector.binary Regs N D vec-or A B)
+  Regs N D [vxor A B] -> (vector.binary Regs N D vec-xor A B)
+  _ _ _ E -> (simple-error (make-string "native code: not a vector expression: ~R" E)))
+
+(define vector.binary
+  Regs N D Op A B -> (let First (vector.operand Regs N A)
+                          Second (vector.operand Regs (vector.after Regs N A) B)
+                       (append (tl First) (tl Second) [[Op D (hd First) (hd Second)]])))
 
 (define word.binary
   Regs N D Op A B -> (let First (word.operand Regs N A)
@@ -1150,8 +1209,10 @@
   Name Slots Body
   -> (let Floats (mapcan (/. I (float.reads [float float!] I)) Body)
           Words (mapcan (/. I (float.reads [word word!] I)) Body)
+          Vectors (mapcan (/. I (float.reads [vector vector!] I)) Body)
           FloatNames (native.add-names Floats [])
           WordNames (native.add-names Words [])
+          VectorNames (native.add-names Vectors [])
        (do (map (/. X (if (or (element? X Slots) (element? X WordNames))
                           (simple-error (make-string "native code, ~A: ~R is a register, and is used as something else" Name X))
                           skip))
@@ -1160,10 +1221,15 @@
                           (simple-error (make-string "native code, ~A: ~R is a register, and is used as something else" Name X))
                           skip))
                 WordNames)
-           (if (or (> (length FloatNames) 64) (> (length WordNames) 16))
-               (simple-error (make-string "native code, ~A: more than 64 float registers or 16 word registers: ~R"
-                                          Name [FloatNames WordNames]))
-               (append (shen-jit.lower.bind FloatNames 0) (shen-jit.lower.bind WordNames 0))))))
+           (map (/. X (if (or (element? X Slots) (element? X FloatNames) (element? X WordNames))
+                          (simple-error (make-string "native code, ~A: ~R is a register, and is used as something else" Name X))
+                          skip))
+                VectorNames)
+           (if (or (> (length FloatNames) 64) (> (length WordNames) 16) (> (length VectorNames) 16))
+               (simple-error (make-string "native code, ~A: more than 64 float registers, 16 word registers or 16 vector registers: ~R"
+                                          Name [FloatNames WordNames VectorNames]))
+               (append (shen-jit.lower.bind FloatNames 0) (shen-jit.lower.bind WordNames 0)
+                       (shen-jit.lower.bind VectorNames 0))))))
 
 (define float.reads
   Kinds [Op | Args] -> (float.reads-h Kinds (check.shape Op) Args))

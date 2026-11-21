@@ -1602,4 +1602,124 @@
           [[const 2 0] [exception 3] [return 2]]
           []]])))
 
+\\ ---------------------------------------------------------------------------
+\\ Vectors: 16 bytes in registers of their own, against the same work done a byte at a time.
+
+(define native-test.vector-bytes
+  Seed N -> (native-test.vector-fill (shen-jit.bytes N) 0 N Seed))
+
+(define native-test.vector-fill
+  B I N _ -> B where (= I N)
+  B I N Seed -> (let Next (shen.mod (+ (* Seed 75) 74) 65537)
+                  (native-test.vector-fill (shen-jit.u8! B I (shen-jit.bit-and Next 255)) (+ I 1) N Next)))
+
+(define native-test.all?
+  _ [] -> true
+  F [X | Xs] -> (and (F X) (native-test.all? F Xs)))
+
+\\ Each of the operations on 16 bytes at I and J, stored at K in Out: copied, equal, and, or, xor.
+(define-native native-test.vector-ops (A I B J Out)
+  (vector X (v128 A I))
+  (vector Y (v128 B J))
+  (v128! Out 0 X)
+  (v128! Out 16 (v= X Y))
+  (v128! Out 32 (vand X Y))
+  (v128! Out 48 (vor X Y))
+  (v128! Out 64 (vxor X Y))
+  (v128! Out 80 (splat (u8 A I)))
+  (return Out))
+
+(define native-test.ref-op
+  Op X Y -> (cases (= Op 0) X
+                   (= Op 1) (if (= X Y) 255 0)
+                   (= Op 2) (shen-jit.bit-and X Y)
+                   (= Op 3) (shen-jit.bit-or X Y)
+                   true (shen-jit.bit-xor X Y)))
+
+(define native-test.vector-ok?
+  A I B J Out Op K -> true where (= K 16)
+  A I B J Out 5 K -> (and (= (shen-jit.u8 Out (+ 80 K)) (shen-jit.u8 A I)) (native-test.vector-ok? A I B J Out 5 (+ K 1)))
+  A I B J Out Op K -> (and (= (shen-jit.u8 Out (+ (* Op 16) K))
+                              (native-test.ref-op Op (shen-jit.u8 A (+ I K)) (shen-jit.u8 B (+ J K))))
+                           (native-test.vector-ok? A I B J Out Op (+ K 1))))
+
+(define native-test.vectors-agree
+  0 -> true
+  Seed -> (let A (native-test.vector-bytes Seed 40)
+               B (native-test.vector-bytes (+ Seed 1) 40)
+               _ (shen-jit.u8! B 5 (shen-jit.u8 A 7))
+               I (shen.mod Seed 24)
+               J (shen.mod (* Seed 7) 24)
+               Out (native-test.vector-ops A I B J (shen-jit.bytes 96))
+            (and (native-test.vector-ok? A I B J Out 0 0) (native-test.vector-ok? A I B J Out 1 0)
+                 (native-test.vector-ok? A I B J Out 2 0) (native-test.vector-ok? A I B J Out 3 0)
+                 (native-test.vector-ok? A I B J Out 4 0) (native-test.vector-ok? A I B J Out 5 0)
+                 (native-test.vectors-agree (- Seed 1)))))
+
+(native-test.check "vector loads, stores, splat, equality, and, or and xor at any offset" true
+  (freeze (native-test.vectors-agree 60)))
+
+\\ The mask: bit K is the top bit of byte K.
+(define-native native-test.mask (B I)
+  (return-word (vmask (v128 B I))))
+
+(define native-test.ref-mask
+  B I 16 -> 0
+  B I K -> (+ (if (>= (shen-jit.u8 B (+ I K)) 128) (shen-jit.shift-left 1 K) 0) (native-test.ref-mask B I (+ K 1))))
+
+(native-test.check "the mask of each byte's top bit" true
+  (freeze (let B (native-test.vector-bytes 3 64)
+            (native-test.all? (/. I (= (native-test.mask B I) (native-test.ref-mask B I 0))) [0 1 7 16 31 48]))))
+
+(define-native native-test.zeros (W)
+  (word X W)
+  (return-word (+ (* (ctz X) 1000) (clz X))))
+
+(native-test.check "trailing and leading zeros of 64 bits, 64 for zero" [64064 63 61000 1020]
+  (freeze [(native-test.zeros 0) (native-test.zeros 1) (native-test.zeros (shen-jit.shift-left 1 61))
+           (native-test.zeros 8796093022210)]))
+
+\\ More vectors than registers: the rest live in the native frame, and all of them wait there
+\\ around a primitive, which may collect.
+(define-native native-test.many-vectors (A Out)
+  (vector V0 (v128 A 0)) (vector V1 (v128 A 1)) (vector V2 (v128 A 2)) (vector V3 (v128 A 3))
+  (vector V4 (v128 A 4)) (vector V5 (v128 A 5)) (vector V6 (v128 A 6)) (vector V7 (v128 A 7))
+  (vector V8 (v128 A 8)) (vector V9 (v128 A 9)) (vector V10 (v128 A 10)) (vector V11 (v128 A 11))
+  (vector V12 (v128 A 12)) (vector V13 (v128 A 13)) (vector V14 (v128 A 14))
+  (prim Fresh shen-jit.bytes 64)
+  (vector V0 (vxor V0 V1)) (vector V0 (vxor V0 V2)) (vector V0 (vxor V0 V3)) (vector V0 (vxor V0 V4))
+  (vector V0 (vxor V0 V5)) (vector V0 (vxor V0 V6)) (vector V0 (vxor V0 V7)) (vector V0 (vxor V0 V8))
+  (vector V0 (vxor V0 V9)) (vector V0 (vxor V0 V10)) (vector V0 (vxor V0 V11)) (vector V0 (vxor V0 V12))
+  (vector V0 (vxor V0 V13)) (vector V0 (vxor V0 V14))
+  (v128! Out 0 V0)
+  (return Out))
+
+(define native-test.ref-xor
+  A K 15 Acc -> Acc
+  A K J Acc -> (native-test.ref-xor A K (+ J 1) (shen-jit.bit-xor Acc (shen-jit.u8 A (+ K J)))))
+
+(native-test.check "fifteen vectors, in registers and the frame, across a primitive" true
+  (freeze (let A (native-test.vector-bytes 9 32)
+               Out (native-test.many-vectors A (shen-jit.bytes 16))
+            (native-test.all? (/. K (= (shen-jit.u8 Out K) (native-test.ref-xor A K 0 0))) [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15]))))
+
+(native-test.check "a load past the end raises" true
+  (freeze (trap-error (do (native-test.mask (shen-jit.bytes 20) 5) false) (/. E true))))
+(native-test.check "a store into a string raises" true
+  (freeze (trap-error (do (native-test.vector-ops "0123456789abcdefghijklmnopqrstuvwxyz0123" 0
+                                                  "0123456789abcdefghijklmnopqrstuvwxyz0123" 0 "x") false)
+                      (/. E true))))
+(native-test.refused "a vector read before it is written"
+  (freeze (define-native native-test.bad (B) (vector X (v128 B 0)) (v128! B 0 Y) (return B))))
+(native-test.refused "vectors in code that calls"
+  (freeze (define-native native-test.bad (B F) (vector X (v128 B 0)) (call R F B) (return R))))
+(native-test.refused "seventeen vector registers"
+  (freeze (define-native native-test.bad (A)
+            (vector V0 (v128 A 0)) (vector V1 V0) (vector V2 V1) (vector V3 V2) (vector V4 V3) (vector V5 V4)
+            (vector V6 V5) (vector V7 V6) (vector V8 V7) (vector V9 V8) (vector V10 V9) (vector V11 V10)
+            (vector V12 V11) (vector V13 V12) (vector V14 V13) (vector V15 V14) (vector V16 V15)
+            (v128! A 0 V16) (return A))))
+(native-test.raw "a vector register past 15"
+  [defun native-test.bad [code native-test.bad 1 3 [] [[vec-load 16 2 [const 0]] [return 2]] []]])
+
 (output "~A passed, ~A failed~%" (value native-test.*passed*) (value native-test.*failed*))

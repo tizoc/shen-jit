@@ -7242,8 +7242,19 @@ relation of one tuple a key or rule that makes a string, as interned values must
   each collection copies, here 0.15 ms more of 0.8. Loading `native` into the earlier build alone made it 8.4,
   and loading `json` instead 8.8. Every library costs this, in proportion to what it keeps; native code assembled
   ahead, installed without `native`, would avoid it for this module, at the cost of generated code to keep.
-- **Not done.** Reading 8 bytes at a time, as `memchr` does, would make long scans several times faster, and the
-  ranges these libraries scan are short.
+- **Vector registers, and `bytes.find` 16 bytes at a time** (2026-11-21, Apple M3 Max, against main before it).
+  Native code has 16 registers of 16 bytes, loads and stores checked as one access of 16 bytes, `splat`, bytewise
+  `v=`, `vand`, `vor` and `vxor`, `vmask`, the word of each byte's top bit, and `ctz` and `clz` on words. They are
+  the machine's float registers, shared: code using vectors gives up to half of them to the vectors used most, and
+  the rest wait in 16 bytes of the native frame each. SLJIT's portable SIMD calls emit all but byte equality, which
+  is CMEQ on arm64 and PCMPEQB on x86-64. `bytes.find` reads 16 bytes a step, and a range's last 16 once more at the
+  end, which covers what is left over. A call took 9.5 ns at 8 bytes against 9.3, 5.9 at 32 against 22.1, and 216
+  at 4,096 against 2,196, 0.05 ns a byte; on x86-64 under Rosetta, 256 at 4,096. In its callers, median of five
+  alternating runs: `shen-git diff` of four large files 54.3 and 52.0 ms, `json.parse` of strings with escapes 1.85
+  and 1.71, `http.parse-request` 2.31 and 2.26 µs; `shen-git log` and `status`, plain JSON and `http.read-request`
+  moved within their noise, as their ranges are short. The fuzzer of code objects, now with vector code among its
+  seeds, found no crash in 2,000 cases, and the native and bytes suites pass on x86-64 under Rosetta, with SLJIT's
+  argument checks.
 - **Grammar loops over a class as one `bytes.span`** (2026-11-21, Apple M3 Max, against main before it). A
   repetition of a byte class alone, as `(+ <tchar>)` and JSON's `(+ <plain>)` are, already ran as one loop testing a
   table of the 256 bytes, at 1.58 ns a byte. A loop whose code is only that now compiles, at its first call, to one

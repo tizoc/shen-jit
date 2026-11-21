@@ -1143,6 +1143,20 @@ them, so the code that runs is the same. The hash again:
   (return-word (shift-right Hash 8)))
 ```
 
+`vector` holds 16 bytes at a time, for scanning and comparing: `bytes.find` reads 16 bytes a step, as here, where `v=`
+compares each byte, `vmask` makes a word of their top bits, and `ctz` counts the zeros below the first:
+
+```shen
+(define-native find16 (B At End Byte)
+  (vector Needle (splat Byte))
+  (word I At)
+  (while (<= (+ I 16) End)
+    (word Hits (vmask (v= (v128 B I) Needle)))
+    (when (!= Hits 0) (return-word (+ I (ctz Hits))))
+    (word I (+ I 16)))
+  (return-word I))
+```
+
 [docs/bytecode.md](https://github.com/tizoc/shen-jit/blob/main/docs/bytecode.md), "Native code written by hand", has
 the instructions and these forms.
 

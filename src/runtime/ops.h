@@ -104,7 +104,18 @@
     X(OP_FIX_SAR, "fix-sar", 3)               \
     X(OP_FIX_CLZ, "fix-clz", 2)               \
     X(OP_FIX_CTZ, "fix-ctz", 2)               \
-    X(OP_FIX_POPCOUNT, "fix-popcount", 2)
+    X(OP_FIX_POPCOUNT, "fix-popcount", 2)     \
+    X(OP_VEC_LOAD, "vec-load", 3)             \
+    X(OP_VEC_STORE, "vec-store", 3)           \
+    X(OP_VEC_SPLAT, "vec-splat", 2)           \
+    X(OP_VEC_MOVE, "vec-move", 2)             \
+    X(OP_VEC_EQ, "vec=", 3)                   \
+    X(OP_VEC_AND, "vec-and", 3)               \
+    X(OP_VEC_OR, "vec-or", 3)                 \
+    X(OP_VEC_XOR, "vec-xor", 3)               \
+    X(OP_VEC_MASK, "vec-mask", 2)             \
+    X(OP_WORD_CTZ, "word-ctz", 2)             \
+    X(OP_WORD_CLZ, "word-clz", 2)
 
 enum {
 #define SJ_OP_ENUM(op, name, n) op,
@@ -129,10 +140,12 @@ static inline size_t insn_length(const uint32_t *p)
 /* The registers of code written by hand (docs/bytecode.md). */
 #define FLOAT_REGISTERS 64
 #define WORD_REGISTERS 16
+#define VECTOR_REGISTERS 16
 
 /* What each operand of the instructions on them is: s a slot written, o a slot or constant read,
-   r a float register, w a word register written, W a word register or constant read, l a label jumped
-   to on a test, h a loop's head, which defines a label, b a label jumped back to.
+   r a float register, w a word register written, W a word register or constant read, v a vector
+   register written, V one read, l a label jumped to on a test, h a loop's head, which defines a label,
+   b a label jumped back to.
    float-load and float-store are laid out as prim is, with the float register first. */
 static inline const char *raw_kinds(unsigned op)
 {
@@ -166,6 +179,13 @@ static inline const char *raw_kinds(unsigned op)
     case OP_FIX_ADD: case OP_FIX_SUB: case OP_FIX_MUL: case OP_FIX_SHL: case OP_FIX_SAR: return "wWW";
     case OP_FIX_CLZ: case OP_FIX_CTZ: case OP_FIX_POPCOUNT: return "wW";
     case OP_FIX_FROM_FLOAT: return "wr";
+    case OP_VEC_LOAD: return "voW";
+    case OP_VEC_STORE: return "oWV";
+    case OP_VEC_SPLAT: return "vW";
+    case OP_VEC_MOVE: return "vV";
+    case OP_VEC_EQ: case OP_VEC_AND: case OP_VEC_OR: case OP_VEC_XOR: return "vVV";
+    case OP_VEC_MASK: return "wV";
+    case OP_WORD_CTZ: case OP_WORD_CLZ: return "wW";
     case OP_FLOAT_CALL1: return "rfr";
     case OP_FLOAT_CALL2: return "rfrr";
     case OP_FLOAT_CALL3: return "rfrrr";

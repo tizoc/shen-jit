@@ -215,6 +215,7 @@ static bool encode(Loader *l, V insn, uint64_t frame, uint64_t nconst, uint64_t 
         case 'r': ok = small_int(v, FLOAT_REGISTERS, &x); break;
         case 'w': ok = small_int(v, WORD_REGISTERS, &x); break;
         case 'W': ok = operand(v, WORD_REGISTERS, nconst, &x); break;
+        case 'v': case 'V': ok = small_int(v, VECTOR_REGISTERS, &x); break;
         default: /* 'f' */
             ok = is_symbol(v);
             if (ok && (op == OP_CALL_SEALED || op == OP_TAIL_CALL_SEALED)) {

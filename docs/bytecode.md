@@ -791,12 +791,40 @@ converted, and anything else raising; `(+ E1 E2)`, `(- E1 E2)`, `(* E1 E2)`, `(/
 
 A word expression W is a word register; an integer, or `(const K)` holding one; a slot, which must hold an integer; `(+ W1 W2)`, `(- W1 W2)`, `(* W1 W2)`, `(neg W)`;
 `(bit-and W1 W2)`, `(bit-or W1 W2)`, `(bit-xor W1 W2)`, `(bit-not W)`; `(shift-left W N)`, `(shift-right W N)`, which fills with zeroes, `(shift-right-signed W N)`, `(rotate-left W N)`,
-`(rotate-right W N)`, whose counts are taken modulo 64; `(u8 M I)`, `(u16 M I)`, `(u32 M I)`, `(s32 M I)`, `(u64 M I)`; or `(truncate E)`, toward zero, of a float expression, which is the machine's own beyond 64 bits.
+`(rotate-right W N)`, whose counts are taken modulo 64; `(u8 M I)`, `(u16 M I)`, `(u32 M I)`, `(s32 M I)`, `(u64 M I)`; `(ctz W)` and `(clz W)`, the
+trailing and leading zeros of its 64 bits, 64 for zero; `(vmask V)`, below; or `(truncate E)`, toward zero, of a float expression, which is the machine's own beyond 64 bits.
 Arithmetic wraps and raises nothing. A literal has to fit a fixnum, so a wider constant is built, once, before the loop.
 
 The index of `u8` to `u64` and their stores is a word expression. So is that of `f64` and `f64!` when it is an integer or mentions a word register, with no tag to check and only the bound; any other is integer arithmetic through `prim`, as `(+ I 8)` on slots. A word index is checked as an unsigned number, so a negative one fails the bound. Intermediate values take registers too, named `Float.0`, `Word.0` and on, so a register written by hand may not take
 such a name, and more than the registers there are is refused. A test that is `true` or `false` keeps only the branch
 that runs.
+
+### Vector registers
+
+16 vector registers each hold 16 bytes, under the same rules as float and word registers: code using them calls
+nothing and has no handlers, the JIT saves them around calls to C, and the collector never sees them. They are the
+machine's float registers, which code using vectors shares between the two: the vectors used most take up to half of
+them, 13 on arm64 and 6 on x86-64, and the rest live in 16 bytes each of the native frame. Each operation means the
+same on both targets: SLJIT emits most of them, and byte equality is encoded for each.
+
+| Form | Meaning |
+| --- | --- |
+| `(vector X V)` | Vector register X := the value of V. X is then a vector register wherever it is named. |
+| `(v128! M I V)` | Store V's 16 bytes from byte offset I of M, checked as one access of 16 bytes, at any alignment. |
+
+A vector expression V is a vector register; `(v128 M I)`, the 16 bytes from offset I of M, checked the same way;
+`(splat W)`, 16 copies of W's low byte; `(v= V1 V2)`, 255 in each byte where the two are equal and 0 elsewhere; or
+`(vand V1 V2)`, `(vor V1 V2)`, `(vxor V1 V2)`. `(vmask V)` is the word whose bit K is the top bit of V's byte K, so
+that `(ctz (vmask (v= V (splat B))))` is where B first is in V, and 64 when it is not. Intermediate vectors are named
+`Vector.0` and on.
+
+| Instruction | Meaning |
+| --- | --- |
+| `(vec-load X M I)`, `(vec-store M I X)` | 16 bytes at word index I of M, checked |
+| `(vec-splat X W)`, `(vec-move X Y)` | 16 copies of W's low byte; a copy of Y |
+| `(vec= X A B)`, `(vec-and X A B)`, `(vec-or X A B)`, `(vec-xor X A B)` | Bytewise |
+| `(vec-mask W X)` | Word register W := the top bit of each of X's bytes |
+| `(word-ctz W A)`, `(word-clz W A)` | Trailing and leading zeros of 64 bits |
 
 - **Division is IEEE's:** dividing by zero gives an infinity or a NaN, where `/` raises.
 - **A register or slot keeps its value round a loop,** and what comes before a loop's head runs once. To leave a loop, jump
