@@ -4084,6 +4084,15 @@ TCP's lossy run took 161.2 against 163.9 ms, its lossless run 11.2 against 11.2.
 The portable networking suites pass, 9,000 connections adding no collections under allocation stress,
 and Linux's TUN and TAP suites pass with no heap words.
 
+### One setup record, and one fragment rule (2026-11-21, Apple M3 Max, and Linux arm64 in Docker Desktop)
+
+- **One fragment rule for both families.** IPv4's and IPv6's reassemblies each wrote out when a fragment
+  conflicts with what is stored: it ends past the datagram's end, or at it with more to follow; it is a
+  second last fragment; it is the last but stored bytes reach past it; or it overlaps them. IPv4 tested the
+  third with `>` and IPv6 with `>=`, but both refuse an empty fragment first, and a nonempty one that ends
+  where stored bytes reach overlaps them, so the two agreed. `net-fragments.conflict?` is the rule, and both
+  call it. The interface's and IPv6's suites pass.
+
 ### Source-specific multicast (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
 
 - Extended the group table with preallocated INCLUDE filters. Sources stop

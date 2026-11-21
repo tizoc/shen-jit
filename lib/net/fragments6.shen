@@ -133,15 +133,6 @@
   {fixnum --> fixnum --> fixnum}
   A B -> (if (fx> A B) A B))
 
-(define conflict?
-  {assembly --> fixnum --> fixnum --> boolean --> boolean}
-  A Offset End More ->
-    (let Final (assembly.end A)
-      (or (and (fx>= Final 0) (or (fx> End Final) (not More) (and More (= End Final))))
-          (and (not More) (fx>= (assembly.highest A) End))
-          (net-fragments.overlaps? (assembly.present A)
-                                   (fxquotient Offset 8) (fxquotient (fx+ End 7) 8)))))
-
 (define store
   {table --> assembly --> fixnum --> buffer.view --> fixnum --> fixnum --> fixnum -->
    fixnum --> fixnum --> boolean --> fixnum}
@@ -153,7 +144,8 @@
                        true (wire.ipv6.size))
          Total (fx+ (assembly.received A) Bytes)
       (cases (assembly.rejected A) 0
-             (or (fx> (fx+ Prefix High) (table.limit T)) (conflict? A Offset End More))
+             (or (fx> (fx+ Prefix High) (table.limit T))
+                 (net-fragments.conflict? (assembly.present A) (assembly.highest A) (assembly.end A) Offset End More))
                (do (assembly.rejected-> A true) (fixnum 0))
              true
                (do (if (= Offset 0) (remember-first A B I (fx+ (fx- Frag I) (wire.ipv6-fragment.size)) Prev Bytes) A)

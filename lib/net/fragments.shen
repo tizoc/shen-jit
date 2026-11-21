@@ -5,7 +5,7 @@
   (use shen-jit)
   (use net-wire => wire)
   (import struct defstruct)
-  (export table make receive packet clear overlaps? mark)
+  (export table make receive packet clear conflict? mark)
   (shadow receive)
 
 (defstruct assembly
@@ -105,6 +105,18 @@
   B At End ->
     (if (= At End) B (mark (buffer.u8-> B At 1) (fx+ At 1) End)))
 
+\\ Whether a fragment of the bytes from Offset to End, with more to follow or not, conflicts with those
+\\ stored, marked in Present and reaching Highest, of a datagram that ends at Last, or -1 until its last
+\\ fragment came: it ends past the end, or at it with more to follow; it is a second last fragment; it is
+\\ the last but stored bytes reach past it; or it overlaps them. A fragment is never empty, so one that
+\\ ends where stored bytes reach overlaps them.
+(define conflict?
+  {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> boolean --> boolean}
+  Present Highest Last Offset End More ->
+    (or (and (fx>= Last 0) (or (not More) (fx>= End Last)))
+        (and (not More) (fx> Highest End))
+        (overlaps? Present (fxquotient Offset 8) (fxquotient (fx+ End 7) 8))))
+
 (define complete
   {table --> fixnum --> assembly --> fixnum}
   T Index A ->
@@ -130,9 +142,7 @@
          FirstBlock (fxquotient Offset 8)
          EndBlock (fxquotient (fx+ End 7) 8)
       (cases (assembly.rejected A) 0
-             (or (and (fx>= Last 0) (or (fx> End Last) (and More (= End Last)) (not More)))
-                 (and (not More) (fx> (assembly.highest A) End))
-                 (overlaps? Map FirstBlock EndBlock))
+             (conflict? Map (assembly.highest A) Last Offset End More)
                (do (assembly.rejected-> A true) (fixnum 0))
              true
                (let Out (assembly.bytes A)
