@@ -583,6 +583,95 @@
     [A (error-to-string E)]))
 
 \\ ---------------------------------------------------------------------------------------------
+\\ Scopes: the isolates spawned in one have ended when it returns or raises.
+
+(define pt.work
+  N -> (pt.count N 0))
+
+(define pt.reasons
+  Is -> (map (/. I (pt.third (channel.receive (isolate.monitor I)))) Is))
+
+\\ Whether I has ended now: a monitor of one that has has its message at once.
+(define pt.ended?
+  I -> (let M (isolate.monitor I)
+            Ended (= (hd (channel.wait-any [M] 0)) ready)
+            _ (channel.close M)
+         Ended))
+
+(define pt.pause
+  Ms -> (let R (channel.new 1)
+             _ (channel.wait-any [R] Ms)
+          (channel.close R)))
+
+\\ K isolates spawned in S in turn, each seen to end, and then what S keeps.
+(define pt.in-scope
+  S 0 -> (length (<-address S 2))
+  S K -> (do (channel.receive (isolate.monitor (isolate.spawn-in S pt.id K))) (pt.in-scope S (- K 1))))
+
+(define pt.spawn-in-from
+  [S Out] -> (channel.send Out (pt.message (freeze (isolate.spawn-in S pt.id 1)))))
+
+\\ An isolate with a scope of its own, in which it spawns one that counts for a while, sends that
+\\ one out, and waits for ever.
+(define pt.nest
+  [N Out] -> (isolate.scope (/. S (do (channel.send Out (isolate.spawn-in S pt.work N))
+                                       (channel.receive (channel.new 1))))))
+
+(set pt.spawned [])
+(pt.check "a scope gives what its function does once each isolate in it has ended" [done [true true true]]
+  (let Got (isolate.scope (/. S (do (set pt.spawned (map (/. N (isolate.spawn-in S pt.work N))
+                                                          [1000000 2000000 3000000]))
+                                    done)))
+    [Got (map (function pt.ended?) (value pt.spawned))]))
+
+(pt.check "and raises the error one ends with, killing the others" ["failing with 2" [killed "failing with 2"]]
+  (let Why (pt.message (freeze (isolate.scope (/. S (set pt.spawned [(isolate.spawn-in S pt.block 1)
+                                                                       (isolate.spawn-in S pt.fail 2)])))))
+    [Why (pt.reasons (value pt.spawned))]))
+
+(pt.check "if its function raises, it kills those it spawned and raises the same" ["gave up" [killed killed]]
+  (let Why (pt.message (freeze (isolate.scope (/. S (do (set pt.spawned [(isolate.spawn-in S pt.block 1)
+                                                                           (isolate.spawn-in S pt.block 2)])
+                                                         (simple-error "gave up"))))))
+    [Why (pt.reasons (value pt.spawned))]))
+
+(pt.check "a scope that has ended refuses to spawn" "isolate.spawn-in: the scope has ended"
+  (pt.message (freeze (isolate.spawn-in (isolate.scope (/. S S)) pt.id 1))))
+
+(pt.check "spawning in what is not a scope raises" "isolate.spawn-in: 5 is not a scope"
+  (pt.message (freeze (isolate.spawn-in 5 pt.id 1))))
+
+(pt.check "a scope belongs to the isolate that made it" "isolate.spawn-in: a scope belongs to the isolate that made it"
+  (isolate.scope (/. S (let R (channel.new 1)
+                            _ (isolate.spawn-in S pt.spawn-in-from [S (channel.sender R)])
+                         (channel.receive R)))))
+
+(pt.check "a scope keeps only the isolates still running" true
+  (isolate.scope (/. S (< (pt.in-scope S 100) 32))))
+
+\\ The sixteenth fills the scope, so the next spawn reads the monitors, the last spawned first.
+(pt.check "a failure seen as it spawns raises there" ["failing with 16" none]
+  (do (set pt.spawned none)
+      [(pt.message (freeze (isolate.scope (/. S (do (pt.in-scope S 15)
+                                                     (channel.receive (isolate.monitor (isolate.spawn-in S pt.fail 16)))
+                                                     (isolate.spawn-in S pt.id 17)
+                                                     (set pt.spawned spawned))))))
+       (value pt.spawned)]))
+
+\\ The one spawned in the nested scope counts for about a third of a second here, and the second
+\\ kill comes while the killed isolate waits for it.
+(pt.check "a scope in a killed isolate waits for its own, through a second kill" [killed true]
+  (let R (channel.new 1)
+       P (isolate.spawn pt.nest [400000000 (channel.sender R)])
+       M (isolate.monitor P)
+       Inner (channel.receive R)
+       _ (isolate.kill P)
+       _ (pt.pause 20)
+       _ (isolate.kill P)
+       Down (channel.receive M)
+    [(pt.third Down) (pt.ended? Inner)]))
+
+\\ ---------------------------------------------------------------------------------------------
 \\ Many at once, and many in turn.
 
 (pt.check "eight at once" [36 36 36 36 36 36 36 36]

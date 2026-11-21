@@ -2445,6 +2445,38 @@ and blank lines.
   or `grammar`, and the grammar client took 18,360 against 18,299. Fixtures refuse wrong payloads, closures,
   function values and binary workers, and pass names through namespaces and local bindings.
 
+### Scopes over isolates (2026-11-21, Apple M3 Max, load about 3, against `spawn-each`)
+
+- **Why:** a bare spawn's isolate can outlive the call and the isolate that spawned it, and `spawn-each` stops its
+  isolates only when something raises: if `G` returns, they go on. `parallel.map` and the Datalog runs waited for
+  theirs by hand; other code had nothing to keep a call's isolates within it.
+- **Built:** `isolate.scope` and `isolate.spawn-in`, about 80 lines of the port's KLambda and nothing in the runtime.
+  The scope waits for its isolates once its function returns, kills the rest at the first failure, and on an error
+  kills, waits and raises the same. An isolate's end unwinds through its scopes, however it ends, so isolates
+  spawned only in scopes never outlive the isolate that spawned them, with no parent recorded anywhere. A server's
+  long-lived scope reads ended monitors when its entries double, keeping 100 sequential spawns under 32 entries. 2000
+  rounds of four isolates that return at once: 0.357 to 0.379 s through scopes, 0.370 to 0.389 s through `spawn-each`
+  with each monitor read, three rounds alternating, so the scope costs nothing next to a spawn.
+- **The `sqlite-http` example** lost its `Cell`, `kept` and `undo-start`: its owner is spawned in the caller's
+  scope, which ends it if the start fails, so only stopping a server already made is left to do by hand.
+- **Rejected: kills at any call, through the check Ctrl-C uses.** Clearing an isolate's `check_limit` would raise
+  "killed" at its next frame entry with no change to emitted code, so no cost on hot paths, and loops that only
+  tail-call would still run on. But a kill could then fall between a library's opening a socket, file or child
+  process and its handler for it, which `lib/` was written not to expect: kills land at channel operations and
+  `isolate.check-kill` only, as `lib/socket.shen` relies on. Making that safe needs a mask around acquiring, which
+  is more machinery than a faster stop after a failure is worth. Loop checks were rejected earlier ("`kill` at
+  channel operations only", above).
+- **Rejected: a second kill doing nothing,** to keep it from cutting a scope's wait short. An isolate that caught
+  the first kill could then never be stopped. The scope's wait catches a kill instead, tries the read again, and
+  raises "killed" once all have ended; a test kills twice while an inner scope waits for a counting isolate, and
+  fails when the wait gives up on the kill as `stop-each` does.
+- **Left alone:** `parallel.map` and the Datalog runs read their own monitors, to tell an isolate that ended without
+  replying, so a scope would add a second monitor to each isolate and remove no code. `spawn-each` keeps not waiting
+  when `G` returns, as code may hand its isolates out. Raising a failure in the scope's owner while its function
+  still runs would need the runtime to raise into the builder, which a kill does not reach; the owners here already
+  wait on monitors, so they see a failure as it happens. A parent recorded in the runtime would only police bare
+  spawns.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on

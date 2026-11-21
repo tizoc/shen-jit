@@ -4,7 +4,7 @@
   (use channel => c)
   (use isolate => i)
   (externals [sender isolate])
-  (export ping)
+  (export ping spread)
 
   (define echo
     {(A * (sender A)) --> A}
@@ -18,7 +18,11 @@
     {A --> A}
     X -> (let R (c.new 1)
               _ (start echo (@p X (c.sender R)))
-            (c.receive R))))
+            (c.receive R)))
+
+  (define spread
+    {(i.worker A) --> (list A) --> number}
+    Worker Xs -> (i.scope (/. S (length (map (/. X (i.spawn-in S Worker X)) Xs))))))
 
 (shen.x.namespace it.plain
   (externals [sender])
@@ -90,6 +94,10 @@
 (define it.each
   {(list number) --> number}
   Xs -> (isolate.spawn-each it.double Xs (/. Started (if (isolate.stop-each Started) (length Started) 0))))
+
+(define it.scoped
+  {(list number) --> number}
+  Xs -> (isolate.scope (/. S (length (map (/. X (isolate.spawn-in S it.double X)) Xs)))))
 
 (define it.shared
   {(list number) --> (list number)}

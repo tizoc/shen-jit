@@ -12,6 +12,8 @@
 (it.check "a typed monitor" "normal" (it.ended 3))
 (it.check "typed waits" [false true] (it.polls 5))
 (it.check "typed spawn-each and stop-each" 3 (it.each [1 2 3]))
+(it.check "a typed scope" 3 (it.scoped [1 2 3]))
+(it.check "a scope in a namespace client" 2 (it.client.spread it.double [4 5]))
 (it.check "typed sharing" [1 2] (it.shared [1 2]))
 (it.check "a namespace client" hello (it.client.ping hello))
 (it.check "a namespace that names them without a use" hello (it.plain.pong hello))

@@ -491,6 +491,21 @@ that a monitor that comes after, as one made just after a spawn can, is told at 
 reason, until the record is used again with a new generation. Then, or for one that could not start,
 the reason is `ended`.
 
+**Scopes** are the port's, over spawning, monitors and kills, with nothing in the runtime: a scope
+is an absvector of its owner, the isolate that made it, and `[I | Monitor]` for each isolate spawned
+in it and not yet seen to end. `isolate.spawn-in` adds one through `spawn-each`, which stops it if
+adding fails. Once the scope's function returns, it reads the monitors with `channel.receive-any`,
+killing the rest at the first failure; if the function or that wait raises, it kills them all and
+reads each monitor in turn. A kill that comes then is caught and the read tried again, and
+"killed" raised once all have ended, so that a scope inside a killed isolate still waits for its
+own; any other error, a Ctrl-C's in the builder, ends the wait, as the REPL then kills what the input
+spawned. The owner is checked at each spawn, as a scope sent to another isolate arrives as a copy,
+or is refused once it holds monitors, which are receive endpoints. When the entries reach a limit,
+16 at first and then twice what is left, a spawn first reads the monitors that `channel.wait-any`
+finds ready, so that a scope a server keeps open does not grow with each isolate it ever had.
+Kills still land at channel operations only: one at any call would let it fall between a library's
+acquiring a socket or file and its handler for it.
+
 **The program is fixed while isolates run.** Defining, foreign definitions and arities are
 refused while an isolate other than the builder has not ended, so nothing patches the code
 isolates run, and the builder never has to stop them. Once they have all ended, the builder

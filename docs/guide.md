@@ -305,13 +305,16 @@ marks each difference with *Deviation*.
 
 ## Isolates
 
-### Spawning and channels
+An isolate runs a function of one argument that the program defined, on an OS thread of its own. Isolates share the
+program's code and nothing else: each has its own heap, globals and property list, and they talk through channels.
+They run on several cores at once, within one operating-system process;
+[subprocesses](https://github.com/tizoc/shen-jit/blob/main/docs/processes.md) are other programs.
 
-`(isolate.spawn F X)` runs `F`, a function of one argument that the program defined, in an isolate of its own on an
-OS thread of its own, with a copy of `X`, and returns the isolate. Isolates share the program's code and nothing
-else: each has its own heap, globals and property list, and they talk through channels. They run on several cores at
-once, within one operating-system process; [subprocesses](https://github.com/tizoc/shen-jit/blob/main/docs/processes.md)
-are other programs.
+### Scopes
+
+A scope keeps the isolates of a call from outliving it, and is the way to spawn them. `(isolate.scope F)` calls `F`
+with a scope, in which `(isolate.spawn-in Scope G X)` runs `G` in an isolate of its own, with a copy of `X`, and
+returns the isolate. Once `F` returns, the scope waits for each isolate spawned in it to end, and gives what `F` gave.
 
 ```shen
 (define fib 0 -> 0 1 -> 1 N -> (+ (fib (- N 1)) (fib (- N 2))))
@@ -319,10 +322,33 @@ are other programs.
 
 (let Replies (channel.new 4)
      Out (channel.sender Replies)
-     _ (map (/. N (isolate.spawn fib-of [N Out])) [27 28 29 30])
-  (map (/. I (channel.receive Replies)) [1 2 3 4]))
+  (isolate.scope
+    (/. Scope (do (map (/. N (isolate.spawn-in Scope fib-of [N Out])) [27 28 29 30])
+                  (map (/. I (channel.receive Replies)) [1 2 3 4])))))
 \\ [[27 196418] [28 317811] [29 514229] [30 832040]], in the order they finish
 ```
+
+- **Failures:** if an isolate ends with an error, or is killed, the scope kills the others as soon as it sees it, and
+  raises that error once all have ended. `isolate.spawn-in` raises it too, if it sees it first.
+- **If `F` raises,** or the scope's wait does, it kills those still running, waits for each to end, and raises the
+  same error. A kill of the isolate that waits does not cut the wait short: it raises "killed" once the wait is
+  over, so that a scope in a killed isolate waits for its own too. After a Ctrl-C, the REPL kills what the input
+  spawned instead.
+- **A kill takes effect at a channel operation,** as [Ending and killing](#ending-and-killing) says: an isolate
+  busy computing goes on until its next one, so the wait after a failure lasts until then.
+- **A scope belongs to the isolate that made it:** spawning in it from another isolate, or once it has returned,
+  raises. A scope that a server keeps open reads the monitors of those that have ended as it spawns more, so that it
+  does not grow with each isolate it ever had.
+
+[`lib/parallel.shen`](https://github.com/tizoc/shen-jit/blob/main/docs/parallel.md) gives `(parallel.map N F Xs)`,
+which maps a function named `F` over `Xs` with at most `N` isolates, and returns once all have ended.
+
+`(isolate.spawn F X)` spawns outside any scope: the isolate is the program's, and nothing waits for it or stops it
+unless the program does, through a [monitor and a kill](#ending-and-killing). That suits a supervisor that keeps
+track of its isolates itself, as the [HTTP listener](https://github.com/tizoc/shen-jit/blob/main/docs/http-listener.md)
+does with its connections, or one isolate handed to other code to keep; elsewhere, use a scope.
+
+### Channels
 
 - **Channels:** `(channel.new N)` makes a channel that holds up to `N` messages, from 1 to 2^24, and returns its
   receive endpoint, which only the isolate that made it reads. `(channel.sender R)` gives a send endpoint, which can go
@@ -347,7 +373,7 @@ are other programs.
   raise an error in any other. Its heap starts at 128 KB and grows; `SHEN_JIT_MAX_HEAP` and `SHEN_JIT_GC_STRESS`
   apply to each isolate's heap, and `SHEN_JIT_SEMISPACE` to the builder's alone.
 - **The program is fixed while isolates run:** defining raises an error in the builder until every other isolate has
-  ended, as a monitor tells. Define everything first, then spawn. Isolates cannot compile either, so a program whose
+  ended, as a monitor tells, or a scope's return. Define everything first, then spawn. Isolates cannot compile either, so a program whose
   isolates parse with grammars calls `(grammar.finish)` before it spawns them, as `http.listen` does.
 - **Symbols are shared:** a symbol made in any isolate is the program's, and stays for as long as it runs, so names
   that come from outside, such as a request's, belong in strings.
@@ -368,15 +394,13 @@ nothing.
 `(isolate.self)` is the isolate running. The program ends when the builder does, or when any isolate calls
 `(shen-jit.exit N)`; if several end it at once, the first does, and its status is the program's.
 
-### Parts of a call
+### Starting several outside a scope
 
 `(isolate.spawn-each F Args G)` spawns `F` with each of `Args`, each with a monitor, and gives `(G Started)`,
 `Started` being `[[I | Monitor] ...]`. If a spawn fails, or anything after it raises, `G` included, it stops those it
 started, as `(isolate.stop-each Started)` does: kills them, waits for each to end and closes the monitors, so that
-none is left waiting on one that is gone.
-
-[`lib/parallel.shen`](https://github.com/tizoc/shen-jit/blob/main/docs/parallel.md) gives `(parallel.map N F Xs)`,
-which maps a function named `F` over `Xs` with at most `N` isolates.
+none is left waiting on one that is gone. Unlike a scope, it does not wait for them once `G` returns: what `G` gives
+back may hold isolates that go on, for its caller to end.
 
 ### Sharing data
 
@@ -387,14 +411,14 @@ shared dictionary cannot change. It is never freed. What cannot be sent cannot b
 
 ### Types, namespaces and saving
 
-- **Worker names.** Both `isolate.spawn` and `isolate.spawn-each` take an `(isolate.worker A)`.
+- **Worker names.** `isolate.spawn-in`, `isolate.spawn` and `isolate.spawn-each` take an `(isolate.worker A)`.
   The name of a one-argument function with signature `A --> B` has this type. For example,
-  if `double` takes a number, write `(isolate.spawn double 21)` or
+  if `double` takes a number, write `(isolate.spawn-in Scope double 21)` or
   `(isolate.spawn-each double [1 2 3] G)`. Shen checks the payload or each list element
   against `A`. Passing `(fn double)` or a lambda gives a type error. A helper that forwards
   a worker can declare its parameter as `(isolate.worker A)`.
-- **Types and namespaces.** An isolate has type `isolate`, and endpoints have types `(receiver A)` and `(sender A)`,
-  where `A` is the message type. Results have datatypes including
+- **Types and namespaces.** An isolate has type `isolate`, a scope `isolate.scope`, and endpoints have types
+  `(receiver A)` and `(sender A)`, where `A` is the message type. Results have datatypes including
   `isolate.down` for a monitor's message, whose reason is an `isolate.reason`, `isolate.started` for what
   `spawn-each` gives, and `(channel.next A)`, `(channel.got A)` and `(channel.ready A)` for what `channel.next`,
   `channel.receive-any` and `channel.wait-any` give. `isolate` and `channel` are namespaces: their functions are

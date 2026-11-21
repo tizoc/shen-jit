@@ -47,11 +47,13 @@ def server(executable, database):
                         (do (http.stop (http.current-server)) (counter-app.json 202 [object]))
                        (= (http.target Q) "/__test_fail") (error "test application failure")
                        true (counter-app.handle Db Q)))
-      (set counter-test.started
-        (counter-app.start {shen_string(database.as_posix())} "127.0.0.1" {port} counter-test.handle
-          [[max-connections 4] [shutdown-grace 100] [head-timeout 1000]
-           [body-timeout 1000] [body-limit 4096] [response-body-limit 65536]]))
-      (counter-app.await (hd (value counter-test.started)) (hd (tl (value counter-test.started))))
+      (isolate.scope
+        (/. Scope
+          (do (set counter-test.started
+                (counter-app.start Scope {shen_string(database.as_posix())} "127.0.0.1" {port} counter-test.handle
+                  [[max-connections 4] [shutdown-grace 100] [head-timeout 1000]
+                   [body-timeout 1000] [body-limit 4096] [response-body-limit 65536]]))
+              (counter-app.await (hd (value counter-test.started)) (hd (tl (value counter-test.started)))))))
       (output "APP-STATS ~A~%" (http.stats (hd (tl (value counter-test.started)))))'''
     driver = database.parent / "test-driver.shen"
     driver.write_text(program)

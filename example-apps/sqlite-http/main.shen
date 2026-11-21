@@ -121,26 +121,19 @@
 (define gone
   X -> (if (= (error-to-string X) "channel closed") skip (simple-error (error-to-string X))))
 
-\\ Starts the owning isolate: [Db Monitor], Db for the handlers and Monitor for the owning isolate's end.
-\\ If making the result fails, spawn-each kills it, which closes the database, and waits for its end;
-\\ its channel is closed, which does nothing once it has gone with the isolate.
+\\ Starts the owning isolate in Scope, and gives Db for the handlers. The isolate is the scope's: the
+\\ scope waits for it to end, and kills it if anything fails first, which closes the database. Its
+\\ channel is closed if it could not start; once given, it goes with the isolate.
 (define open
-  Path -> (let R (channel.new 64)
-            (shen-jit.on-error
-              (freeze (let Requests (channel.sender R)
-                        (isolate.spawn-each owner [[Path (channel.give R)]]
-                          (/. Started [[Path Requests (hd (hd Started))] (tl (hd Started))]))))
-              (freeze (channel.close R)))))
+  Scope Path -> (let R (channel.new 64)
+                  (shen-jit.on-error
+                    (freeze (let Requests (channel.sender R)
+                              [Path Requests (isolate.spawn-in Scope owner [Path (channel.give R)])]))
+                    (freeze (trap-error (channel.close R) (/. X skip))))))
 
-(define kept
-  Cell I X -> (do (address-> Cell I X) X))
-
-(define db
-  [Db _] -> Db)
-
-\\ Ends the owning isolate's stream, which it reads to its end, and waits for it to close the database.
+\\ Ends the owning isolate's stream, which it reads to its end, closing the database then.
 (define counter-app.close
-  [[_ Requests _] Monitor] -> (do (channel.close Requests) (channel.receive Monitor) (channel.close Monitor) true))
+  [_ Requests _] -> (do (channel.close Requests) true))
 
 (define counter-app.list
   Db -> (json 200 (map (function row-json) (counter-app.do Db [list]))))
@@ -285,33 +278,24 @@
   _ _ [invalid] -> (counter-app.error 400 "expected an object with one decimal integer value in 0..1000000000000")
   Db Name (:ok N) -> (found (counter-app.do Db [set Name N])))
 
-\\ The owner, and a server whose handler F is called with Db and the request: [Owner Server]. Each is
-\\ kept in Cell as it is made, so that a failure after it, even making the result, stops the server,
-\\ which closes its listener, and ends the owning isolate. The grammars compile what is still pending
-\\ first, as the program cannot change once the owning isolate runs.
+\\ The owning isolate, in Scope, and a server whose handler F is called with Db and the request:
+\\ [Db Server]. A failure ends the owning isolate, as the scope's; one after listening, even making
+\\ the result, also stops the server, which, never run, closes its listener. The grammars compile
+\\ what is still pending first, as the program cannot change once the owning isolate runs.
 (define start
-  Path Host Port F Options ->
+  Scope Path Host Port F Options ->
     (let _ (initialize Path)
          _ (grammar.finish)
-         Cell (address-> (address-> (absvector 2) 0 []) 1 [])
-      (shen-jit.on-error
-        (freeze (let Owner (kept Cell 0 (open Path))
-                     S (kept Cell 1 (http.listen Host Port [F (db Owner)] Options))
-                  [Owner S]))
-        (freeze (undo-start Cell)))))
-
-\\ The server, never run, closes its listener before allocating anything; the owning isolate ends
-\\ even if that raises.
-(define undo-start
-  Cell -> (shen-jit.finally
-            (freeze (if (empty? (<-address Cell 1)) true (do (http.stop (<-address Cell 1)) (http.run (<-address Cell 1)))))
-            (freeze (if (empty? (<-address Cell 0)) true (counter-app.close (<-address Cell 0))))))
+         Db (open Scope Path)
+         S (http.listen Host Port [F Db] Options)
+      (shen-jit.on-error (freeze [Db S]) (freeze (do (http.stop S) (http.run S))))))
 
 \\ Serves until a handler stops the server, each connection in an isolate of its own, then ends the
-\\ owner. The owner holds the database open meanwhile, so the log stays between requests: the last
-\\ connection to close checkpoints it and removes it, which made each write many times slower.
+\\ owning isolate, which the scope waits for. It holds the database open meanwhile, so the log stays
+\\ between requests: the last connection to close checkpoints it and removes it, which made each
+\\ write many times slower.
 (define await
-  Owner S -> (await-result S (shen-jit.finally (freeze (http.run S)) (freeze (counter-app.close Owner)))))
+  Db S -> (await-result S (shen-jit.finally (freeze (http.run S)) (freeze (counter-app.close Db)))))
 
 (define await-result
   _ (:ok []) -> true
@@ -319,10 +303,11 @@
 
 (define run
   Path Port ->
-    (let Started (start Path "127.0.0.1" Port control
-                   [[body-limit 4096] [response-body-limit 65536]])
-         _ (output "Listening on http://127.0.0.1:~A~%" (http.port (hd (tl Started))))
-      (await (hd Started) (hd (tl Started)))))
+    (isolate.scope
+      (/. Scope (let Started (start Scope Path "127.0.0.1" Port control
+                               [[body-limit 4096] [response-body-limit 65536]])
+                     _ (output "Listening on http://127.0.0.1:~A~%" (http.port (hd (tl Started))))
+                  (await (hd Started) (hd (tl Started)))))))
 
 (define control
   Db Request ->

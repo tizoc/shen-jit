@@ -84,13 +84,21 @@ would need separate runtime/library support; this example uses an explicit appli
 ## Files and tests
 
 `main.shen` holds the routes, database scopes, startup and shutdown. `sqlite-http.shenmod` names the libraries
-it requires, and `run.shen` loads it and passes the command-line arguments. Applications can instead load `main.shen` and call
-`(counter-app.start Path Host Port F Options)`, which starts the database's owner and a server whose handler is `F`,
-called with `Db`, what reaches the owning isolate, and the request, such as `counter-app.handle`: a handler runs in an
-isolate of its connection's, which inherits no globals. If it fails, it ends the owning isolate and closes the
-server it made. It gives `[Owner S]`, which the caller serves with
-`(counter-app.await Owner S)` until it is stopped, which then ends the owning isolate. The `/shutdown` control route
-is supplied by `counter-app.run`.
+it requires, and `run.shen` loads it and passes the command-line arguments. Applications can instead load
+`main.shen` and, inside an [isolate scope](../../docs/guide.md#scopes), call
+`(counter-app.start Scope Path Host Port F Options)`, which starts the database's owner in `Scope` and a server whose
+handler is `F`, called with `Db`, what reaches the owning isolate, and the request, such as `counter-app.handle`: a
+handler runs in an isolate of its connection's, which inherits no globals. It gives `[Db S]`, which the caller
+serves with `(counter-app.await Db S)` until it is stopped, which then ends the owning isolate's stream:
+
+```shen
+(isolate.scope (/. Scope (let Started (counter-app.start Scope "counters.db" "127.0.0.1" 8080 counter-app.handle [])
+                           (counter-app.await (hd Started) (hd (tl Started))))))
+```
+
+The scope returns once the owning isolate has closed the database. If anything fails first, the scope kills the
+owning isolate, which closes the database as it ends, and a server already made is stopped. The `/shutdown`
+control route is supplied by `counter-app.run`.
 
 ```sh
 python3 example-apps/sqlite-http/test.py build/shen-jit

@@ -230,11 +230,13 @@ shen-jit eval -m datalog -m io/file -l deps.shen -l imports.shen
 
   (let Shared (datalog.share dependencies)
        R (channel.new 2)
-       _ (isolate.spawn count-depends [Shared [[imports a b] [imports b c]] (channel.sender R)])
-       _ (isolate.spawn count-depends [Shared [[imports x y]] (channel.sender R)])
-       A (channel.receive R)
-       B (channel.receive R)
-    (if (< A B) [A B] [B A]))
+       Out (channel.sender R)
+    (isolate.scope
+      (/. Scope (let _ (isolate.spawn-in Scope count-depends [Shared [[imports a b] [imports b c]] Out])
+                     _ (isolate.spawn-in Scope count-depends [Shared [[imports x y]] Out])
+                     A (channel.receive R)
+                     B (channel.receive R)
+                  (if (< A B) [A B] [B A])))))
   \\ [1 3]
   ```
 

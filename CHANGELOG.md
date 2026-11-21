@@ -7,6 +7,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Isolate scopes: `(isolate.scope F)` calls `F` with a scope, in which `(isolate.spawn-in Scope G X)` spawns, and
+  returns once every isolate spawned in it has ended. The first that fails, or is killed, has the others killed and
+  its error raised; if `F` raises, the scope kills its isolates and waits for them before raising the same error. The
+  guide now leads with scopes, and keeps `isolate.spawn` for supervisors that keep track of their isolates themselves.
+
 - The module `bytes` finds a byte, skips the bytes of a class from either end, lowercases, and converts hexadecimal
   and decimal digits over a range of bytes, each in one call to native code. HTTP, curl, Git, JSON and the filesystem
   library use it in place of their own loops: parsing an HTTP head took 2.3 µs where it took 3.8.
@@ -111,6 +116,8 @@ All notable changes to this project are documented in this file. The format is b
 - Polling a TCP listener or interface and asking for its next deadline pass over vacant connection slots and
   unused TIME-WAIT records a run at a time, and over all of them while none is used, so a table sized for many
   connections costs little while few are open.
+- The `sqlite-http` example starts its database's owner in a scope: `(counter-app.start Scope Path Host Port F
+  Options)` gives `[Db S]`, and the scope waits for the owning isolate once `counter-app.await` ends its stream.
 
 ### Fixed
 

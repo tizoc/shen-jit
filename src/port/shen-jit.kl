@@ -721,6 +721,139 @@ failure to allocate anywhere after a spawn stops it too."
 (defun shen-jit.await (Monitor)
   (trap-error (do (channel.receive Monitor) (channel.close Monitor)) (lambda E skip)))
 
+"A scope keeps the isolates of a call from outliving it. (isolate.scope F)
+calls F with a scope, in which (isolate.spawn-in Scope G X) spawns G with X, as
+isolate.spawn does, and gives the isolate. Once F returns, the scope waits for
+each isolate spawned in it to end, and gives what F gave. If one ends with an
+error, or is killed, the scope kills the others as soon as it sees it, and raises
+that error once all have ended. If F raises, or the wait does, it kills those
+still running, waits for each to end, and raises the same error. A kill that
+comes during that wait does not cut it short: the wait goes on, and raises
+killed at its end, so that a scope in a killed isolate still waits for its own.
+A scope belongs to the isolate that made it: spawning in it from another, or
+once it has ended, raises.
+
+A scope is [shen-jit.print-scope Owner Started Count Limit State], Started being
+[[I | Monitor] ...] for each isolate not yet seen to end, Count its length, and
+State open or ended. Each is added by spawn-each, which stops it if adding it
+fails. When Count reaches Limit, spawn-in first reads the monitors of those
+that have ended, so that a scope that a server keeps open does not grow with
+each isolate it ever had, and raises if one of them failed. Limit is then twice
+what is left, and 16 at least."
+
+(defun isolate.scope (F)
+  (let Scope (address-> (address-> (address-> (address-> (address-> (address-> (absvector 6)
+                 0 shen-jit.print-scope) 1 (isolate.self)) 2 ()) 3 0) 4 16) 5 open)
+    (trap-error (shen-jit.scope-join Scope (F Scope) ())
+      (lambda E (shen-jit.scope-failed Scope (error-to-string E))))))
+
+(defun isolate.spawn-in (Scope F X)
+  (do (shen-jit.scope-check Scope)
+  (do (if (< (<-address Scope 3) (<-address Scope 4)) skip (shen-jit.scope-prune Scope))
+      (isolate.spawn-each F (cons X ()) (lambda Started (shen-jit.scope-add Scope (hd Started)))))))
+
+(defun shen-jit.print-scope (V) "<scope>")
+
+(defun shen-jit.scope-check (Scope)
+  (cond ((not (shen-jit.scope? Scope))
+          (simple-error (cn "isolate.spawn-in: " (shen.app Scope " is not a scope" shen.s))))
+        ((not (= (<-address Scope 1) (isolate.self)))
+          (simple-error "isolate.spawn-in: a scope belongs to the isolate that made it"))
+        ((= (<-address Scope 5) ended) (simple-error "isolate.spawn-in: the scope has ended"))
+        (true true)))
+
+(defun shen-jit.scope? (X)
+  (and (absvector? X) (trap-error (= (<-address X 0) shen-jit.print-scope) (lambda E false))))
+
+(defun shen-jit.scope-add (Scope Entry)
+  (do (address-> Scope 2 (cons Entry (<-address Scope 2)))
+  (do (address-> Scope 3 (+ (<-address Scope 3) 1))
+      (hd Entry))))
+
+"Removes the entry of Monitor, which has been read, and closes Monitor."
+
+(defun shen-jit.scope-forget (Scope Monitor)
+  (do (address-> Scope 2 (shen-jit.scope-without Monitor (<-address Scope 2)))
+  (do (address-> Scope 3 (- (<-address Scope 3) 1))
+      (channel.close Monitor))))
+
+(defun shen-jit.scope-without (Monitor Started)
+  (cond ((= () Started) ())
+        ((= Monitor (tl (hd Started))) (tl Started))
+        (true (cons (hd Started) (shen-jit.scope-without Monitor (tl Started))))))
+
+(defun shen-jit.scope-monitors (Started)
+  (if (= () Started) () (cons (tl (hd Started)) (shen-jit.scope-monitors (tl Started)))))
+
+"What a monitor's [down I Reason] tells the scope's owner: () if the isolate
+returned, or the error the scope raises."
+
+(defun shen-jit.scope-failure (Down)
+  (let Reason (hd (tl (tl Down)))
+    (cond ((= Reason normal) ())
+          ((= Reason killed) "isolate.scope: an isolate was killed")
+          ((= Reason ended) "isolate.scope: an isolate could not start")
+          (true Reason))))
+
+"Once F has returned: each down as it comes, the first failure killing the
+rest."
+
+(defun shen-jit.scope-join (Scope Result Failure)
+  (do (address-> Scope 5 ended)
+      (if (= () (<-address Scope 2))
+          (if (= () Failure) Result (simple-error Failure))
+          (let Got (channel.receive-any (shen-jit.scope-monitors (<-address Scope 2)))
+            (let Now (shen-jit.scope-failure (hd (tl Got)))
+              (do (shen-jit.scope-forget Scope (hd Got))
+                  (if (and (= () Failure) (not (= () Now)))
+                      (do (shen-jit.kill-each (<-address Scope 2))
+                          (shen-jit.scope-join Scope Result Now))
+                      (shen-jit.scope-join Scope Result Failure))))))))
+
+(defun shen-jit.scope-failed (Scope Message)
+  (do (address-> Scope 5 ended)
+  (do (shen-jit.kill-each (<-address Scope 2))
+      (if (and (shen-jit.scope-await Scope false) (not (= Message "killed")))
+          (simple-error "killed")
+          (simple-error Message)))))
+
+"Waits for each isolate left, and gives whether a kill came meanwhile. Any other
+error, such as a Ctrl-C's, ends the wait, as the REPL then kills what the input
+spawned."
+
+(defun shen-jit.scope-await (Scope Killed)
+  (if (= () (<-address Scope 2))
+      Killed
+      (let Monitor (tl (hd (<-address Scope 2)))
+        (let Why (trap-error (do (channel.receive Monitor) ok) (lambda E (error-to-string E)))
+          (cond ((= Why "killed") (shen-jit.scope-await Scope true))
+                ((or (= Why ok) (= Why "channel closed"))
+                  (do (shen-jit.scope-forget Scope Monitor) (shen-jit.scope-await Scope Killed)))
+                (true (simple-error Why)))))))
+
+"Reads the monitors that have something, keeping the entries of the others. A
+failure seen raises at once; the entries not yet looked at are kept, and the
+ones read are dropped first."
+
+(defun shen-jit.scope-prune (Scope)
+  (do (address-> Scope 2 (shen-jit.scope-running Scope (<-address Scope 2) ()))
+  (do (address-> Scope 3 (length (<-address Scope 2)))
+      (address-> Scope 4 (if (> (<-address Scope 3) 8) (* 2 (<-address Scope 3)) 16)))))
+
+(defun shen-jit.scope-running (Scope Started Kept)
+  (if (= () Started)
+      Kept
+      (let Monitor (tl (hd Started))
+        (if (= (channel.wait-any (cons Monitor ()) 0) (cons timeout ()))
+            (shen-jit.scope-running Scope (tl Started) (cons (hd Started) Kept))
+            (let Failure (shen-jit.scope-failure (channel.receive Monitor))
+              (do (channel.close Monitor)
+                  (if (= () Failure)
+                      (shen-jit.scope-running Scope (tl Started) Kept)
+                      (do (address-> Scope 2 (append Kept (tl Started)))
+                      (do (address-> Scope 3 (length (<-address Scope 2)))
+                          (simple-error Failure))))))))))
+
 "Types for typed programs, and the two namespaces' exports, so that a client
 can write (use channel => c). An isolate is of type isolate, and endpoints of
 types (receiver A) and (sender A), A being what crosses them; the shapes of
@@ -790,6 +923,8 @@ only; what the datatypes define is not the program's, for shen.*userdefs*."
 (declare isolate.share [A --> A])
 (declare isolate.spawn-each [[isolate.worker A] --> [[list A] --> [[[list isolate.started] --> C] --> C]]])
 (declare isolate.stop-each [[list isolate.started] --> boolean])
+(declare isolate.scope [[isolate.scope --> A] --> A])
+(declare isolate.spawn-in [isolate.scope --> [[isolate.worker A] --> [A --> isolate]]])
 (declare channel.new [number --> [receiver A]])
 (declare channel.sender [[receiver A] --> [sender A]])
 (declare channel.give [[receiver A] --> [receiver A]])
@@ -803,8 +938,8 @@ only; what the datatypes define is not the program's, for shen.*userdefs*."
 (shen.x.namespaces.publish isolate
   [[spawn | isolate.spawn] [self | isolate.self] [kill | isolate.kill] [monitor | isolate.monitor]
    [check-kill | isolate.check-kill] [share | isolate.share] [spawn-each | isolate.spawn-each]
-   [stop-each | isolate.stop-each] [down | isolate.down] [started | isolate.started]
-   [reason | isolate.reason] [worker | isolate.worker]])
+   [stop-each | isolate.stop-each] [scope | isolate.scope] [spawn-in | isolate.spawn-in]
+   [down | isolate.down] [started | isolate.started] [reason | isolate.reason] [worker | isolate.worker]])
 (shen.x.namespaces.publish channel
   [[new | channel.new] [sender | channel.sender] [give | channel.give] [send | channel.send]
    [receive | channel.receive] [next | channel.next] [receive-any | channel.receive-any]
@@ -812,7 +947,8 @@ only; what the datatypes define is not the program's, for shen.*userdefs*."
    [got | channel.got] [ready | channel.ready]])
 (map (/. F (systemf F))
   [isolate.spawn isolate.self isolate.kill isolate.monitor isolate.check-kill isolate.share
-   isolate.spawn-each isolate.stop-each isolate.down isolate.started isolate.reason isolate.worker
+   isolate.spawn-each isolate.stop-each isolate.scope isolate.spawn-in isolate.down isolate.started
+   isolate.reason isolate.worker
    channel.new channel.sender channel.give channel.send channel.receive channel.next
    channel.receive-any channel.wait-any channel.close channel.endpoint channel.got channel.ready])"))
         (set shen.*userdefs* Userdefs))))
@@ -953,11 +1089,12 @@ from a template, which needs the arity."
               (cons isolate.kill (cons 1 (cons isolate.self (cons 0 (cons channel.next (cons 1
               (cons channel.wait-any (cons 2 (cons isolate.check-kill (cons 0 (cons isolate.share (cons 1
                 (cons isolate.spawn-each (cons 3 (cons isolate.stop-each (cons 1
+                (cons isolate.scope (cons 1 (cons isolate.spawn-in (cons 3 (cons shen-jit.print-scope (cons 1
                 (cons shen-jit.at-end (cons 1 (cons shen-jit.at-guards-dead (cons 1
                 (cons shen.tuple (cons 1 (cons shen.pvar (cons 1 (cons shen.dictionary (cons 1
                 (cons shen-jit.print-isolate (cons 1 (cons shen-jit.print-receiver (cons 1
                   (cons shen-jit.print-sender (cons 1 (cons shen-jit.print-given (cons 1
-                    ())))))))))))))))))))))))))))))))))))))))))))))))))))))
+                    ())))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-2 (cons a (cons b ()))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-3 (cons a (cons b (cons c ())))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-4 (cons a (cons b (cons c (cons d ()))))))
