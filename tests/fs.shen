@@ -215,6 +215,24 @@
         (fs-test.check "broken symlink exists only without following" (:result.ok false)
           (freeze (fs.exists? (fs-test.path "broken-link"))))) skip)
 
+(if (and (value fs-test.links) (not (io.file-windows?)))
+    (let Link (fs-test.path "made-link")
+      (do (fs-test.check "create a link" (:result.ok [])
+            (freeze (fs.symlink "data" Link)))
+          (fs-test.check "read a link's target as stored" (:result.ok "data")
+            (freeze (fs.read-link Link)))
+          (fs-test.check "a real path resolves links" (fs.real-path (fs-test.path "data"))
+            (freeze (fs.real-path Link)))
+          (fs-test.check "a link refuses an existing name" true
+            (freeze (io.error? (fs-test.error (fs.symlink "data" Link)))))
+          (fs.remove-file Link)))
+    skip)
+
+(fs-test.check "a missing path has no real path" true
+  (freeze (io.error? (fs-test.error (fs.real-path (fs-test.path "missing"))))))
+(fs-test.check "environment variables" [true []]
+  (freeze [(cons? (fs.getenv "PATH")) (fs.getenv "SHEN_FS_TEST_UNSET")]))
+
 (if (value fs-test.denied)
     (fs-test.check "exists does not hide permission errors" 13
       (freeze (io.error-code (fs-test.error (fs.exists? (fs-test.path "denied/file")))))) skip)
@@ -230,11 +248,26 @@
 
 (let Path (fs-test.path "collision")
      _ (io.write-file Path (buffer.from-string "existing"))
-     Error (fs-test.error (fs.temp-open Path))
+     Error (fs-test.error (fs.temp-open Path 384))
   (do (fs-test.check "exclusive creation refuses an existing file" 17
         (freeze (io.error-code Error)))
       (fs-test.check "exclusive creation does not change existing bytes" "existing"
         (freeze (fs-test.bytes Path)))))
+
+(let Path (fs-test.path "new-file")
+     Before (fs-test.ok (fs.list (value fs-test.root) []))
+  (do (fs-test.check "write a new file" (:result.ok 5)
+        (freeze (fs.write-new Path (buffer.from-string "fresh") 420)))
+      (fs-test.check "new file contents" "fresh"
+        (freeze (fs-test.bytes Path)))
+      (fs-test.check "write-new refuses an existing name" true
+        (freeze (io.error? (fs-test.error (fs.write-new Path (buffer.from-string "other") 420)))))
+      (fs-test.check "refused write-new keeps the file" "fresh"
+        (freeze (fs-test.bytes Path)))
+      (fs-test.check "refused write-new leaves no temporary file" (+ 1 (length Before))
+        (freeze (length (fs-test.ok (fs.list (value fs-test.root) [])))))
+      (fs-test.check "mode above 4095 raises" [raised "fs: mode must be at most 4095"]
+        (freeze (fs.write-new (fs-test.path "other") (buffer.new 0) 4096)))))
 
 (let Saved (io.record [[]])
      Result (fs.with-temp-file (value fs-test.root) "cleanup-"

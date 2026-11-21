@@ -7252,6 +7252,31 @@ relation of one tuple a key or rule that makes a string, as interned values must
   from empty, growth included, takes about 20 ns a key in typed Shen by the rows above, against about 9 in the
   earlier version's native loop.
 
+## Local Git repositories
+
+- **The library** (2026-11-21, Apple M3 Max). The optional `git` module implements in Shen repository discovery,
+  loose and packed objects with offset and reference deltas, the index, versions 2 to 4, refs under `.lock`
+  files, Git's config syntax, ignore rules, status, staging, switching with rollback, three-way merges of
+  distinct paths, Myers diffs in linear space with Git's hunks, clone and repack. Its adapter is SHA-1 and
+  SHA-256 written from FIPS 180-4, zlib, CRC32 and an `lstat` that fills the index's stat fields; it needed
+  OpenSSL for the digests before. New files come from `fs.write-new`, a temporary file made with Git's mode
+  and renamed without replacement, so they have Git's permissions under any umask. The API is typed, and a
+  switch, merge, commit or ref update gives an outcome rather than a raised string. The `shen-git` example is
+  a typed program over it. `make test-shen-git` checks a typed client, and the example's repositories,
+  patches, packs and modes in both hash formats against Git 2.50.
+- **Stat data, packs and delta bases** (2026-11-21, Apple M3 Max, against the first version of the library).
+  Status, diff, add and switch read a file again only when its stat data changed or is as recent as the
+  index, as Git does; before, they hashed every tracked file, and Git saw every staged file as modified until
+  it refreshed its index. Packs stay open on the repository handle, checked by their trailer, where moving
+  between two packs read the other one again and hashed it whole, up to 512 MiB. Delta bases are kept by
+  offset, up to 16 MiB: reading the 50 versions of a 200 KB file packed with `--depth=50`, chains up to 32
+  long, in one process took 32 ms without them and 5 ms with them.
+- **Rejected or left out.** Delta compression in repack, which writes full objects: it would make packs
+  smaller, but the search for deltas is most of what packing costs, and nothing local needed smaller packs.
+  The code points that HFS+ ignores in names, which Git's `core.protectHFS` checks so that a name such as
+  `.g` followed by a zero-width joiner and `it` cannot reach `.git` on macOS: the library refuses `.git` in any
+  ASCII case and `git~1`, but not those spellings.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.

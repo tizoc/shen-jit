@@ -1,0 +1,10 @@
+(shen.module
+  (version 1)
+  (name git)
+  (requires fs ffi result buffer layout)
+  (requires-features shen-jit/ffi)
+  (sources tc+ "git/formats.shen"
+    tc- "git/bytes.shen" "git/repository.shen" "git/pack.shen" "git/objects.shen" "git/index.shen"
+        "git/ignore.shen" "git/worktree.shen" "git/switch.shen" "git/repack.shen" "git/history.shen"
+        "git/diff.shen"
+    tc+ "git/git-typed.shen"))

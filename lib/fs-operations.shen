@@ -12,7 +12,7 @@
   (export copy-file exists? fs.lstat => lstat fs.mkdir => mkdir mkdirs
     fs.rename => rename fs.replace => replace fs.stat => stat
     fs.temp-directory => temp-directory fs.temp-file => temp-file
-    remove-directory remove-file with-replacement with-temp-file write-replace)
+    remove-directory remove-file with-replacement with-temp-file write-new write-replace)
 
 (define fs.stat
   {string --> (io.result info)}
@@ -78,7 +78,7 @@
   Parent Prefix ->
     (do (prefix Prefix)
         (let-ok Root (fs.resolve Parent)
-          (trap-error (temp-file-try Root Prefix 64)
+          (trap-error (temp-file-try Root Prefix 64 384)
             (/. X (err (io.native-error temp-file foreign 0 Root (error-to-string X))))))))
 
 (define with-temp-open
@@ -103,13 +103,13 @@
   Result -> Result)
 
 (define replace-open
-  {string --> (io.endpoint --> (io.result A)) --> (io.result (string * io.endpoint)) -->
+  {string --> boolean --> (io.endpoint --> (io.result A)) --> (io.result (string * io.endpoint)) -->
    (io.result A)}
-  _ _ (:err Error) -> (err Error)
-  Path F (:ok (@p Temporary E)) ->
+  _ _ _ (:err Error) -> (err Error)
+  Path Replace F (:ok (@p Temporary E)) ->
     (let Result (io.with-endpoint E F)
          Moved (if (result.ok? Result)
-                   (io.finish Result (rename-path Temporary Path true))
+                   (io.finish Result (rename-path Temporary Path Replace))
                    Result)
       (if (result.ok? Moved)
           Moved
@@ -119,7 +119,7 @@
   {string --> (io.endpoint --> (io.result A)) --> (io.result A)}
   Path F ->
     (let-ok Resolved (fs.resolve Path)
-      (replace-open Resolved F (temp-file-try (parent Resolved) ".shen-" 64))))
+      (replace-open Resolved true F (temp-file-try (parent Resolved) ".shen-" 64 384))))
 
 (define new-byte-count
   {--> (vector fixnum)}
@@ -154,6 +154,19 @@
          State (new-byte-count)
          Result (with-replacement Path
                   (/. E (write-chunk State E View 0 (buffer.length View))))
+      (counted State Result)))
+
+\\ A new file appears whole or not at all, and an existing name is an error, as for a lock.
+(define write-new
+  {string --> buffer.view --> fixnum --> (io.result fixnum)}
+  Path View Mode ->
+    (let _ (buffer.check View)
+         Bits (if (fx<= (buffer.index Mode) 4095) Mode (error "fs: mode must be at most 4095"))
+         State (new-byte-count)
+         Result (let-ok Resolved (fs.resolve Path)
+                  (replace-open Resolved false
+                    (/. E (write-chunk State E View 0 (buffer.length View)))
+                    (temp-file-try (parent Resolved) ".shen-" 64 (fx->number Bits))))
       (counted State Result)))
 
 (define copy-read

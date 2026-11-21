@@ -26,6 +26,7 @@ local PAGES = {
   parallel = 'Parallel map',
   ['tree-sitter'] = 'Tree-sitter bindings',
   framing = 'Binary framing',
+  git = 'Local Git repositories',
   hyperloglog = 'HyperLogLog++ sketches',
   ['io-sockets'] = 'Socket I/O endpoints',
   ['networking'] = 'Networking',

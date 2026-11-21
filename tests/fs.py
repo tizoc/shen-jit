@@ -175,7 +175,11 @@ def main():
             assert (root / "destination").read_bytes() == BINARY
             assert (root / "relative-copy").read_bytes() == BINARY
             assert not any(p.name.startswith(".shen-") for p in root.iterdir()), "temporary file leaked"
-            print("3 passed, 0 failed", flush=True)
+            if os.name != "nt":
+                umask = os.umask(0)
+                os.umask(umask)
+                assert (root / "new-file").stat().st_mode & 0o7777 == 0o644 & ~umask
+            print("4 passed, 0 failed", flush=True)
 
             typed = '(do (output "~A~%" (if (fs-typed.run ' + string(root)
             typed += ') "6 passed, 0 failed" "0 passed, 1 failed")) true)'

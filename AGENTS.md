@@ -19,9 +19,9 @@ checkout's own workflow, and git ignores it.
 | `docs/` | The guide's source, and how it works |
 | `site/` | What renders the guide: pandoc's template and a filter |
 | `include/` | `shen.h`, for C written for Shen |
-| `lib/` | Libraries that are not in the default image, loaded on request as modules, each described by a `.shenmod` file beside it ([docs/modules.md](docs/modules.md)): `native.shen`, native code written by hand and the rules bytecode is checked against, `ffi.shen`, calling C, and `memory.shen`, `mmap.shen`, `sqlite.shen` and `socket.shen` over it, `handle.shen`, which releases memory once nothing reaches it, `datalog.shen`, relations and recursive rules, over `native.shen`, `buffer.shen`, with `buffer-view.shen`, its struct, and `buffer-typed.shen`, its typed checks, and `cursor.shen`, views over bytes, `layout.shen`, binary layouts over those, `grammar.shen`, parsers over those, I/O over those (`io/`, `frame.shen`, `deadline.shen` and `clock.shen`), with its results from `result.shen`, HTTP/1.1 over that (`http/`), `json.shen`, `parallel.shen`, a map over isolates, `numbers.shen`, fixnum and float types for typed code, `floats.shen`, arrays of doubles over it, `word.shen`, 64-bit words for it, `words.shen`, arrays of them, and `hyperloglog/`, distinct counts over those |
+| `lib/` | Libraries that are not in the default image, loaded on request as modules, each described by a `.shenmod` file beside it ([docs/modules.md](docs/modules.md)): `native.shen`, native code written by hand and the rules bytecode is checked against, `ffi.shen`, calling C, and `memory.shen`, `mmap.shen`, `sqlite.shen` and `socket.shen` over it, `handle.shen`, which releases memory once nothing reaches it, `datalog.shen`, relations and recursive rules, over `native.shen`, `buffer.shen`, with `buffer-view.shen`, its struct, and `buffer-typed.shen`, its typed checks, and `cursor.shen`, views over bytes, `layout.shen`, binary layouts over those, `grammar.shen`, parsers over those, I/O over those (`io/`, `frame.shen`, `deadline.shen` and `clock.shen`), with its results from `result.shen`, HTTP/1.1 over that (`http/`), `json.shen`, `parallel.shen`, a map over isolates, `numbers.shen`, fixnum and float types for typed code, `floats.shen`, arrays of doubles over it, `word.shen`, 64-bit words for it, `words.shen`, arrays of them, `hyperloglog/`, distinct counts over those, and `git/`, local Git repositories over `fs.shen` and `layout.shen` |
 | `tools/` | Scripts: `stlib.shen` writes the executable of `make stlib`, `ci-deps.sh` fetches the kernel, the earlier release that builds this one, Shen/Scheme and CI's pandoc, `package.sh` makes a release archive, `release-notes.sh` prints a version's section of the changelog, `tree-sitter-deps.sh` fetches the pinned Tree-sitter runtime and C grammar, `hyperloglog-calibrate.c` generates the HyperLogLog++ bias table, and `buffer-parsers.shen`, `frame-echo.shen`, `http-echo.shen`, `http-head-capture.shen`, `fs-copy.shen`, `process-filter.shen` and `curl-fetch.shen` are small examples over the libraries |
-| `example-apps/` | Runnable applications built over the public libraries, each with its own README and independent test: `sqlite-http` over HTTP and SQLite, `depends` over Datalog, `source-facts`, C source facts from Tree-sitter, and `source-deps`, those facts in Datalog |
+| `example-apps/` | Runnable applications built over the public libraries, each with its own README and independent test: `sqlite-http` over HTTP and SQLite, `depends` over Datalog, `source-facts`, C source facts from Tree-sitter, `source-deps`, those facts in Datalog, and `shen-git`, a Git client over `git` |
 | `assets/` | The logos and icons |
 | `tests/` | Unit tests, `eval-kl` cases, CLI tests and benchmark drivers |
 | `contract/` | The contract examples, and Shen/Scheme's results for them |
@@ -39,6 +39,12 @@ runs the pure checks and skips native work before compiling adapters or starting
 `lib/tree-sitter.shen` adds complete-input syntax snapshots and bounded structural query captures.
 `make tree-sitter` builds its adapter against Tree-sitter >= 0.25. `make deps-tree-sitter` fetches
 the pinned runtime/C grammar for tests; loading or testing never downloads them implicitly.
+
+`make git` builds the POSIX adapter for the `git` library in `lib/git/`: SHA-1, SHA-256, zlib, CRC32
+and index stat data, with zlib from `pkg-config` or `-lz`. `make shen-git` builds the example client
+in `example-apps/shen-git/`. `make test-shen-git` checks a typed client of the library and the
+client's repositories against Git; it needs a C compiler, zlib's headers, Git 2.29 or newer and
+Python 3.8 or newer, and skips, saying why, without one of them, on a static build or on Windows.
 
 ## Priorities
 
@@ -91,13 +97,14 @@ Run what the change can break, and nothing more: CI runs everything on every pus
 | `net/ipv6`, `net/ipv6-headers`, `net/fragments6`, `net/ndp` | `make test-net-ipv6` for IPv6 transport, reassembly, ICMPv6, and SLAAC checks |
 | `net/multicast` | `make test-net-multicast` for group lifecycle, queue backpressure and legacy query compatibility |
 | `net/tun`, `net/ethernet` | `make test-net-tun test-net-tap` in an isolated Linux network namespace with `/dev/net/tun`, `iproute2`, `ping`, and Python 3 |
+| `git` (`lib/git/`) or `example-apps/shen-git` | `make test-shen-git`, and `make test-fs` when `lib/fs.*` changes |
 | An application in `example-apps/` | `test-http` for `sqlite-http`, `test-datalog` for `depends` and `source-deps`, `test-tree-sitter` for `source-facts` |
 | A test, `Makefile`, `tools/` or CI | What the edit touches |
 | Documentation only | Nothing; `make guide` if a rendered page's layout changed, and the examples you changed |
 
 `make test-core` is `test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn
 test-native test-ffi test-overrides test-structs test-isolates test-modules test-typed`, and `make test-libs` is `test-buffer test-layout test-hyperloglog test-json test-io test-net-udp test-net-tcp test-net-interface test-net-clients test-net-ipv6 test-net-multicast test-fs test-process
-test-tree-sitter test-http test-datalog test-curl test-namespaces test-parallel`.
+test-tree-sitter test-http test-datalog test-curl test-namespaces test-parallel test-shen-git`.
 
 Keep each suite fast. A check that needs a collection at every allocation, a long wait or a large input goes in a
 stress target that CI runs, as `test-lib-stress` holds the libraries' saved images reloaded under GC stress: a test

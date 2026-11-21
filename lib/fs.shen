@@ -4,20 +4,22 @@
 (shen.x.namespace fs
   (use buffer)
   (use io)
+  (use option)
   (use result)
   (import result let-ok ok err)
   (use shen-jit)
   (import struct defstruct)
   (externals [blocking bool bytes continue copy crt define-foreign define-foreign-procedure
     depth-limit directory done entry-limit int32 int64 library lstat mkdir
-    name-byte-limit other posix random read-write rename replace resolve rmdir shen skip stat
-    stop symlink temp-directory temp-file uint32 unlink void walk win32 write])
+    name-byte-limit other posix random read-write readlink realpath rename replace resolve rmdir
+    shen skip stat stop symlink temp-directory temp-file uint32 unlink void walk win32 write])
   (shadow copy-file)
-  (export *adapter-files* accessed copy-file exists? extension info join kind fs.list => list
-    fs.lstat => lstat fs.mkdir => mkdir mkdirs modified name option parent path remove-directory
-    remove-file fs.rename => rename fs.replace => replace fs.resolve => resolve resolve-at size
-    fs.stat => stat fs.temp-directory => temp-directory fs.temp-file => temp-file visit
-    fs.walk => walk with-replacement with-temp-file write-replace)
+  (export *adapter-files* accessed copy-file exists? extension getenv info join kind fs.list => list
+    fs.lstat => lstat fs.mkdir => mkdir mkdirs modified name option parent path read-link
+    real-path remove-directory remove-file fs.rename => rename fs.replace => replace
+    fs.resolve => resolve resolve-at size fs.stat => stat fs.symlink => symlink
+    fs.temp-directory => temp-directory fs.temp-file => temp-file visit fs.walk => walk
+    with-replacement with-temp-file write-new write-replace)
 
 (shen-jit.library adapter
   (trap-error (value *adapter-files*)
@@ -28,6 +30,8 @@
 (define-foreign-procedure c-list adapter "shen_fs_list" 3)
 (define-foreign-procedure c-rename adapter "shen_fs_rename" 3)
 (define-foreign-procedure c-resolve adapter "shen_fs_resolve" 1)
+(define-foreign-procedure c-real-path adapter "shen_fs_real_path" 1)
+(define-foreign-procedure c-read-link adapter "shen_fs_read_link" 1)
 
 (define-foreign c-mkdir io.file-lib "mkdir" (string int32) --> int32 blocking)
 (define-foreign c-wmkdir io.file-lib "_wmkdir" (bytes) --> int32 blocking)
@@ -35,6 +39,8 @@
   ((if (io.file-windows?) bytes string)) --> int32 blocking)
 (define-foreign c-rmdir io.file-lib (if (io.file-windows?) "_wrmdir" "rmdir")
   ((if (io.file-windows?) bytes string)) --> int32 blocking)
+(define-foreign c-symlink io.file-lib "symlink" (string string) --> int32 blocking)
+(define-foreign c-getenv io.file-lib "getenv" (string) --> string)
 (define-foreign c-random-linux io.file-lib "getrandom" (bytes int64 uint32) --> int64 blocking)
 (define-foreign c-random-mac io.file-lib "arc4random_buf" (bytes int64) --> void blocking)
 (shen-jit.library random-win ["advapi32.dll"])
@@ -238,6 +244,21 @@
 (define remove-directory-path
   Path -> (simple rmdir Path (function c-rmdir)))
 
+(define real-path-of
+  Path -> (native realpath Path (freeze (c-real-path Path))))
+
+(define read-link-path
+  Path -> (native readlink Path (freeze (c-read-link Path))))
+
+(define symlink-path
+  Target Path ->
+    (if (io.file-windows?)
+        (:err (io.native-error symlink library 0 Path "creating a link is not supported on Windows"))
+        (simple symlink Path (/. Native (c-symlink Target Native)))))
+
+(define environment-value
+  Name -> (let Value (c-getenv Name) (if (string? Value) [Value] [])))
+
 (define rename-path
   From To Replace ->
     (let Resource (cn From (cn " -> " To))
@@ -281,11 +302,12 @@
 (define random-name
   Prefix -> (let-ok Bytes (random-bytes) (:ok (hex Bytes 0 Prefix))))
 
+\\ Windows takes only the owner's read and write bits, as a read-only attribute.
 (define temp-open
-  Path ->
+  Path Mode ->
     (let-ok Native (io.file-native-name Path)
       (let Flags (+ (io.file-flags read-write) (io.file-by-os 192 2560 1280))
-           Fd (io.file-c-open Native Flags 384)
+           Fd (io.file-c-open Native Flags (if (io.file-windows?) (shen-jit.bit-and Mode 384) Mode))
            Code (shen-jit.c-errno)
         (if (< Fd 0)
             (:err (io.file-error temp-file Path Code))
@@ -293,18 +315,18 @@
                                (freeze (do (io.file-c-close Fd) (c-unlink Native))))))))
 
 (define temp-created
-  _ _ _ (:ok Value) -> (:ok Value)
-  Parent Prefix Attempts (:err Error) ->
+  _ _ _ _ (:ok Value) -> (:ok Value)
+  Parent Prefix Attempts Mode (:err Error) ->
     (if (= (io.error-code Error) 17)
-        (temp-file-try Parent Prefix (- Attempts 1))
+        (temp-file-try Parent Prefix (- Attempts 1) Mode)
         (:err Error)))
 
 (define temp-file-try
-  Parent _ 0 ->
+  Parent _ 0 _ ->
     (:err (io.native-error temp-file limit 0 Parent "temporary name collision limit exceeded"))
-  Parent Prefix Attempts ->
+  Parent Prefix Attempts Mode ->
     (let-ok Name (random-name Prefix)
-      (temp-created Parent Prefix Attempts (temp-open (join Parent Name)))))
+      (temp-created Parent Prefix Attempts Mode (temp-open (join Parent Name) Mode))))
 
 (datatype t
   N : number;
@@ -338,9 +360,14 @@
 (declare random-name [string --> [result.t [io.error * string]]])
 (declare stat-path [string --> [boolean --> [result.t [io.error * info]]]])
 (declare remove-file-path [string --> [result.t [io.error * result.empty]]])
+(declare real-path-of [string --> [result.t [io.error * string]]])
+(declare read-link-path [string --> [result.t [io.error * string]]])
+(declare symlink-path [string --> [string --> [result.t [io.error * result.empty]]]])
+(declare environment-value [string --> [option.t string]])
 (declare rename-path [string --> [string --> [boolean --> [result.t [io.error * result.empty]]]]])
 (declare resolve-pair [string --> [string --> [result.t [io.error * [string * string]]]]])
-(declare temp-file-try [string --> [string --> [number --> [result.t [io.error * [string * io.endpoint]]]]]])
+(declare temp-file-try
+  [string --> [string --> [number --> [number --> [result.t [io.error * [string * io.endpoint]]]]]]])
 
 (declare fs.resolve [string --> [result.t [io.error * string]]])
 (declare fs.list [string --> [[list option] --> [result.t [io.error * [list string]]]]])

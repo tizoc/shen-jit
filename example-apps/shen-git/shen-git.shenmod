@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name shen-git)
+  (requires git buffer fs)
+  (main shen-git.entry)
+  (sources tc- "console.shen" tc+ "commands.shen"))

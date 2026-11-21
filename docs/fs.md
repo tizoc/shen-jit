@@ -52,7 +52,7 @@ Resolution uses the existing file module's `*home-directory*` convention, snapsh
 operation, and produces paths that can be passed back to I/O without applying the home prefix twice.
 It never changes the native process cwd. POSIX resolution preserves `.` and `..` components, including
 their interaction with symlinks. Windows uses `GetFullPathNameW` semantics. This is not `realpath`,
-and lexical path manipulation does not establish confinement to a directory.
+which `fs.real-path` below is, and lexical path manipulation does not establish confinement to a directory.
 
 ## Metadata and errors
 
@@ -154,9 +154,24 @@ uses `fs.remove-directory`, following native directory-link behavior.
 
 No-overwrite rename uses `renameat2(RENAME_NOREPLACE)` on Linux, `renamex_np(RENAME_EXCL)` on macOS
 and `MoveFileExW` without replacement on Windows. It does not emulate exclusivity with an existence
-check. Linux needs glibc 2.28 or newer and kernel/filesystem support for that operation; unsupported
-cases remain errors. Rename and replacement do not fall back to copying across filesystems/volumes.
+check. Linux needs glibc 2.28 or newer; on a filesystem without `RENAME_NOREPLACE` it links the new
+name and unlinks the old, as `link` also refuses an existing name. Rename and replacement do not fall
+back to copying across filesystems/volumes.
 Replacement of existing directories is OS-dependent; Windows rejects it.
+
+## Links, real paths and the environment
+
+| Function | Result |
+| --- | --- |
+| `(fs.symlink Target Path)` | `(:result.ok [])` once Path is a symbolic link to Target, which is stored as given, so relative to Path's directory unless absolute |
+| `(fs.read-link Path)` | `(:result.ok Target)`, a link's target as its bytes |
+| `(fs.real-path Path)` | `(:result.ok Real)`, the existing Path with every link, `.` and `..` resolved |
+| `(fs.getenv Name)` | `[Value]`, or `[]` when the environment has no such variable |
+
+They use `symlink`, `readlink`, `realpath` and `getenv`. On Windows, `fs.real-path` uses
+`GetFinalPathNameByHandleW` and gives the path without its `\\?\` prefix, `fs.getenv` gives the
+variable in the ANSI code page, and the other two give a `library` error, as Windows links need a
+privilege or developer mode.
 
 ## Temporary files and replacement output
 
@@ -185,6 +200,11 @@ Both scopes take a callback returning `(io.result A)`. A transfer failure carrie
 ```
 
 `fs.write-replace` validates a view before creating output and returns `(:result.ok Bytes)` or `(:result.err Error)`.
+`(fs.write-new Path View Mode)` writes a new file the same way, but renames its temporary sibling without
+replacement: Path appears with all its bytes or not at all, and an existing entry is an error, with code 17,
+`EEXIST`, on POSIX. Written empty, it takes a lock file. The temporary file is made with permissions Mode,
+at most 4095, which POSIX filters by umask as `open` does, so 438 (0666) gives what a new file usually has.
+Windows keeps only the owner's write bit, as the read-only attribute.
 `(fs.copy-file From To ByteLimit)` copies regular-file contents in 64 KiB chunks through the same
 replacement path. It follows source file links, rejects non-regular sources, and returns `(:result.ok Bytes)`
 or an error. A source that exceeds the quota leaves the original destination unchanged. Errors

@@ -85,6 +85,24 @@ $(FS_ADAPTER): lib/fs.c lib/build-fs.sh include/shen.h | $(BUILD)
 test-fs: $(BUILD)/shen-jit
 	CC="$(CC)" sh tests/fs.sh $(SHEN_JIT)
 
+# Optional: the git library's adapter, for POSIX systems with zlib, and its example client.
+.PHONY: git shen-git test-shen-git
+SHEN_GIT_APP := example-apps/shen-git
+SHEN_GIT_NATIVE := $(BUILD)/shen-git-native.so
+git: $(FS_ADAPTER) $(SHEN_GIT_NATIVE)
+shen-git: $(BUILD)/shen-git
+
+$(SHEN_GIT_NATIVE): lib/git/native.c lib/git/build-native.sh include/shen.h | $(BUILD)
+	CC="$(CC)" CFLAGS="$(CFLAGS)" sh lib/git/build-native.sh $@
+
+$(BUILD)/shen-git: $(BUILD)/shen-jit $(FS_ADAPTER) $(SHEN_GIT_NATIVE) \
+                  $(SHEN_GIT_APP)/shen-git.shenmod $(wildcard $(SHEN_GIT_APP)/*.shen) \
+                  $(wildcard lib/*.shen lib/*.shenmod lib/git/*.shen lib/io/*.shen)
+	$(BUILD)/shen-jit build $(SHEN_GIT_APP)/shen-git.shenmod -o $@
+
+test-shen-git: $(BUILD)/shen-jit
+	CC="$(CC)" sh $(SHEN_GIT_APP)/test.sh $(SHEN_JIT)
+
 .PHONY: process test-process
 process: $(PROCESS_ADAPTER)
 
@@ -270,7 +288,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words option result buffers layout grammar io fs processes parallel tree-sitter framing io-sockets hyperloglog networking net-udp net-tcp net-tun deadlines http-head http http-streaming http-listener json datalog curl
+GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words option result buffers layout grammar io fs processes parallel tree-sitter framing io-sockets git hyperloglog networking net-udp net-tcp net-tun deadlines http-head http http-streaming http-listener json datalog curl
 PANDOC ?= pandoc
 GUIDE_PANDOC := $(PANDOC) -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
@@ -384,7 +402,7 @@ test-isolates-stress: $(BUILD)/shen-jit
 
 # Every library's suite, without the collections test-lib-stress adds (about 30 s).
 test-libs: test-buffer test-layout test-hyperloglog test-json test-io test-net-udp test-net-tcp test-net-interface test-net-clients test-net-ipv6 test-net-multicast test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces \
-  test-parallel
+  test-parallel test-shen-git
 
 .PHONY: test-isolates test-isolates-stress test-parallel
 
@@ -409,6 +427,7 @@ test-lib-stress: $(BUILD)/shen-jit
 	for t in $(LIB_IMAGE_TESTS); do TEST_GC_STRESS=1 sh tests/$$t.sh $(SHEN_JIT) || exit 1; done
 	TEST_GC_STRESS=1 CC="$(CC)" sh tests/curl.sh $(SHEN_JIT)
 	TEST_GC_STRESS=1 CC="$(CC)" sh example-apps/source-deps/test.sh $(SHEN_JIT)
+	TEST_GC_STRESS=1 CC="$(CC)" sh example-apps/shen-git/test.sh $(SHEN_JIT)
 
 # The optional standard library: an executable of its own, with the kernel's
 # precompiled stlib in its image (docs/guide.md, "The standard library").

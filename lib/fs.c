@@ -123,6 +123,25 @@ static shen_value reply(shen_vm *vm, Error e, shen_value payload)
     return text == SHEN_ERROR ? SHEN_ERROR : out;
 }
 
+#ifdef _WIN32
+/* A new UTF-8 copy of a wide string, or NULL with the error. */
+static char *narrow(const wchar_t *wide, Error *e)
+{
+    int bytes = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, NULL, 0, NULL, NULL);
+    char *text = bytes ? malloc((size_t)bytes) : NULL;
+    if (!bytes)
+        *e = native_error(GetLastError());
+    else if (!text)
+        *e = (Error){3, 0, "cannot allocate path"};
+    else if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, text, bytes, NULL, NULL)) {
+        *e = native_error(GetLastError());
+        free(text);
+        text = NULL;
+    }
+    return text;
+}
+#endif
+
 EXPORT int shen_fs_abi(void)
 {
     return 1;
@@ -153,20 +172,8 @@ EXPORT shen_value shen_fs_resolve(shen_vm *vm, shen_value *args)
             e = native_error(GetLastError());
         else if (n >= size)
             e = (Error){3, 0, "current directory changed while resolving a path"};
-        else {
-            int bytes =
-                WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, NULL, 0, NULL, NULL);
-            if (!bytes)
-                e = native_error(GetLastError());
-            else {
-                text = malloc((size_t)bytes);
-                if (!text)
-                    e = (Error){3, 0, "cannot allocate current directory"};
-                else if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide, -1, text, bytes,
-                                              NULL, NULL))
-                    e = native_error(GetLastError());
-            }
-        }
+        else
+            text = narrow(wide, &e);
     }
     free(wide);
 #else
@@ -490,8 +497,12 @@ EXPORT shen_value shen_fs_rename(shen_vm *vm, shen_value *args)
         else
             rc = renamex_np(from.text, to.text, RENAME_EXCL);
 #else
-        else
+        else {
             rc = renameat2(AT_FDCWD, from.text, AT_FDCWD, to.text, RENAME_NOREPLACE);
+            /* A filesystem without RENAME_NOREPLACE: link refuses an existing name too. */
+            if (rc < 0 && (errno == EINVAL || errno == ENOSYS) && (rc = link(from.text, to.text)) == 0)
+                unlink(from.text);
+        }
 #endif
         if (rc < 0)
             e = native_error(errno);
@@ -501,4 +512,86 @@ EXPORT shen_value shen_fs_rename(shen_vm *vm, shen_value *args)
     free_path(&from);
     free_path(&to);
     return reply(vm, e, SHEN_NIL);
+}
+
+/* The path with every link resolved, which names the same file. */
+EXPORT shen_value shen_fs_real_path(shen_vm *vm, shen_value *args)
+{
+    Error e = {0};
+    Path p = {0};
+    char *text = NULL;
+    if (read_path(vm, args[0], &p, &e)) {
+        void *token = shen_release(vm);
+#ifdef _WIN32
+        HANDLE h = CreateFileW(p.wide, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                               NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+        wchar_t *wide = malloc(32768 * sizeof *wide);
+        if (h == INVALID_HANDLE_VALUE)
+            e = native_error(GetLastError());
+        else if (!wide)
+            e = (Error){3, 0, "cannot allocate path"};
+        else {
+            DWORD n = GetFinalPathNameByHandleW(h, wide, 32768, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+            if (!n || n >= 32768)
+                e = n ? (Error){4, 0, "resolved path is too long"} : native_error(GetLastError());
+            else if (!wcsncmp(wide, L"\\\\?\\UNC\\", 8)) {
+                wide[6] = L'\\';
+                text = narrow(wide + 6, &e);
+            } else
+                text = narrow(wide + (wcsncmp(wide, L"\\\\?\\", 4) ? 0 : 4), &e);
+        }
+        if (h != INVALID_HANDLE_VALUE && !CloseHandle(h) && !e.domain)
+            e = native_error(GetLastError());
+        free(wide);
+#else
+        text = realpath(p.text, NULL);
+        if (!text)
+            e = native_error(errno);
+#endif
+        shen_acquire(vm, token);
+    }
+    free_path(&p);
+    shen_value payload = e.domain ? SHEN_NIL : shen_make_string(vm, text, strlen(text));
+    free(text);
+    return payload == SHEN_ERROR ? SHEN_ERROR : reply(vm, e, payload);
+}
+
+/* A link's target as its bytes; Windows reparse data is not read. */
+EXPORT shen_value shen_fs_read_link(shen_vm *vm, shen_value *args)
+{
+    Error e = {0};
+    Path p = {0};
+    char *text = NULL;
+    size_t n = 0;
+    if (read_path(vm, args[0], &p, &e)) {
+        void *token = shen_release(vm);
+#ifdef _WIN32
+        e = (Error){3, 0, "reading a link is not supported on Windows"};
+#else
+        for (size_t capacity = 256; !e.domain; capacity *= 2) {
+            text = malloc(capacity);
+            if (!text) {
+                e = (Error){3, 0, "cannot allocate link target"};
+                break;
+            }
+            ssize_t r = readlink(p.text, text, capacity);
+            int code = errno;
+            if (r >= 0 && (size_t)r < capacity) {
+                n = (size_t)r;
+                break;
+            }
+            free(text);
+            text = NULL;
+            if (r < 0)
+                e = native_error(code);
+            else if (capacity == 1048576)
+                e = (Error){4, 0, "link target exceeds 1 MiB"};
+        }
+#endif
+        shen_acquire(vm, token);
+    }
+    free_path(&p);
+    shen_value payload = e.domain ? SHEN_NIL : shen_make_string(vm, text, n);
+    free(text);
+    return payload == SHEN_ERROR ? SHEN_ERROR : reply(vm, e, payload);
 }

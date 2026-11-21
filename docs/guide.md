@@ -775,6 +775,14 @@ Values go in and come out as Shen values: a number is an INTEGER or a REAL, a st
 BLOB, and `[]` is NULL. `true` and `false` go in as 1 and 0. Errors raise, with SQLite's message. A connection belongs
 to the isolate that opened it.
 
+#### Git
+
+The [Git library](https://github.com/tizoc/shen-jit/blob/main/docs/git.md) opens local Git
+repositories and exposes objects, refs, the index, history, diffs and worktree operations, with types
+for typed programs. A switch, merge, commit or ref update gives an outcome to match, such as the
+paths a merge conflicts at, rather than raising. Use `make git` to build its optional POSIX adapter,
+which needs zlib, and `shen-jit eval -m git` to load the module.
+
 ### Example applications
 
 Each is in `example-apps/`, with a README and a test of its own, and in the release archives.
@@ -789,6 +797,8 @@ Each is in `example-apps/`, with a README and a test of its own, and in the rele
   database, it preprocesses each file as the build does.
 - [`source-deps`](https://github.com/tizoc/shen-jit/blob/main/example-apps/source-deps/README.md): reads those facts
   into Datalog, matches calls with definitions, and answers which functions one reaches and which depend on it.
+- [`shen-git`](https://github.com/tizoc/shen-jit/blob/main/example-apps/shen-git/README.md) is a
+  local command-line client using the Git library.
 
 Smaller examples are in `tools/`, each on the page of the libraries it uses.
 
@@ -1236,7 +1246,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | Target | What it does |
 | --- | --- |
 | `make test-core` | `test`, `test-jit`, `test-ops`, `test-kl`, `check-lowerer`, `check-generated`, `test-kernel`, `test-stlib`, `test-thorn`, `test-native`, `test-ffi`, `test-overrides`, `test-structs`, `test-isolates`, `test-modules` and `test-typed` |
-| `make test-libs` | `test-buffer`, `test-json`, `test-io`, `test-net-udp`, `test-net-tcp`, `test-net-interface`, `test-net-clients`, `test-net-ipv6`, `test-net-multicast`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl`, `test-namespaces` and `test-parallel` |
+| `make test-libs` | `test-buffer`, `test-layout`, `test-hyperloglog`, `test-json`, `test-io`, `test-net-udp`, `test-net-tcp`, `test-net-interface`, `test-net-clients`, `test-net-ipv6`, `test-net-multicast`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl`, `test-namespaces`, `test-parallel` and `test-shen-git` |
 | `make test` | The runtime's unit tests |
 | `make test-jit`, `make test-ops` | The JIT and the instructions, on small programs |
 | `make test-kl` | The `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
@@ -1252,6 +1262,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-namespaces` | Library exports, aliases, imports, types and scoped DSL vocabulary in the base and stlib executables, and in their saved images |
 | `make test-json` | JSON syntax/encoding, Unicode, exact numbers, builders, typing and images/GC |
 | `make test-buffer` | Buffer/cursor bounds, copying, foreign lifetime, typed clients, format examples, grammars, typed grammars, grammars in isolates and images/GC |
+| `make test-hyperloglog` | HyperLogLog++ hashes, sparse and dense estimates, merges, every way keys go in against the others, and allocation stress |
 | `make test-io` | Bounded chunk I/O, binary files and framing, socket endpoints/echo, native lifetimes, typed results and images/GC |
 | `make test-net-udp` | In-memory IPv4/UDP echo, independent wire fixtures, queue and clock behavior, and allocation stress |
 | `make test-net-tcp` | In-memory TCP echo, sliding-window recovery, stream backpressure, shutdown, and allocation stress |
@@ -1266,6 +1277,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-ffi` | C functions called from Shen and C written for Shen, against `tests/ffi_lib.c`, memory outside the heap, and the SQLite and socket libraries |
 | `make test-curl` | Optional libcurl adapter, independent loopback HTTP/TLS fixtures, downloader, typing and images/GC; needs libcurl development headers, Python 3 and `openssl` |
 | `make test-fs` | Filesystem metadata, paths, bounded traversal, replacement, cleanup, typing, images/GC and the copy application; needs a C compiler and Python 3 |
+| `make test-shen-git` | The Git library through a typed client, and the `shen-git` client's repositories, patches, packs, modes and outcomes against Git; needs a C compiler, zlib's headers, Git 2.29 or newer and Python 3.8 or newer |
 | `make test-process` | Child lifecycle, argv/environment/cwd, bounded communication, pipelines, inheritance, typing, images/GC and streaming memory; needs a C compiler and Python 3 |
 | `make test-tree-sitter` | Tree/query snapshots, independent C/coordinate oracles, types, images/GC and bounded source facts; needs a C compiler, Python 3 and `make deps-tree-sitter` on shared-capable builds |
 | `make test-overrides` | Each kernel function that Shen/JIT replaces beside the kernel's own definition, over generated values, as compiled and through C |

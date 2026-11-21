@@ -12,6 +12,15 @@ All notable changes to this project are documented in this file. The format is b
   fixed-width keys and prehashed 64-bit words go in from typed code without allocating.
 - `(shen-jit.xxh64 To From J N K)` stores the XXH64 hashes of K keys of N bytes, one after another from J in From, as
   64-bit words in To.
+- The optional `git` library reads and writes local Git repositories in Shen, with a native adapter
+  that needs only zlib. It handles loose and packed objects, indexes with Git's stat data, refs,
+  diffs, and worktree operations, with Git's file modes and config syntax. Its API is typed, and a
+  switch, merge, commit or ref update gives an outcome to match instead of raising. The `shen-git`
+  example, a typed program, uses the library to stage and commit changes, inspect history, switch
+  branches, merge, clone and repack.
+- `fs.write-new` writes a new file whole, with the permissions it is given, and refuses an existing
+  name, which makes it a lock too; `fs.real-path`, `fs.read-link`, `fs.symlink` and `fs.getenv` give a
+  path with its links resolved, a link's target, a new link and an environment variable.
 - The module `layout`: `(deflayout Name (Field Bits) ...)` declares a fixed binary format as its specification draws
   it and defines typed readers, writers and offsets of each field and the layout's size, which inline where called;
   `write-layout` writes a whole layout in packed stores, with its constants folded; `defflags` and `flag-bits` name a
