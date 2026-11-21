@@ -7255,6 +7255,20 @@ relation of one tuple a key or rule that makes a string, as interned values must
   moved within their noise, as their ranges are short. The fuzzer of code objects, now with vector code among its
   seeds, found no crash in 2,000 cases, and the native and bytes suites pass on x86-64 under Rosetta, with SLJIT's
   argument checks.
+- **`bytes.span` 16 bytes at a time, by nibble tables** (2026-11-21, Apple M3 Max, against main before vectors).
+  Two more vector operations, `vshr`, each byte shifted right by a constant, and `vlookup`, 16 lanes picked from
+  a table of 16, 0 from index 16 up: USHR and TBL on arm64; on x86-64, PSRLW and a mask, and PSHUFB after adding
+  112 with saturation to each index, so that both give 0 at the same indices. A class is now 96 bytes: its bitmap,
+  two tables by a byte's low four bits whose bits say which high four go with them, and the bit of each high four.
+  A run took 0.065 ns a byte on long input against 0.75, and a grammar's loop over a class the same, as it calls
+  `span`. A grammar gives `span` its input's end, which lies far beyond most runs: with the vectors set up for any
+  range of 16 or more, JSON of 60,000 strings of 4 bytes took 2.90 ms against 2.47. Testing the first 8 bytes one
+  at a time first made that 2.52, and long runs pay about 6 ns for it. Moving the vector part to a function of its
+  own, which `span` tail called, cost a long range 3 ns and saved a short one nothing. Median of five alternating
+  runs, against main before the first step: `json.parse` of 657 KB of plain strings 2.54 and 2.33 ms, of 3,000
+  strings of 200 bytes 0.68 and 0.24, of strings with escapes 1.86 and 1.69; `http.parse-request` 2.33 and 2.04 µs;
+  `shen-git diff` 53.6 and 51.7 ms, `log` 33.0 and 32.1. `http.read-request` took 7.85 and 8.06 µs, as after the
+  first step: its runs are short, and no cost a call could be found to account for it.
 - **Grammar loops over a class as one `bytes.span`** (2026-11-21, Apple M3 Max, against main before it). A
   repetition of a byte class alone, as `(+ <tchar>)` and JSON's `(+ <plain>)` are, already ran as one loop testing a
   table of the 256 bytes, at 1.58 ns a byte. A loop whose code is only that now compiles, at its first call, to one

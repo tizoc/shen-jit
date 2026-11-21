@@ -1703,6 +1703,44 @@
                Out (native-test.many-vectors A (shen-jit.bytes 16))
             (native-test.all? (/. K (= (shen-jit.u8 Out K) (native-test.ref-xor A K 0 0))) [0 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15]))))
 
+\\ Shifts of each byte, with zeros in, and lookups in a table of 16, which give 0 from index 16 up.
+(define-native native-test.shifts (B Out)
+  (vector X (v128 B 0))
+  (v128! Out 0 (vshr X 0)) (v128! Out 16 (vshr X 1)) (v128! Out 32 (vshr X 3))
+  (v128! Out 48 (vshr X 4)) (v128! Out 64 (vshr X 7))
+  (return Out))
+
+(define native-test.shifts-agree?
+  B Out 5 _ -> true
+  B Out S 16 -> (native-test.shifts-agree? B Out (+ S 1) 0)
+  B Out S K -> (and (= (shen-jit.u8 Out (+ (* S 16) K))
+                       (shen-jit.shift-right (shen-jit.u8 B K) (nth (+ S 1) [0 1 3 4 7])))
+                    (native-test.shifts-agree? B Out S (+ K 1))))
+
+(native-test.check "each byte shifted right by 0, 1, 3, 4 and 7" true
+  (freeze (let B (native-test.vector-bytes 11 16)
+            (native-test.shifts-agree? B (native-test.shifts B (shen-jit.bytes 80)) 0 0))))
+
+(define-native native-test.lookup (T I Out)
+  (v128! Out 0 (vlookup (v128 T 0) (v128 I 0)))
+  (return Out))
+
+(define native-test.lookup-agrees?
+  T I Out 16 -> true
+  T I Out K -> (and (= (shen-jit.u8 Out K) (let X (shen-jit.u8 I K) (if (< X 16) (shen-jit.u8 T X) 0)))
+                    (native-test.lookup-agrees? T I Out (+ K 1))))
+
+(native-test.check "a lookup in 16 bytes, 0 from index 16 up" true
+  (freeze (let T (native-test.vector-bytes 5 16)
+               I (native-test.vector-fill (shen-jit.bytes 16) 0 16 8)
+               _ (map (/. P (shen-jit.u8! I (fst P) (snd P))) [(@p 0 0) (@p 1 15) (@p 2 16) (@p 3 127) (@p 4 128)
+                                                              (@p 5 255) (@p 6 143) (@p 7 112) (@p 8 111)])
+            (native-test.lookup-agrees? T I (native-test.lookup T I (shen-jit.bytes 16)) 0))))
+(native-test.refused "a shift by a register"
+  (freeze (define-native native-test.bad (B N) (word K N) (vector X (v128 B 0)) (vector Y (vshr X K)) (v128! B 0 Y) (return B))))
+(native-test.raw "a shift past 7"
+  [defun native-test.bad [code native-test.bad 1 3 [8] [[vec-load 0 2 [const 0]] [vec-shr 0 0 [const 0]] [return 2]] []]])
+
 (native-test.check "a load past the end raises" true
   (freeze (trap-error (do (native-test.mask (shen-jit.bytes 20) 5) false) (/. E true))))
 (native-test.check "a store into a string raises" true

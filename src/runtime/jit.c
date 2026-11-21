@@ -2233,6 +2233,57 @@ static void emit_vector_eq(struct sljit_compiler *c, sljit_s32 d, sljit_s32 a, s
 #endif
 }
 
+/* Vector d := each byte of a shifted right by k, from 1 to 7, with zeros. x86-64 has no shift of
+   bytes, so it shifts 16-bit lanes and masks the bits that came from the next byte. */
+static void emit_vector_shr(struct sljit_compiler *c, sljit_s32 d, sljit_s32 a, sljit_s32 tmp, sljit_s32 k)
+{
+#if (defined SLJIT_CONFIG_ARM_64 && SLJIT_CONFIG_ARM_64)
+    SLJIT_UNUSED_ARG(tmp);
+    sljit_u32 ushr = 0x6F000400u /* USHR Vd.16B, Vn.16B, #k */
+                   | (sljit_u32)(16 - k) << 16
+                   | (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, a) << 5
+                   | (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, d);
+    sljit_emit_op_custom(c, &ushr, sizeof ushr);
+#elif (defined SLJIT_CONFIG_X86_64 && SLJIT_CONFIG_X86_64)
+    if (d != a)
+        sljit_emit_simd_mov(c, VECTOR_TYPE | SLJIT_SIMD_LOAD, d, a, 0);
+    sljit_u32 rd = (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, d);
+    sljit_u8 psrlw[] = {0x66, (sljit_u8)(0x40 | rd >> 3), 0x0F, 0x71, (sljit_u8)(0xD0 | (rd & 7)), (sljit_u8)k};
+    sljit_emit_op_custom(c, psrlw, sizeof psrlw);
+    sljit_emit_op1(c, SLJIT_MOV, R0, IMM(0xFF >> k));
+    sljit_emit_simd_replicate(c, VECTOR_TYPE, tmp, SLJIT_R0, 0);
+    sljit_emit_simd_op2(c, VECTOR_TYPE | SLJIT_SIMD_OP2_AND, d, d, tmp, 0);
+#else
+#error "no vector shift for this target"
+#endif
+}
+
+/* Vector d := lane i[k] of t in each lane k, or 0 where i[k] is 16 or more. TBL gives 0 there;
+   PSHUFB uses the low 4 bits unless bit 7 is set, which adding 112 with saturation sets exactly
+   from 16 up. d is computed in FR2 there, the index in FR1. */
+static void emit_vector_lookup(struct sljit_compiler *c, sljit_s32 d, sljit_s32 t, sljit_s32 i)
+{
+#if (defined SLJIT_CONFIG_ARM_64 && SLJIT_CONFIG_ARM_64)
+    sljit_emit_simd_op2(c, VECTOR_TYPE | SLJIT_SIMD_OP2_SHUFFLE, d, t, i, 0);
+#elif (defined SLJIT_CONFIG_X86_64 && SLJIT_CONFIG_X86_64)
+    if (i != SLJIT_FR1)
+        sljit_emit_simd_mov(c, VECTOR_TYPE | SLJIT_SIMD_LOAD, SLJIT_FR1, i, 0);
+    sljit_emit_op1(c, SLJIT_MOV, R0, IMM(112));
+    sljit_emit_simd_replicate(c, VECTOR_TYPE, SLJIT_FR2, SLJIT_R0, 0);
+    sljit_u32 r1 = (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, SLJIT_FR1);
+    sljit_u32 r2 = (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, SLJIT_FR2);
+    sljit_u8 paddusb[] = {0x66, (sljit_u8)(0x40 | (r1 >> 3) << 2 | r2 >> 3), 0x0F, 0xDC,
+                          (sljit_u8)(0xC0 | (r1 & 7) << 3 | (r2 & 7))};
+    sljit_emit_op_custom(c, paddusb, sizeof paddusb);
+    sljit_emit_simd_mov(c, VECTOR_TYPE | SLJIT_SIMD_LOAD, SLJIT_FR2, t, 0);
+    sljit_emit_simd_op2(c, VECTOR_TYPE | SLJIT_SIMD_OP2_SHUFFLE, SLJIT_FR2, SLJIT_FR2, SLJIT_FR1, 0);
+    if (d != SLJIT_FR2)
+        sljit_emit_simd_mov(c, VECTOR_TYPE | SLJIT_SIMD_LOAD, d, SLJIT_FR2, 0);
+#else
+#error "no vector lookup for this target"
+#endif
+}
+
 /* Instructions on float registers. They are only in code written by hand, which the checker
    holds to making no calls, and neither the collector nor a raise looks at the registers. */
 static void emit_raw(Emit *e, const uint32_t *p)
@@ -2436,6 +2487,24 @@ static void emit_raw(Emit *e, const uint32_t *p)
             sljit_emit_simd_op2(c, VECTOR_TYPE | (p[0] == OP_VEC_AND ? SLJIT_SIMD_OP2_AND
                                                   : p[0] == OP_VEC_OR ? SLJIT_SIMD_OP2_OR : SLJIT_SIMD_OP2_XOR),
                                 d, a, b, 0);
+        vector_done(e, p[1], d);
+        break;
+    }
+    case OP_VEC_SHR: {
+        /* By a constant from 0 to 7, which the checker holds code to. */
+        sljit_s32 k = p[3] & OPERAND_CONST ? (sljit_s32)(fixval(*operand_cell(e, p[3])) & 7) : 0;
+        sljit_s32 a = vector_in(e, p[2], SLJIT_FR0), d = vector_out(e, p[1], SLJIT_FR2);
+        if (k)
+            emit_vector_shr(c, d, a, SLJIT_FR1, k);
+        else if (d != a)
+            sljit_emit_simd_mov(c, VECTOR_TYPE | SLJIT_SIMD_LOAD, d, a, 0);
+        vector_done(e, p[1], d);
+        break;
+    }
+    case OP_VEC_LOOKUP: {
+        sljit_s32 t = vector_in(e, p[2], SLJIT_FR0), i = vector_in(e, p[3], SLJIT_FR1);
+        sljit_s32 d = vector_out(e, p[1], SLJIT_FR2);
+        emit_vector_lookup(c, d, t, i);
         vector_done(e, p[1], d);
         break;
     }

@@ -32,7 +32,9 @@ To use it, add `bytes` to a module's `requires`, and `(use bytes)` to a namespac
 | `(bytes.unhex! To I B At End)` | `To`, with the bytes that the hexadecimal digits from `At` to `End` stand for stored from `I`; `[]` for an odd count or a byte that is no digit |
 | `(bytes.decimal B At End Limit)` | The number the decimal digits from `At` to `End` make, from 0 to `Limit`; -1 if there are none or a byte is no digit, -2 past `Limit` |
 
-A class is a string of 32 bytes, a bit for each byte. Written with a list of constants, as above,
+A class is a string of 96 bytes: a bit for each byte, then the same set as tables of 16 by a byte's high and low four
+bits, with which `span` tests 16 bytes at once. A range of 16 bytes or more takes 16 at a time in `find` and `span`,
+after `span` has tested its first 8 one at a time, as most runs end within them. Written with a list of constants, as above,
 `(bytes.class ...)` is made as the code is read, and is then a constant of the code: an
 [isolate](guide.md#isolates), whose globals start unbound, has it too, and naming it costs nothing.
 

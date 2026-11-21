@@ -49,7 +49,7 @@
   (use shen-jit.lower)
   (externals [!= abs again back bit-and bit-not bit-or bit-xor block call-sealed call-value
     vector vector! v128 v128! splat v= vand vor vxor vmask ctz clz vec-load vec-store vec-splat
-    vec-move vec= vec-and vec-or vec-xor vec-mask word-ctz word-clz
+    vec-move vec= vec-and vec-or vec-xor vec-mask word-ctz word-clz vshr vlookup vec-shr vec-lookup count
     capture closure code const dead define-native done entry exit f64 f64! for jump jump-if-false
     jump-unless jump-unless-entry jump-unless-test jump-unless-word label loop move neg nested
     new next none param pop-handler prim push-handler raise-cond float float! float* float+ float-
@@ -202,7 +202,8 @@
   vec-store -> [tagged word vector]
   vec-splat -> [vector! word]
   vec-move -> [vector! vector]
-  Op -> [vector! vector vector] where (element? Op [vec= vec-and vec-or vec-xor])
+  Op -> [vector! vector vector] where (element? Op [vec= vec-and vec-or vec-xor vec-lookup])
+  vec-shr -> [vector! vector count]
   vec-mask -> [word! vector]
   _ -> none)
 
@@ -224,6 +225,7 @@
   _ _ word A -> (check.below? A 16)
   _ _ vector A -> (check.below? A 16)
   _ _ vector! A -> (check.below? A 16)
+  Ctx _ count [const K] -> (and (check.below? K (nth 4 Ctx)) (check.below? (nth (+ K 1) (nth 7 Ctx)) 8))
   _ Labels label A -> (element? A Labels)
   _ _ head A -> (integer? A)
   _ Labels back A -> (element? A Labels))
@@ -672,7 +674,7 @@
   _ [] As -> As
   _ _ [] -> []
   C [tagged | Ks] [A | As] -> [(native.operand C A) | (native.raw-args C Ks As)]
-  C [word | Ks] [A | As] -> [(native.operand C A) | (native.raw-args C Ks As)]
+  C [K | Ks] [A | As] -> [(native.operand C A) | (native.raw-args C Ks As)] where (element? K [word count])
   C [K | Ks] [A | As] -> [(native.label C A) | (native.raw-args C Ks As)]
       where (element? K [label head back])
   C [_ | Ks] [A | As] -> [(native.slot C A) | (native.raw-args C Ks As)]
@@ -1158,6 +1160,11 @@
   Regs N D [vand A B] -> (vector.binary Regs N D vec-and A B)
   Regs N D [vor A B] -> (vector.binary Regs N D vec-or A B)
   Regs N D [vxor A B] -> (vector.binary Regs N D vec-xor A B)
+  Regs N D [vlookup T I] -> (vector.binary Regs N D vec-lookup T I)
+  Regs N D [vshr A K] -> (let Value (vector.operand Regs N A)
+                           (append (tl Value) [[vec-shr D (hd Value) K]]))
+      where (and (integer? K) (>= K 0) (< K 8))
+  _ _ _ [vshr _ K] -> (simple-error (make-string "native code: vshr shifts by a constant from 0 to 7, not ~R" K))
   _ _ _ E -> (simple-error (make-string "native code: not a vector expression: ~R" E)))
 
 (define vector.binary

@@ -805,7 +805,9 @@ that runs.
 nothing and has no handlers, the JIT saves them around calls to C, and the collector never sees them. They are the
 machine's float registers, which code using vectors shares between the two: the vectors used most take up to half of
 them, 13 on arm64 and 6 on x86-64, and the rest live in 16 bytes each of the native frame. Each operation means the
-same on both targets: SLJIT emits most of them, and byte equality is encoded for each.
+same on both targets: SLJIT emits most of them, and byte equality and the shift are encoded for each; x86-64 shifts
+16-bit lanes and masks, and before its table lookup adds 112 with saturation to each index, which sets the bit that
+makes it give 0 exactly from 16 up, as arm64's does.
 
 | Form | Meaning |
 | --- | --- |
@@ -813,8 +815,10 @@ same on both targets: SLJIT emits most of them, and byte equality is encoded for
 | `(v128! M I V)` | Store V's 16 bytes from byte offset I of M, checked as one access of 16 bytes, at any alignment. |
 
 A vector expression V is a vector register; `(v128 M I)`, the 16 bytes from offset I of M, checked the same way;
-`(splat W)`, 16 copies of W's low byte; `(v= V1 V2)`, 255 in each byte where the two are equal and 0 elsewhere; or
-`(vand V1 V2)`, `(vor V1 V2)`, `(vxor V1 V2)`. `(vmask V)` is the word whose bit K is the top bit of V's byte K, so
+`(splat W)`, 16 copies of W's low byte; `(v= V1 V2)`, 255 in each byte where the two are equal and 0 elsewhere;
+`(vand V1 V2)`, `(vor V1 V2)`, `(vxor V1 V2)`; `(vshr V K)`, each byte shifted right by K, a constant from 0 to 7, with
+zeros; or `(vlookup T I)`, whose byte K is byte `I[K]` of T, or 0 where `I[K]` is 16 or more. With the two, a byte's
+high and low four bits pick bits out of tables of 16, which is how `bytes.span` tests 16 bytes against a class at once. `(vmask V)` is the word whose bit K is the top bit of V's byte K, so
 that `(ctz (vmask (v= V (splat B))))` is where B first is in V, and 64 when it is not. Intermediate vectors are named
 `Vector.0` and on.
 
@@ -823,6 +827,8 @@ that `(ctz (vmask (v= V (splat B))))` is where B first is in V, and 64 when it i
 | `(vec-load X M I)`, `(vec-store M I X)` | 16 bytes at word index I of M, checked |
 | `(vec-splat X W)`, `(vec-move X Y)` | 16 copies of W's low byte; a copy of Y |
 | `(vec= X A B)`, `(vec-and X A B)`, `(vec-or X A B)`, `(vec-xor X A B)` | Bytewise |
+| `(vec-shr X A K)` | Each byte of A shifted right by the constant K, from 0 to 7 |
+| `(vec-lookup X T I)` | Byte K := byte `I[K]` of T, or 0 from index 16 up |
 | `(vec-mask W X)` | Word register W := the top bit of each of X's bytes |
 | `(word-ctz W A)`, `(word-clz W A)` | Trailing and leading zeros of 64 bits |
 
