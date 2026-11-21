@@ -1741,6 +1741,22 @@
 (native-test.raw "a shift past 7"
   [defun native-test.bad [code native-test.bad 1 3 [8] [[vec-load 0 2 [const 0]] [vec-shr 0 0 [const 0]] [return 2]] []]])
 
+\\ Bytes and 16 bytes from one memory in a loop: it keeps the bytes' limit, and the 16 take one more check.
+(define-native native-test.mixed-widths (B I J)
+  (word Sum 0)
+  (for K 0 2
+    (word Sum (+ Sum (u8 B (+ J K))))
+    (word Sum (+ Sum (vmask (v128 B (+ I K))))))
+  (return-word Sum))
+
+(native-test.check "bytes and 16 bytes from one memory, each checked to its last byte"
+  [true true true true]
+  (freeze (let B (shen-jit.bytes 20)
+            [(= 0 (native-test.mixed-widths B 3 18))
+             (trap-error (do (native-test.mixed-widths B 4 0) false) (/. E true))
+             (trap-error (do (native-test.mixed-widths B 0 19) false) (/. E true))
+             (= 0 (native-test.mixed-widths B 0 0))])))
+
 (native-test.check "a load past the end raises" true
   (freeze (trap-error (do (native-test.mask (shen-jit.bytes 20) 5) false) (/. E true))))
 (native-test.check "a store into a string raises" true

@@ -1324,7 +1324,12 @@ static void assign_places(Emit *e, const uint32_t *words, size_t nwords)
             if (e->memory[k] == memory) {
                 uint32_t at = WORD_REGISTERS + 3 * k;
                 int size = word_access_size(p[0]);
-                e->limit_size[k] = !raw_use[at] || e->limit_size[k] == size ? (int8_t)size : -1;
+                /* Byte indices of two widths keep the narrower's limit, against which a wider
+                   access makes one comparison more. */
+                int8_t was = e->limit_size[k];
+                e->limit_size[k] = !raw_use[at] || was == size ? (int8_t)size
+                                 : was >= 0 && was < SCALED && size >= 0 && size < SCALED ? (int8_t)(size < was ? size : was)
+                                 : -1;
                 raw_use[at] += use;
                 raw_use[at + (store_access(p) ? 2 : 1)] += use;
             }
@@ -2160,7 +2165,9 @@ static void emit_word_index(Emit *e, Slow *slow, uint32_t index, unsigned size)
 }
 
 /* The check of a word-indexed access, and the operand that makes it, with a slow path that says
-   what is wrong. Memory with a limit takes one comparison, and what is in registers stays there. */
+   what is wrong. Memory with a limit takes one comparison, and what is in registers stays there. An
+   access wider than the limit's width takes a second, of its last byte: the first holds the index
+   below the length, so adding the difference in width cannot wrap. */
 static sljit_s32 emit_word_access(Emit *e, uint32_t memory, uint32_t index, unsigned size, bool store)
 {
     struct sljit_compiler *c = e->c;
@@ -2177,6 +2184,10 @@ static sljit_s32 emit_word_access(Emit *e, uint32_t memory, uint32_t index, unsi
             if (i == SLJIT_R1)
                 sljit_emit_op1(c, SLJIT_MOV, R1, WORD_OPERAND(e, index));
             slow->from[2] = sljit_emit_cmp(c, SLJIT_GREATER_EQUAL, i, 0, RAW(e, at + (store ? 2 : 1)));
+            if ((int)size > e->limit_size[k]) {
+                sljit_emit_op2(c, SLJIT_ADD, R3, i, 0, IMM(((sljit_sw)1 << size) - ((sljit_sw)1 << e->limit_size[k])));
+                slow->from[3] = sljit_emit_cmp(c, SLJIT_GREATER_EQUAL, R3, RAW(e, at + (store ? 2 : 1)));
+            }
             if (base == SLJIT_R0)
                 sljit_emit_op1(c, SLJIT_MOV, R0, RAW(e, at));
             return SLJIT_MEM2(base, i);

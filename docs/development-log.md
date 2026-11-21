@@ -7269,6 +7269,18 @@ relation of one tuple a key or rule that makes a string, as interned values must
   strings of 200 bytes 0.68 and 0.24, of strings with escapes 1.86 and 1.69; `http.parse-request` 2.33 and 2.04 µs;
   `shen-git diff` 53.6 and 51.7 ms, `log` 33.0 and 32.1. `http.read-request` took 7.85 and 8.06 µs, as after the
   first step: its runs are short, and no cost a call could be found to account for it.
+- **Kept memory at two widths** (2026-11-21, Apple M3 Max, against main before vectors). Of `http.read-request`'s
+  loss, the new JIT with the old `bytes` showed none, 7.51 µs against 7.46, so it was in the library. `span` and
+  `find` read their memory both a byte and 16 bytes at a time, and memory reached at two widths kept lengths, not
+  limits, so every byte of their one-at-a-time loops went through the full check. Memory reached at byte indices of
+  several widths now keeps the narrowest's limit, and a wider access compares its last byte with it too, which
+  cannot wrap, as the first comparison holds the index below the length. A run of `span` from a grammar, with the
+  input's end far beyond, took 5.2 ns at 2 bytes against 5.8 before vectors, 9.8 at 12 against 13.0, and 17.6 at
+  128 against 104.5. Median of five runs: `json.parse` of 3,000 strings of 200 bytes 0.70 and 0.25 ms, of plain
+  strings 2.60 and 2.39, with escapes 1.90 and 1.68; `http.parse-request` 2.38 and 2.02 µs; `shen-git diff` 56.1
+  and 54.2 ms. `http.read-request` took 7.98 and 8.17 µs, and 8.04 and 8.06, 8.06 and 8.11, and 8.16 and 8.27 with
+  the code shifted by 0, 12 and 30 unrelated definitions first: within what where the code lies moves it.
+  JSON of 60,000 strings of 4 bytes took 2.52 and 2.56.
 - **Grammar loops over a class as one `bytes.span`** (2026-11-21, Apple M3 Max, against main before it). A
   repetition of a byte class alone, as `(+ <tchar>)` and JSON's `(+ <plain>)` are, already ran as one loop testing a
   table of the 256 bytes, at 1.58 ns a byte. A loop whose code is only that now compiles, at its first call, to one

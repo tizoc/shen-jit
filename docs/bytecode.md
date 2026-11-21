@@ -269,7 +269,7 @@ a string to write into.
 
 Code that loops, calls nothing and has no handlers, and reads or stores through a parameter it never changes, works out that memory's base and lengths once, on the way in, for any code,
 written by hand or not, however many loops it has, for eight parameters at most where integer registers are many, as on arm64, and four
-where they are few, as on x86-64. They hold until C runs, as only C can collect or kill a pointer, and they are worked out again each time it has. What is not memory gets length 0, so that its first access raises as it would have, and a read-only pointer or a string gets 0 for stores. Memory reached at one width, and only at word indices, keeps limits in place of lengths, the first index without room for that width, so that an access is one comparison, and what is in registers is used where it is.
+where they are few, as on x86-64. They hold until C runs, as only C can collect or kill a pointer, and they are worked out again each time it has. What is not memory gets length 0, so that its first access raises as it would have, and a read-only pointer or a string gets 0 for stores. Memory reached only at word indices, all of bytes or all of elements of one size, keeps limits in place of lengths, the first index without room for the narrowest width it is reached at, so that an access at that width is one comparison, a wider one a second, of its last byte, and what is in registers is used where it is.
 
 | Form | Result |
 | --- | --- |
