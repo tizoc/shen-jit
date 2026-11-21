@@ -6,4 +6,4 @@
 - Copied on 2026-11-01, unmodified.
 
 Shen/JIT includes it header-only (`XXH_INLINE_ALL`) in `src/runtime/objects.c`
-and uses `XXH3_64bits` for string and symbol-name hashes.
+and uses `XXH3_64bits` for string and symbol-name hashes, and `XXH64` for `shen-jit.xxh64`.

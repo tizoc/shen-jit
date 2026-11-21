@@ -140,6 +140,7 @@ const Primitive primitive_table[] = {
     {"shen-jit.word-op", 3, NULL},
     {"shen-jit.truncate", 1, NULL},
     {"shen-jit.struct-ref", 3, NULL},
+    {"shen-jit.xxh64", 5, NULL},
 };
 
 const size_t primitive_count = sizeof primitive_table / sizeof primitive_table[0];
@@ -1608,6 +1609,34 @@ static V write_bytes(VM *vm)
     return n;
 }
 
+/* shen-jit.xxh64: the XXH64 of each of Count keys of N bytes, one after another from J in From,
+   stored from the start of To as words are, 8 bytes little-endian, so that a typed caller reads them
+   into word registers and nothing is allocated. Many keys at once share the cost of the call. */
+static V xxh64(VM *vm)
+{
+    V to = vm->args[0], from = vm->args[1], j = vm->args[2], n = vm->args[3], count = vm->args[4];
+    char *base, *source;
+    size_t length, source_length;
+    if (!memory_of(to, &base, &length))
+        return sj_raise_value(vm, "bytes: ~S is not a byte buffer", to);
+    if (!memory_of(from, &source, &source_length))
+        return sj_raise_value(vm, "bytes: ~S is not a byte buffer", from);
+    if (is_read_only(to))
+        return sj_raise_value(vm, "bytes: ~S is read only", to);
+    if (!is_fix(count) || fixval(count) < 0 || (uint64_t)fixval(count) > length / 8)
+        return sj_raise_value(vm, "shen-jit.xxh64: ~S is not a valid count", count);
+    if (!bytes_range(source_length, j, n) ||
+        (fixval(n) > 0 && (uint64_t)fixval(count) > (source_length - (size_t)fixval(j)) / (size_t)fixval(n)))
+        return sj_raise_value(vm, "shen-jit.xxh64: ~S is not a valid range", j);
+    size_t width = (size_t)fixval(n), keys = (size_t)fixval(count);
+    const char *key = source + fixval(j);
+    for (size_t k = 0; k < keys; k++, key += width) {
+        uint64_t h = hash_xxh64(key, width);
+        memcpy(base + 8 * k, &h, sizeof h);
+    }
+    return to;
+}
+
 /* Bit operations (docs/bytecode.md), on the 62 bits of a fixnum. A fixnum's tag bits
    are zero, so its value shifted left by two is its own word. */
 static V bit_operation(VM *vm, unsigned prim)
@@ -2065,6 +2094,7 @@ V sj_primitive(VM *vm, size_t index)
         vm_collect(vm, 0);
         return V_TRUE;
     case P_WRITE_BYTES: return write_bytes(vm);
+    case P_XXH64: return xxh64(vm);
     case P_DEREF: {
         /* What X is bound to in the vector b, along a chain of variables; the
            third argument marks a variable with no binding. */

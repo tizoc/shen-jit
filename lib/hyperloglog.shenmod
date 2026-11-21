@@ -1,0 +1,8 @@
+(shen.module
+  (version 1)
+  (name hyperloglog)
+  (requires buffer words)
+  (typed)
+  (sources tc- "hyperloglog/string.shen"
+    tc+ "hyperloglog/hash.shen" "hyperloglog/sketch.shen" "hyperloglog/bias.shen"
+    "hyperloglog/estimate.shen"))

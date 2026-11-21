@@ -273,6 +273,7 @@ enum Prim {
     P_WORD_OP,   /* shen-jit.word-op: 64-bit words, boxed as 8 bytes (lib/word.shen) */
     P_TRUNCATE,  /* shen-jit.truncate: a number truncated to a fixnum; fix-from-float in registers */
     P_STRUCT_REF, /* shen-jit.struct-ref: a struct's field, the struct tested once for a slot (jit.c) */
+    P_XXH64,     /* shen-jit.xxh64: the XXH64 of consecutive keys, stored as 8 bytes each */
     P_COUNT
 };
 #define PRIM_RAISE_COND P_COUNT

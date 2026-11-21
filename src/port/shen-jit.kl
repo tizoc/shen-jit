@@ -853,7 +853,8 @@ which the printer calls."
 
 (defun shen-jit.register-primitives ()
   (do (shen-jit.primitive shen-jit.fixnum? 1)
-  (do (do (shen-jit.primitive shen-jit.tagged? 2) (shen-jit.primitive shen-jit.struct-ref 3))
+  (do (do (shen-jit.primitive shen-jit.tagged? 2) (do (shen-jit.primitive shen-jit.struct-ref 3)
+                                                       (shen-jit.primitive shen-jit.xxh64 5)))
     (do (shen-jit.primitive shen-jit.bytes 1)
     (do (shen-jit.primitive shen-jit.bytes? 1)
     (do (shen-jit.primitive shen-jit.bytes-length 1)

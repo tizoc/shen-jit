@@ -7222,6 +7222,36 @@ relation of one tuple a key or rule that makes a string, as interned values must
   that a right-linear closure over a line runs whole; the joins tests call the joined run directly, as
   `run-parallel` now runs small programs whole.
 
+## HyperLogLog++
+
+- **HyperLogLog++ over one hashing primitive** (2026-11-21, Apple M3 Max, against an earlier version of the library
+  that hashed in Shen). `lib/hyperloglog/` keeps 25-bit sparse cells in an open-addressed table, becomes one byte a
+  register when the table would outgrow the dense size, and corrects the dense estimate by a table that
+  `tools/hyperloglog-calibrate.c` generates by simulation. Keys are hashed by `shen-jit.xxh64`, the vendored XXH64
+  with seed 0, which stores the hashes of K keys of N bytes as words: some 30 lines of C against 367 of the
+  library. A call to C costs about 6.5 ns, as one of `shen-jit.copy-bytes` does, and XXH64 of 32 bytes 2 more, so
+  `add-fixed!` hashes eight keys a call. A key's hash goes into 8 bytes the sketch keeps, and the function that
+  reads it into a register is the one that updates the sketch: passed to a call the lowerer did not inline, the
+  word would be boxed. A loop that calls `insert-sparse` keeps nothing in registers either, so a batch's sparse
+  cells are made first, by a loop that calls nothing, and inserted after. Warm sketches take every kind of key
+  with no collection under allocation stress. Median of seven alternating runs of the test's `bench`, 2,048 keys
+  of 32 bytes, in ns a key, earlier version first: prehashed into a dense sketch 1.59 and 1.59, views 12.8 and
+  17.0, strings 28.0 and 13.3, packed keys 4.13 and 7.23; from an empty sparse sketch, views 40.9 and 45.7, and
+  packed keys 12.2 and 26.8.
+- **Rejected: XXH64 written in Shen, fused with the sketch's updates** (2026-11-21, Apple M3 Max). The earlier
+  version wrote XXH64 in native code and fused it with sparse and dense updates in loops made for 8-, 32- and
+  128-byte keys and for runs of views sharing a buffer: 30 generated native functions over a traversal module,
+  four new instructions (a paired 64-bit load, multiply-add, a 64-bit leading-zero count and a checked byte
+  maximum store), 32 word registers in place of 16, and a lowerer pass that inlined hand-written native code
+  into typed callers so that a hash stayed in a register: 1,003 lines of libraries and 310 of runtime and
+  lowerer. Its packed keys were faster, as above, but a string, the key Shen programs count most, was copied
+  to a buffer first, and only a benchmark's shapes took the fused loops. Also dropped from it, for having no
+  user: `define-layout-fold`, a typed scan of packed records by a layout.
+- **Not tried: a cheaper call to C.** Views and strings spend most of their time in the call to
+  `shen-jit.xxh64`, which costs what every primitive taking its arguments through C does. Filling a sparse table
+  from empty, growth included, takes about 20 ns a key in typed Shen by the rows above, against about 9 in the
+  earlier version's native loop.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.

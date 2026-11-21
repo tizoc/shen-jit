@@ -233,7 +233,7 @@
   P N -> (append [captured value-of let-bound nested rethrown quiet inlined]
                  \\ It runs the call twice, and an overlapping copy does not give the same again, nor a
                  \\ new variable, which moves the offset on.
-                 (if (element? P [shen-jit.copy-bytes shen-jit.newpv]) [] [loop])
+                 (if (element? P [shen-jit.copy-bytes shen-jit.xxh64 shen-jit.newpv]) [] [loop])
                  (if (> N 0) [after-cons? after-number? after-string? after-vector? after-symbol?] [])
                  (if (d.boolean? P) [if-test if-not and-test loop-test] [])))
 
@@ -360,6 +360,11 @@
                                     Index (d.filter-names [n0 n1 n2 n3 n7 n8 n-1 half r1 sym n9007199254740992
                                                            n2305843009213693951 n-2305843009213693952] All)
                                  [Memory Index Memory Index Index])
+  shen-jit.xxh64 _ All -> (let To (d.filter-names [b0 b1 b8 b8b bs8 sym abc nv2b p8 ro8 dead] All)
+                               From (d.filter-names [b0 b8 bs abc sym p8 dead] All)
+                               Index (d.filter-names [n0 n1 n2 n8 n-1 half r1 sym n9007199254740992] All)
+                               Count (d.filter-names [n0 n1 n2 n-1 n2305843009213693951] All)
+                            [To From Index Index Count])
   _ N All -> (d.n-copies N All) where (<= N 2)
   _ N All -> (d.n-copies N (d.filter-names (d.few) All)))
 
@@ -801,7 +806,7 @@
          shen-jit.pointer-sized shen-jit.apply shen-jit.quotient shen-jit.remainder]
       [3 address-> shen-jit.struct-ref shen-jit.deref shen-jit.u8! shen-jit.u16! shen-jit.u32! shen-jit.s32! shen-jit.s64! shen-jit.f32!
          shen-jit.f64! shen-jit.bytes->string shen-jit.bytes->pointer shen-jit.pointer! shen-jit.word-op]
-      [5 shen-jit.copy-bytes]])
+      [5 shen-jit.copy-bytes shen-jit.xxh64]])
 
 \\ Against another implementation: the primitives and values of the language alone, called plainly, with
 \\ no error's message, and a length that this implementation refuses might not be refused there.

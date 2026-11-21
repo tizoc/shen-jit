@@ -190,7 +190,7 @@ plus:
   `shen-jit.u32!` (3), `shen-jit.s32`, `shen-jit.s64`, `shen-jit.f32`, `shen-jit.f64` (2),
   `shen-jit.s32!`, `shen-jit.s64!`, `shen-jit.f32!`, `shen-jit.f64!` (3),
   `shen-jit.string->bytes` (1), `shen-jit.bytes->string` (3),
-  `shen-jit.copy-bytes` (5) and `shen-jit.write-bytes` (4): byte buffers, below.
+  `shen-jit.copy-bytes` (5), `shen-jit.write-bytes` (4) and `shen-jit.xxh64` (5): byte buffers, below.
 - `shen-jit.read-file`: arity 2, a path and whether to give a list of bytes, else a string.
   The port's file reading uses it.
 - `shen-jit.append`: arity 2, the port's `append` for a non-empty first list.
@@ -285,6 +285,7 @@ where they are few, as on x86-64. They hold until C runs, as only C can collect 
 | `(shen-jit.bytes->string B I N)` | A new string of the N bytes from I. |
 | `(shen-jit.copy-bytes To I From J N)` | Copies N bytes from J in From to I in To, which may overlap, and returns To. |
 | `(shen-jit.write-bytes B I N S)` | Writes the N bytes from I to the output stream S, as `write-byte` would one at a time, and returns N. |
+| `(shen-jit.xxh64 To From J N K)` | Stores the XXH64 hashes, seed 0, of K keys of N bytes, one after another from J in From, 8 bytes each from the start of To, as `word.set` would, and returns To. One call with K keys costs about what K calls of one would cost apart from the call. |
 
 `=` compares buffers by contents, as it does strings, and `shen-jit.hash` agrees.
 

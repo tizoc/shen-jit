@@ -270,7 +270,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words option result buffers layout grammar io fs processes parallel tree-sitter framing io-sockets networking net-udp net-tcp net-tun deadlines http-head http http-streaming http-listener json datalog curl
+GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words option result buffers layout grammar io fs processes parallel tree-sitter framing io-sockets hyperloglog networking net-udp net-tcp net-tun deadlines http-head http http-streaming http-listener json datalog curl
 PANDOC ?= pandoc
 GUIDE_PANDOC := $(PANDOC) -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
@@ -383,7 +383,7 @@ test-isolates-stress: $(BUILD)/shen-jit
 	SHEN_JIT_GC_STRESS=1 $(BUILD)/shen-jit eval -l tests/isolates.shen | $(FFI_RESULT)
 
 # Every library's suite, without the collections test-lib-stress adds (about 30 s).
-test-libs: test-buffer test-layout test-json test-io test-net-udp test-net-tcp test-net-interface test-net-clients test-net-ipv6 test-net-multicast test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces \
+test-libs: test-buffer test-layout test-hyperloglog test-json test-io test-net-udp test-net-tcp test-net-interface test-net-clients test-net-ipv6 test-net-multicast test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces \
   test-parallel
 
 .PHONY: test-isolates test-isolates-stress test-parallel
@@ -484,13 +484,19 @@ test-io: $(BUILD)/shen-jit
 test-layout: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -m tests/layout-test.shenmod | $(FFI_RESULT)
 
+# HyperLogLog++ accuracy, transitions and steady-state allocation of hashed inserts.
+.PHONY: test-hyperloglog
+test-hyperloglog: $(BUILD)/shen-jit
+	sh tests/steady_alloc.sh $(SHEN_JIT) tests/test-hyperloglog.shenmod HyperLogLog++ \
+	  "131,072 dense hashed updates, byte, string and packed keys" check
+
 # In-memory IPv4/UDP wire, echo and steady-state allocation regression.
 test-net-udp: $(BUILD)/shen-jit
-	sh tests/net_alloc.sh $(SHEN_JIT) tests/net_udp.shenmod UDP "10,000 typed UDP cycles"
+	sh tests/steady_alloc.sh $(SHEN_JIT) tests/net_udp.shenmod UDP "10,000 typed UDP cycles"
 
 # In-memory TCP connection, loss recovery and steady-state allocation regression.
 test-net-tcp: $(BUILD)/shen-jit
-	sh tests/net_alloc.sh $(SHEN_JIT) tests/net_tcp.shenmod TCP "9,000 typed TCP connections"
+	sh tests/steady_alloc.sh $(SHEN_JIT) tests/net_tcp.shenmod TCP "9,000 typed TCP connections"
 
 # Shared ingress, UDP overflow and ICMP wire checks.
 .PHONY: test-net-interface

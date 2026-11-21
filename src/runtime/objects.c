@@ -185,6 +185,9 @@ V make_stream(VM *vm, uint64_t flags, void *handle)
 
 uint64_t hash_bytes(const void *bytes, size_t len) { return XXH3_64bits(bytes, len); }
 
+/* shen-jit.xxh64's: XXH64 with seed 0, which other programs and formats share. */
+uint64_t hash_xxh64(const void *bytes, size_t len) { return XXH64(bytes, len, 0); }
+
 /* The word at SYM_CELL holds the function cell's index, and the global's
    number above it. Above those (vm.h): the
    symbol's kind for shen-jit.symbol-kind (bits 56-57), whether the function

@@ -423,6 +423,7 @@ V *global_slot_new(VM *vm, V sym);
 bool vm_globals_commit(VM *vm, size_t n);
 bool symbol_table_put(SymbolTable *t, V sym);
 uint64_t hash_bytes(const void *bytes, size_t len);
+uint64_t hash_xxh64(const void *bytes, size_t len);
 
 static inline size_t string_length(V s) { return (size_t)hdr_size(ptr(s)[0]); }
 static inline char *string_bytes(V s) { return (char *)(ptr(s) + 1); }

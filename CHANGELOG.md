@@ -7,6 +7,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- The module `hyperloglog` estimates how many distinct keys a stream holds, with HyperLogLog++ sketches that start
+  as a small sparse table, become one byte a register as the count grows, and merge. Strings, views, packed
+  fixed-width keys and prehashed 64-bit words go in from typed code without allocating.
+- `(shen-jit.xxh64 To From J N K)` stores the XXH64 hashes of K keys of N bytes, one after another from J in From, as
+  64-bit words in To.
 - The module `layout`: `(deflayout Name (Field Bits) ...)` declares a fixed binary format as its specification draws
   it and defines typed readers, writers and offsets of each field and the layout's size, which inline where called;
   `write-layout` writes a whole layout in packed stores, with its constants folded; `defflags` and `flag-bits` name a

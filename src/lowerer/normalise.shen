@@ -41,7 +41,7 @@
        shen-jit.s32! shen-jit.s64! shen-jit.f32! shen-jit.f64! shen-jit.pointer! shen-jit.isolate
        shen-jit.word-op]]
    [4 [shen-jit.write-bytes]]
-   [5 [shen-jit.copy-bytes]]
+   [5 [shen-jit.copy-bytes shen-jit.xxh64]]
    [fixed [if and or cond let lambda defun freeze type trap-error do thaw eval-kl protect]]])
 
 (define fixed-table

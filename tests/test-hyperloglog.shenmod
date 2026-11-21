@@ -1,0 +1,7 @@
+(shen.module
+  (version 1)
+  (name test-hyperloglog)
+  (requires hyperloglog)
+  (typed)
+  (main hll-test.entry)
+  (sources tc+ "hyperloglog.shen" tc- "hyperloglog_main.shen"))

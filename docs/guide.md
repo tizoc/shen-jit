@@ -735,6 +735,10 @@ and recursive rules bottom up, to a fixed point, over symbols, strings, integers
 through the JIT and its join order chosen from the sizes of the relations as it runs, and answers a query by deriving
 only what bears on it.
 
+[HyperLogLog++](https://github.com/tizoc/shen-jit/blob/main/docs/hyperloglog.md): `lib/hyperloglog/` estimates how
+many distinct keys a stream holds, in a sketch of bounded size that starts as a small sparse table and becomes one
+byte a register as the count grows, and merges the sketches of separate streams.
+
 #### SQLite
 
 `lib/sqlite.shen` is written over [the FFI](#calling-c), in Shen alone. It needs SQLite's library, which macOS and
@@ -824,6 +828,7 @@ them.
 | `(shen-jit.bytes->string B I N)` | A new string of the N bytes from I |
 | `(shen-jit.copy-bytes To I From J N)` | Copies N bytes from J in From to I in To, which may overlap, and returns To |
 | `(shen-jit.write-bytes B I N S)` | Writes the N bytes from I to the output stream S at once, and returns N |
+| `(shen-jit.xxh64 To From J N K)` | Stores the XXH64 hashes, seed 0, of K keys of N bytes, one after another from J in From, as 64-bit words from the start of To, and returns To |
 
 On a fixnum's 62 bits: `shen-jit.bit-and`, `bit-or`, `bit-xor`, `bit-not`, `shift-left`, `shift-right`, `rotate32`,
 `bswap32`, `popcount`, `clz` and `ctz`, which raise for a float. `(shen-jit.fixnum? X)` says whether X is a fixnum: false

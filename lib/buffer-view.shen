@@ -21,5 +21,6 @@
 (declare shen-jit.string->bytes [string --> storage])
 (declare shen-jit.bytes->string [storage --> [fixnum --> [fixnum --> string]]])
 (declare shen-jit.copy-bytes [storage --> [fixnum --> [storage --> [fixnum --> [fixnum --> storage]]]]])
+(declare shen-jit.xxh64 [storage --> [storage --> [fixnum --> [fixnum --> [fixnum --> storage]]]]])
 
 )
