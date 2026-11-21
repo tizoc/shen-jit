@@ -50,6 +50,7 @@
   (externals [!= abs again back bit-and bit-not bit-or bit-xor block call-sealed call-value
     vector vector! v128 v128! splat v= vand vor vxor vmask ctz clz vec-load vec-store vec-splat
     vec-move vec= vec-and vec-or vec-xor vec-mask word-ctz word-clz vshr vlookup vec-shr vec-lookup count
+    vmax vmin v+ v- vandnot vec-max vec-min vec+ vec- vec-andnot
     capture closure code const dead define-native done entry exit f64 f64! for jump jump-if-false
     jump-unless jump-unless-entry jump-unless-test jump-unless-word label loop move neg nested
     new next none param pop-handler prim push-handler raise-cond float float! float* float+ float-
@@ -202,7 +203,8 @@
   vec-store -> [tagged word vector]
   vec-splat -> [vector! word]
   vec-move -> [vector! vector]
-  Op -> [vector! vector vector] where (element? Op [vec= vec-and vec-or vec-xor vec-lookup])
+  Op -> [vector! vector vector] where (element? Op [vec= vec-and vec-or vec-xor vec-lookup vec-max vec-min vec+ vec-
+                                                    vec-andnot])
   vec-shr -> [vector! vector count]
   vec-mask -> [word! vector]
   _ -> none)
@@ -1161,6 +1163,11 @@
   Regs N D [vor A B] -> (vector.binary Regs N D vec-or A B)
   Regs N D [vxor A B] -> (vector.binary Regs N D vec-xor A B)
   Regs N D [vlookup T I] -> (vector.binary Regs N D vec-lookup T I)
+  Regs N D [vmax A B] -> (vector.binary Regs N D vec-max A B)
+  Regs N D [vmin A B] -> (vector.binary Regs N D vec-min A B)
+  Regs N D [v+ A B] -> (vector.binary Regs N D vec+ A B)
+  Regs N D [v- A B] -> (vector.binary Regs N D vec- A B)
+  Regs N D [vandnot A B] -> (vector.binary Regs N D vec-andnot A B)
   Regs N D [vshr A K] -> (let Value (vector.operand Regs N A)
                            (append (tl Value) [[vec-shr D (hd Value) K]]))
       where (and (integer? K) (>= K 0) (< K 8))

@@ -7373,6 +7373,20 @@ relation of one tuple a key or rule that makes a string, as interned values must
   `shen-jit.xxh64`, which costs what every primitive taking its arguments through C does. Filling a sparse table
   from empty, growth included, takes about 20 ns a key in typed Shen by the rows above, against about 9 in the
   earlier version's native loop.
+- **Merges and runs of sparse cells in native code** (2026-11-21, Apple M3 Max, against main before it). The
+  third step of vector registers, for this caller: `vmax`, `vmin`, `v+`, `v-` and `vandnot`, each byte's unsigned
+  maximum and minimum, wrapping sum and difference, and and-not, encoded by hand on both targets, as UMAX, UMIN,
+  ADD, SUB and BIC, and PMAXUB, PMINUB, PADDB, PSUBB and PANDN, whose two-operand forms work in a scratch register
+  when the result replaces the second operand of one that does not commute; byte equality now goes through the
+  same function. `lib/hyperloglog/native.shen` has two functions, and the module now loads `native`:
+  `max-bytes!`, a merge of dense registers 16 at a time, and `insert-run`, which puts a run of cells into the
+  sparse table, probing as the typed code did, when the table has room for all of them, which the typed code
+  checks; it also refills a table that grows. Median of seven alternating runs of the test's `bench`, ns a key:
+  from an empty sparse sketch, prehashed 20.3 and 11.4, packed keys 26.8 and 18.4, views, which go in one at a
+  time and gain only in growth, 44.1 and 37.3; dense rows unchanged; a merge of dense sketches at precision 14,
+  21.8 µs and 0.58. Most of what remains of a sparse insert is probing a table up to three quarters full. On
+  x86-64 under Rosetta the suite passes, a merge takes 0.65 µs and a prehashed sparse insert 18.5 ns. The
+  fuzzer of code objects, with the five among its seeds, found no crash in 2,000 cases.
 
 ## Local Git repositories
 

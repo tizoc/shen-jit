@@ -2218,30 +2218,45 @@ static void emit_sqrt(struct sljit_compiler *c, sljit_s32 d, sljit_s32 s)
 #endif
 }
 
-/* Vector d := 255 in each byte where a and b are equal, else 0, which SLJIT has no operation for. */
-static void emit_vector_eq(struct sljit_compiler *c, sljit_s32 d, sljit_s32 a, sljit_s32 b)
+/* The bytewise operations SLJIT has none for: vector d := a op b, by an arm64 instruction on three
+   registers, given without them, or by an SSE2 one, 66 0F op /r, which writes its first operand.
+   Where op commutes, that may be either. Otherwise, with d the same as b, it works in FR2, which
+   then holds neither: vector_in gives b FR1 when it is not in a register, and vector_out gives d FR2. */
+static void emit_vector_bytes(struct sljit_compiler *c, sljit_u32 arm, sljit_u8 op, bool commutes, sljit_s32 d,
+                              sljit_s32 a, sljit_s32 b)
 {
 #if (defined SLJIT_CONFIG_ARM_64 && SLJIT_CONFIG_ARM_64)
-    sljit_u32 cmeq = 0x6E208C00u /* CMEQ Vd.16B, Vn.16B, Vm.16B */
-                   | (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, b) << 16
+    SLJIT_UNUSED_ARG(op);
+    SLJIT_UNUSED_ARG(commutes);
+    sljit_u32 insn = arm | (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, b) << 16
                    | (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, a) << 5
                    | (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, d);
-    sljit_emit_op_custom(c, &cmeq, sizeof cmeq);
+    sljit_emit_op_custom(c, &insn, sizeof insn);
 #elif (defined SLJIT_CONFIG_X86_64 && SLJIT_CONFIG_X86_64)
-    /* PCMPEQB d, s: equality commutes, so d may take either operand first. */
-    sljit_s32 s = b;
-    if (d == b)
+    SLJIT_UNUSED_ARG(arm);
+    sljit_s32 t = d, s = b;
+    if (d == b && commutes)
         s = a;
-    else if (d != a)
-        sljit_emit_simd_mov(c, VECTOR_TYPE | SLJIT_SIMD_LOAD, d, a, 0);
-    sljit_u32 rd = (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, d);
+    else if (d == b)
+        t = SLJIT_FR2;
+    if (t != a && s == b)
+        sljit_emit_simd_mov(c, VECTOR_TYPE | SLJIT_SIMD_LOAD, t, a, 0);
+    sljit_u32 rt = (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, t);
     sljit_u32 rs = (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, s);
-    sljit_u8 pcmpeqb[] = {0x66, (sljit_u8)(0x40 | (rd >> 3) << 2 | rs >> 3), 0x0F, 0x74,
-                          (sljit_u8)(0xC0 | (rd & 7) << 3 | (rs & 7))};
-    sljit_emit_op_custom(c, pcmpeqb, sizeof pcmpeqb);
+    sljit_u8 insn[] = {0x66, (sljit_u8)(0x40 | (rt >> 3) << 2 | rs >> 3), 0x0F, op,
+                       (sljit_u8)(0xC0 | (rt & 7) << 3 | (rs & 7))};
+    sljit_emit_op_custom(c, insn, sizeof insn);
+    if (t != d)
+        sljit_emit_simd_mov(c, VECTOR_TYPE | SLJIT_SIMD_LOAD, d, t, 0);
 #else
-#error "no vector comparison for this target"
+#error "no bytewise vector operations for this target"
 #endif
+}
+
+/* Vector d := 255 in each byte where a and b are equal, else 0: CMEQ, PCMPEQB. */
+static void emit_vector_eq(struct sljit_compiler *c, sljit_s32 d, sljit_s32 a, sljit_s32 b)
+{
+    emit_vector_bytes(c, 0x6E208C00u, 0x74, true, d, a, b);
 }
 
 /* Vector d := each byte of a shifted right by k, from 1 to 7, with zeros. x86-64 has no shift of
@@ -2516,6 +2531,26 @@ static void emit_raw(Emit *e, const uint32_t *p)
         sljit_s32 t = vector_in(e, p[2], SLJIT_FR0), i = vector_in(e, p[3], SLJIT_FR1);
         sljit_s32 d = vector_out(e, p[1], SLJIT_FR2);
         emit_vector_lookup(c, d, t, i);
+        vector_done(e, p[1], d);
+        break;
+    }
+    case OP_VEC_MAX: case OP_VEC_MIN: case OP_VEC_ADD: case OP_VEC_SUB: case OP_VEC_ANDNOT: {
+        /* Unsigned maximum and minimum, wrapping sum and difference, a and not b: UMAX, UMIN, ADD,
+           SUB and BIC; PMAXUB, PMINUB, PADDB, PSUBB, and PANDN, which is not d and s. */
+        sljit_s32 a = vector_in(e, p[2], SLJIT_FR0), b = vector_in(e, p[3], SLJIT_FR1);
+        sljit_s32 d = vector_out(e, p[1], SLJIT_FR2);
+        switch (p[0]) {
+        case OP_VEC_MAX: emit_vector_bytes(c, 0x6E206400u, 0xDE, true, d, a, b); break;
+        case OP_VEC_MIN: emit_vector_bytes(c, 0x6E206C00u, 0xDA, true, d, a, b); break;
+        case OP_VEC_ADD: emit_vector_bytes(c, 0x4E208400u, 0xFC, true, d, a, b); break;
+        case OP_VEC_SUB: emit_vector_bytes(c, 0x6E208400u, 0xF8, false, d, a, b); break;
+        default:
+#if (defined SLJIT_CONFIG_ARM_64 && SLJIT_CONFIG_ARM_64)
+            emit_vector_bytes(c, 0x4E601C00u, 0xDF, false, d, a, b);
+#else
+            emit_vector_bytes(c, 0x4E601C00u, 0xDF, false, d, b, a);
+#endif
+        }
         vector_done(e, p[1], d);
         break;
     }

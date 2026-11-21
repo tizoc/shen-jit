@@ -62,7 +62,8 @@ BASES = [
     # Vectors: loads and stores at a word index, each bytewise operation, the mask and the counts, in a loop.
     "(code fuzz.f 2 8 (32 7 3) ((prim 4 shen-jit.bytes (const 0)) (word-number 0 (const 2)) (word-number 1 (const 1))"
     " (vec-splat 0 0) (loop 1) (vec-load 1 4 1) (vec= 2 1 0) (vec-and 3 2 1) (vec-or 3 3 2) (vec-xor 3 3 0)"
-    " (vec-move 4 3) (vec-shr 4 4 (const 2)) (vec-lookup 4 3 4) (vec-store 4 1 4) (vec-mask 2 2) (word-ctz 3 2)"
+    " (vec-move 4 3) (vec-shr 4 4 (const 2)) (vec-lookup 4 3 4) (vec-max 3 3 4) (vec-min 4 4 2) (vec+ 2 3 4)"
+    " (vec- 4 2 4) (vec-andnot 3 4 3) (vec-store 4 1 4) (vec-mask 2 2) (word-ctz 3 2)"
     " (word-clz 2 2) (word+ 1 1 (const 2))"
     " (word-unless-u< 1 (const 0) 0) (again 1) (label 0) (word-box 5 3) (return 5)) ())",
 ]
@@ -78,7 +79,7 @@ INSNS = ["(move 4 2)", "(const 4 0)", "(prim 4 cons? 2)", "(jump-if-false 4 0)",
          "(float-store-at 2 1 0)", "(word-unless< 0 1 0)", "(word-unless-u>= 0 (const 0) 0)", "(word-from-float 0 0)",
          "(float-from-word 0 0)", "(vec-load 0 2 1)", "(vec-store 2 1 0)", "(vec-splat 1 0)", "(vec= 0 0 1)",
          "(vec-xor 1 0 1)", "(vec-move 1 0)", "(vec-mask 0 1)", "(word-ctz 0 1)", "(word-clz 1 0)",
-         "(vec-shr 0 1 (const 1))", "(vec-lookup 1 0 1)"]
+         "(vec-shr 0 1 (const 1))", "(vec-lookup 1 0 1)", "(vec-max 0 1 0)", "(vec- 1 0 1)", "(vec-andnot 0 0 1)"]
 
 
 def parse(text):

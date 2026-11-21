@@ -50,6 +50,10 @@ written into 8 bytes the sketch keeps, and read from there into a register.
 The sparse table starts at 16 bytes. Each occupied cell stores a 25-bit hash prefix and a 6-bit
 rank. The table grows at 75% occupancy and becomes dense when the next table would exceed the
 dense size, `2^P` bytes, one byte a register. Growing and becoming dense allocate a new buffer.
+Runs of cells, as `add-hashes!` and `add-fixed!` make them and a merge reads them, go into the
+table by native code, and a merge of dense sketches takes the greater of 16 registers at a time
+with vector registers, written with [`native`](guide.md#native-code-written-by-hand), which the
+module loads.
 
 Sparse estimates use linear counting at precision 25. Dense estimates use the precision-specific
 linear-counting cutoffs from the HLL++ appendix. Above that range the estimator uses the harmonic
@@ -76,4 +80,4 @@ estimates, merges, and promotion. It compares strings, views, packed batches and
 with one another, byte for byte, across key widths and storage transitions, and checks that
 adding keys of each kind to warm sketches adds no collections under allocation stress. Passing
 `bench` to the saved test, built from `tests/test-hyperloglog.shenmod`, times each way in over
-2,048 keys of 32 bytes.
+2,048 keys of 32 bytes, and a merge of dense sketches.

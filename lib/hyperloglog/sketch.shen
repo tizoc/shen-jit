@@ -71,17 +71,10 @@
   {fixnum --> fixnum --> fixnum}
   Index Mask -> (shen-jit.bit-and Index Mask))
 
+\\ When the table grows, its cells go into the new one, which has room for all of them.
 (define copy-sparse
   {buffer.storage --> fixnum --> fixnum --> buffer.storage --> fixnum --> buffer.storage}
-  From I End To Mask ->
-    (if (fx>= I End) To
-        (let Cell (shen-jit.u32 From I)
-          (if (= Cell 0)
-              (copy-sparse From (fx+ I 4) End To Mask)
-              (let Index (cell-index Cell)
-                   Slot (find-slot To Mask Index (home-slot Index Mask))
-                   _ (shen-jit.u32! To (slot-offset Slot) Cell)
-                (copy-sparse From (fx+ I 4) End To Mask))))))
+  From I End To Mask -> (let _ (insert-run To Mask From I End 0) To))
 
 (define promote-cell
   {buffer.storage --> fixnum --> fixnum --> buffer.storage}
@@ -130,6 +123,11 @@
             (do (t.storage-> S New) (t.mask-> S Mask)
                 (t.occupied-> S Count) S)))))
 
+\\ A table holds at most three quarters of its slots.
+(define sparse-limit
+  {fixnum --> fixnum}
+  Mask -> (fx- Mask (shen-jit.shift-right Mask 2)))
+
 (define insert-sparse
   {t --> fixnum --> t}
   S Cell ->
@@ -140,8 +138,7 @@
          Old (shen-jit.u32 B Pos)
       (cases (= Old 0)
                (let Count (fx+ (t.occupied S) 1)
-                    Limit (fx- Mask (shen-jit.shift-right Mask 2))
-                 (if (fx> Count Limit) (grow-and-insert S Cell Count)
+                 (if (fx> Count (sparse-limit Mask)) (grow-and-insert S Cell Count)
                      (do (shen-jit.u32! B Pos Cell) (t.occupied-> S Count) S)))
              (fx> Cell Old) (do (shen-jit.u32! B Pos Cell) S)
              true S)))
@@ -193,15 +190,25 @@
         (do (shen-jit.u32! To I (sparse-cell (word.get From At)))
             (cells! From (fx+ At 8) End To (fx+ I 4)))))
 
-\\ A cell after a promotion goes into the dense registers, as promote does with the others.
+\\ A cell after a promotion goes into the dense registers, as promote does with the others, and a
+\\ zero one is none.
+(define insert-cell
+  {t --> fixnum --> t}
+  S Cell -> (cases (= Cell 0) S
+                   (sparse? S) (insert-sparse S Cell)
+                   true (do (promote-cell (t.storage S) (fx- (sparse-precision) (t.precision S)) Cell) S)))
+
+\\ The cells from I to End of B, 16 at a time by insert-run while the table has room for all of
+\\ them, and one at a time where it may grow.
 (define insert-cells
   {t --> buffer.storage --> fixnum --> fixnum --> t}
   S B I End ->
-    (cases (fx>= I End) S
-           (sparse? S) (insert-cells (insert-sparse S (shen-jit.u32 B I)) B (fx+ I 4) End)
-           true (do (promote-cell (t.storage S) (fx- (sparse-precision) (t.precision S))
-                                  (shen-jit.u32 B I))
-                    (insert-cells S B (fx+ I 4) End))))
+    (let Next (if (fx< (fx- End I) 64) End (fx+ I 64))
+      (cases (fx>= I End) S
+             (and (sparse? S) (fx<= (fx+ (t.occupied S) 16) (sparse-limit (t.mask S))))
+               (do (t.occupied-> S (insert-run (t.storage S) (t.mask S) B I Next (t.occupied S)))
+                   (insert-cells S B Next End))
+             true (insert-cells (insert-cell S (shen-jit.u32 B I)) B (fx+ I 4) End))))
 
 (define add-hash-range
   {t --> buffer.storage --> fixnum --> fixnum --> t}
@@ -242,31 +249,13 @@
                (error "hyperloglog: view length is not a multiple of ~A bytes" Width)
              true (add-fixed-range! S (buffer.view.owner Checked) Start End Width))))
 
-(define merge-dense
-  {buffer.storage --> buffer.storage --> fixnum --> fixnum --> buffer.storage}
-  To From I End ->
-    (if (fx>= I End) To
-        (let _ (dense-put To I (shen-jit.u8 From I))
-          (merge-dense To From (fx+ I 1) End))))
-
-(define merge-sparse
-  {t --> buffer.storage --> fixnum --> fixnum --> t}
-  To From I End ->
-    (cases (fx>= I End) To
-           (sparse? To)
-             (let Cell (shen-jit.u32 From I)
-                  _ (if (= Cell 0) To (insert-sparse To Cell))
-               (merge-sparse To From (fx+ I 4) End))
-           true (do (promote-slots From I End (t.storage To)
-                                      (fx- (sparse-precision) (t.precision To))) To)))
-
 (define merge!
   {t --> t --> t}
   To From ->
     (let _ (if (= (t.precision To) (t.precision From)) true
                 (error "hyperloglog: sketch precisions differ"))
          B (t.storage From)
-      (if (sparse? From) (merge-sparse To B 0 (shen-jit.bytes-length B))
+      (if (sparse? From) (insert-cells To B 0 (shen-jit.bytes-length B))
           (let Dense (if (sparse? To) (promote To) (t.storage To))
-            (do (merge-dense Dense B 0 (t.registers To)) To)))))
+            (do (max-bytes! Dense B (t.registers To)) To)))))
 )

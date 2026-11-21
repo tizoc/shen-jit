@@ -330,7 +330,7 @@
          _ (if Control (buffer.length (buffer.new 7)) (fixnum 7))
       (do (output "HyperLogLog++ checks passed~%") true)))
 
-\\ Times each way in, in ns a key, over 2,048 keys of 32 bytes: bench, passed to the saved test.
+\\ Times each way in, in ns a key, over 2,048 keys of 32 bytes, and a merge: bench, passed to the saved test.
 (define key-views
   {buffer.view --> fixnum --> fixnum --> (vector buffer.view) --> (vector buffer.view)}
   B Width I Keys ->
@@ -360,12 +360,12 @@
   F N -> (do (thaw F) (rounds F (fx- N 1))))
 
 (define timed
-  {string --> (lazy A) --> boolean}
-  Name F ->
+  {string --> string --> number --> (lazy A) --> boolean}
+  Name Unit Per F ->
     (let Start (get-time unix)
          _ (rounds F 2000)
          Stop (get-time unix)
-      (do (output "~A: ~A ns/key~%" Name (/ (* 1000000000 (- Stop Start)) (* 2048 2000))) true)))
+      (do (output "~A: ~A ns/~A~%" Name (/ (* 1000000000 (- Stop Start)) (* Per 2000)) Unit) true)))
 
 (define bench
   {--> boolean}
@@ -375,12 +375,15 @@
           Strings (key-strings Views 1 (vector 2048))
           Words (hashes 2048)
           Dense (h.add-fixed! (h.add-hashes! (h.new 14) (hashes 100000)) B 32)
-       (do (timed "prehashed, dense" (freeze (h.add-hashes! Dense Words)))
-           (timed "views, dense" (freeze (add-views Dense Views 1)))
-           (timed "strings, dense" (freeze (add-strings Dense Strings 1)))
-           (timed "packed, dense" (freeze (h.add-fixed! Dense B 32)))
-           (timed "views, sparse from empty" (freeze (add-views (h.new 14) Views 1)))
-           (timed "packed, sparse from empty" (freeze (h.add-fixed! (h.new 14) B 32))))))
+          Other (h.add-hashes! (h.new 14) (hashes 50000))
+       (do (timed "prehashed, dense" "key" 2048 (freeze (h.add-hashes! Dense Words)))
+           (timed "views, dense" "key" 2048 (freeze (add-views Dense Views 1)))
+           (timed "strings, dense" "key" 2048 (freeze (add-strings Dense Strings 1)))
+           (timed "packed, dense" "key" 2048 (freeze (h.add-fixed! Dense B 32)))
+           (timed "prehashed, sparse from empty" "key" 2048 (freeze (h.add-hashes! (h.new 14) Words)))
+           (timed "views, sparse from empty" "key" 2048 (freeze (add-views (h.new 14) Views 1)))
+           (timed "packed, sparse from empty" "key" 2048 (freeze (h.add-fixed! (h.new 14) B 32)))
+           (timed "merge of a dense sketch, precision 14" "merge" 1 (freeze (h.merge! Dense Other))))))
 
 (define command
   {string --> boolean}

@@ -1617,7 +1617,9 @@
   _ [] -> true
   F [X | Xs] -> (and (F X) (native-test.all? F Xs)))
 
-\\ Each of the operations on 16 bytes at I and J, stored at K in Out: copied, equal, and, or, xor.
+\\ Each of the operations on 16 bytes at I and J, stored at 16 times its number in Out: copied,
+\\ equal, and, or, xor, splat, unsigned maximum and minimum, sum, difference, and and not. The
+\\ difference and and-not are also computed into their second operand, which x86-64 does apart.
 (define-native native-test.vector-ops (A I B J Out)
   (vector X (v128 A I))
   (vector Y (v128 B J))
@@ -1627,6 +1629,15 @@
   (v128! Out 48 (vor X Y))
   (v128! Out 64 (vxor X Y))
   (v128! Out 80 (splat (u8 A I)))
+  (v128! Out 96 (vmax X Y))
+  (v128! Out 112 (vmin X Y))
+  (v128! Out 128 (v+ X Y))
+  (vector Z (v128 B J))
+  (vector Z (v- X Z))
+  (v128! Out 144 Z)
+  (vector Z (v128 B J))
+  (vector Z (vandnot X Z))
+  (v128! Out 160 Z)
   (return Out))
 
 (define native-test.ref-op
@@ -1634,7 +1645,12 @@
                    (= Op 1) (if (= X Y) 255 0)
                    (= Op 2) (shen-jit.bit-and X Y)
                    (= Op 3) (shen-jit.bit-or X Y)
-                   true (shen-jit.bit-xor X Y)))
+                   (= Op 4) (shen-jit.bit-xor X Y)
+                   (= Op 6) (if (> X Y) X Y)
+                   (= Op 7) (if (< X Y) X Y)
+                   (= Op 8) (shen-jit.bit-and (+ X Y) 255)
+                   (= Op 9) (shen-jit.bit-and (- (+ X 256) Y) 255)
+                   true (shen-jit.bit-and X (- 255 Y))))
 
 (define native-test.vector-ok?
   A I B J Out Op K -> true where (= K 16)
@@ -1650,13 +1666,11 @@
                _ (shen-jit.u8! B 5 (shen-jit.u8 A 7))
                I (shen.mod Seed 24)
                J (shen.mod (* Seed 7) 24)
-               Out (native-test.vector-ops A I B J (shen-jit.bytes 96))
-            (and (native-test.vector-ok? A I B J Out 0 0) (native-test.vector-ok? A I B J Out 1 0)
-                 (native-test.vector-ok? A I B J Out 2 0) (native-test.vector-ok? A I B J Out 3 0)
-                 (native-test.vector-ok? A I B J Out 4 0) (native-test.vector-ok? A I B J Out 5 0)
+               Out (native-test.vector-ops A I B J (shen-jit.bytes 176))
+            (and (native-test.all? (/. Op (native-test.vector-ok? A I B J Out Op 0)) [0 1 2 3 4 5 6 7 8 9 10])
                  (native-test.vectors-agree (- Seed 1)))))
 
-(native-test.check "vector loads, stores, splat, equality, and, or and xor at any offset" true
+(native-test.check "vector loads, stores, splat, equality, and, or, xor, max, min, +, - and and-not at any offset" true
   (freeze (native-test.vectors-agree 60)))
 
 \\ The mask: bit K is the top bit of byte K.

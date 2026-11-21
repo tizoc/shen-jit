@@ -84,7 +84,7 @@ Run what the change can break, and nothing more: CI runs everything on every pus
 | --- | --- |
 | The runtime, the JIT, the lowerer, the port, `vendor/` or the generated files | `make test-core` (about 20 s) |
 | The C API (`include/shen.h`, `src/runtime/ffi.c`), images or isolates, which libraries and their adapters use too | `make test-core test-libs` |
-| `lib/native.shen` | `make test-native test-datalog` |
+| `lib/native.shen` | `make test-native test-datalog test-bytes test-hyperloglog` |
 | `lib/numbers.shen`, which `buffer`, `memory` and `socket` require | `make test-typed test-libs` |
 | `lib/floats.shen`, `lib/word.shen`, `lib/words.shen` | `make test-typed` |
 | `lib/ffi.shen` | `make test-ffi test-libs` |

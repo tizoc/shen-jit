@@ -117,7 +117,12 @@
     X(OP_WORD_CTZ, "word-ctz", 2)             \
     X(OP_WORD_CLZ, "word-clz", 2)             \
     X(OP_VEC_SHR, "vec-shr", 3)               \
-    X(OP_VEC_LOOKUP, "vec-lookup", 3)
+    X(OP_VEC_LOOKUP, "vec-lookup", 3)         \
+    X(OP_VEC_MAX, "vec-max", 3)               \
+    X(OP_VEC_MIN, "vec-min", 3)               \
+    X(OP_VEC_ADD, "vec+", 3)                  \
+    X(OP_VEC_SUB, "vec-", 3)                  \
+    X(OP_VEC_ANDNOT, "vec-andnot", 3)
 
 enum {
 #define SJ_OP_ENUM(op, name, n) op,
@@ -185,7 +190,8 @@ static inline const char *raw_kinds(unsigned op)
     case OP_VEC_STORE: return "oWV";
     case OP_VEC_SPLAT: return "vW";
     case OP_VEC_MOVE: return "vV";
-    case OP_VEC_EQ: case OP_VEC_AND: case OP_VEC_OR: case OP_VEC_XOR: case OP_VEC_LOOKUP: return "vVV";
+    case OP_VEC_EQ: case OP_VEC_AND: case OP_VEC_OR: case OP_VEC_XOR: case OP_VEC_LOOKUP: case OP_VEC_MAX:
+    case OP_VEC_MIN: case OP_VEC_ADD: case OP_VEC_SUB: case OP_VEC_ANDNOT: return "vVV";
     case OP_VEC_SHR: return "vVW";
     case OP_VEC_MASK: return "wV";
     case OP_WORD_CTZ: case OP_WORD_CLZ: return "wW";
