@@ -41,7 +41,9 @@
 (define make-host
   {net-link.device --> net-ndp.host --> fixnum --> fixnum --> net-ipv6.address --> test-host}
   D H IP Index Address6 ->
-    (let F (net-interface.make-host D IP [] 1 19 40 [7777] 4)
+    (let F (net-interface.make-host D IP
+             (:net-interface.setup tcp-ports <- [] tcp-slots <- 1 tcp-buffer <- 0 time-waits <- 16
+                                   udp-ports <- [7777] udp-slots <- 4 key0 <- 19 key1 <- 40))
          _ (net-ndp.configure-static H Address6)
          _ (net-interface.enable-ipv6 F H)
          _ (net-interface.enable-multicast-sized F 2 2 95)

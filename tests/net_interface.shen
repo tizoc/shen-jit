@@ -58,8 +58,12 @@
           Right (net-link.right Link)
           A (net-ipv4.address 192 0 2 1)
           B (net-ipv4.address 192 0 2 2)
-          Client (net-interface.make-host Left A [49152] 2 123 0 [] 0)
-          Server (net-interface.make-host Right B [80 81] 2 789 678 [7 8] 1)
+          Client (net-interface.make-host Left A
+                   (:net-interface.setup tcp-ports <- [49152] tcp-slots <- 2 tcp-buffer <- 0 time-waits <- 16
+                                         udp-ports <- [] udp-slots <- 0 key0 <- 123 key1 <- 0))
+          Server (net-interface.make-host Right B
+                   (:net-interface.setup tcp-ports <- [80 81] tcp-slots <- 2 tcp-buffer <- 0 time-waits <- 16
+                                         udp-ports <- [7 8] udp-slots <- 1 key0 <- 789 key1 <- 678))
           C (net-interface.interface.listener Client)
           S (net-interface.interface.listener Server)
           T1 (net-interface.connect Client B 80)
@@ -95,8 +99,12 @@
           Right (net-link.right Link)
           A (net-ipv4.address 192 0 2 1)
           B (net-ipv4.address 192 0 2 2)
-          Client (net-interface.make-host Left A [49152] 2 123 0 [] 0)
-          Server (net-interface.make-host Right B [80 81] 2 789 678 [7 8] 1)
+          Client (net-interface.make-host Left A
+                   (:net-interface.setup tcp-ports <- [49152] tcp-slots <- 2 tcp-buffer <- 0 time-waits <- 16
+                                         udp-ports <- [] udp-slots <- 0 key0 <- 123 key1 <- 0))
+          Server (net-interface.make-host Right B
+                   (:net-interface.setup tcp-ports <- [80 81] tcp-slots <- 2 tcp-buffer <- 0 time-waits <- 16
+                                         udp-ports <- [7 8] udp-slots <- 1 key0 <- 789 key1 <- 678))
           C (net-interface.interface.listener Client)
           S (net-interface.interface.listener Server)
           U7 (net-interface.udp-binding Server 7)
@@ -154,7 +162,9 @@
           Right (net-link.right Link)
           A (net-ipv4.address 192 0 2 1)
           B (net-ipv4.address 192 0 2 2)
-          Server (net-interface.make-host Right B [] 1 1 2 [7] 1)
+          Server (net-interface.make-host Right B
+                   (:net-interface.setup tcp-ports <- [] tcp-slots <- 1 tcp-buffer <- 0 time-waits <- 16
+                                         udp-ports <- [7] udp-slots <- 1 key0 <- 1 key1 <- 2))
           P (buffer.from-string "IPv4 fragments")
           Out (buffer.new 14)
           Info (udp.make-recv-info)
@@ -193,8 +203,12 @@
           Right (net-link.right Link)
           A (net-ipv4.address 192 0 2 1)
           B (net-ipv4.address 192 0 2 2)
-          Client (net-interface.make-host Left A [] 1 10 20 [] 0)
-          Server (net-interface.make-host Right B [80] 1 30 40 [] 0)
+          Client (net-interface.make-host Left A
+                   (:net-interface.setup tcp-ports <- [] tcp-slots <- 1 tcp-buffer <- 0 time-waits <- 16
+                                         udp-ports <- [] udp-slots <- 0 key0 <- 10 key1 <- 20))
+          Server (net-interface.make-host Right B
+                   (:net-interface.setup tcp-ports <- [80] tcp-slots <- 1 tcp-buffer <- 0 time-waits <- 16
+                                         udp-ports <- [] udp-slots <- 0 key0 <- 30 key1 <- 40))
           C (net-interface.interface.listener Client)
           U (udp.bind Left A 2000)
           P (buffer.from-string "hello")
@@ -232,7 +246,9 @@
           Link (net-link.make 16 128 0 (freeze (fx<-vector Time 1)))
           A (net-ipv4.address 192 0 2 1)
           B (net-ipv4.address 192 0 2 2)
-          Server (net-interface.make-host (net-link.right Link) B [80] 1 30 40 [] 0)
+          Server (net-interface.make-host (net-link.right Link) B
+                   (:net-interface.setup tcp-ports <- [80] tcp-slots <- 1 tcp-buffer <- 0 time-waits <- 16
+                                         udp-ports <- [] udp-slots <- 0 key0 <- 30 key1 <- 40))
           U (udp.bind (net-link.left Link) A 2000)
           P (buffer.from-string "hello")
           Wire (buffer.new 128)
@@ -265,8 +281,12 @@
   -> (let Link (net-link.make 8 1500 0 (freeze 0))
           A (net-ipv4.address 192 0 2 1)
           B (net-ipv4.address 192 0 2 2)
-          Client (net-interface.make-host-sized (net-link.left Link) A [] 1 10 20 [] 0 131072)
-          Server (net-interface.make-host-sized (net-link.right Link) B [80] 1 30 40 [] 0 131072)
+          Client (net-interface.make-host (net-link.left Link) A
+                   (:net-interface.setup tcp-ports <- [] tcp-slots <- 1 tcp-buffer <- 131072 time-waits <- 16
+                                         udp-ports <- [] udp-slots <- 0 key0 <- 10 key1 <- 20))
+          Server (net-interface.make-host (net-link.right Link) B
+                   (:net-interface.setup tcp-ports <- [80] tcp-slots <- 1 tcp-buffer <- 131072 time-waits <- 16
+                                         udp-ports <- [] udp-slots <- 0 key0 <- 30 key1 <- 40))
           C (net-interface.interface.listener Client)
           S (net-interface.interface.listener Server)
           Token (net-interface.connect Client B 80)
@@ -295,8 +315,12 @@
           A (net-ipv4.address 192 0 2 1)
           B (net-ipv4.address 192 0 2 2)
           Router (net-ipv4.address 192 0 2 3)
-          Client (net-interface.make-host-sized Left A [] 1 10 20 [] 0 8192)
-          Server (net-interface.make-host-sized Right B [80] 1 30 40 [] 0 8192)
+          Client (net-interface.make-host Left A
+                   (:net-interface.setup tcp-ports <- [] tcp-slots <- 1 tcp-buffer <- 8192 time-waits <- 16
+                                         udp-ports <- [] udp-slots <- 0 key0 <- 10 key1 <- 20))
+          Server (net-interface.make-host Right B
+                   (:net-interface.setup tcp-ports <- [80] tcp-slots <- 1 tcp-buffer <- 8192 time-waits <- 16
+                                         udp-ports <- [] udp-slots <- 0 key0 <- 30 key1 <- 40))
           C (net-interface.interface.listener Client)
           Token (net-interface.connect Client B 80)
           Payload (buffer.new 1460)
@@ -340,7 +364,9 @@
           Left (net-link.left Link)
           A (net-ipv4.address 192 0 2 1)
           B (net-ipv4.address 192 0 2 2)
-          Server (net-interface.make-host-sized (net-link.right Link) B [80] 1 30 40 [] 0 8192)
+          Server (net-interface.make-host (net-link.right Link) B
+                   (:net-interface.setup tcp-ports <- [80] tcp-slots <- 1 tcp-buffer <- 8192 time-waits <- 16
+                                         udp-ports <- [] udp-slots <- 0 key0 <- 30 key1 <- 40))
           S (net-interface.interface.listener Server)
           Wire (buffer.new 1500)
           Data (buffer.new 600)

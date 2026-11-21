@@ -379,19 +379,11 @@
              (listener.next-port-> L (fx+ 49152 (shen-jit.bit-and (hash-end H 12) 16383))))))
 
 (define make-table
-  {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
-  D IP Slots Key0 Key1 -> (seed-port (new-table D IP 0 Slots 0 Key0 Key1 0 16)))
-
-(define make-table-sized
-  {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
-  D IP Slots Key0 Key1 Bytes -> (make-table-limits D IP Slots Key0 Key1 Bytes 16))
-
-(define make-table-limits
   {net-link.device --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> listener}
   D IP Slots Key0 Key1 Bytes WaitSlots ->
-    (if (and (fx>= Bytes 1) (fx<= Bytes 1048576) (fx>= WaitSlots 0) (fx<= WaitSlots 1024))
+    (if (and (fx>= Bytes 0) (fx<= Bytes 1048576) (fx>= WaitSlots 0) (fx<= WaitSlots 1024))
         (seed-port (new-table D IP 0 Slots 0 Key0 Key1 Bytes WaitSlots))
-        (error "tcp: need a 1..1048576-byte window and 0..1024 TIME-WAIT slots")))
+        (error "tcp: need buffers of 0..1048576 bytes, 0 for eight segments, and 0..1024 TIME-WAIT records")))
 
 (define next-sequence
   {listener --> peer --> fixnum --> fixnum}

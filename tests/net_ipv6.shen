@@ -24,7 +24,9 @@
   {net-link.device --> fixnum --> net-ipv6.address --> fixnum --> net-interface.interface}
   D V4 V6 Id ->
     (let H (net-ndp.make D 0 0 Id 0)
-         F (net-interface.make-host-sized D V4 [80] 2 1234 35 [7] 2 8192)
+         F (net-interface.make-host D V4
+             (:net-interface.setup tcp-ports <- [80] tcp-slots <- 2 tcp-buffer <- 8192 time-waits <- 16
+                                   udp-ports <- [7] udp-slots <- 2 key0 <- 1234 key1 <- 35))
       (do (net-ndp.configure-static H V6)
           (net-interface.enable-ipv6 F H)
           F)))

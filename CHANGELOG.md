@@ -35,7 +35,7 @@ All notable changes to this project are documented in this file. The format is b
   TCP and ICMP continue to make progress.
 - The IPv4 interface shares a bounded TCP table across listeners and outbound connections, with separate UDP
   queues per port. It handles IPv4 fragment reassembly, ICMP errors, limited in rate, TCP path MTU updates, scaled windows,
-  and closed-port resets.
+  and closed-port resets. A host is set up from one record that names its ports, slots, buffer sizes and keys.
 - `net/ethernet` adds IPv4 routing and ARP over Linux TAP. `net/dhcp`, `net/dns`, and `net/stream` support address
   acquisition and renewal, DNS A lookups, and application streams. The Linux tests exercise outbound HTTP and
   verify zero Shen heap allocations after setup on both transports.

@@ -41,7 +41,9 @@
           Guest (net-ipv4.address 198 51 100 2)
           Bcast (fixnum 4294967295)
           D (net-dhcp.make Left 2199023255574 100)
-          F (net-interface.make-host Left Guest [] 1 12 34 [68] 1)
+          F (net-interface.make-host Left Guest
+              (:net-interface.setup tcp-ports <- [] tcp-slots <- 1 tcp-buffer <- 0 time-waits <- 16
+                                    udp-ports <- [68] udp-slots <- 1 key0 <- 12 key1 <- 34))
           Inbox (net-interface.udp-binding F 68)
           B (buffer.new 256)
           Wire (buffer.new 576)
@@ -85,7 +87,9 @@
           Right (net-link.right Cable)
           Host (net-ipv4.address 198 51 100 1)
           Guest (net-ipv4.address 198 51 100 2)
-          F (net-interface.make-host Left Guest [] 1 12 34 [53000] 2)
+          F (net-interface.make-host Left Guest
+              (:net-interface.setup tcp-ports <- [] tcp-slots <- 1 tcp-buffer <- 0 time-waits <- 16
+                                    udp-ports <- [53000] udp-slots <- 2 key0 <- 12 key1 <- 34))
           R (net-dns.make (net-interface.udp-binding F 53000) 512)
           Server (udp.bind Right Host 53)
           Info (udp.make-recv-info)

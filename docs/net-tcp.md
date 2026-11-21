@@ -30,7 +30,7 @@ writes and partial reads with the same preallocated buffers.
 
 The MTU must be at least 41. A peer sends segments of at most `min(536, Mtu - 40)` bytes, IPv4's default
 size, even on a larger link, and offers that size; a table made with a buffer size `N`, as
-`net-interface.make-host-sized` makes one, sends `min(N, Mtu - 40)`. Each peer reserves two circular byte
+`net-interface.make-host` makes one with a `tcp-buffer` of `N`, sends `min(N, Mtu - 40)`. Each peer reserves two circular byte
 buffers of `8 × min(536, Mtu - 40)` bytes each, up to 4,288 bytes for sending and 4,288 for receiving.
 Three bitmaps track out-of-order data, SACKed data, and repairs. Each bitmap uses one
 bit per buffer byte and three padding bytes so that a 32-bit read can start at its last

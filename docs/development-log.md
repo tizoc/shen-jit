@@ -4092,6 +4092,21 @@ and Linux's TUN and TAP suites pass with no heap words.
   third with `>` and IPv6 with `>=`, but both refuse an empty fragment first, and a nonempty one that ends
   where stored bytes reach overlaps them, so the two agreed. `net-fragments.conflict?` is the rule, and both
   call it. The interface's and IPv6's suites pass.
+- **A host's setup is one record.** `make-host`, `make-host-sized` and `make-host-limits` took 8, 9 and 10
+  positional arguments, six of them fixnums in two runs of three, the TCP slots and the two keys, and the
+  UDP slots, the buffer bytes and the TIME-WAIT records, where a swap passes the type checker. `make-host`
+  takes the device, the address and a `net-interface.setup` of eight named fields, each of which the
+  struct's reader requires once, and `tcp.make-table` takes the bytes, 0 for eight segments, and the
+  records, in place of three constructors. The library has 9 lines of code fewer, and a call grows from one
+  line to three. The portable suites pass, and Linux's TUN and TAP suites with no heap words.
+- **Kept: neighbor discovery reads a router advertisement's options twice.** Its grammar checks every
+  option's length and takes the first link-layer addresses, and a second pass applies the prefixes. RFC
+  4861 6.1.2 discards an advertisement with an option of length 0 anywhere in it, so applying each prefix
+  as the grammar met it would act on a message found invalid later. Advertisements come minutes apart.
+- **Not tried: deadlines that cost nothing while idle.** Each poll visits every open connection twice, for
+  its output and its deadline, at about 30 ns a connection: 7.7 µs with 256 open and idle. A timer wheel or
+  a heap of deadlines would make a poll cost what is due, but must be kept current wherever a connection's
+  timer moves, which is in most of TCP's paths.
 
 ### Source-specific multicast (2026-11-19, macOS arm64 and Linux x86-64 in Docker Desktop)
 

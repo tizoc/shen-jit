@@ -63,7 +63,9 @@
   {net-link.device --> fixnum --> net-ndp.host --> net-ipv6.address --> net-ipv6.address -->
    (list net-ipv6.address) --> server}
   D IP H Remote Guest Offlink ->
-    (let F (net-interface.make-host-sized D IP [7777] 3 52 92 [7777] 4 16384)
+    (let F (net-interface.make-host D IP
+             (:net-interface.setup tcp-ports <- [7777] tcp-slots <- 3 tcp-buffer <- 16384 time-waits <- 16
+                                   udp-ports <- [7777] udp-slots <- 4 key0 <- 52 key1 <- 92))
          _ (net-interface.enable-ipv6 F H)
          P (buffer.from-string "outbound IPv6 stream")
       (:server

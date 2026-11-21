@@ -207,7 +207,8 @@
     (let Cable (net-link.make 8 1500 0 (freeze (net-tun.monotonic 0)))
          Wire (net-link.right Cable)
          F (net-interface.make-host (net-link.left Cable) (net-ipv4.address 198 51 100 2)
-                                    [] 1 22703 42166 [] 0)
+             (:net-interface.setup tcp-ports <- [] tcp-slots <- 1 tcp-buffer <- 0 time-waits <- 16
+                                   udp-ports <- [] udp-slots <- 0 key0 <- 22703 key1 <- 42166))
          Q (make-request F true)
          Device (net-tun.attach Wire Name)
          Server (net-ipv4.address 198 51 100 1)
@@ -265,7 +266,9 @@
          Local (net-routes.make IP 25 0)
          Default (net-routes.make 0 0 Gateway)
          _ (net-ethernet.configure Eth IP [Default Local])
-         F (net-interface.make-host Cable IP [] 2 1066 1126 [68 53333] 2)
+         F (net-interface.make-host Cable IP
+             (:net-interface.setup tcp-ports <- [] tcp-slots <- 2 tcp-buffer <- 0 time-waits <- 16
+                                   udp-ports <- [68 53333] udp-slots <- 2 key0 <- 1066 key1 <- 1126))
          R (net-dns.make (net-interface.udp-binding F 53333) 1472)
          Name (buffer.from-string "c#4;testc#0;")
          Q (make-request F false)

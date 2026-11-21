@@ -228,8 +228,9 @@
          Eth (net-ethernet.make (net-link.left FrameLink) (net-link.right IpLink)
                                  Mac Guest [Route] 4)
          Slots (fixnum 4)
-         F (net-interface.make-host-sized (net-link.left IpLink) Guest [7777] Slots
-                                          1212 20 [7777] 2 131072)
+         F (net-interface.make-host (net-link.left IpLink) Guest
+             (:net-interface.setup tcp-ports <- [7777] tcp-slots <- Slots tcp-buffer <- 131072 time-waits <- 16
+                                   udp-ports <- [7777] udp-slots <- 2 key0 <- 1212 key1 <- 20))
          S (make-server F Slots Mtu)
          Tap (net-tun.attach-tap (net-link.right FrameLink) Name)
          Step (/. Budget (net-ethernet.pump Eth Budget))

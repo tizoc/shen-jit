@@ -17,7 +17,7 @@
           listener make-listener listener-poll accept connection-index connection-state
           listener-ingress listener-transmit make-table table-ingress table-connect accept-on
           listener-deadline connection-readable? connection-writable? connection-abort
-          make-table-sized make-table-limits path-mtu path-mtu6
+          path-mtu path-mtu6
           table-ingress6 table-ingress6-at header-fits? table-connect6 expire-addresses6
           connection-send connection-send-from connection-recv-into connection-recv-at connection-shutdown-write release
           closed listen-state syn-sent syn-received established close-wait fin-wait-1 fin-wait-2

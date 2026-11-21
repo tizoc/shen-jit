@@ -39,9 +39,7 @@ adapter, or an in-memory peer. Call only `net-interface.poll` to drive this side
 | Operation | Meaning |
 | --- | --- |
 | `net-interface.make Device IP TcpPort TcpSlots InitialSequence UdpPort UdpSlots` | Preallocate the TCP listener and a UDP receive queue. Each UDP slot holds one packet of up to the link MTU. Its initial sequence numbers are `tcp.make-listener`'s, which a peer can predict, so use it for tests and links you trust. |
-| `net-interface.make-host Device IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots` | Set up listener and UDP bindings from lists of port fixnums. All TCP connections share `TcpSlots`. UDP uses `UdpSlots` per port. Supply two independently randomized unsigned 32-bit key words at setup, and keep them secret: they key the hash that gives each connection its initial sequence number (RFC 6528) and the first ephemeral port. |
-| `net-interface.make-host-sized Device IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots Bytes` | Choose 1 through 1,048,576 bytes per TCP send and receive buffer. Setup also reserves the appropriate presence and SACK bitmaps. |
-| `net-interface.make-host-limits Device IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots Bytes WaitSlots` | Also choose 0 through 1,024 detached TCP TIME-WAIT records. The other constructors reserve 16. At zero, TIME-WAIT connections hold their stream slot until expiry. |
+| `net-interface.make-host Device IP Setup` | Set up the TCP table, its listeners and the UDP bindings that a `net-interface.setup` record names, as below. |
 | `net-interface.connect Interface RemoteIP RemotePort` | Claim a TCP slot, pick an unused ephemeral port, and start an active open. Returns a token, or zero when no slot or port is free. |
 | `net-interface.next-deadline Interface` | Give the earliest input, TCP, IPv6, or multicast deadline in absolute monotonic milliseconds, or `-1` while waiting for external I/O. |
 | `net-interface.udp-binding Interface Port` | Get an inbox for `udp.inbox-recv-into`, `udp.inbox-ready?`, or `udp.send` with `udp.inbox.peer`. |
@@ -50,6 +48,23 @@ adapter, or an in-memory peer. Call only `net-interface.poll` to drive this side
 | `net-interface.udp-send Interface IP Port View Count` | Send from the bound port. Returns `udp.sent`, `udp.would-block`, or `udp.too-large`. |
 | `net-interface.udp-recv-into Interface Out Info` | Read the next queued datagram with reusable `udp.recv-info`. Returns `udp.received`, `udp.empty`, or `udp.too-small`. A short output leaves the datagram queued. |
 | `net-interface.udp-dropped Interface` | Count valid datagrams dropped because this port's receive queue was full. |
+
+A host's setup names every bound it reserves, and one left out is an error when the code is read:
+
+```shen
+(net-interface.make-host Device IP
+  (:net-interface.setup tcp-ports <- [80 443] tcp-slots <- 64 tcp-buffer <- 0 time-waits <- 16
+                        udp-ports <- [53] udp-slots <- 8 key0 <- Key0 key1 <- Key1))
+```
+
+| Field | Meaning |
+| --- | --- |
+| `tcp-ports`, `udp-ports` | The ports to listen on and to bind, each list distinct, in 1 through 65535. |
+| `tcp-slots` | The connection slots that all listeners and outbound connections share. |
+| `tcp-buffer` | The bytes of each connection's send buffer and of its receive buffer, 1 through 1,048,576, or 0 for eight segments of `min(536, Mtu - 40)` bytes, as [in-memory TCP](net-tcp.md) describes. Setup also reserves their presence and SACK bitmaps. |
+| `time-waits` | The detached TCP TIME-WAIT records, 0 through 1,024. At zero, a connection in TIME-WAIT holds its stream slot until it expires. |
+| `udp-slots` | The packets each UDP port queues, each up to the link MTU. |
+| `key0`, `key1` | Two independently randomized unsigned 32-bit words, kept secret: they key the hash that gives each connection its initial sequence number (RFC 6528) and the first ephemeral port. |
 
 A full UDP queue drops the newest datagram, preserving the queued datagrams and allowing TCP and ICMP
 to continue. ICMP handles echo requests plus protocol and UDP port unreachable replies; the

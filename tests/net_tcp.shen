@@ -1237,7 +1237,7 @@
         time <- Time
         left <- (net-link.left Link)
         right <- Right
-        listener <- (tcp.make-table-limits Right Local 1 17 52 64 1)
+        listener <- (tcp.make-table Right Local 1 17 52 64 1)
         local4 <- Local
         remote4 <- (net-ipv4.address 192 0 2 1)
         local6 <- (net-ipv6.make-address 536939960 0 0 2)

@@ -34,7 +34,9 @@
          A (net-ipv6.make-address 536939960 0 0 1)
          B (net-ipv6.make-address 536939960 0 0 2)
          H (net-ndp.make D 0 0 2 0)
-         F (net-interface.make-host D (net-ipv4.address 192 0 2 2) [] 1 22 33 [7] 2)
+         F (net-interface.make-host D (net-ipv4.address 192 0 2 2)
+             (:net-interface.setup tcp-ports <- [] tcp-slots <- 1 tcp-buffer <- 0 time-waits <- 16
+                                   udp-ports <- [7] udp-slots <- 2 key0 <- 22 key1 <- 33))
          _ (if Static (net-ndp.configure-static H B) true)
          _ (net-interface.enable-ipv6-sized F H Slots 1500)
          Payload (buffer.from-string "reassembled IPv6 packet!")

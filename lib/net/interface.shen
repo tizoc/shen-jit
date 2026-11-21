@@ -15,7 +15,7 @@
   (use net-wire => wire)
   (import struct defstruct)
   (import layout write-layout)
-  (export interface interface.listener make make-host make-host-sized make-host-limits connect poll next-deadline
+  (export interface interface.listener setup setup.make make make-host connect poll next-deadline
           enable-multicast enable-multicast-sized join4 join6 leave4 leave6 joined4? joined6?
           join-source4 join-source6 leave-source4 leave-source6
           enable-ipv6 enable-ipv6-sized connect6 udp-send6 no-address udp-binding udp-send udp-recv-into udp-dropped
@@ -95,6 +95,20 @@
   (tcp-ports : (list fixnum))
   (udp-bindings : (list udp.inbox)))
 
+\\ What a host reserves at setup: its TCP ports, the connection slots they share, the bytes of each
+\\ connection's send buffer and of its receive buffer, 0 for eight full segments, and the records that
+\\ keep TIME-WAIT apart from the slots; its UDP ports and the packets each queues; and two secret random
+\\ words that key TCP's initial sequence numbers and first ephemeral port.
+(defstruct setup
+  (tcp-ports : (list fixnum))
+  (tcp-slots : fixnum)
+  (tcp-buffer : fixnum)
+  (time-waits : fixnum)
+  (udp-ports : (list fixnum))
+  (udp-slots : fixnum)
+  (key0 : fixnum)
+  (key1 : fixnum))
+
 (define full-budget
   {--> error-budget}
   -> (:error-budget at <- 0 tokens <- 8))
@@ -142,38 +156,23 @@
   D IP [P | Rest] Slots -> [(udp.make-inbox D IP P Slots) | (bind-udp D IP Rest Slots)])
 
 (define make-host
-  {net-link.device --> fixnum --> (list fixnum) --> fixnum --> fixnum --> fixnum -->
-   (list fixnum) --> fixnum --> interface}
-  D IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots ->
-    (new-host D IP TcpPorts (tcp.make-table D IP TcpSlots Key0 Key1) UdpPorts UdpSlots))
-
-(define make-host-sized
-  {net-link.device --> fixnum --> (list fixnum) --> fixnum --> fixnum --> fixnum -->
-   (list fixnum) --> fixnum --> fixnum --> interface}
-  D IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots Bytes ->
-    (new-host D IP TcpPorts (tcp.make-table-sized D IP TcpSlots Key0 Key1 Bytes) UdpPorts UdpSlots))
-
-(define make-host-limits
-  {net-link.device --> fixnum --> (list fixnum) --> fixnum --> fixnum --> fixnum -->
-   (list fixnum) --> fixnum --> fixnum --> fixnum --> interface}
-  D IP TcpPorts TcpSlots Key0 Key1 UdpPorts UdpSlots Bytes WaitSlots ->
-    (new-host D IP TcpPorts (tcp.make-table-limits D IP TcpSlots Key0 Key1 Bytes WaitSlots) UdpPorts UdpSlots))
-
-(define new-host
-  {net-link.device --> fixnum --> (list fixnum) --> tcp.listener --> (list fixnum) --> fixnum --> interface}
-  D IP TcpPorts L UdpPorts UdpSlots ->
-    (do (check-ports TcpPorts)
-        (check-ports UdpPorts)
-        (:interface
-          device <- D
-          ip <- IP
-          ipv6 <- []
-          groups <- []
-          fragments <- (net-fragments.make 2 (net-link.mtu D))
-          errors <- (full-budget)
-          listener <- L
-          tcp-ports <- TcpPorts
-          udp-bindings <- (bind-udp D IP UdpPorts UdpSlots))))
+  {net-link.device --> fixnum --> setup --> interface}
+  D IP S ->
+    (let TcpPorts (setup.tcp-ports S)
+         UdpPorts (setup.udp-ports S)
+      (do (check-ports TcpPorts)
+          (check-ports UdpPorts)
+          (:interface
+            device <- D
+            ip <- IP
+            ipv6 <- []
+            groups <- []
+            fragments <- (net-fragments.make 2 (net-link.mtu D))
+            errors <- (full-budget)
+            listener <- (tcp.make-table D IP (setup.tcp-slots S) (setup.key0 S) (setup.key1 S)
+                                        (setup.tcp-buffer S) (setup.time-waits S))
+            tcp-ports <- TcpPorts
+            udp-bindings <- (bind-udp D IP UdpPorts (setup.udp-slots S))))))
 
 (define enable-multicast
   {interface --> fixnum --> fixnum --> boolean}
