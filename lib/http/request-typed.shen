@@ -1,5 +1,6 @@
 (shen.x.namespace http
   (use buffer)
+  (use bytes)
   (use io)
   (use option)
   (use shen-jit)
@@ -9,23 +10,6 @@
 (define body-reader
   {io.reader --> request --> body-reader}
   R Request -> (body-reader-with R Request []))
-
-(define lower
-  {string --> string}
-  Text ->
-    (let B (shen-jit.string->bytes Text)
-         _ (lower-bytes B 0 (shen-jit.bytes-length B))
-      (shen-jit.bytes->string B 0 (shen-jit.bytes-length B))))
-
-(define lower-bytes
-  {buffer.storage --> fixnum --> fixnum --> boolean}
-  _ At At -> true
-  B At End ->
-    (let Byte (shen-jit.u8 B At)
-         _ (if (and (fx>= Byte 65) (fx<= Byte 90))
-               (do (shen-jit.u8! B At (fx+ Byte 32)) true)
-               true)
-      (lower-bytes B (fx+ At 1) End)))
 
 (define field-values
   {(list (list string)) --> string --> (list string)}
@@ -72,7 +56,7 @@
 
 (define header-values
   {request --> string --> (list string)}
-  Request Name -> (field-values (headers Request) (lower Name)))
+  Request Name -> (field-values (headers Request) (bytes.lower Name)))
 
 (define body
   {request --> buffer.view}

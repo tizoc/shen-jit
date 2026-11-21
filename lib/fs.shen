@@ -3,6 +3,7 @@
 
 (shen.x.namespace fs
   (use buffer)
+  (use bytes)
   (use io)
   (use option)
   (use result)
@@ -291,16 +292,8 @@
               (true (do (c-random-mac B 16) (:ok B)))))
       (/. X (:err (io.native-error random foreign 0 "temporary name" (error-to-string X))))))
 
-(define hex
-  _ 16 Acc -> Acc
-  B I Acc ->
-    (let N (shen-jit.u8 B I)
-         Hi (pos "0123456789abcdef" (shen-jit.shift-right N 4))
-         Lo (pos "0123456789abcdef" (shen-jit.bit-and N 15))
-      (hex B (+ I 1) (cn Acc (cn Hi Lo)))))
-
 (define random-name
-  Prefix -> (let-ok Bytes (random-bytes) (:ok (hex Bytes 0 Prefix))))
+  Prefix -> (let-ok Bytes (random-bytes) (:ok (cn Prefix (bytes.hex Bytes 0 16)))))
 
 \\ Windows takes only the owner's read and write bits, as a read-only attribute.
 (define temp-open

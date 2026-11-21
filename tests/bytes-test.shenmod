@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name bytes-test)
+  (requires bytes buffer)
+  (typed)
+  (sources tc+ "bytes_typed.shen" tc- "bytes_checks.shen"))

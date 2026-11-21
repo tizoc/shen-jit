@@ -2,6 +2,7 @@
 \\ Numbers decode to lossless [number Token] values; native numbers can also be encoded.
 
 (shen.x.namespace json
+  (use bytes)
   (use option)
   (use result)
   (import result ok)
@@ -101,14 +102,10 @@
                                  (true (scan-fail (+ I Shift) "invalid escape")))
                   (do (shen-jit.u8! Out K Byte)
                       (scan-decode Data (+ I 2) Stop Out (+ K 1) Shift)))))
-          (let Run (- (scan-run Data I Stop) I)
+          \\ The grammar has checked the text, so what runs to the next escape is copied as it is.
+          (let Run (- (bytes.find Data I Stop 92) I)
             (do (shen-jit.copy-bytes Out K Data I Run)
                 (scan-decode Data (+ I Run) Stop Out (+ K Run) Shift))))))
-
-\\ The grammar has checked the text, so what runs to the next escape is copied as it is.
-(define scan-run
-  _ I I -> I
-  Data I Stop -> (if (= (shen-jit.u8 Data I) 92) I (scan-run Data (+ I 1) Stop)))
 
 \\ V is the span the grammar made, and At its position, which errors count from: read from a
 \\ reader, the span is a copy, and At is its position in the stream.

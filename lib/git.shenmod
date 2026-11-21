@@ -1,7 +1,7 @@
 (shen.module
   (version 1)
   (name git)
-  (requires fs ffi result buffer layout)
+  (requires fs ffi result buffer bytes layout)
   (requires-features shen-jit/ffi)
   (sources tc+ "git/formats.shen"
     tc- "git/bytes.shen" "git/repository.shen" "git/pack.shen" "git/objects.shen" "git/index.shen"

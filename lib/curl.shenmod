@@ -1,5 +1,5 @@
 (shen.module
   (version 1)
   (name curl)
-  (requires ffi buffer io result)
+  (requires ffi buffer bytes io result)
   (sources tc- "curl.shen" tc+ "curl-typed.shen"))

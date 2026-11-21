@@ -2,6 +2,7 @@
 \\ The application receives a complete request and returns a response value, without writing bytes.
 
 (shen.x.namespace http
+  (use bytes)
   (use buffer)
   (use clock)
   (use deadline)
@@ -68,7 +69,7 @@
 
 (define has-date?
   [] -> false
-  [[Name _] | Rest] -> (or (= (lower Name) "date") (has-date? Rest))
+  [[Name _] | Rest] -> (or (= (bytes.lower Name) "date") (has-date? Rest))
   _ -> (error "http: response fields must be pairs"))
 
 (define server-response

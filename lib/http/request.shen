@@ -3,6 +3,7 @@
 
 (shen.x.namespace http
   (use buffer)
+  (use bytes)
   (use deadline)
   (use grammar)
   (use io)
@@ -39,42 +40,35 @@
            (digit? B)
            (element? B [33 35 36 37 38 39 42 43 45 46 94 95 96 124 126])))
 
+\\ Classes of bytes for bytes.span, made as the code is read.
+(define token-bytes -> (bytes.class [33 35 36 37 38 39 42 43 45 46 94 95 96 124 126 [48 57] [65 90] [97 122]]))
+(define ows-bytes -> (bytes.class [9 32]))
+(define digit-bytes -> (bytes.class [[48 57]]))
+(define line-bytes -> (bytes.class [9 [32 126] [128 255]]))
+
 (define token-range?
-  _ At At -> true
-  B At End -> (and (token-byte? (shen-jit.u8 B At)) (token-range? B (+ At 1) End)))
+  B At End -> (= (bytes.span B At End (token-bytes)) End))
 
 (define ows?
   B -> (or (= B 32) (= B 9)))
 
 (define trim-start
-  B At End -> (if (and (< At End) (ows? (shen-jit.u8 B At)))
-                  (trim-start B (+ At 1) End)
-                  At))
+  B At End -> (bytes.span B At End (ows-bytes)))
 
 (define trim-end
-  B At End -> (if (and (< At End) (ows? (shen-jit.u8 B (- End 1))))
-                  (trim-end B At (- End 1))
-                  End))
+  B At End -> (bytes.span-back B At End (ows-bytes)))
 
 (define http.text
   B Start End -> (shen-jit.bytes->string B Start (- End Start)))
 
+\\ Where the line from At ends with CRLF: what a line may hold is tabs and bytes but controls.
 (define line-end
   B At End ->
-    (if (>= At End)
-        (invalid "unterminated line")
-        (let Byte (shen-jit.u8 B At)
-          (cond ((= Byte 13)
-                  (if (and (< (+ At 1) End) (= (shen-jit.u8 B (+ At 1)) 10))
-                      At
-                      (invalid "CR without LF")))
-                ((or (= Byte 10) (= Byte 127) (and (< Byte 32) (not (= Byte 9))))
-                  (invalid "control byte in head"))
-                (true (line-end B (+ At 1) End))))))
-
-(define find-byte
-  _ At End _ -> End where (>= At End)
-  B At End Byte -> (if (= (shen-jit.u8 B At) Byte) At (find-byte B (+ At 1) End Byte)))
+    (let Stop (bytes.span B At End (line-bytes))
+      (cond ((>= Stop End) (invalid "unterminated line"))
+            ((not (= (shen-jit.u8 B Stop) 13)) (invalid "control byte in head"))
+            ((and (< (+ Stop 1) End) (= (shen-jit.u8 B (+ Stop 1)) 10)) Stop)
+            (true (invalid "CR without LF")))))
 
 (define uri-byte?
   B -> (or (ascii-letter? B)
@@ -109,12 +103,12 @@
 (define field
   B At End ->
     (let _ (if (<= (- End At) 8192) true (invalid "field line too long"))
-         Colon (find-byte B At End 58)
+         Colon (bytes.find B At End 58)
          _ (if (and (> Colon At) (< Colon End) (token-range? B At Colon))
                true (invalid "invalid field name or whitespace before colon"))
          Start (trim-start B (+ Colon 1) End)
          Finish (trim-end B Start End)
-      [(lower (http.text B At Colon)) (http.text B Start Finish)]))
+      [(bytes.lower (http.text B At Colon)) (http.text B Start Finish)]))
 
 \\ A whole head read as it arrives, by http.read-request: the request line, the fields and the blank
 \\ line, each line within its limit and ended by CRLF.
@@ -126,7 +120,7 @@
 (defgrammar <field-value> <word> (* <spaced-word>); <e>;)
 (defgrammar <field-line>
   (text <token>) (require ":" "invalid field name or whitespace before colon")
-    <ows> (text <field-value>) <ows> := [(lower <token>) <field-value>];)
+    <ows> (text <field-value>) <ows> := [(bytes.lower <token>) <field-value>];)
 (defgrammar <eol>
   13 (require 10 "CR without LF");
   B (require (where false) (if (or (< B 32) (= B 127)) (if (= B 10) "bare LF" "control byte in head")
@@ -190,34 +184,11 @@
             (true false))))
 
 (define digits?
-  _ At At -> true
-  B At End -> (and (digit? (shen-jit.u8 B At)) (digits? B (+ At 1) End)))
+  B At End -> (= (bytes.span B At End (digit-bytes)) End))
 
-\\ Split at 2^60 on the rare large-limit path: the kernel's mod doubles its divisor,
-\\ which would overflow near the largest fixnum. Every intermediate here stays in range.
-(define decimal-bound
-  N ->
-    (if (<= N 1152921504606846975)
-        (let R (shen.mod N 10) (@p (/ (- N R) 10) R))
-        (let Low (- N 1152921504606846976)
-             R (shen.mod Low 10)
-             Sum (+ R 6)
-             Carry (if (>= Sum 10) 1 0)
-          (@p (+ 115292150460684697 (/ (- Low R) 10) Carry)
-              (if (= Carry 1) (- Sum 10) Sum)))))
-
+\\ Digits that digits? has checked, as a number, or too-large past Limit.
 (define decimal
-  B Start End Limit ->
-    (let Bound (decimal-bound Limit)
-      (decimal-loop B Start End 0 (fst Bound) (snd Bound))))
-
-(define decimal-loop
-  _ At At N _ _ -> N
-  B At End N Tens Remainder ->
-    (let Digit (- (shen-jit.u8 B At) 48)
-      (if (or (> N Tens) (and (= N Tens) (> Digit Remainder)))
-          too-large
-          (decimal-loop B (+ At 1) End (+ (* N 10) Digit) Tens Remainder))))
+  B Start End Limit -> (let N (bytes.decimal B Start End Limit) (if (= N -2) too-large N)))
 
 (define host-port?
   _ At At -> true
@@ -233,11 +204,11 @@
          N (shen-jit.bytes-length B)
       (and (> N 0)
            (if (= (shen-jit.u8 B 0) 91)
-               (let Close (find-byte B 1 N 93)
+               (let Close (bytes.find B 1 N 93)
                  (and (< Close N)
                       (ipv6? B 1 Close)
                       (host-port? B (+ Close 1) N)))
-               (let Colon (find-byte B 0 N 58)
+               (let Colon (bytes.find B 0 N 58)
                  (and (<= Colon 253)
                       (host-labels? B 0 Colon 0 0)
                       (host-port? B Colon N)))))))
@@ -254,12 +225,12 @@
 
 (define token-parts
   B At End Acc ->
-    (let Comma (find-byte B At End 44)
+    (let Comma (bytes.find B At End 44)
          Start (trim-start B At Comma)
          Finish (trim-end B Start Comma)
          _ (if (and (< Start Finish) (token-range? B Start Finish))
                true (invalid "invalid token list"))
-         Next [(lower (http.text B Start Finish)) | Acc]
+         Next [(bytes.lower (http.text B Start Finish)) | Acc]
       (if (= Comma End) Next (token-parts B (+ Comma 1) End Next))))
 
 (define connection-framing?

@@ -288,7 +288,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words option result buffers layout grammar io fs processes parallel tree-sitter framing io-sockets git hyperloglog networking net-udp net-tcp net-tun deadlines http-head http http-streaming http-listener json datalog curl
+GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words option result buffers bytes layout grammar io fs processes parallel tree-sitter framing io-sockets git hyperloglog networking net-udp net-tcp net-tun deadlines http-head http http-streaming http-listener json datalog curl
 PANDOC ?= pandoc
 GUIDE_PANDOC := $(PANDOC) -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
@@ -401,7 +401,7 @@ test-isolates-stress: $(BUILD)/shen-jit
 	SHEN_JIT_GC_STRESS=1 $(BUILD)/shen-jit eval -l tests/isolates.shen | $(FFI_RESULT)
 
 # Every library's suite, without the collections test-lib-stress adds (about 30 s).
-test-libs: test-buffer test-layout test-hyperloglog test-json test-io test-net-udp test-net-tcp test-net-interface test-net-clients test-net-ipv6 test-net-multicast test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces \
+test-libs: test-buffer test-bytes test-layout test-hyperloglog test-json test-io test-net-udp test-net-tcp test-net-interface test-net-clients test-net-ipv6 test-net-multicast test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces \
   test-parallel test-shen-git
 
 .PHONY: test-isolates test-isolates-stress test-parallel
@@ -502,6 +502,10 @@ test-io: $(BUILD)/shen-jit
 # Binary layouts: generated accessors against raw bytes, ranges, offsets, namespaces and inlining.
 test-layout: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -m tests/layout-test.shenmod | $(FFI_RESULT)
+
+.PHONY: test-bytes
+test-bytes: $(BUILD)/shen-jit
+	$(BUILD)/shen-jit eval -m tests/bytes-test.shenmod | $(FFI_RESULT)
 
 # HyperLogLog++ accuracy, transitions and steady-state allocation of hashed inserts.
 .PHONY: test-hyperloglog

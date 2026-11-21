@@ -7,6 +7,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- The module `bytes` finds a byte, skips the bytes of a class from either end, lowercases, and converts hexadecimal
+  and decimal digits over a range of bytes, each in one call to native code. HTTP, curl, Git, JSON and the filesystem
+  library use it in place of their own loops: parsing an HTTP head took 2.3 µs where it took 3.8.
 - The module `hyperloglog` estimates how many distinct keys a stream holds, with HyperLogLog++ sketches that start
   as a small sparse table, become one byte a register as the count grows, and merge. Strings, views, packed
   fixed-width keys and prehashed 64-bit words go in from typed code without allocating.

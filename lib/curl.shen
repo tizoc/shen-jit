@@ -3,6 +3,7 @@
 
 (shen.x.namespace curl
   (use buffer)
+  (use bytes)
   (use io)
   (use option)
   (use result)
@@ -143,9 +144,9 @@
     (let Text (text URL 8192)
          B (shen-jit.string->bytes Text)
          N (shen-jit.bytes-length B)
-      (cond ((and (>= N 7) (= (lower (shen-jit.bytes->string B 0 7)) "http://"))
+      (cond ((and (>= N 7) (= (bytes.lower (shen-jit.bytes->string B 0 7)) "http://"))
               (cn "http://" (shen-jit.bytes->string B 7 (- N 7))))
-            ((and (>= N 8) (= (lower (shen-jit.bytes->string B 0 8)) "https://"))
+            ((and (>= N 8) (= (bytes.lower (shen-jit.bytes->string B 0 8)) "https://"))
               (cn "https://" (shen-jit.bytes->string B 8 (- N 8))))
             (true (error "curl: URL must use http:// or https://")))))
 
@@ -172,7 +173,7 @@
 
 (define has-content-type?
   [] -> false
-  [[Name _] | Rest] -> (or (= (lower Name) "content-type") (has-content-type? Rest))
+  [[Name _] | Rest] -> (or (= (bytes.lower Name) "content-type") (has-content-type? Rest))
   _ -> (error "curl: headers must be [Name Value] pairs"))
 
 (define request-fields
@@ -180,7 +181,7 @@
   [[Name Value] | Rest] Count Total Acc ->
     (let _ (token Name 8192)
          _ (text Value 8192)
-         _ (if (element? (lower Name) ["content-length" "transfer-encoding"])
+         _ (if (element? (bytes.lower Name) ["content-length" "transfer-encoding"])
                (error "curl: request framing headers are managed by libcurl") true)
          V (shen-jit.string->bytes Value)
          _ (if (field-value? V 0 (shen-jit.bytes-length V)) true (error "curl: invalid header value"))
@@ -371,17 +372,13 @@
         (/. Client (stream-perform Client Input (/. Head (:ok Sink)) (sink-state.make [] 0 []))))))
 
 \\ Parse only the final status block; native callbacks retain trailers separately.
-(define find-byte
-  _ At At _ -> At
-  B At End Byte -> (if (= (shen-jit.u8 B At) Byte) At (find-byte B (+ At 1) End Byte)))
+(define blanks -> (bytes.class [9 32]))
 
 (define trim-left
-  B At End -> (if (and (< At End) (element? (shen-jit.u8 B At) [9 32]))
-                 (trim-left B (+ At 1) End) At))
+  B At End -> (bytes.span B At End (blanks)))
 
 (define trim-right
-  B At End -> (if (and (> End At) (element? (shen-jit.u8 B (- End 1)) [9 32]))
-                 (trim-right B At (- End 1)) End))
+  B At End -> (bytes.span-back B At End (blanks)))
 
 (define header-text
   B At End ->
@@ -393,13 +390,13 @@
   View SkipStatus ->
     (let B (buffer.owner View)
          N (buffer.length View)
-         At (if SkipStatus (io.min N (+ (find-byte B 0 N 10) 1)) 0)
+         At (if SkipStatus (io.min N (+ (bytes.find B 0 N 10) 1)) 0)
       (parse-lines B At N [])))
 
 (define parse-lines
   _ At At Acc -> (reverse Acc)
   B At End Acc ->
-    (let LF (find-byte B At End 10)
+    (let LF (bytes.find B At End 10)
          Stop (if (and (> LF At) (= (shen-jit.u8 B (- LF 1)) 13)) (- LF 1) LF)
          Next (io.min End (+ LF 1))
          _ (if (field-value? B At Stop) true (error "curl: invalid response field value"))
@@ -410,11 +407,11 @@
   B At End Acc ->
     (if (element? (shen-jit.u8 B At) [9 32])
         (continuation Acc (header-text B At End))
-        (let Colon (find-byte B At End 58)
+        (let Colon (bytes.find B At End 58)
              _ (if (and (> Colon At) (< Colon End) (token-range? B At Colon))
                    true (error "curl: malformed response field"))
              _ (if (field-value? B (+ Colon 1) End) true (error "curl: invalid response field value"))
-             Name (lower (shen-jit.bytes->string B At (- Colon At)))
+             Name (bytes.lower (shen-jit.bytes->string B At (- Colon At)))
           [[Name (header-text B (+ Colon 1) End)] | Acc])))
 
 (define continuation

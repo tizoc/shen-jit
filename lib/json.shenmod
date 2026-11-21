@@ -1,5 +1,5 @@
 (shen.module
   (version 1)
   (name json)
-  (requires buffer io option grammar)
+  (requires buffer bytes io option grammar)
   (sources tc- "json.shen" tc+ "json-typed.shen"))

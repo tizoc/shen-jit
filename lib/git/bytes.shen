@@ -1,4 +1,5 @@
 (shen.x.namespace git
+  (use bytes)
   (use fs)
   (use io)
   (use buffer)
@@ -154,40 +155,27 @@
               (and (>= C 65) (<= C 70)) (- C 55)
               true -1))
 
-(define hex-digit
-  N -> (if (< N 10) (+ N 48) (+ N 87)))
-
-(define hex-loop
-  _ To End End -> (buffer.string To)
-  V To At End ->
-    (let B (buffer.u8 V At)
-         O (* At 2)
-      (do (buffer.u8-> To O (hex-digit (shen-jit.shift-right B 4)))
-          (buffer.u8-> To (+ O 1) (hex-digit (shen-jit.bit-and B 15)))
-          (hex-loop V To (+ At 1) End))))
-
 (define hex
-  V -> (hex-loop V (buffer.new (* 2 (buffer.length V))) 0 (buffer.length V)))
+  V -> (let N (buffer.length V)
+            At (buffer.offset-at V 0 N)
+         (bytes.hex (buffer.owner V) At (+ At N))))
+
+(define hex-digits -> (bytes.class [[48 57] [97 102] [65 70]]))
 
 (define hex-bytes?
-  _ End End -> true
-  V At End -> (and (>= (nibble (buffer.u8 V At)) 0) (hex-bytes? V (+ At 1) End)))
+  V At End -> (let Start (buffer.offset-at V At (- End At))
+                   Stop (+ Start (- End At))
+                (= (bytes.span (buffer.owner V) Start Stop (hex-digits)) Stop)))
 
 (define hex?
-  S Width ->
-    (let V (buffer.from-string S)
-      (and (= (buffer.length V) (* Width 2)) (hex-bytes? V 0 (buffer.length V)))))
-
-(define unhex-loop
-  _ To At At -> To
-  V To At End ->
-    (let X (* At 2)
-      (do (buffer.u8-> To At (+ (* 16 (nibble (buffer.u8 V X))) (nibble (buffer.u8 V (+ X 1)))))
-          (unhex-loop V To (+ At 1) End))))
+  S Width -> (let N (shen-jit.bytes-length S)
+               (and (= N (* Width 2)) (= (bytes.span S 0 N (hex-digits)) N))))
 
 (define unhex
-  S Width -> (do (ensure (hex? S Width) (make-string "invalid object ID ~S" S))
-                (unhex-loop (buffer.from-string S) (buffer.new Width) 0 Width)))
+  S Width -> (let _ (ensure (hex? S Width) (make-string "invalid object ID ~S" S))
+                  To (buffer.new Width)
+                  _ (bytes.unhex! (buffer.owner To) (buffer.offset-at To 0 Width) S 0 (* 2 Width))
+               To))
 
 (define nth-byte
   S From Count -> (shen-jit.bytes->string (shen-jit.string->bytes S) From Count))
@@ -205,9 +193,10 @@
     (if (= At End) true
         (and (not (element? (buffer.u8 V At) Bad)) (no-bytes? V Bad (+ At 1) End))))
 
+\\ Where the first B from At is in V, or End.
 (define find-byte
-  _ _ End End -> End
-  V B At End -> (if (= (buffer.u8 V At) B) At (find-byte V B (+ At 1) End)))
+  V B At End -> (let Start (buffer.offset-at V At (- End At))
+                  (+ At (- (bytes.find (buffer.owner V) Start (+ Start (- End At)) B) Start))))
 
 (define split-at-byte
   V B At End ->
@@ -264,45 +253,25 @@
 (define space-byte?
   B -> (element? B [9 10 13 32]))
 
-(define trim-start
-  V At End -> (if (and (< At End) (space-byte? (buffer.u8 V At)))
-                  (trim-start V (+ At 1) End) At))
-
-(define trim-end
-  V Start End -> (if (and (> End Start) (space-byte? (buffer.u8 V (- End 1))))
-                     (trim-end V Start (- End 1)) End))
+(define spaces -> (bytes.class [9 10 13 32]))
 
 (define trim
-  S -> (let V (buffer.from-string S)
-            Start (trim-start V 0 (buffer.length V))
-            End (trim-end V Start (buffer.length V))
-         (buffer.string (buffer.slice V Start (- End Start)))))
+  S -> (let N (shen-jit.bytes-length S)
+            Start (bytes.span S 0 N (spaces))
+            End (bytes.span-back S Start N (spaces))
+         (shen-jit.bytes->string S Start (- End Start))))
 
 (define strip-eol
   S -> (if (suffix? (lf) S) (before S (lf)) S))
 
 (define lowercase
-  S -> (let V (buffer.from-string S)
-         (do (lower-bytes V 0 (buffer.length V)) (buffer.string V))))
-
-(define lower-bytes
-  _ At At -> true
-  V At End -> (let B (buffer.u8 V At)
-                (do (if (and (>= B 65) (<= B 90)) (buffer.u8-> V At (+ B 32)) V)
-                    (lower-bytes V (+ At 1) End))))
-
-(define decimal-loop
-  _ At At N -> N
-  V At End N ->
-    (let D (- (buffer.u8 V At) 48)
-      (if (and (>= D 0) (<= D 9) (< N 100000000000000000))
-          (decimal-loop V (+ At 1) End (+ (* N 10) D))
-          (git-error "invalid decimal field"))))
+  S -> (bytes.lower S))
 
 (define decimal
-  S -> (let V (buffer.from-string S)
-         (do (ensure (> (buffer.length V) 0) "empty decimal field")
-             (decimal-loop V 0 (buffer.length V) 0))))
+  S -> (let N (shen-jit.bytes-length S)
+            _ (ensure (> N 0) "empty decimal field")
+            Value (bytes.decimal S 0 N 999999999999999999)
+         (if (< Value 0) (git-error "invalid decimal field") Value)))
 
 (define bytes<
   A B -> (let X (buffer.from-string A) Y (buffer.from-string B)

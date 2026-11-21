@@ -1,5 +1,6 @@
 (shen.x.namespace curl
   (use buffer)
+  (use bytes)
   (use io)
   (use option)
   (use result)
@@ -44,24 +45,6 @@
   {response --> (list (list string))}
   R -> (response.headers (response-check R)))
 
-(define lower-bytes
-  {buffer.storage --> fixnum --> fixnum --> boolean}
-  _ At At -> true
-  B At End ->
-    (let Byte (shen-jit.u8 B At)
-         Storage (if (and (fx>= Byte 65) (fx<= Byte 90))
-                     (shen-jit.u8! B At (fx+ Byte 32))
-                     B)
-      (lower-bytes Storage (fx+ At 1) End)))
-
-(define lower
-  {string --> string}
-  Text ->
-    (let B (shen-jit.string->bytes Text)
-         N (shen-jit.bytes-length B)
-         _ (lower-bytes B 0 N)
-      (shen-jit.bytes->string B 0 N)))
-
 (define field-values
   {(list (list string)) --> string --> (list string)}
   [] _ -> []
@@ -70,7 +53,7 @@
 
 (define header-values
   {response --> string --> (list string)}
-  R Name -> (field-values (headers R) (lower Name)))
+  R Name -> (field-values (headers R) (bytes.lower Name)))
 
 (define trailers
   {response --> (list (list string))}

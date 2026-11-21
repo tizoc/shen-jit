@@ -2,6 +2,7 @@
 \\ Application fields are ordered pairs; framing fields are supplied by this encoder.
 
 (shen.x.namespace http
+  (use bytes)
   (use buffer)
   (use deadline)
   (use io)
@@ -80,7 +81,7 @@
          N (shen-jit.bytes-length B)
          M (shen-jit.bytes-length V)
          _ (if (and (> N 0) (token-range? B 0 N)) true (error "http: invalid response field name"))
-         Lower (lower Name)
+         Lower (bytes.lower Name)
          _ (if (element? Lower ["content-length" "transfer-encoding" "connection" "trailer"
                                "upgrade" "keep-alive" "proxy-connection" "te"])
                (error "http: response framing field is managed by the encoder") true)

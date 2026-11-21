@@ -532,7 +532,7 @@ shen-jit eval -m io/file -l program.shen
 
 A library of several parts is a directory: `io`, then `io/file` and `io/socket`; `http`, the head parser, then
 `http/request`, `http/response`, `http/server` and `http/listener`; and `process`, then `process/io`. The others are
-a file each, named as their modules are: `numbers`, `floats`, `word`, `words`, `option`, `result`, `ffi`, `native`, `buffer`, `cursor`, `grammar`, `json`, `frame`, `deadline`,
+a file each, named as their modules are: `numbers`, `floats`, `word`, `words`, `option`, `result`, `ffi`, `native`, `bytes`, `buffer`, `cursor`, `grammar`, `json`, `frame`, `deadline`,
 `clock`, `socket`, `memory`, `mmap`, `handle`, `sqlite`, `datalog`, `parallel`, `fs`, `tree-sitter` and `curl`, but for
 `buffer`, which is three: `buffer-view.shen`, `buffer-typed.shen` and `buffer.shen`.
 
@@ -599,6 +599,10 @@ adapter shipped beside it, or in its `lib/`.
 [Buffers and cursors](https://github.com/tizoc/shen-jit/blob/main/docs/buffers.md): `lib/buffer.shen` gives checked
 views over a range of a byte buffer or of [memory outside the heap](#memory-outside-the-heap), which copy and compare,
 and `lib/cursor.shen` positions in them that move as they read. The libraries below read and write through such views.
+
+[Byte scans and conversions](https://github.com/tizoc/shen-jit/blob/main/docs/bytes.md): `lib/bytes.shen` finds a byte,
+skips the bytes of a class, lowercases, and converts hexadecimal and decimal digits over a range, each as one call to
+native code, which the HTTP, curl, Git, JSON and filesystem libraries share.
 
 [Grammars over bytes](https://github.com/tizoc/shen-jit/blob/main/docs/grammar.md): `lib/grammar.shen` adds
 `defgrammar`, Shen-YACC's notation for parsers over views, compiled to the loops a scanner written by hand would use.
@@ -1246,7 +1250,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | Target | What it does |
 | --- | --- |
 | `make test-core` | `test`, `test-jit`, `test-ops`, `test-kl`, `check-lowerer`, `check-generated`, `test-kernel`, `test-stlib`, `test-thorn`, `test-native`, `test-ffi`, `test-overrides`, `test-structs`, `test-isolates`, `test-modules` and `test-typed` |
-| `make test-libs` | `test-buffer`, `test-layout`, `test-hyperloglog`, `test-json`, `test-io`, `test-net-udp`, `test-net-tcp`, `test-net-interface`, `test-net-clients`, `test-net-ipv6`, `test-net-multicast`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl`, `test-namespaces`, `test-parallel` and `test-shen-git` |
+| `make test-libs` | `test-buffer`, `test-bytes`, `test-layout`, `test-hyperloglog`, `test-json`, `test-io`, `test-net-udp`, `test-net-tcp`, `test-net-interface`, `test-net-clients`, `test-net-ipv6`, `test-net-multicast`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl`, `test-namespaces`, `test-parallel` and `test-shen-git` |
 | `make test` | The runtime's unit tests |
 | `make test-jit`, `make test-ops` | The JIT and the instructions, on small programs |
 | `make test-kl` | The `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
@@ -1262,6 +1266,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-namespaces` | Library exports, aliases, imports, types and scoped DSL vocabulary in the base and stlib executables, and in their saved images |
 | `make test-json` | JSON syntax/encoding, Unicode, exact numbers, builders, typing and images/GC |
 | `make test-buffer` | Buffer/cursor bounds, copying, foreign lifetime, typed clients, format examples, grammars, typed grammars, grammars in isolates and images/GC |
+| `make test-bytes` | Each byte scan and conversion against a loop in Shen, over random ranges and every byte, from typed code and in another isolate |
 | `make test-hyperloglog` | HyperLogLog++ hashes, sparse and dense estimates, merges, every way keys go in against the others, and allocation stress |
 | `make test-io` | Bounded chunk I/O, binary files and framing, socket endpoints/echo, native lifetimes, typed results and images/GC |
 | `make test-net-udp` | In-memory IPv4/UDP echo, independent wire fixtures, queue and clock behavior, and allocation stress |

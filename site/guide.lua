@@ -18,6 +18,7 @@ local PAGES = {
   option = 'Optional values',
   result = 'Results',
   buffers = 'Buffers and cursors',
+  bytes = 'Byte scans and conversions',
   layout = 'Binary layouts',
   grammar = 'Grammars over bytes',
   io = 'Chunk I/O',

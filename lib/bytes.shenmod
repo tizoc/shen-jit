@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name bytes)
+  (requires native)
+  (sources tc- "bytes.shen"))

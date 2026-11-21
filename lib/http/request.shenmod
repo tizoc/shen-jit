@@ -1,5 +1,5 @@
 (shen.module
   (version 1)
   (name http/request)
-  (requires buffer io option deadline grammar http result)
+  (requires buffer bytes io option deadline grammar http result)
   (sources tc- "request.shen" tc+ "request-typed.shen"))

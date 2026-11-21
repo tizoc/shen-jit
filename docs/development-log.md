@@ -7222,6 +7222,31 @@ relation of one tuple a key or rule that makes a string, as interned values must
   that a right-linear closure over a line runs whole; the joins tests call the joined run directly, as
   `run-parallel` now runs small programs whole.
 
+## Byte helpers in native code
+
+- **One module for the byte loops the libraries each wrote** (2026-11-21, Apple M3 Max, against main before it).
+  `lib/bytes.shen` holds what curl, HTTP, Git, JSON and fs had copies of: finding a byte (three copies), skipping
+  blanks from either end (three), lowercasing (three), hexadecimal (two) and decimal digits (two), as native code
+  that does a whole range in one call and gives a fixnum, a string or its storage, so that nothing is boxed. Tests
+  of a byte against a list, such as HTTP's for a token, became `bytes.span` over a class: 32 bytes, a bit for each
+  byte. A call costs about 4 ns, as a call of the loop in Shen does, and the native loop scans a byte in about 0.5
+  ns against 1.0, so short ranges gain little and long ones about half. In their callers, median of five
+  alternating runs: `http.parse-request` of a ten-field head 3.75 and 2.30 µs, `shen-git log` on this repository,
+  386 commits, 40.6 and 32.4 ms, `status` 44.8 and 41.3, `ls-tree -r` 27.4 and 26.6, and `json.parse` of 403 KB
+  of strings with escapes 2.29 and 2.08 ms.
+- **A class first lived in a global**, set when the library loaded, and the HTTP listener's handlers then failed
+  without a word: an isolate starts with its globals unbound. A class written with constants is now made as the code
+  is read, by a macro, into a string constant of the code, which every isolate has; a test checks it in one.
+- **The price of loading `native`.** `http.read-request`, which parses as bytes arrive, gained only in validation and
+  lowercasing, and took 8.15 µs a head against 7.70: the module adds about 300 KB of live heap, mostly pairs, which
+  each collection copies, here 0.15 ms more of 0.8. Loading `native` into the earlier build alone made it 8.4,
+  and loading `json` instead 8.8. Every library costs this, in proportion to what it keeps; native code assembled
+  ahead, installed without `native`, would avoid it for this module, at the cost of generated code to keep.
+- **Not done.** JSON's strings are scanned by grammar rules a byte at a time, which `bytes.span` could do a run at a
+  time, but a grammar reading from an I/O reader cannot see past what has arrived, and the rule would have to know.
+  Reading 8 bytes at a time, as `memchr` does, would make long scans several times faster, and the ranges these
+  libraries scan are short.
+
 ## HyperLogLog++
 
 - **HyperLogLog++ over one hashing primitive** (2026-11-21, Apple M3 Max, against an earlier version of the library
