@@ -131,12 +131,29 @@
        (cond ((element? Name (loaded-list)) (already-loaded Name))
              ((element? Name Loading) (error "module: ~A is used while it loads" Name))
              (true (let Defined (definition-log)
+                        Library (trap-error (value *library*) (/. E false))
                      (shen-jit.finally (freeze (do (set *loading* [Name | Loading])
                                                    (set *defined* [])
+                                                   (set *library* (library? Path))
                                                    (load-module Name Fields Path Chain)))
                                        (freeze (do (unsealed-unless-loaded Name (definition-log))
                                                    (set *loading* Loading)
-                                                   (set *defined* Defined)))))))))
+                                                   (set *defined* Defined)
+                                                   (set *library* Library)))))))))
+
+\\ Whether the descriptor at Path is a library that comes with Shen/JIT, under the installation's
+\\ lib/, the last two roots main.c gives. What such a library defines keeps no KLambda for ps, as
+\\ the kernel's definitions keep none (shen.record-kl in shen-jit.kl); a program's own modules
+\\ keep theirs.
+(define library?
+  Path -> (let Roots (reverse (trap-error (value shen-jit.*module-roots*) (/. E [])))
+            (and (cons? Roots) (cons? (tl Roots))
+                 (or (starts? (cn (hd Roots) "/") Path) (starts? (cn (hd (tl Roots)) "/") Path)))))
+
+(define starts?
+  "" _ -> true
+  (@s C S) (@s C T) -> (starts? S T)
+  _ _ -> false)
 
 \\ The runtime adds each name it seals to the innermost module's list. False disables recording.
 (define definition-log

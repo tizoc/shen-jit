@@ -1420,13 +1420,20 @@ to any stream."
 with adjoin, which looks through the whole list, so loading n new
 definitions took time growing with n squared. A name without a shen.source
 property has never been recorded, so it goes on the list directly; any other
-still goes through adjoin."
+still goes through adjoin.
+
+What a library that comes with Shen/JIT defines keeps no KLambda for ps, as
+the kernel's definitions keep none (shen-jit.module.library?): it would stay in
+the heap, where each collection copies it, though only ps and shen-jit.code
+read it. Such a name defined twice is listed twice."
 
 (defun shen.record-kl (F Kl)
   (do (set shen.*userdefs* (if (shen-jit.recorded? F)
                                (adjoin F (value shen.*userdefs*))
                                (cons F (value shen.*userdefs*))))
-      (put F shen.source Kl (value *property-vector*))))
+      (if (trap-error (value shen-jit.module.*library*) (lambda E false))
+          F
+          (put F shen.source Kl (value *property-vector*)))))
 
 (defun shen-jit.recorded? (F)
   (let Entry (shen-jit.dict-find (value *property-vector*) F)

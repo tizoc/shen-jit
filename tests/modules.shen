@@ -233,4 +233,11 @@
 (mods.check "dependency next to its descriptor" right (value mods.path-dep))
 (mods.check "no duplicate directory" ["tests/modules/other" "tests/modules"] (module.path))
 
+\\ A library that comes with Shen/JIT keeps no KLambda for ps, as the kernel's definitions keep none; a
+\\ program's own module keeps it.
+(module.set-path (value shen-jit.*module-roots*))
+(module.use [option])
+(mods.check "a library keeps no KLambda" false (cons? (trap-error (ps option.some) (/. E false))))
+(mods.check "a program's module keeps its KLambda" true (cons? (trap-error (ps mod-a) (/. E false))))
+
 (output "~A passed, ~A failed (modules)~%" (value mods.passed) (value mods.failed))

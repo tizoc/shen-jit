@@ -120,6 +120,11 @@ Module sources evaluate a form at a time. A `tc+` source also typechecks as a ch
 Module loading shows output from the source and diagnostics. Direct `load` outside a module also
 shows the inferred types and, under typechecking, the inference count.
 
+A library that comes with Shen/JIT, found in the installation's `lib/`, keeps no KLambda of its definitions, as
+the kernel's functions keep none: `ps` and `shen-jit.code` refuse them, and the heap, which each collection copies,
+is spared their source. A program's own modules keep theirs, and so does a library found on `SHEN_JIT_PATH`, which
+is how to look at one's code.
+
 A module loads once in a process, and a saved image keeps what it loaded. Those it requires load first, left to
 right, and a module that requires itself, through others or not, is refused, naming the chain. A source that raises
 leaves its module unloaded, so the next use loads it again from its first source; modules loaded before it stay

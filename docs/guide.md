@@ -1199,7 +1199,7 @@ shen-jit: uncaught error: hd: 1 is not a pair
 | Function | What it does |
 | --- | --- |
 | `(shen-jit.backtrace)` | The names of the active functions, innermost first |
-| `(shen-jit.code F)` | The bytecode of F, a function defined after startup |
+| `(shen-jit.code F)` | The bytecode of F, a function defined after startup, not by a library that comes with Shen/JIT ([Modules](modules.md#loading)) |
 | `(shen-jit.collect)` | Collects now |
 | `(shen-jit.exit N)` | Ends the process with exit status N |
 

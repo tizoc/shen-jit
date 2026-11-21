@@ -5879,6 +5879,26 @@ type carry process-specific data. The process and Tree-sitter application tests 
   sealed, a few ns a step beside the system calls such chains wait on. Applying the lambda in place there would
   copy it into both the inlined body and the call behind the test, at each step of a chain, so a chain would
   grow exponentially without a limit on size.
+- **Libraries keep no KLambda** (2026-11-21, Apple M3 Max, against main before it). The kernel's
+  `shen.record-kl` puts every definition's KLambda on its name's `shen.source`, for `ps`, which the port's
+  `shen-jit.code` also reads, and nothing else does. For the libraries it was most of what they kept live: loading
+  `native` added 300 KB to the 273 KB of the image, `json` 1.5 MB and `http/request` 1.6 MB, all copied at each
+  collection. A library found in the installation's `lib/`, the last two of the loader's roots, now records none,
+  as the kernel's definitions have none; a program's own modules, and a library found on `SHEN_JIT_PATH`, keep
+  theirs, and `tests/buffer.shen`, which reads `buffer`'s code, loads it so. The live heap after loading `native`
+  is 303 KB, `json` 903 and `http/request` 913. Median of five alternating runs: `http.read-request` 8.09 and 5.08
+  µs a head, its collections 0.231 and 0.074 s; `json.parse` of a 400 KB document 1.63 and 1.57 ms. Built
+  `shen-git` is 3.9 MB against 6.1, its live heap 1,222 KB against 3,099, and `log` on this repository takes 24.8
+  ms against 27.1, `status` 32.7 against 34.9, `ls-tree -r` 17.8 against 19.0 (seven runs each).
+- **Rejected for it: native code assembled ahead, and unloading `native`** (2026-11-21, Apple M3 Max). Before the
+  KLambda was found to be the weight, `bytes`' native code was written to a generated file of `shen-jit.install`
+  forms, by a tool that captured what `install-code` checked, with a test that the file was current, so that
+  `bytes` did not load `native`: the live heap after `bytes` went from 610 KB to 293, `http.read-request` from 7.91
+  to 7.34 µs, and a script loading `bytes` started in 12.1 ms against 29.1. With no KLambda kept, `native` costs
+  some 30 KB, and only the startup of scripts that are not built would gain, for generated code to keep current.
+  Unloading `native` once the modules needing it have loaded would need the runtime to undefine functions, which
+  it cannot, the loader to know what each module defined, and Datalog, which assembles at run time, to load it
+  again.
 
 ## C FFI
 
@@ -7273,7 +7293,9 @@ relation of one tuple a key or rule that makes a string, as interned values must
   lowercasing, and took 8.15 µs a head against 7.70: the module adds about 300 KB of live heap, mostly pairs, which
   each collection copies, here 0.15 ms more of 0.8. Loading `native` into the earlier build alone made it 8.4,
   and loading `json` instead 8.8. Every library costs this, in proportion to what it keeps; native code assembled
-  ahead, installed without `native`, would avoid it for this module, at the cost of generated code to keep.
+  ahead, installed without `native`, would avoid it for this module, at the cost of generated code to keep. It was
+  the KLambda the kernel keeps for `ps`, which libraries no longer keep: see "Libraries keep no KLambda" under
+  Modules and typed programs.
 - **Vector registers, and `bytes.find` 16 bytes at a time** (2026-11-21, Apple M3 Max, against main before it).
   Native code has 16 registers of 16 bytes, loads and stores checked as one access of 16 bytes, `splat`, bytewise
   `v=`, `vand`, `vor` and `vxor`, `vmask`, the word of each byte's top bit, and `ctz` and `clz` on words. They are

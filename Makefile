@@ -453,9 +453,10 @@ test-native: $(BUILD)/shen-jit
 
 # Byte views and cursors, and grammars over them, independent of native assembly or kernel streams.
 # A macro applies only to files read after it, so the grammar tests load as a file of their own.
+# tests/buffer.shen reads the library's code, which it keeps only when found on SHEN_JIT_PATH.
 test-buffer: $(BUILD)/shen-jit
 	sh tests/refused.sh $(SHEN_JIT) tests/option_refused.shen -m option
-	$(BUILD)/shen-jit eval -m cursor -l tests/buffer.shen | $(FFI_RESULT)
+	SHEN_JIT_PATH=lib $(BUILD)/shen-jit eval -m cursor -l tests/buffer.shen | $(FFI_RESULT)
 	SHEN_JIT_SEAL=1 $(BUILD)/shen-jit eval -e '(optimise +)' -m buffer -l tests/buffer_registers.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -m grammar -l tests/grammar.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -m grammar -l tests/grammar_stream.shen | $(FFI_RESULT)
