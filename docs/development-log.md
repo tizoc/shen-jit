@@ -7369,10 +7369,18 @@ relation of one tuple a key or rule that makes a string, as interned values must
   lowerer. Its packed keys were faster, as above, but a string, the key Shen programs count most, was copied
   to a buffer first, and only a benchmark's shapes took the fused loops. Also dropped from it, for having no
   user: `define-layout-fold`, a typed scan of packed records by a layout.
-- **Not tried: a cheaper call to C.** Views and strings spend most of their time in the call to
-  `shen-jit.xxh64`, which costs what every primitive taking its arguments through C does. Filling a sparse table
-  from empty, growth included, takes about 20 ns a key in typed Shen by the rows above, against about 9 in the
-  earlier version's native loop.
+- **A cheaper call to C: measured, and left** (2026-11-21, Apple M3 Max). Views and strings spend much of their
+  time in the call to `shen-jit.xxh64`, which costs what every primitive taking its arguments through C does.
+  Filling a sparse table from empty, growth included, took about 20 ns a key in typed Shen by the rows above,
+  against about 9 in the earlier version's native loop: the next entry brings it to 11.4. A loop of calls of
+  `shen-jit.xxh64` took 4.1 ns with no key, 2.8 in a build where the primitive returned at once, and 6.1 with one
+  key of 8 bytes. So the call itself is 2.8 ns, publishing the frame, the arguments through the VM and the
+  registers saved and loaded around it, and the checks of its arguments 1.3, their loads of the objects' headers:
+  computing the range's bound with an overflow-checked product in place of a division changed nothing. A path in
+  registers for C functions of a byte range giving a word, as typed programs have for functions of doubles, would
+  need a way to declare them, the lowerer to pass a checked range's address, and a leaf call in the JIT, to save
+  at most some 3 ns of a string key's 13.4, in the one library with such a function. Left until a second caller
+  needs it.
 - **Merges and runs of sparse cells in native code** (2026-11-21, Apple M3 Max, against main before it). The
   third step of vector registers, for this caller: `vmax`, `vmin`, `v+`, `v-` and `vandnot`, each byte's unsigned
   maximum and minimum, wrapping sum and difference, and and-not, encoded by hand on both targets, as UMAX, UMIN,
