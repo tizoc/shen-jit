@@ -152,7 +152,9 @@ A byte class, a rule that is only `B where Guard`, is not called by the rules re
 byte in place, so that `(+ <tchar>)` is one loop with no call per byte, and a loop over a class is called only
 if its first byte matches. When a loop compiles, it evaluates each class's guard for all 256 bytes and tests a
 table from then on, so a class's guard must depend only on its byte; one that raises for some byte, or calls a
-function defined after the rule, stays a test. Other small rules that do not name themselves are compiled in place too, up to three
+function defined after the rule, stays a test. A loop over a class and nothing else, such as `(+ <tchar>)`, is
+then one call of [`bytes.span`](bytes.md), native code that takes the whole run, about twice as fast as the
+loop; read from a reader, it takes what has arrived and goes on as more does. Other small rules that do not name themselves are compiled in place too, up to three
 deep. So define a grammar's parts before the rules that use them; a rule redefined later is not seen where an
 earlier definition was compiled in place. A rule's alternatives read their input in turn, each failing straight
 to the next. A rule compiled in place hands its end and its value to what follows it, which is copied into each

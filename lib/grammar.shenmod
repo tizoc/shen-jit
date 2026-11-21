@@ -1,5 +1,5 @@
 (shen.module
   (version 1)
   (name grammar)
-  (requires buffer io option)
+  (requires buffer bytes io option)
   (sources tc- "grammar.shen"))

@@ -55,6 +55,29 @@
                 (freeze (stream-test.words (stream-test.reader "12;345;6789;0;77" Step) []))))
      [1 2 3 7 100])
 
+\\ A run of a class alone is one bytes.span over what has arrived, and goes on as more arrives.
+(defgrammar <s.lower> B where (and (>= B 97) (<= B 122));)
+(defgrammar <s.lowers> (+ <s.lower>);)
+(defgrammar <s.name> (text <s.lowers>) ";" := <s.lowers>;)
+
+(define stream-test.names
+  R Acc -> (stream-test.next-name (grammar.read <s.name> R (function stream-test.fail)) R Acc))
+
+(define stream-test.next-name
+  (:result.ok [Name]) R Acc -> (stream-test.names R [Name | Acc])
+  Terminal _ Acc -> [(reverse Acc) Terminal])
+
+(map (/. Step (stream-test.check (make-string "class runs in chunks of ~A" Step)
+                [["ab" "cdefghijklmnop" "q"] [fail 23 "input ended"]]
+                (freeze (stream-test.names (stream-test.reader "ab;cdefghijklmnop;q;rst" Step) []))))
+     [1 2 3 7 100])
+(stream-test.check "a class run larger than the reader's buffer" [fail 8 "input exceeds the limit"]
+  (freeze (grammar.read <s.name> (io.reader (stream-test.feed (buffer.from-string "abcdefghijk;") 3 (:result.ok []))
+                                            [[chunk-size 8]])
+                        (function stream-test.fail))))
+(stream-test.check "a class run that stops at a byte outside it" [fail 0 "no match"]
+  (freeze (grammar.read <s.name> (stream-test.reader "abc4;" 1) (function stream-test.fail))))
+
 (let R (stream-test.reader "12;345;rest of it" 2)
      _ (grammar.read <s.word> R (function stream-test.fail))
   (do (stream-test.check "what follows the value stays in the reader" (:result.ok ["345"])

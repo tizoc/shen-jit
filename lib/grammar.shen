@@ -17,6 +17,7 @@
   (use result)
   (use option)
   (use buffer)
+  (use bytes)
   (use io)
   (use shen-jit)
   (import struct defstruct)
@@ -885,6 +886,7 @@
          Params [Buf At End S | Free]
          _ (grammar.arity [H | (length Params)])
          _ (put H inlined (cons? Stack))
+         _ (put H run (if (and (empty? Free) (cons? (class-of X))) X []))
          _ (stub H Name (append [define H | Params]
                              [-> (rounds Again (/. Q (append [H Buf Q End S] Free)) Body)]))
       [H | Free]))
@@ -915,7 +917,7 @@
 \\ expressions that typechecked: each marked (by) is a typed rule's that did too. A class's guard
 \\ that stays a test, marked by the class, which is untyped, keeps it from compiling so.
 (define compile-loop
-  H -> (let Def (tables (get H loop))
+  H -> (let Def (run-or-loop H (tables (get H loop)))
             Owner (get H owner)
          (if (and (checked? Owner) (every? (function checked?) (marks Def)))
              (typed-eval H Def (param-types H Owner (tl (tl (tl (tl (parameters Def)))))))
@@ -979,6 +981,42 @@
 (define fill
   _ Table 256 -> Table
   F Table B -> (fill F (if (F B) (shen-jit.u8! Table B 1) Table) (+ B 1)))
+
+\\ A loop over a byte class alone, whose class has a table, is one bytes.span over the class as
+\\ bytes.class makes it: native code, a whole run in one call, where the loop takes a call a byte.
+\\ The class is a constant of the loop's code, as a table is, and its test is the one in the loop's
+\\ code, as the class was when the loop was read: a class defined again later is not seen there.
+(define run-bits
+  H -> (if (empty? (trap-error (get H run) (/. E [])))
+           none
+           (class-bits (tables (class-form (source H))))))
+
+(define class-form
+  [in-class X B Guard] -> [in-class X B Guard]
+  [X | Y] -> (let Found (class-form X) (if (= Found none) (class-form Y) Found))
+  _ -> none)
+
+(define class-bits
+  [= [shen-jit.u8 Table _] 1] -> (bytes.class (members Table 0))
+  _ -> none)
+
+(define members
+  _ 256 -> []
+  Table B -> (if (= (shen-jit.u8 Table B) 1) [B | (members Table (+ B 1))] (members Table (+ B 1))))
+
+(define run-or-loop
+  H Def -> (let Bits (run-bits H)
+             (if (= Bits none) Def (append [define H | (parameters Def)] [-> (run-call (parameters Def) Bits)]))))
+
+(define run-call
+  [Buf At End _] Bits -> [bytes.span Buf At End Bits])
+
+\\ The same read as input arrives: what has arrived, and on to what arrives next, until a byte not
+\\ in the class, or the input's end or its limit, which refill records as a bounds check does.
+(define run-stream
+  Buf At E Bits -> (let N (<-address E 0)
+                        P (bytes.span Buf At N Bits)
+                     (if (and (= P N) (refill E P)) (run-stream Buf P E Bits) P)))
 
 (defmacro macro
   [defgrammar Name | Body] -> (grammar.define Name [] Body) where (nonterminal? Name)
@@ -1180,6 +1218,20 @@
 
 \\ Defines G from F's code rewritten, and gives the rules whose streaming variants it calls.
 (define install
+  G F -> (let Bits (run-bits F)
+           (if (= Bits none) (install-rewritten G F) (install-run G F Bits))))
+
+(define install-run
+  G F Bits -> (let Def (source F)
+                   Params (parameters Def)
+                   _ (eval (append [define G | Params] [-> (run-stream-call Params Bits)]))
+                   _ (put G compiled Def)
+                []))
+
+(define run-stream-call
+  [Buf At End _] Bits -> [run-stream Buf At End Bits])
+
+(define install-rewritten
   G F ->
     (let Def (source F)
          Params (parameters Def)

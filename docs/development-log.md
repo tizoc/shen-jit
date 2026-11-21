@@ -7242,10 +7242,16 @@ relation of one tuple a key or rule that makes a string, as interned values must
   each collection copies, here 0.15 ms more of 0.8. Loading `native` into the earlier build alone made it 8.4,
   and loading `json` instead 8.8. Every library costs this, in proportion to what it keeps; native code assembled
   ahead, installed without `native`, would avoid it for this module, at the cost of generated code to keep.
-- **Not done.** JSON's strings are scanned by grammar rules a byte at a time, which `bytes.span` could do a run at a
-  time, but a grammar reading from an I/O reader cannot see past what has arrived, and the rule would have to know.
-  Reading 8 bytes at a time, as `memchr` does, would make long scans several times faster, and the ranges these
-  libraries scan are short.
+- **Not done.** Reading 8 bytes at a time, as `memchr` does, would make long scans several times faster, and the
+  ranges these libraries scan are short.
+- **Grammar loops over a class as one `bytes.span`** (2026-11-21, Apple M3 Max, against main before it). A
+  repetition of a byte class alone, as `(+ <tchar>)` and JSON's `(+ <plain>)` are, already ran as one loop testing a
+  table of the 256 bytes, at 1.58 ns a byte. A loop whose code is only that now compiles, at its first call, to one
+  `bytes.span` over the class, at 0.75; its streaming variant spans what has arrived, refills, and goes on. The
+  class is taken from the loop's own code, so a class defined again later is not seen there, as before. Median of
+  five alternating runs: `json.parse` of 657 KB of plain strings 2.92 and 2.55 ms, and of 403 KB with escapes 2.09
+  and 1.87; `http.read-request` 8.22 and 7.99 µs; `http.parse-request`, which reads its fields without loops,
+  2.35 and 2.34. Grammars now load `bytes`, and so `native`.
 
 ## HyperLogLog++
 
