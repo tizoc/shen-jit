@@ -735,12 +735,18 @@ def exercise_config(root):
         config.write('[core]\n\tfilemode = No ; Git booleans\n\tignorecase\n'
                      '[user]\n\tname = "Quoted ; Name" # comment\n\tnick = a\\tb  c\n'
                      '[remote "Origin"]\n\turl = first \\\n second\n'
-                     '[Section.Sub]\n\tkey = old style\n')
+                     '[Section.Sub]\n\tkey = old style\r\n\tcrlf = one \\\r\n two\r\n')
     (repo / ".git/objects/info/alternates").write_text(
         f"# objects of another repository\n\n{other / '.git/objects'}\n")
-    for key in ("user.name", "user.nick", "remote.Origin.url", "core.filemode", "section.sub.key"):
+    for key in ("user.name", "user.nick", "remote.Origin.url", "core.filemode", "section.sub.key",
+                "section.sub.crlf"):
         assert_git_equal(repo, "config", key)
     app(repo, "config", "remote.origin.url", error="")
+    config = (repo / ".git/config").read_bytes()
+    (repo / ".git/config").write_bytes(config + b'[s "q\\\nr"]\n\tk = v\n')
+    git(repo, "config", "s.q.k", error="bad config line")
+    app(repo, "config", "s.q.k", error="invalid config subsection")
+    (repo / ".git/config").write_bytes(config)
     assert app(repo, "cat-file", "-p", shared) == b"from an alternate\n"
     (repo / "tool").chmod(0o644)
     write(repo, ".gitignore", b"*.LOG\n")

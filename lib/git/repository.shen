@@ -63,7 +63,7 @@
     (let _ (ensure (and (< At End) (not (= (buffer.u8 V At) 10))) "invalid config subsection")
          C (buffer.u8 V At)
       (cases (= C 34) (@p (buffer.string (buffer.finish B)) (+ At 1))
-             (and (= C 92) (< (+ At 1) End))
+             (and (= C 92) (< (+ At 1) End) (not (= (buffer.u8 V (+ At 1)) 10)))
                (config-subsection V (+ At 2) End (buffer.append-byte! B (buffer.u8 V (+ At 1))))
              true (config-subsection V (+ At 1) End (buffer.append-byte! B C)))))
 
@@ -91,10 +91,11 @@
                (config-value-text V (line-end V At End) End B [] false)
              (= C 34) (config-value-text V (+ At 1) End (flush-pending B Pending) [] (not Quoted))
              (= C 92) (let Next (if (< (+ At 1) End) (buffer.u8 V (+ At 1)) 0)
-                        (if (= Next 10)
-                            (config-value-text V (+ At 2) End B Pending Quoted)
-                            (config-value-text V (+ At 2) End
-                              (buffer.append-byte! (flush-pending B Pending) (config-escape Next)) [] Quoted)))
+                        (cases (= Next 10) (config-value-text V (+ At 2) End B Pending Quoted)
+                               (and (= Next 13) (< (+ At 2) End) (= (buffer.u8 V (+ At 2)) 10))
+                                 (config-value-text V (+ At 3) End B Pending Quoted)
+                               true (config-value-text V (+ At 2) End
+                                      (buffer.append-byte! (flush-pending B Pending) (config-escape Next)) [] Quoted)))
              true (config-value-text V (+ At 1) End (buffer.append-byte! (flush-pending B Pending) C) [] Quoted))))
 
 (define flush-pending

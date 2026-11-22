@@ -184,6 +184,9 @@ All notable changes to this project are documented in this file. The format is b
   adds a directory, where it raised "file and directory collide" and wrote nothing.
 - The `git` library refuses revisions such as `HEAD~{tree}` and `v1~{}`, as Git does, where it read them as
   `HEAD^{tree}` and `v1^{}`.
+- The `git` library reads a config value continued by a backslash before a CRLF line end as Git does, where it raised
+  "invalid escape in config value" and so could not open the repository; a subsection name with a backslash before a
+  newline is refused, as in Git.
 
 ## [0.10] - 2026-11-19
 
