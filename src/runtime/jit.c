@@ -582,7 +582,7 @@ static void *h_compile(VM *vm)
 
 typedef enum { SLOW_PRIM, SLOW_ALLOC, SLOW_BOOLEAN, SLOW_NOT_PROC, SLOW_GROW, SLOW_LOOP, SLOW_RESOLVE, SLOW_GUARD,
                SLOW_RETURN, SLOW_POINTER, SLOW_NOT_NUMBER, SLOW_NOT_INTEGER, SLOW_TOO_BIG, SLOW_MEMORY,
-               SLOW_OVERFLOW, SLOW_FOREIGN, SLOW_DIVIDE, SLOW_FIT, SLOW_SHIFT } SlowKind;
+               SLOW_OVERFLOW, SLOW_FOREIGN, SLOW_DIVIDE, SLOW_FIT, SLOW_SHIFT, SLOW_PUSH_HANDLER } SlowKind;
 
 typedef struct Slow {
     SlowKind kind;
@@ -608,7 +608,6 @@ typedef struct {
     bool slow_prims;
     uint32_t floats, word_regs, vectors; /* how many of each register the code uses */
     uint32_t memory[CACHED_MEMORY], nmemory; /* the slots whose memory is cached (emit_memory_caches) */
-    bool uncached;                           /* for bytes-length, which must see what is there */
     /* Where memory is reached at one width and at word indices alone, the log2 of that width, and
        its lengths are limits on the index; else -1. */
     int8_t limit_size[CACHED_MEMORY];
@@ -1683,12 +1682,15 @@ static void call_c_raising(Emit *e, const Slow *s, sljit_s32 arg_types, void *fn
 /* A call to C that neither allocates nor collects: the heap pointer stays in
    its register, which C preserves, rather than going through memory, where
    a loop that calls would wait on it. */
-static void call_leaf(Emit *e, sljit_s32 arg_types, void *fn)
+static void save_leaf(Emit *e)
 {
     for (sljit_s32 k = SAVED_HOMES; k < (sljit_s32)e->homes; k++)
         sljit_emit_op1(e->c, SLJIT_MOV, SLOT(2 + k), HOME_REG(k), 0);
     save_raw(e);
-    sljit_emit_icall(e->c, SLJIT_CALL, arg_types, SLJIT_IMM, SLJIT_FUNC_ADDR(fn));
+}
+
+static void load_leaf(Emit *e)
+{
     /* C keeps no scratch register, whether or not this call happened to touch them. */
     if (e->vm->stress)
         for (sljit_s32 k = SAVED_HOMES; k < HOMES; k++)
@@ -1696,6 +1698,13 @@ static void call_leaf(Emit *e, sljit_s32 arg_types, void *fn)
     load_raw(e);
     for (sljit_s32 k = SAVED_HOMES; k < (sljit_s32)e->homes; k++)
         sljit_emit_op1(e->c, SLJIT_MOV, HOME_REG(k), 0, SLOT(2 + k));
+}
+
+static void call_leaf(Emit *e, sljit_s32 arg_types, void *fn)
+{
+    save_leaf(e);
+    sljit_emit_icall(e->c, SLJIT_CALL, arg_types, SLJIT_IMM, SLJIT_FUNC_ADDR(fn));
+    load_leaf(e);
 }
 
 static void check_raise(Emit *e)
@@ -1709,6 +1718,30 @@ static void store_boolean_from_flags(Emit *e, sljit_s32 type, uint32_t dst)
     sljit_emit_op_flags(c, SLJIT_MOV, R0, type);
     sljit_emit_op2(c, SLJIT_SHL, R0, R0, IMM(3));
     sljit_emit_op2(c, SLJIT_ADD, HOME(e, dst), R0, IMM(V_FALSE));
+}
+
+static void emit_boolean_result(Emit *e, uint32_t dst, struct sljit_jump *yes,
+                                struct sljit_jump **no, int nno, bool fallthrough_true)
+{
+    struct sljit_compiler *c = e->c;
+    if (fallthrough_true) {
+        if (yes)
+            sljit_set_label(yes, sljit_emit_label(c));
+        sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), IMM(V_TRUE));
+        struct sljit_jump *done = sljit_emit_jump(c, SLJIT_JUMP);
+        struct sljit_label *false_ = sljit_emit_label(c);
+        for (int i = 0; i < nno; i++)
+            if (no[i])
+                sljit_set_label(no[i], false_);
+        sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), IMM(V_FALSE));
+        sljit_set_label(done, sljit_emit_label(c));
+    } else {
+        sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), IMM(V_FALSE));
+        struct sljit_jump *done = sljit_emit_jump(c, SLJIT_JUMP);
+        sljit_set_label(yes, sljit_emit_label(c));
+        sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), IMM(V_TRUE));
+        sljit_set_label(done, sljit_emit_label(c));
+    }
 }
 
 /* Raises unless R1 is a procedure; target is the cell of a named call. */
@@ -2106,10 +2139,10 @@ static void emit_inlined_test(Emit *e, size_t cell, uint32_t body, struct sljit_
 /* A byte buffer in reach of an instruction: its base in R0 and its length in R2. Anything else
    leaves this path. A pointer with a length comes back to it from SLOW_POINTER, with its length
    and base in the same registers, and anything else takes the slow path, which raises. */
-static Slow *emit_memory_base(Emit *e, uint32_t memory, SlowKind kind, bool store)
+static Slow *emit_memory_base(Emit *e, uint32_t memory, SlowKind kind, bool store, bool cached)
 {
     struct sljit_compiler *c = e->c;
-    for (uint32_t k = 0; k < e->nmemory && !(kind == SLOW_PRIM && e->uncached); k++)
+    for (uint32_t k = 0; k < e->nmemory && cached; k++)
         if (e->memory[k] == memory) { /* checked already: length 0 sends anything else to its slow path */
             uint32_t at = WORD_REGISTERS + 3 * k;
             sljit_emit_op1(c, SLJIT_MOV, R0, RAW(e, at));
@@ -2192,7 +2225,7 @@ static sljit_s32 emit_word_access(Emit *e, uint32_t memory, uint32_t index, unsi
                 sljit_emit_op1(c, SLJIT_MOV, R0, RAW(e, at));
             return SLJIT_MEM2(base, i);
         }
-    Slow *slow = emit_memory_base(e, memory, SLOW_MEMORY, store);
+    Slow *slow = emit_memory_base(e, memory, SLOW_MEMORY, store, true);
     slow->memory = memory;
     slow->index = index;
     slow->store = store;
@@ -2330,15 +2363,11 @@ static void emit_raw(Emit *e, const uint32_t *p)
         s->words = (uint64_t)(uintptr_t)cell;
         s->back = sljit_emit_label(c);
         /* R1 holds the address: what follows only stores registers and moves floats. */
-        for (sljit_s32 k = SAVED_HOMES; k < (sljit_s32)e->homes; k++)
-            sljit_emit_op1(c, SLJIT_MOV, SLOT(2 + k), HOME_REG(k), 0);
-        save_raw(e);
+        save_leaf(e);
         for (unsigned i = 0; i < n; i++)
             sljit_emit_fop1(c, SLJIT_MOV_F64, SLJIT_FR(i), 0, FLOAT(e, p[3 + i]));
         sljit_emit_icall(c, SLJIT_CALL, types[n - 1], SLJIT_R1, 0);
-        load_raw(e);
-        for (sljit_s32 k = SAVED_HOMES; k < (sljit_s32)e->homes; k++)
-            sljit_emit_op1(c, SLJIT_MOV, HOME_REG(k), 0, SLOT(2 + k));
+        load_leaf(e);
         sljit_emit_fop1(c, SLJIT_MOV_F64, FLOAT(e, p[1]), SLJIT_FR0, 0);
         break;
     }
@@ -2700,7 +2729,7 @@ static void emit_raw(Emit *e, const uint32_t *p)
         break;
     }
     default: { /* OP_FLOAT_LOAD, OP_FLOAT_STORE: laid out as prim is */
-        Slow *slow = emit_memory_base(e, p[4], SLOW_PRIM, p[0] == OP_FLOAT_STORE);
+        Slow *slow = emit_memory_base(e, p[4], SLOW_PRIM, p[0] == OP_FLOAT_STORE, true);
         emit_memory_index(e, slow, p[5], 3);
         if (p[0] == OP_FLOAT_LOAD)
             sljit_emit_fop1(c, SLJIT_MOV_F64, FLOAT(e, p[1]), SLJIT_MEM2(SLJIT_R0, SLJIT_R1), 0);
@@ -2773,13 +2802,10 @@ static void emit_prim(Emit *e, const uint32_t *p)
         if (string_operand(e, arg[0]) || string_operand(e, arg[1])) {
             struct sljit_jump *differ[STRING_EQ_WORDS + 3];
             emit_string_eq(e, arg, differ);
-            sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), IMM(V_TRUE));
-            struct sljit_jump *done = sljit_emit_jump(c, SLJIT_JUMP);
-            struct sljit_label *no = sljit_emit_label(c);
-            for (int i = 0; differ[i]; i++)
-                sljit_set_label(differ[i], no);
-            sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), IMM(V_FALSE));
-            sljit_set_label(done, sljit_emit_label(c));
+            int n = 0;
+            while (differ[n])
+                n++;
+            emit_boolean_result(e, dst, NULL, differ, n, true);
             break;
         }
         if (fixnum_operand(e, arg[0]) || fixnum_operand(e, arg[1])) {
@@ -2795,11 +2821,7 @@ static void emit_prim(Emit *e, const uint32_t *p)
         }
         struct sljit_jump *same;
         slow = slow_path(e, SLOW_PRIM, emit_eq(e, arg, &same, NULL));
-        sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), IMM(V_FALSE));
-        struct sljit_jump *done = sljit_emit_jump(c, SLJIT_JUMP);
-        sljit_set_label(same, sljit_emit_label(c));
-        sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), IMM(V_TRUE));
-        sljit_set_label(done, sljit_emit_label(c));
+        emit_boolean_result(e, dst, same, NULL, 0, false);
         break;
     }
     case P_HD:
@@ -2823,17 +2845,7 @@ static void emit_prim(Emit *e, const uint32_t *p)
     case P_SAMEP:
     case P_POINTERP: {
         Test t = emit_type_test(e, prim, arg);
-        struct sljit_label *yes = sljit_emit_label(c);
-        if (t.yes)
-            sljit_set_label(t.yes, yes);
-        sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), IMM(V_TRUE));
-        struct sljit_jump *done = sljit_emit_jump(c, SLJIT_JUMP);
-        struct sljit_label *no = sljit_emit_label(c);
-        for (int i = 0; i < 4; i++)
-            if (t.no[i])
-                sljit_set_label(t.no[i], no);
-        sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), IMM(V_FALSE));
-        sljit_set_label(done, sljit_emit_label(c));
+        emit_boolean_result(e, dst, t.yes, t.no, 4, true);
         break;
     }
     case P_CN: {
@@ -2888,14 +2900,8 @@ static void emit_prim(Emit *e, const uint32_t *p)
         sljit_emit_op1(c, SLJIT_MOV, R0, SLJIT_MEM1(SLJIT_R0),
                        (sljit_sw)offsetof(Handler, fp_offset) - (sljit_sw)sizeof(Handler));
         sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R0, IMM(1));
-        struct sljit_jump *loud = sljit_emit_jump(c, SLJIT_ZERO);
-        sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), IMM(V_TRUE));
-        struct sljit_jump *done = sljit_emit_jump(c, SLJIT_JUMP);
-        struct sljit_label *no = sljit_emit_label(c);
-        sljit_set_label(none, no);
-        sljit_set_label(loud, no);
-        sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), IMM(V_FALSE));
-        sljit_set_label(done, sljit_emit_label(c));
+        struct sljit_jump *no[] = {none, sljit_emit_jump(c, SLJIT_ZERO)};
+        emit_boolean_result(e, dst, NULL, no, 2, true);
         break;
     }
     case P_ABSVECTOR:
@@ -3214,9 +3220,7 @@ static void emit_prim(Emit *e, const uint32_t *p)
     case P_SET_U8: case P_SET_U16: case P_SET_U32: case P_SET_F64: {
         /* A value to store must fit in the width, and one mask tests that and its tag
            together; f64! takes a float here, and leaves a fixnum to C. */
-        e->uncached = prim == P_BYTES_LENGTH;
-        slow = emit_memory_base(e, arg[0], SLOW_PRIM, store_prim(prim));
-        e->uncached = false;
+        slow = emit_memory_base(e, arg[0], SLOW_PRIM, store_prim(prim), prim != P_BYTES_LENGTH);
         if (prim == P_BYTES_LENGTH) {
             sljit_emit_op2(c, SLJIT_SHL, R0, R2, IMM(2));
             store_result(e, dst);
@@ -3461,13 +3465,7 @@ static void emit_prim(Emit *e, const uint32_t *p)
     case P_VECTORP: {
         struct sljit_jump *no[3];
         slow = slow_path(e, SLOW_PRIM, emit_vector_test(e, arg, no));
-        sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), IMM(V_TRUE));
-        struct sljit_jump *done = sljit_emit_jump(c, SLJIT_JUMP);
-        struct sljit_label *false_ = sljit_emit_label(c);
-        for (int i = 0; i < 3; i++)
-            sljit_set_label(no[i], false_);
-        sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), IMM(V_FALSE));
-        sljit_set_label(done, sljit_emit_label(c));
+        emit_boolean_result(e, dst, NULL, no, 3, true);
         break;
     }
     case P_TLSTR: {
@@ -3773,6 +3771,13 @@ static void go_back(Emit *e, const Slow *s)
     sljit_set_label(sljit_emit_jump(e->c, SLJIT_JUMP), s->back);
 }
 
+static void emit_slow_raise(Emit *e, const Slow *s, sljit_s32 arg_types, void *fn)
+{
+    sljit_emit_op1(e->c, SLJIT_MOV, R0, VMR, 0);
+    call_c_raising(e, s, arg_types, fn);
+    to_unwind(e, sljit_emit_jump(e->c, SLJIT_JUMP));
+}
+
 static void emit_slow_paths(Emit *e)
 {
     struct sljit_compiler *c = e->c;
@@ -3891,8 +3896,7 @@ static void emit_slow_paths(Emit *e)
                 struct sljit_jump *other = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM(T_STRING << 3 | TAG_HEADER));
                 sljit_emit_op2(c, SLJIT_LSHR, R2, R2, IMM(8));
                 sljit_emit_op2(c, SLJIT_ADD, R2, R2, IMM(7));
-                sljit_emit_op2(c, SLJIT_LSHR, R2, R2, IMM(3));
-                sljit_emit_op2(c, SLJIT_SHL, R2, R2, IMM(3));
+                sljit_emit_op2(c, SLJIT_AND, R2, R2, IMM(~(sljit_sw)7));
                 sljit_emit_op2(c, SLJIT_ADD, R2, R2, R0); /* where R0 ends */
                 struct sljit_label *word = sljit_emit_aligned_label(c, LOOP_ALIGN, NULL);
                 same[0] = sljit_emit_cmp(c, SLJIT_GREATER_EQUAL, R0, R2);
@@ -3964,20 +3968,11 @@ static void emit_slow_paths(Emit *e)
             break;
         }
         case SLOW_FOREIGN:
-            publish(e);
-            sljit_emit_op1(c, SLJIT_MOV, R0, VMR, 0);
-            sljit_emit_op1(c, SLJIT_MOV, R1, IMM(s->words));
-            call_c(c, SLJIT_ARGS2(W, P, P), (void *)h_foreign_address);
-            check_raise(e);
-            fill(e);
-            sljit_emit_op1(c, SLJIT_MOV, R1, R0);
-            sljit_set_label(sljit_emit_jump(c, SLJIT_JUMP), s->back);
-            break;
         case SLOW_RESOLVE:
             publish(e);
             sljit_emit_op1(c, SLJIT_MOV, R0, VMR, 0);
             sljit_emit_op1(c, SLJIT_MOV, R1, IMM(s->words));
-            call_c(c, SLJIT_ARGS2(W, P, P), (void *)h_resolve);
+            call_c(c, SLJIT_ARGS2(W, P, P), s->kind == SLOW_FOREIGN ? (void *)h_foreign_address : (void *)h_resolve);
             check_raise(e);
             fill(e);
             sljit_emit_op1(c, SLJIT_MOV, R1, R0);
@@ -3992,6 +3987,16 @@ static void emit_slow_paths(Emit *e)
             fill(e);
             go_back(e, s);
             break;
+        case SLOW_PUSH_HANDLER:
+            publish(e);
+            to_label(e, sljit_emit_op_addr(c, SLJIT_MOV_ADDR, R1), s->branch);
+            sljit_emit_op1(c, SLJIT_MOV, R0, VMR, 0);
+            sljit_emit_op1(c, SLJIT_MOV, R2, IMM(s->words));
+            call_c_raising(e, s, SLJIT_ARGS3(W, P, P, W), (void *)h_push_handler);
+            check_raise(e);
+            fill(e);
+            go_back(e, s);
+            break;
         case SLOW_BOOLEAN:
             if (s->catch_label != NONE) {
                 jump_to_catch(e, s->catch_label);
@@ -3999,57 +4004,43 @@ static void emit_slow_paths(Emit *e)
             }
             publish(e);
             sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, s->insn[1]));
-            sljit_emit_op1(c, SLJIT_MOV, R0, VMR, 0);
-            call_c_raising(e, s, SLJIT_ARGS2(W, P, W), (void *)h_boolean_error);
-            to_unwind(e, sljit_emit_jump(c, SLJIT_JUMP));
+            emit_slow_raise(e, s, SLJIT_ARGS2(W, P, W), (void *)h_boolean_error);
             break;
         case SLOW_NOT_NUMBER:
         case SLOW_NOT_INTEGER:
             publish(e);
             sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, s->insn[2]));
-            sljit_emit_op1(c, SLJIT_MOV, R0, VMR, 0);
-            call_c_raising(e, s, SLJIT_ARGS2(W, P, W), s->kind == SLOW_NOT_NUMBER ? (void *)h_not_number : (void *)h_not_integer);
-            to_unwind(e, sljit_emit_jump(c, SLJIT_JUMP));
+            emit_slow_raise(e, s, SLJIT_ARGS2(W, P, W), s->kind == SLOW_NOT_NUMBER ? (void *)h_not_number : (void *)h_not_integer);
             break;
         case SLOW_FIT: /* the value, in R2 */
         case SLOW_SHIFT: /* the count, in R2 */
             publish(e);
             sljit_emit_op1(c, SLJIT_MOV, R1, R2);
-            sljit_emit_op1(c, SLJIT_MOV, R0, VMR, 0);
-            call_c_raising(e, s, SLJIT_ARGS2(W, P, W), s->kind == SLOW_FIT ? (void *)h_not_fit : (void *)h_bad_shift);
-            to_unwind(e, sljit_emit_jump(c, SLJIT_JUMP));
+            emit_slow_raise(e, s, SLJIT_ARGS2(W, P, W), s->kind == SLOW_FIT ? (void *)h_not_fit : (void *)h_bad_shift);
             break;
         case SLOW_DIVIDE: /* a NaN, which the test may take with zero, divides */
             sljit_set_label(sljit_emit_fcmp(c, SLJIT_UNORDERED, FLOAT(e, s->insn[3]), FLOAT(e, s->insn[3])), s->back);
             /* fall through */
         case SLOW_OVERFLOW:
             publish(e);
-            sljit_emit_op1(c, SLJIT_MOV, R0, VMR, 0);
-            call_c_raising(e, s, SLJIT_ARGS1(W, P), s->kind == SLOW_DIVIDE ? (void *)h_divide : (void *)h_overflow);
-            to_unwind(e, sljit_emit_jump(c, SLJIT_JUMP));
+            emit_slow_raise(e, s, SLJIT_ARGS1(W, P), s->kind == SLOW_DIVIDE ? (void *)h_divide : (void *)h_overflow);
             break;
         case SLOW_TOO_BIG:
             publish(e);
             sljit_emit_op1(c, SLJIT_MOV, R1, WORD_OPERAND(e, s->insn[2]));
-            sljit_emit_op1(c, SLJIT_MOV, R0, VMR, 0);
-            call_c_raising(e, s, SLJIT_ARGS2(W, P, W), (void *)h_too_big);
-            to_unwind(e, sljit_emit_jump(c, SLJIT_JUMP));
+            emit_slow_raise(e, s, SLJIT_ARGS2(W, P, W), (void *)h_too_big);
             break;
         case SLOW_MEMORY:
             publish(e);
             sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, s->memory));
             sljit_emit_op1(c, SLJIT_MOV, R2, WORD_OPERAND(e, s->index));
             sljit_emit_op1(c, SLJIT_MOV, R3, IMM(s->store | s->words << 1));
-            sljit_emit_op1(c, SLJIT_MOV, R0, VMR, 0);
-            call_c_raising(e, s, SLJIT_ARGS4(W, P, W, W, W), (void *)h_memory_error);
-            to_unwind(e, sljit_emit_jump(c, SLJIT_JUMP));
+            emit_slow_raise(e, s, SLJIT_ARGS4(W, P, W, W, W), (void *)h_memory_error);
             break;
         case SLOW_NOT_PROC:
             publish(e);
-            sljit_emit_op1(c, SLJIT_MOV, R0, VMR, 0);
             sljit_emit_op1(c, SLJIT_MOV, R2, IMM(s->words));
-            call_c_raising(e, s, SLJIT_ARGS3(W, P, W, W), (void *)h_not_procedure);
-            to_unwind(e, sljit_emit_jump(c, SLJIT_JUMP));
+            emit_slow_raise(e, s, SLJIT_ARGS3(W, P, W, W), (void *)h_not_procedure);
             break;
         case SLOW_RETURN:
             /* An exit test's return, out of the way of the code after it. */
@@ -4448,7 +4439,10 @@ static void *compile_code(VM *vm, V code)
             size_t quiet = h >= words + nwords || h[0] != OP_EXCEPTION;
             e.handlers[e.nhandlers++] = quiet ? p[1] : NONE;
             sljit_emit_op1(c, SLJIT_MOV, R0, VMF(nhandlers));
-            struct sljit_jump *full = sljit_emit_cmp(c, SLJIT_GREATER_EQUAL, R0, VMF(handlers_cap));
+            Slow *s = slow_path(&e, SLOW_PUSH_HANDLER,
+                                sljit_emit_cmp(c, SLJIT_GREATER_EQUAL, R0, VMF(handlers_cap)));
+            s->branch = p[1];
+            s->words = quiet;
             sljit_emit_op2(c, SLJIT_ADD, R1, R0, IMM(1));
             sljit_emit_op1(c, SLJIT_MOV, VMF(nhandlers), R1);
             sljit_emit_op2(c, SLJIT_SHL, R0, R0, IMM(4));
@@ -4464,15 +4458,7 @@ static void *compile_code(VM *vm, V code)
             e.at_label[p[1]].pairs = 0;
             memset(e.at_label[p[1]].lengths, 0, sizeof e.lengths);
             sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0), offsetof(Handler, catch_addr), R1);
-            struct sljit_jump *done = sljit_emit_jump(c, SLJIT_JUMP);
-            sljit_set_label(full, sljit_emit_label(c));
-            sljit_emit_op1(c, SLJIT_MOV, VMF(fp), FP, 0);
-            to_label(&e, sljit_emit_op_addr(c, SLJIT_MOV_ADDR, R1), p[1]);
-            sljit_emit_op1(c, SLJIT_MOV, R0, VMR, 0);
-            sljit_emit_op1(c, SLJIT_MOV, R2, IMM(quiet));
-            call_c(c, SLJIT_ARGS3(W, P, P, W), (void *)h_push_handler);
-            check_raise(&e);
-            sljit_set_label(done, sljit_emit_label(c));
+            s->back = sljit_emit_label(c);
             break;
         }
         case OP_POP_HANDLER: {
@@ -4517,7 +4503,7 @@ static void *compile_code(VM *vm, V code)
                 s->restore = pre;
                 s->kept[0] = kept_pre[0];
                 s->kept[1] = kept_pre[1];
-            } else if (s->kind == SLOW_PRIM) {
+            } else if (s->kind == SLOW_PRIM || s->kind == SLOW_PUSH_HANDLER) {
                 s->restore = e.post;
                 s->kept[0] = e.kept_post[0];
                 s->kept[1] = e.kept_post[1];

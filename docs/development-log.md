@@ -386,6 +386,11 @@ Lowering rules, the collector and the kernel port have their own sections.
   1.016, 1.005, 1.013, 0.976 and 0.997 on arm64, and 0.996, 1.002, 1.001, 0.982 and 0.997 on x86-64. A million
   `(trap-error (hd X) (/. E false))` cost more, about 1.3 to 1.5 times on x86-64 whether `hd` succeeds or fails,
   and unsteadily on arm64, but in samples of 1 to 3 ms: a loop that does little but catch pays for the record.
+- **Handler growth out of line** (2026-11-22, Apple M3 Max, load 2.5 to 4.3). From an outside agent's branch, reviewed
+  and measured that day. Growing the handler array moved from `OP_PUSH_HANDLER`'s inline code to a slow path that
+  publishes the stack top and saves raw registers around the call, so a failed `realloc` raises with a consistent
+  stack; boolean results, raises and two slow paths share their emitters. Smaller code, no change in time: the bench
+  suite read 1.00.
 
 ### Compile time and code memory
 
