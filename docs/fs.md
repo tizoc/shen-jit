@@ -155,8 +155,9 @@ uses `fs.remove-directory`, following native directory-link behavior.
 No-overwrite rename uses `renameat2(RENAME_NOREPLACE)` on Linux, `renamex_np(RENAME_EXCL)` on macOS
 and `MoveFileExW` without replacement on Windows. It does not emulate exclusivity with an existence
 check. Linux needs glibc 2.28 or newer; on a filesystem without `RENAME_NOREPLACE` it links the new
-name and unlinks the old, as `link` also refuses an existing name. Rename and replacement do not fall
-back to copying across filesystems/volumes.
+name and unlinks the old, as `link` also refuses an existing name. There it cannot rename a directory,
+which `link` refuses, and if the old name cannot be unlinked it removes the new one and reports that
+error. Rename and replacement do not fall back to copying across filesystems/volumes.
 Replacement of existing directories is OS-dependent; Windows rejects it.
 
 ## Links, real paths and the environment

@@ -499,9 +499,14 @@ EXPORT shen_value shen_fs_rename(shen_vm *vm, shen_value *args)
 #else
         else {
             rc = renameat2(AT_FDCWD, from.text, AT_FDCWD, to.text, RENAME_NOREPLACE);
-            /* A filesystem without RENAME_NOREPLACE: link refuses an existing name too. */
-            if (rc < 0 && (errno == EINVAL || errno == ENOSYS) && (rc = link(from.text, to.text)) == 0)
-                unlink(from.text);
+            /* A filesystem without RENAME_NOREPLACE: link refuses an existing name too. If the
+               old name stays, the new one goes, and the unlink's error is the result. */
+            if (rc < 0 && (errno == EINVAL || errno == ENOSYS) &&
+                (rc = link(from.text, to.text)) == 0 && (rc = unlink(from.text)) < 0) {
+                int saved = errno;
+                unlink(to.text);
+                errno = saved;
+            }
         }
 #endif
         if (rc < 0)
