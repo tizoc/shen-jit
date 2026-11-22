@@ -115,9 +115,10 @@
 (define float-same {float --> boolean} X -> (= X X))
 (define word-byte-at {buffer.storage --> fixnum --> fixnum --> fixnum} B I J -> (shen-jit.u8 B (fx+ I J)))
 
-\\ Loop counters whose steps go unchecked (src/lowerer/registers.shen, word-op-of): one that a test
-\\ found below a fixnum, stepped by a constant, and one read at as a byte index, stepped by any
-\\ fixnum. Past the greatest fixnum, the value raises where it leaves the registers, or at the read.
+\\ Loop counters whose steps go unchecked (src/lowerer/registers.shen, word-op-of): one that the test
+\\ at the loop's head finds below a fixnum, stepped by a constant, and one read at as a byte index,
+\\ stepped by any fixnum. Past the greatest fixnum, the first raises "integer overflow" at that test,
+\\ whatever the loop then returns, and the second at the read.
 (define word-count-up {fixnum --> fixnum --> symbol}
   I End -> done where (fx>= I End)
   I End -> (word-count-up (fx+ I 8) End))
@@ -125,6 +126,31 @@
 (define word-count-to {fixnum --> fixnum --> fixnum}
   I End -> I where (fx>= I End)
   I End -> (word-count-to (fx+ I 8) End))
+
+(define word-count-inner {fixnum --> fixnum --> fixnum}
+  I End -> 7 where (fx>= I End)
+  I End -> (word-count-inner (fx+ I 8) End))
+
+\\ The same, inlined as a loop of its caller's.
+(define word-count-outer {fixnum --> fixnum --> fixnum}
+  I End -> (fx+ (word-count-inner I End) 1))
+
+\\ Sums of a fixnum that a test found below another and a large constant, which go anywhere but
+\\ straight back to a parameter that the loop's head tests: each is checked, as fix- and fx->fl see
+\\ only what they are given.
+(define word-past-difference {fixnum --> fixnum --> fixnum}
+  I N -> (if (fx< I N) (fx- (fx+ I 2305843009213693951) 2305843009213693951) 0))
+
+(define word-past-float {fixnum --> fixnum --> float}
+  I N -> (if (fx< I N) (fx->fl (fx+ I 2305843009213693951)) 0.5))
+
+(define word-past-other {fixnum --> fixnum --> fixnum --> fixnum}
+  I J N -> 0 where (fx>= I N)
+  I J N -> (word-past-other (fx+ I 1) (fx+ I 2305843009213693951) N))
+
+(define word-past-nested {fixnum --> fixnum --> fixnum}
+  I N -> I where (fx>= I N)
+  I N -> (word-past-nested (fx- (fx+ I 2305843009213693951) 2305843009213693950) N))
 
 (define word-stride {buffer.storage --> fixnum --> fixnum --> fixnum --> fixnum}
   B P Step Acc -> (word-stride B (fx+ P Step) Step (fx+ Acc (shen-jit.u8 B P))))

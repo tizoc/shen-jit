@@ -5323,7 +5323,7 @@ The fourth step towards typed programs: a call of a struct's reader that typeche
   enclosing loop's function, the definition itself included, would otherwise become `again` to that loop's head,
   and the code after the inner loop be lost. `tests/typed/loops.shen` has the case (`loop-outer`, `loop-inner`).
 
-### Loop steps unchecked where they cannot go wrong (2026-11-14, 16 and 17, Apple M3 Max at load near 2 and the idle Ryzen VM, against the commit before)
+### Loop steps unchecked where they cannot go wrong (2026-11-14, 16, 17 and 22, Apple M3 Max at load near 2 and the idle Ryzen VM, against the commit before)
 
 - **What.** Two sums of a fixnum variable P, as loops step their counters, are `word+`, with no overflow check:
   - in the branch where a test found P below a fixnum E, P plus a constant that is not negative;
@@ -5369,6 +5369,32 @@ The fourth step towards typed programs: a call of a struct's reader that typeche
   The tracer is unchanged on arm64 (813 ms both) and too noisy on the VM to call.
 - Tests in `tests/typed.shen` pin down both rules, a counter stepped past the greatest fixnum that then ends its
   loop, one returned, and an index stepped past it.
+- **The first rule let a large step escape** (2026-11-22, load 2 to 4). Its sum was `word+` wherever it stood in
+  the branch, so a value past the greatest fixnum could reach what checks only its own result, or nothing. Under
+  `(fx< I N)`, `(fx- (fx+ I K) K)` with K the greatest fixnum gave I back, and `(fx->fl (fx+ I K))` 2.3e18,
+  where untyped code raises "integer overflow"; a counter so stepped ended its loop unseen when the exit did not
+  read it (`word-count-up` gave `done`, as a test then expected). Found in review.
+  - **Now** P plus 0 or 1, a fixnum, is `word+` anywhere in the branch, and P plus a larger constant only as a
+    loop's own call passes it, alone but for inlining's lets, to a parameter that the test at the loop's head
+    finds below a fixnum (`head-tested` and `step-env` in `src/lowerer/registers.shen`); anywhere else it is
+    `fix+`. Each branch of an `if` first checks, with `fix+` of 0, a register that may hold such a sum and that the
+    test finds below a fixnum only in the other branch (`past-checked`). The head's test runs before anything
+    else of the loop reads the parameter, so a counter stepped past the greatest fixnum raises "integer overflow"
+    there, once per exit and not per step, after the call's other arguments rather than at the step. The second
+    rule is unchanged. `word-count-up`, `word-count-to` and `word-count-outer`, which inlines such a loop, now
+    raise; `word-past-difference`, `word-past-float`, `word-past-other` and `word-past-nested` in
+    `tests/typed/float-registers.shen` are the sums that go elsewhere.
+  - **Rejected: the first rule for 0 and 1 alone.** Correct and the smallest, but heat steps by 16, n-body by 56,
+    matmul's row by 8 and the tracer's spheres by 88, and their gains above came from those steps.
+  - **Rejected: checking the operands of `fix+`, `fix-`, `fix*` and `float-from-word` that may be past.** It
+    leaves comparisons, bit operations, shifts and stores, which see the value as it is, and a counter that the
+    loop's end drops, which nothing reads, so each of those would need a check too.
+  - **Measured** with `make bench-numeric`'s typed programs built by each lowerer, ten alternating rounds,
+    medians, every check equal: matmul 39.5 -> 39.6 ms, mandelbrot 16.7 -> 16.7, spectral 10.9 -> 10.9, n-body
+    1.64 -> 1.60, heat 43.5 -> 43.6, the tracer 387 -> 390; a second run of ten agreed within 1.2%. The code of
+    their loops differs only by a check at each exit, and n-body's inner loop starting at `(fx+ I 56)`, checked
+    once per outer step. A loop of four steps by 8, inlined into one run 20 million times, where an exit's
+    check weighs most: 70.2 -> 70.7 ms, eight alternating rounds, medians; one of 100 million steps 49.9 in both.
 
 ### A shorter overflow test for a constant step: rejected (2026-11-16, Apple M3 Max, load near 5, against the commit before)
 

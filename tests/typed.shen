@@ -37,6 +37,16 @@
   Op [[Op | _] | _] -> true
   Op [_ | Is] -> (typed.has-in? Op Is))
 
+\\ How many of instruction Op F's code has.
+(define typed.count
+  Op F -> (let Code (hd (tl (tl (shen-jit.code F))))
+            (length (typed.ops Op (hd (tl (tl (tl (tl (tl Code))))))))))
+
+(define typed.ops
+  _ [] -> []
+  Op [[Op | X] | Is] -> [[Op | X] | (typed.ops Op Is)]
+  Op [_ | Is] -> (typed.ops Op Is))
+
 \\ Whether X appears anywhere in a tree.
 (define typed.mentions?
   X X -> true
@@ -337,12 +347,22 @@
   [(value typed.least) "integer overflow" (value typed.least) "integer overflow"]
   [(typed.step word-down8 (+ (value typed.least) 8)) (typed.step word-down8 (+ (value typed.least) 7))
    (typed.step word-plus-minus8 (+ (value typed.least) 8)) (typed.step word-plus-minus8 (+ (value typed.least) 7))])
-(typed.check "loop steps in registers with no check" [true false true]
-  [(typed.has? word+ word-count-up) (typed.has? fix+ word-count-up) (typed.has? word+ word-stride)])
-(typed.check "a counter stepped past the greatest fixnum raises where it leaves the registers"
-  [done "the word 2305843009213693956 does not fit in an integer" 40]
+(typed.check "loop steps in registers with no check, a counter's checked where its loop ends" [true 1 true]
+  [(typed.has? word+ word-count-up) (typed.count fix+ word-count-up) (typed.has? word+ word-stride)])
+(typed.check "a counter stepped past the greatest fixnum raises at the loop's next test"
+  ["integer overflow" "integer overflow" 40 done true "integer overflow" 8]
   [(typed.step2 word-count-up 2305843009213693948 2305843009213693951)
-   (typed.step2 word-count-to 2305843009213693948 2305843009213693951) (typed.step2 word-count-to 0 40)])
+   (typed.step2 word-count-to 2305843009213693948 2305843009213693951) (typed.step2 word-count-to 0 40)
+   (typed.step2 word-count-up 2305843009213693935 2305843009213693944)
+   (typed.has? loop word-count-outer) (typed.step2 word-count-outer 2305843009213693948 2305843009213693951)
+   (typed.step2 word-count-outer 0 100)])
+(typed.check "a large step that goes elsewhere is checked"
+  [true "integer overflow" true "integer overflow" "integer overflow" "integer overflow" 0 0]
+  [(typed.has? fix+ word-past-difference) (typed.step2 word-past-difference 1 2) (typed.has? fix+ word-past-float)
+   (typed.step2 word-past-float 1 2)
+   (trap-error (shen-jit.apply (shen-jit.function word-past-other) [1 0 2]) (/. E (error-to-string E)))
+   (typed.step2 word-past-nested 1 3)
+   (shen-jit.apply (shen-jit.function word-past-other) [-1 0 1]) (typed.step2 word-past-nested -3 0)])
 (typed.check "a step below a bound the loop steps too is checked" [true "integer overflow"]
   [(typed.has? fix+ word-leapfrog) (typed.step2 word-leapfrog 0 1)])
 (typed.check "an index stepped past the greatest fixnum raises at its read"
@@ -384,15 +404,6 @@
 (optimise -)
 (shen-jit.seal -)
 
-\\ How many of instruction Op F's code has.
-(define typed.count
-  Op F -> (let Code (hd (tl (tl (shen-jit.code F))))
-            (length (typed.ops Op (hd (tl (tl (tl (tl (tl Code))))))))))
-
-(define typed.ops
-  _ [] -> []
-  Op [[Op | X] | Is] -> [[Op | X] | (typed.ops Op Is)]
-  Op [_ | Is] -> (typed.ops Op Is))
 
 (define typed.doubles
   Xs -> (let B (shen-jit.bytes (* 8 (length Xs)))

@@ -14,7 +14,7 @@
 
 (shen.x.namespace shen-jit.lower
   (use shen-jit)
-  (externals [again apply below indexed past call-sealed call-value capture closure code const effect exit fix* fix+ fix-
+  (externals [again apply below headed indexed past stepping call-sealed call-value capture closure code const effect exit fix* fix+ fix-
     fixnum float frozen jump jump-if-false jump-unless-entry label loop move new none prim push-handler return
     tail-call tail-call-sealed tail-call-value
     float float* float+ float- float-box float-call1 float-call2 float-call3 float-divide float-from-word
@@ -98,7 +98,7 @@
           Loop (if (and (cons? (self-calls F (length Params) Body))
                         (or (element? F Sealed) (shen-jit.sealed? F) (sealing?)))
                    (let L (new-label B)
-                     (do (emit B [loop L]) (address-> B 13 [[L Layout Params F]])))
+                     (do (emit B [loop L]) (address-> B 13 [[L Layout Params F (head-tested Env Body Layout)]])))
                    skip)
           Done (expr B Env Body tail (+ 2 (length Params)))
        (if (and (keeps-nothing-across? (<-address B 3)) (computes? (<-address B 3)))
@@ -774,15 +774,18 @@
   _ To -> To)
 
 \\ One more than a fixnum below another is a fixnum, so that sum needs no check.
-\\ A fixnum that a test has just found below another, plus a constant that is not negative, as a
-\\ loop's step, is word+, unchecked: it is below the greatest fixnum, so the sum passes it by less
-\\ than the step, exactly, in 64 bits, and cannot be stepped so again until a test finds it below a
-\\ fixnum. Past the greatest fixnum, it raises where it leaves the registers, as word-box checks,
-\\ and comparisons and byte indices see its exact value. The other fixnum, and what an indexed one
-\\ is added to, must be exact (exact?), not such a sum, or sums of sums could pass 64 bits.
+\\ A fixnum that a test has just found below another, plus a larger constant that is not negative,
+\\ is word+, unchecked, only as a loop's own call passes it, alone, to a parameter that the test at
+\\ the loop's head finds below a fixnum (stepping, step-env): it is below the greatest fixnum, so the
+\\ sum passes it by less than the step, exactly, in 64 bits, and that test, which comes before
+\\ anything else reads the parameter, compares its exact value and checks it where it does not find
+\\ it below (past-checked), so that a step past the greatest fixnum raises "integer overflow" there.
+\\ Anywhere else such a sum could reach what checks only its own result, or nothing, as fix- and
+\\ float-from-word do, and is checked. The other fixnum, and what an indexed one is added to, must be
+\\ exact (exact?), not such a sum, or sums of sums could pass 64 bits.
 (define word-op-of
-  Env + X [const K] -> word+ where (and (>= K 0) (known? below Env X))
-  Env + [const K] Y -> word+ where (and (>= K 0) (known? below Env Y))
+  Env + X [const K] -> word+ where (and (>= K 0) (known? below Env X) (or (<= K 1) (stepping? Env)))
+  Env + [const K] Y -> word+ where (and (>= K 0) (known? below Env Y) (or (<= K 1) (stepping? Env)))
   Env + X Y -> word+ where (or (and (known? indexed Env X) (exact? Env Y))
                                (and (known? indexed Env Y) (exact? Env X)))
   _ Op _ _ -> (word-op Op))
@@ -900,12 +903,13 @@
                     Layout (hd Placed)
                     L (new-label B)
                     Head (emit B [loop L])
-                    Loops (<-address B 13)
-                    In (address-> B 13 [[L Layout Params F] | Loops])
                     Starts (map (/. P (not (exact? Env [var P]))) Params)
                     Stepped (stepped Params Layout Kept Starts (self-calls F (length Params) Body)
                                      (binders Body) 1)
-                    Done (expr B (append Stepped (layout-env Params Layout) Env) Body Target (hd (tl Placed)))
+                    Within (append Stepped (layout-env Params Layout) Env)
+                    Loops (<-address B 13)
+                    In (address-> B 13 [[L Layout Params F (head-tested Within Body Layout)] | Loops])
+                    Done (expr B Within Body Target (hd (tl Placed)))
                  (address-> B 13 Loops)))))
 
 \\ Lower, with no loop around to go back to: a loop that makes its own exit is in no tail position of
@@ -969,20 +973,22 @@
 \\ A tail call of a loop's own function, the definition's or an inlined one's, the innermost
 \\ first: its arguments go to the parameters, the floats and fixnums among them to their
 \\ registers, and the code goes back to the loop's head. Field 13 of the builder holds the
-\\ loops, each [L Layout Params F], innermost first.
+\\ loops, each [L Layout Params F Headed], innermost first, Headed the word registers of the
+\\ parameters that the test at its head finds below a fixnum (head-tested).
 (define loops?
   B F Args -> (cons? (loop-of F (length Args) (<-address B 13))))
 
 (define loop-of
   _ _ [] -> []
-  F N [[L Layout Params F] | _] -> [L Layout Params F] where (= (length Params) N)
+  F N [[L Layout Params F Headed] | _] -> [L Layout Params F Headed] where (= (length Params) N)
   F N [_ | Loops] -> (loop-of F N Loops))
 
 (define shen-jit.lower.again
   B Env F Args Top
   -> (let Loop (loop-of F (length Args) (<-address B 13))
           Layout (hd (tl Loop))
-          Indexed (append (map (/. W [[indexed W] | true]) (byte-indexed-each Env Args)) Env)
+          Indexed (append (map (/. W [[indexed W] | true]) (byte-indexed-each Env Args))
+                          (append (map (/. W [[headed W] | true]) (nth 5 Loop)) Env))
           Ordered (in-order Indexed (paired Args Layout))
        (do (loop-args B Indexed (map (/. A (hd A)) Ordered) (map (/. A (second A)) Ordered) Layout
                                      (if (> Top (+ (length Args) 2)) Top (+ (length Args) 2)) [] [])
@@ -1019,11 +1025,11 @@
 
 \\ Whether computing X into Place cannot raise or write: X is a variable already in that slot, or,
 \\ for a register, a variable in a register of its kind, a constant, or a sum, difference or
-\\ product of floats, or a sum of fixnums that is unchecked (word-op-of), over those, as inlining
-\\ leaves them, in lets that rename.
+\\ product of floats, or a sum of fixnums that is unchecked (word-op-of, step-env), over those, as
+\\ inlining leaves them, in lets that rename.
 (define effect-free?
   Env [[var V] S] -> true where (= (shen-jit.lower.slot V Env) S)
-  Env [X [Kind _]] -> (computes-purely? Env Kind X)
+  Env [X [Kind R]] -> (computes-purely? (step-env Env Kind X R) Kind X)
   _ _ -> false)
 
 (define computes-purely?
@@ -1052,11 +1058,13 @@
   -> (do (map (/. M (emit B [move | M])) Moves)
          (map (/. M (emit B M)) RMoves))
   B Env [X | Xs] [[Kind R] | Ls] Layout Top Moves RMoves
-  -> (do (into B Env Kind X R Top)
+  -> (do (into B (step-env Env Kind X R) Kind X R Top)
          (loop-args B Env Xs Ls Layout Top Moves RMoves))
       where (not (reads-register? Env Xs [Kind R]))
   B Env [X | Xs] [[Kind R] | Ls] Layout Top Moves RMoves
-  -> (let T (if (= Kind float) (shen-jit.lower.float B Env X Top) (shen-jit.lower.word B Env X Top))
+  -> (let T (if (= Kind float)
+                (shen-jit.lower.float B Env X Top)
+                (shen-jit.lower.word B (step-env Env Kind X R) X Top))
           Move (if (= Kind float) float-move word-move)
           Kept (if (and (element? [Kind T] Layout) (not (= T R)))
                    (let C (if (= Kind float) (float-register B) (word-register B))
@@ -1092,6 +1100,33 @@
   Env [and X _] -> (byte-indexed Env X)
   Env [or X _] -> (byte-indexed Env X)
   _ _ -> [])
+
+\\ Env for computing X, an argument of a loop's own call, into its parameter's word register W:
+\\ with the fact stepping when X is a variable plus a constant, through the lets of inlining, and the
+\\ test at the loop's head finds W below a fixnum (headed), so that word-op-of leaves that sum
+\\ unchecked. X has no other sum for the fact to reach.
+(define step-env
+  Env word X W -> [[[stepping] | true] | Env] where (and (cons? (assoc [headed W] Env)) (step-shape? X))
+  Env _ _ _ -> Env)
+
+(define step-shape?
+  [let inlining _ X] -> (step-shape? X)
+  [let _ [var _] X] -> (step-shape? X)
+  [prim + [[var _] [const _]]] -> true
+  [prim + [[const _] [var _]]] -> true
+  _ -> false)
+
+(define stepping?
+  Env -> (cons? (assoc [stepping] Env)))
+
+\\ The word registers in Layout, a loop's, of the parameters that the test at the head of its Body,
+\\ which runs before anything else of it, finds below a fixnum, either way.
+(define head-tested
+  Env [let inlining _ Body] Layout -> (head-tested Env Body Layout)
+  Env [if C _ _] Layout -> (mapcan (/. Truth (let W (shen-jit.lower.below Env C Truth)
+                                               (if (element? [word W] Layout) [W] [])))
+                                   [true false])
+  _ _ _ -> [])
 
 \\ Whether X has some [var V] with V bound to register Kind R, among the variables vars-of
 \\ finds, bound ones included.
@@ -1362,6 +1397,18 @@
 (define bounded
   B Env C Truth -> (let W (if (registers? B) (shen-jit.lower.below Env C Truth) none)
                      (if (number? W) [[[below W] | true] | Env] Env)))
+
+\\ The word register that C being Truth leaves unknown and C being the other finds below a fixnum,
+\\ when it may be past the greatest one, as a parameter stepped unchecked may be (word-op-of); else
+\\ none. Where C is Truth it is checked (past-checked), as fix+ checks a sum, and raises "integer
+\\ overflow" if it is past.
+(define past-unbounded
+  B Env C Truth -> (let W (if (registers? B) (shen-jit.lower.below Env C (not Truth)) none)
+                     (if (and (number? W) (cons? (assoc [past W] Env))) W none)))
+
+(define past-checked
+  B Env C Truth -> (let W (past-unbounded B Env C Truth)
+                     (if (number? W) (emit B [fix+ W W [const (constant B 0)]]) skip)))
 
 (define shen-jit.lower.below
   Env [let inlining _ C] Truth -> (shen-jit.lower.below Env C Truth)

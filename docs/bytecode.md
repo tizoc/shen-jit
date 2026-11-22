@@ -397,17 +397,24 @@ shifts, `bswap32`, `clz` and `ctz`. The others are calls to C.
     `word-sar`; a shift left by one up to 61 is `word-shl` by the count and 2 more, then `word-sar` by 2, which drops what
     leaves the 62 bits, as the primitive does. A shift by any other count is `fix-sar` or `fix-shl`, which test it, and
     the counts of bits are `fix-clz`, `fix-ctz` and `fix-popcount`. Two sums of a fixnum variable `P`, as a loop's
-    steps, are `word+`, with no check: in the branch of an `if` where its test says that `P` is less
-    than another fixnum, `(< P E)` or `(> E P)` true, or `(>= P E)` or `(<= E P)` false, `P` plus a
-    constant that is not negative; and in the arguments of a loop's own call that read or write bytes
-    at `P` itself wherever they run, not under an `if`, `and`, `or` or closure, `P` plus another fixnum, as
-    the access succeeds only for `P` from 0 to the length. `E`, and the fixnum added to such a `P`, must
-    be exact, not possibly such a sum: a constant, a call's result, a checked primitive's, which is a
-    fixnum whatever it reads, a variable in a slot, or one in a register that no such sum, nor a bit
-    operation or shift of one, may have reached; a loop's parameter may be reached by what its own calls
-    pass it, or for an inlined loop what it starts with, unless they pass it on as it is. Either sum is exact in 64 bits, and cannot be
-    stepped so again without the test or the access finding it a fixnum; past the greatest fixnum it
-    raises where it is boxed, as `word-box` checks, or at the access, and comparisons see its value. The last sum or difference of
+    steps, are `word+`, with no check. The first is in the branch of an `if` where its test says that `P`
+    is less than another fixnum, `(< P E)` or `(> E P)` true, or `(>= P E)` or `(<= E P)` false: `P` plus 0
+    or 1, which is a fixnum, and `P` plus a larger constant only as a loop's own call passes it, alone
+    but for the lets that inlining leaves, to a parameter that the test at the loop's head, which runs
+    before anything else of the loop, finds below a fixnum either way; elsewhere that sum is `fix+`. The
+    second is in the arguments of a loop's own call that read or write bytes at `P` itself wherever they
+    run, not under an `if`, `and`, `or` or closure, `P` plus another fixnum, as the access succeeds only
+    for `P` from 0 to the length. `E`, and the fixnum added to such a `P`, must be exact, not possibly
+    such a sum: a constant, a call's result, a checked primitive's, which is a fixnum whatever it reads, a
+    variable in a slot, or one in a register that no such sum, nor a bit operation or shift of one, may
+    have reached; a loop's parameter may be reached by what its own calls pass it, or for an inlined loop
+    what it starts with, unless they pass it on as it is. Either sum is exact in 64 bits, and cannot be
+    stepped so again without the test or the access finding it a fixnum; comparisons see its value. Each
+    branch of an `if` whose value goes to a slot or in tail position begins with `fix+` of 0 to a register
+    that may hold such a sum and that the test finds below a fixnum only in the other branch, so a
+    parameter stepped past the greatest fixnum raises "integer overflow" at the test at its loop's head,
+    after the other arguments of the call that stepped it. Past the greatest fixnum, the second sum
+    raises at the access, or where it is boxed, as `word-box` checks. The last sum or difference of
     an index into bytes is `word+` or `word-`: of two fixnums it cannot leave 64 bits, and one that is no
     fixnum is past the end of any bytes, so the access raises for it, where `+` would have raised
     "integer overflow". A float computed from a fixnum takes it with `float-from-word`, and a read or a

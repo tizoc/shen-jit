@@ -126,6 +126,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- In a typed program, a fixnum found below another and stepped by a large constant raises `integer overflow` as
+  `+` does: past the greatest fixnum, `(fx- (fx+ I K) K)` under `(fx< I N)` gave `I` back, and `fx->fl` of the
+  sum a float. A loop's counter stepped past the greatest fixnum raises `integer overflow` at the loop's next
+  test, also when the loop then ends without using it, where it gave the loop's result.
 - A streaming grammar can finish a match before later alternatives need more input. A later alternative also sees
   input changes made by a guard that failed.
 - In a typed program, a sealed call of a function of no arguments that is not inlined, such as one written before

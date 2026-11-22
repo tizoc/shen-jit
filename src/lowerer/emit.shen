@@ -322,22 +322,27 @@
                  (true [call Target A F N])))))
 
 \\ What the test and each branch took in registers goes back after it: the else and what follows
-\\ see only what was bound before.
+\\ see only what was bound before. Each branch first checks a register that the test finds below a
+\\ fixnum only in the other, if it may be past the greatest one (past-checked).
 (define shen-jit.lower.if
   \\ An else that jumps to a label: the test jumps there itself.
   B Env C X [apply [var G]] Target Top
   -> (do (test B Env C (goto-label G Env) Top)
-         (expr B (bounded B Env C true) X Target Top))
-      where (and (final? Target) (in-kind? goto G Env))
+         (if-branch B Env C true X Target Top))
+      where (and (final? Target) (in-kind? goto G Env) (= none (past-unbounded B Env C false)))
   B Env C X Y Target Top
   -> (let Else (new-label B)
           End (end-label B Target)
        (do (released B (freeze (do (test B Env C Else Top)
-                                   (expr B (bounded B Env C true) X Target Top))))
+                                   (if-branch B Env C true X Target Top))))
            (jump-to-end B End)
            (emit B [label Else])
-           (released B (freeze (expr B (bounded B Env C false) Y Target Top)))
+           (released B (freeze (if-branch B Env C false Y Target Top)))
            (place-end B End))))
+
+(define if-branch
+  B Env C Truth X Target Top -> (do (past-checked B Env C Truth)
+                                    (expr B (bounded B Env C Truth) X Target Top)))
 
 \\ Code in tail position, or at an exit, never falls through, so it needs no join label.
 (define end-label

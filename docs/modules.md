@@ -372,15 +372,18 @@ definitions for typed clients and the wrappers for the rest:
 `(shapes.area 5)` raises `shapes.area: 5 is not a point`, where `area-of` would read memory that is not a point.
 Typed clients call `area-of` and `total-of`, and pay for no check.
 
-Within its types, four things differ from untyped code:
+Within its types, five things differ from untyped code:
 
 - An index into bytes that overflows raises as an index past their end, rather than as `integer overflow`.
-- A loop's step is not checked where a test has just found the counter below a fixnum that is not itself
-  such a step and the step is a constant that is not negative, or where the loop's own call reads bytes at
-  the counter. A counter so stepped past the greatest fixnum raises where it is boxed, as "the word ... does
-  not fit in an integer", or at the read, and otherwise what is computed from it in registers, by arithmetic,
-  `fx->fl` or shifts, or stored by `shen-jit.s64!`, sees its true value, where untyped code would have raised
-  `integer overflow` at the step.
+- A loop's step by a constant that is not negative is not checked where the loop's own call passes it
+  straight back to a counter that the test at the loop's head finds below a fixnum that is not itself such a
+  step. A counter so stepped past the greatest fixnum raises `integer overflow` at that test, after the
+  call's other arguments, rather than at the step.
+- A loop's step by any fixnum is not checked where the loop's own call reads bytes at the counter. A counter
+  so stepped past the greatest fixnum raises at the read, as an index past the end, or where it is boxed, as
+  "the word ... does not fit in an integer", and otherwise what is computed from it in registers, by
+  arithmetic, `fx->fl` or shifts, or stored by `shen-jit.s64!`, sees its true value, where untyped code would
+  have raised `integer overflow` at the step.
 - A C function of doubles called in registers does not save `errno` ([C FFI](ffi.md)).
 - A float kept in a register is no object, so a NaN there never equals itself, where untyped code finds a NaN equal
   to itself when both sides are the same object ([Semantics](semantics.md)).
