@@ -22,6 +22,13 @@ ENV = {
 ENV.update(
     GIT_CONFIG_GLOBAL=os.devnull,
     GIT_CONFIG_NOSYSTEM="1",
+    # No automatic gc or maintenance, which could repack what a test made: Git before 2.31 has
+    # neither these variables nor the maintenance that newer versions run after a commit.
+    GIT_CONFIG_COUNT="2",
+    GIT_CONFIG_KEY_0="gc.auto",
+    GIT_CONFIG_VALUE_0="0",
+    GIT_CONFIG_KEY_1="maintenance.auto",
+    GIT_CONFIG_VALUE_1="false",
     GIT_AUTHOR_NAME="Test Author",
     GIT_AUTHOR_EMAIL="author@example.test",
     GIT_COMMITTER_NAME="Test Committer",
@@ -391,7 +398,10 @@ def exercise_packs(root):
         write(repo, "shared", f"version {number}\n".encode() * 200)
         git(repo, "add", ".")
         git(repo, "commit", "-qm", f"pack {number}")
-        git(repo, "repack", "-dq")
+        # A pack of this commit's new objects: git repack, as newer versions do, may combine them.
+        new = git(repo, "rev-list", "--objects", "HEAD", *(["^HEAD~1"] if number else []))
+        git(repo, "pack-objects", "-q", ".git/objects/pack/pack", data=new)
+        git(repo, "prune-packed")
     assert len(list((repo / ".git/objects/pack").glob("*.pack"))) == 3
     assert_git_equal(repo, "log", "--oneline")
     assert_git_equal(repo, "ls-tree", "-r", "HEAD")
