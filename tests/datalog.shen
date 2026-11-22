@@ -1040,6 +1040,17 @@
 (dt.raises "a file's relation" "no relation nope" (freeze (datalog.read-facts dt.files nope "build/datalog-facts.tsv")))
 (dt.raises "bytes' field count" "bytes of row, line 2, has 3 fields"
   (freeze (datalog.bytes->facts dt.files row (shen-jit.string->bytes "e	x	5	[pt 1 1]c#10;f	y	6") tsv)))
+\* After a quoted field, a separator or the end of a line, and nothing else. *\
+(defdatalog dt.quoted
+  (relation r [string])
+  (relation p [string string]))
+(dt.check "a quoted field, then a line's end"
+  (datalog.bytes->facts dt.quoted p (shen-jit.string->bytes "c#34;ac#34;,yc#13;c#10;c#34;bc#34;,zc#10;c#34;cc#34;,c#34;dc#34;c#13;c#10;") csv)
+  [[p "a" "y"] [p "b" "z"] [p "c" "d"]])
+(dt.raises "text after a quoted field" "bytes of r, line 1: text after a quoted field"
+  (freeze (datalog.bytes->facts dt.quoted r (shen-jit.string->bytes "c#34;ac#34;bcc#10;dc#10;") csv)))
+(dt.raises "a return and text after a quoted field" "bytes of r, line 2: text after a quoted field"
+  (freeze (datalog.bytes->facts dt.quoted r (shen-jit.string->bytes "dc#10;c#34;ac#34;c#13;xyzc#10;") csv)))
 
 \* Relations of one tuple a key: the least or greatest last column, or the first tuple derived, on
    graphs with cycles, where a shortest path needs no bound to end. *\

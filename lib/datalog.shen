@@ -4287,7 +4287,7 @@
   B I N Line Ctx Acc
   -> (if (>= I N)
          (reverse Acc)
-         (let Read (read-fields B I N (hd (tl (tl Ctx))) [])
+         (let Read (read-fields B I N (hd (tl (tl Ctx))) [(nth 4 Ctx) Line] [])
               Fields (hd Read)
            (read-lines B (tl Read) N (+ Line 1) Ctx
              (if (blank? Fields) Acc [(fact-of B Fields Line Ctx) | Acc])))))
@@ -4297,22 +4297,27 @@
   _ -> false)
 
 \\ A line's fields and where the next line starts: [Fields | Next]. A field is its range of bytes,
-\\ [From | To], or a quoted one's text.
+\\ [From | To], or a quoted one's text. Where is [Path Line], for an error.
 (define read-fields
-  B I N Sep Acc
+  B I N Sep Where Acc
   -> (if (and (< I N) (= (shen-jit.u8 B I) 34) (= Sep 44))
          (let Quoted (read-quoted B (+ I 1) N "")
               J (tl Quoted)
-           (after-field B J N Sep [(hd Quoted) | Acc]))
+           (after-field B J N Sep Where [(hd Quoted) | Acc]))
          (let J (field-end B I N Sep)
               End (if (and (> J I) (= (shen-jit.u8 B (- J 1)) 13) (or (= J N) (= (shen-jit.u8 B J) 10))) (- J 1) J)
-           (after-field B J N Sep [[I | End] | Acc]))))
+           (after-field B J N Sep Where [[I | End] | Acc]))))
 
+\\ What follows a field: a separator or the end of the line, which after a quoted one may be a
+\\ return and a newline.
 (define after-field
-  B J N Sep Acc -> (cases (>= J N) [(reverse Acc) | N]
-                          (= (shen-jit.u8 B J) Sep) (read-fields B (+ J 1) N Sep Acc)
-                          (= (shen-jit.u8 B J) 13) (after-field B (+ J 1) N Sep Acc)
-                          true [(reverse Acc) | (+ J 1)]))
+  B J N Sep Where Acc
+  -> (cases (>= J N) [(reverse Acc) | N]
+            (= (shen-jit.u8 B J) Sep) (read-fields B (+ J 1) N Sep Where Acc)
+            (= (shen-jit.u8 B J) 10) [(reverse Acc) | (+ J 1)]
+            (and (= (shen-jit.u8 B J) 13) (or (= (+ J 1) N) (= (shen-jit.u8 B (+ J 1)) 10)))
+            (after-field B (+ J 1) N Sep Where Acc)
+            true (error "datalog: ~A, line ~A: text after a quoted field" (hd Where) (hd (tl Where)))))
 
 (define field-end
   B I N Sep -> (if (or (>= I N) (= (shen-jit.u8 B I) Sep) (= (shen-jit.u8 B I) 10)) I (field-end B (+ I 1) N Sep)))

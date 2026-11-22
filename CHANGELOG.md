@@ -229,6 +229,8 @@ All notable changes to this project are documented in this file. The format is b
   a pattern with no constants, answer: they raised "datalog.k.find.0 was not prepared".
 - A Datalog `(bshl A B)` whose result is not 32 bits raises however the rule runs: by 31 places or more, or by a
   column, it could give 0 or -2147483648 for an `A` at the edge of 32 bits, as `(bshl -2147483648 31)` gave 0.
+- A Datalog CSV file or bytes with text after a quoted field, as in `"a"bc`, raise, naming the line: the byte after
+  the quote was taken for the end of the line, and the rest read as another fact.
 
 ## [0.10] - 2026-11-19
 
