@@ -281,10 +281,9 @@ freeing or invalidating the active client. A completed transfer leaves it reusab
 failure. A client belongs to the isolate that opened it. Buffered callbacks touch native storage.
 Streaming body callbacks call the sink and do not resume network reads until the write completes.
 
-The adapter initializes libcurl once and leaves global cleanup to process exit. With libcurl older
-than 7.84.0, or a build without thread-safe global initialization, call `curl.version` or `curl.open`
-in the builder before spawning isolates that use libcurl. Its [global initialization contract](https://curl.se/libcurl/c/threadsafe.html)
-applies to other native threads in an embedding host too.
+The adapter initializes libcurl once, even when isolates make their first calls at once, and leaves
+global cleanup to process exit. libcurl's [global initialization contract](https://curl.se/libcurl/c/threadsafe.html)
+still applies to other native threads in an embedding host.
 
 ## Downloader and tests
 

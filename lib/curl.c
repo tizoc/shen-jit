@@ -1,11 +1,18 @@
 /* Optional libcurl adapter over the public Shen C API. No Shen access between shen_release and shen_acquire. */
+#if defined(_WIN32) && !defined(_WIN32_WINNT)
+#define _WIN32_WINNT 0x0600 /* INIT_ONCE requires Windows Vista or later. */
+#endif
 #include "shen.h"
 #include <curl/curl.h>
-#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <pthread.h>
+#endif
 
 #if LIBCURL_VERSION_NUM < 0x074400
 #error "Shen curl requires libcurl 7.68.0 or newer"
@@ -36,16 +43,27 @@ typedef struct {
     char error[CURL_ERROR_SIZE];
 } Transfer;
 
-/* Initialization precedes any transfer. Isolates may make the first calls at once: libcurl's own
-   initialization is safe then, where it says so, and the flag is atomic. */
-static atomic_bool initialized;
+/* Initialization precedes any transfer. Isolates may make the first calls at once, and libcurl
+   before 7.84 cannot initialize from two threads together: it runs once, and keeps its result. */
+static CURLcode init_result;
+static void init_global(void) { init_result = curl_global_init(CURL_GLOBAL_DEFAULT); }
+#ifdef _WIN32
+static INIT_ONCE init_once = INIT_ONCE_STATIC_INIT;
+static BOOL CALLBACK init_global_once(PINIT_ONCE once, PVOID parameter, PVOID *context)
+{
+    (void)once; (void)parameter; (void)context;
+    init_global();
+    return TRUE;
+}
 static CURLcode initialize(void)
 {
-    if (atomic_load_explicit(&initialized, memory_order_acquire)) return CURLE_OK;
-    CURLcode rc = curl_global_init(CURL_GLOBAL_DEFAULT);
-    if (!rc) atomic_store_explicit(&initialized, true, memory_order_release);
-    return rc;
+    InitOnceExecuteOnce(&init_once, init_global_once, NULL, NULL);
+    return init_result;
 }
+#else
+static pthread_once_t init_once = PTHREAD_ONCE_INIT;
+static CURLcode initialize(void) { pthread_once(&init_once, init_global); return init_result; }
+#endif
 
 EXPORT int shen_curl_abi(void) { return 2; }
 

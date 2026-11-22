@@ -166,6 +166,8 @@ All notable changes to this project are documented in this file. The format is b
   inherited `ProgramFiles(x86)` came before `ProgramFiles`.
 - On a Linux filesystem without `RENAME_NOREPLACE`, such as NFS, `fs.rename` that cannot remove the old name removes
   the new one and reports the error, where it succeeded with both names left.
+- Isolates can make their first curl calls at once with libcurl older than 7.84, without a call to `curl.version` or
+  `curl.open` in the builder first.
 
 ## [0.10] - 2026-11-19
 
