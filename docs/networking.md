@@ -15,6 +15,10 @@ buffers when it is set up, and once it runs it allocates nothing on the Shen hea
 | `net/ethernet` | Ethernet frames, ARP and IPv4 routes, between a TAP device and an interface | [Linux TUN and TAP](net-tun.md#ethernet-and-tap) |
 | `net/dhcp`, `net/dns`, `net/stream` | An address lease, A lookups, and application streams over TCP | [Linux TUN and TAP](net-tun.md#dhcp-dns-and-outbound-streams) |
 
+Supporting protocol layers loaded automatically by those modules live beside them: `net/wire`, `net/seq`,
+`net/marks`, `net/ipv4`, `net/ipv6`, `net/ipv6-headers`, `net/fragments`, `net/fragments6`, `net/ndp`,
+`net/multicast` and `net/routes`.
+
 ## Driving it
 
 Every call does a bounded amount of work, and only the device's wait blocks. A program over TUN repeats:

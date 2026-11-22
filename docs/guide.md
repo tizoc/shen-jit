@@ -554,11 +554,8 @@ such as:
 shen-jit eval -m io/file -l program.shen
 ```
 
-A library of several parts is a directory: `io`, then `io/file` and `io/socket`; `http`, the head parser, then
-`http/request`, `http/response`, `http/server` and `http/listener`; and `process`, then `process/io`. The others are
-a file each, named as their modules are: `numbers`, `floats`, `word`, `words`, `option`, `result`, `ffi`, `native`, `bytes`, `buffer`, `cursor`, `grammar`, `json`, `frame`, `deadline`,
-`clock`, `socket`, `memory`, `mmap`, `handle`, `sqlite`, `datalog`, `parallel`, `fs`, `tree-sitter` and `curl`, but for
-`buffer`, which is three: `buffer-view.shen`, `buffer-typed.shen` and `buffer.shen`.
+A library of several parts lives in a directory (`io/`, `http/`, `process/`, `git/`, `hyperloglog/`, `net/`); the
+others sit directly in `lib/`, each with a `.shenmod` descriptor and, for typed APIs, its companion source files.
 
 The libraries use namespaces. Their existing qualified names work directly, and a namespace client can
 use prefixes or import their exported names:
@@ -607,16 +604,34 @@ Load the module `native` before reading that example. Result constructors can be
 `externals` or import it when the library exports it. `shadow` makes a system name local to a namespace;
 the libraries use it where a local operation would otherwise resolve to a kernel or stlib function.
 
-Most of them call C through [the FFI](#calling-c), which a static Linux build cannot do. There, buffers and cursors,
-grammars, JSON, I/O over memory, framing, Datalog and the parallel map still work.
-
-Four have a small C adapter of their own as well, which a C compiler builds once: filesystem operations, subprocesses,
-Tree-sitter, which also needs Tree-sitter 0.25 or later and a grammar compiled for it, and curl, which needs libcurl.
-`make fs`, `make process`, `make tree-sitter` and `make curl` build them in a checkout, and in a binary archive
-`sh lib/build-NAME.sh lib/shen-NAME.so` does, with `.dll` in place of `.so` on Windows. Loading the library never
+Libraries that do not require `ffi` work on static Linux builds too; those that call C through [the FFI](#calling-c)
+need a dynamic build. Several libraries also have a small C adapter of their own, built once with a C compiler:
+filesystem operations (`make fs`), subprocesses (`make process`), Tree-sitter (`make tree-sitter`, needing Tree-sitter
+0.25 or later and a compiled grammar), curl (`make curl`, needing libcurl), local Git (`make git`, on POSIX with zlib,
+which also builds `fs`), and Linux TUN/TAP (`make tun`, Linux only). In a binary archive,
+`sh lib/build-NAME.sh lib/shen-NAME.so` builds `fs`, `process`, `tree-sitter` and `curl` (with `.dll` in place of `.so`
+on Windows), and `sh lib/git/build-native.sh lib/shen-git-native.so` builds `git`'s adapter. Loading a library never
 compiles its adapter: it looks for it in `build/`, `lib/` and the current directory, then in those from the
 executable's directory, or where its `*adapter-files*` says, if that is set before loading. A built program finds an
 adapter shipped beside it, or in its `lib/`.
+
+| Modules | What they provide | Static Linux | C adapter | Reference |
+| --- | --- | --- | --- | --- |
+| `numbers`, `floats`, `word`, `words` | Typed fixnums, floats, 64-bit words and unboxed arrays | Yes | No | [Numbers](numbers.md), [Floats](floats.md), [Word](word.md), [Words](words.md) |
+| `option`, `result` | Optional values and typed error results (`let-ok`) | Yes | No | [Option](option.md), [Result](result.md) |
+| `buffer`, `cursor`, `bytes` | Checked byte views, cursors and SIMD byte scans/conversions | Yes | No | [Buffers](buffers.md), [Bytes](bytes.md) |
+| `layout`, `grammar`, `json` | Binary wire layouts, compiled byte grammars and JSON | Yes | No | [Layout](layout.md), [Grammar](grammar.md), [JSON](json.md) |
+| `io`, `frame`, `deadline` | Bounded chunk I/O over memory, binary framing and deadlines | Yes | No | [Chunk I/O](io.md), [Framing](framing.md), [Deadlines](deadlines.md) |
+| `io/file`, `io/socket`, `clock`, `socket` | File/socket I/O endpoints, monotonic clock and TCP sockets | No | No | [Chunk I/O](io.md), [Socket I/O](io-sockets.md), [Sockets](#sockets) |
+| `fs`, `process`, `process/io` | Filesystem operations, child processes and pipelines | No | `make fs`, `make process` | [Filesystem](fs.md), [Processes](processes.md) |
+| `net/*` (in-memory) | Zero-allocation IPv4/IPv6, UDP, TCP, ICMP, DHCP, DNS, multicast | Yes | No | [Networking](networking.md), [UDP](net-udp.md), [TCP](net-tcp.md) |
+| `net/tun` | Linux TUN and TAP packet device bridge | No | `make tun` (Linux) | [Linux TUN/TAP](net-tun.md) |
+| `http`, `http/request`, `http/response` | HTTP/1.1 head, request and response framing | Yes | No | [HTTP head](http-head.md), [HTTP](http.md), [Streaming](http-streaming.md) |
+| `http/server`, `http/listener` | Concurrent HTTP/1.1 servers over isolates and sockets | No | No | [HTTP servers](http-listener.md) |
+| `curl` | HTTP/HTTPS client over libcurl | No | `make curl` | [libcurl](curl.md) |
+| `datalog`, `hyperloglog`, `parallel` | Compiled Datalog, HyperLogLog++ sketches and parallel map | Yes | No | [Datalog](datalog.md), [HyperLogLog++](hyperloglog.md), [Parallel](parallel.md) |
+| `sqlite`, `tree-sitter`, `git` | SQLite, Tree-sitter syntax/queries and local Git repositories | No | `tree-sitter`, `git` | [SQLite](#sqlite), [Tree-sitter](tree-sitter.md), [Git](git.md) |
+| `native`, `ffi`, `memory`, `mmap`, `handle` | Handwritten native code, C FFI, off-heap memory, mmap and handles | `native`, `handle` | No | [Native](#native-code-by-hand), [Calling C](ffi.md), [Off-heap](#memory-outside-the-heap) |
 
 ### Bytes and parsing
 
@@ -640,7 +655,7 @@ which inline where they are called, a way to write a whole layout in packed stor
 
 [JSON](https://github.com/tizoc/shen-jit/blob/main/docs/json.md): `lib/json.shen` decodes JSON from views and encodes
 it into them, with strict UTF-8, numbers kept as written until converted exactly, and limits on what it reads and
-writes. It needs `lib/grammar.shen` loaded first.
+writes.
 
 [Tree-sitter bindings](https://github.com/tizoc/shen-jit/blob/main/docs/tree-sitter.md): `lib/tree-sitter.shen` parses
 source code in a language that has a Tree-sitter grammar into a syntax tree, and runs structural queries over it,
@@ -1305,6 +1320,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-json` | JSON syntax/encoding, Unicode, exact numbers, builders, typing and images/GC |
 | `make test-buffer` | Buffer/cursor bounds, copying, foreign lifetime, typed clients, format examples, grammars, typed grammars, grammars in isolates and images/GC |
 | `make test-bytes` | Each byte scan and conversion against a loop in Shen, over random ranges and every byte, from typed code and in another isolate |
+| `make test-layout` | Binary layouts: generated accessors against raw bytes, ranges, offsets, namespaces and inlining |
 | `make test-hyperloglog` | HyperLogLog++ hashes, sparse and dense estimates, merges, every way keys go in against the others, and allocation stress |
 | `make test-io` | Bounded chunk I/O, binary files and framing, socket endpoints/echo, native lifetimes, typed results and images/GC |
 | `make test-net-udp` | In-memory IPv4/UDP echo, independent wire fixtures, queue and clock behavior, and allocation stress |
@@ -1326,10 +1342,11 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-overrides` | Each kernel function that Shen/JIT replaces beside the kernel's own definition, over generated values, as compiled and through C |
 | `make check-lowerer` | Checks the stage 0 output against the lowerer's invariants |
 | `make check-generated` | Compares the generated files with `generated.sha256`. `make update-generated` rewrites it after a change to the lowerer, the port or the lowered test programs |
+| `make check-docs` | Checks documentation links, heading anchors, guide page registration and module coverage |
 | `make test-kl-stress`, `make test-kernel-stress` | The same with frequent collections |
 | `make test-lib-stress` | The libraries' saved images reloaded with a collection at every allocation, which their own suites leave out |
-| `make test-san` | `test`, `test-jit`, `test-ops`, `test-kl`, FFI, isolates, libcurl, filesystem, subprocess and Tree-sitter adapters under AddressSanitizer and UBSan |
-| `make test-x86` | The same five, built as x86-64 code (under Rosetta on Apple silicon) |
+| `make test-san` | `test`, `test-jit`, `test-ops`, `test-kl`, FFI, isolates, typed programs, and the libcurl, filesystem, subprocess and Tree-sitter adapters under AddressSanitizer and UBSan |
+| `make test-x86` | `test`, `test-jit`, `test-ops`, `test-kl`, FFI and typed programs, built as x86-64 code (under Rosetta on Apple silicon) |
 | `make test-differential` | Each primitive over generated values, however it is compiled and through C, and properties they must keep. `make differential-scheme` lists what differs from Shen/Scheme, to read and not to pass |
 | `make fuzz-native` | Mutated code objects, run if the checker accepts them |
 | `make test-ctrlc-windows` | A real Ctrl-C to the REPL on Windows, through a console |

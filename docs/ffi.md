@@ -179,6 +179,16 @@ It links against nothing: `shen_vm` is a pointer to a table of functions, which 
 
 **Reads never allocate or raise.** One of the wrong type gives `SHEN_NONE`, or NULL, or as `shen.h` says.
 
+| Area | Functions in `include/shen.h` |
+| --- | --- |
+| Constants | `SHEN_NIL`, `SHEN_FALSE`, `SHEN_TRUE`, `SHEN_ERROR`, `SHEN_NONE`, `SHEN_API_VERSION` |
+| Predicates | `shen_is_fixnum`, `shen_is_string`, `shen_is_pair`, `shen_is_vector`, `shen_is_symbol`, `shen_is_float`, `shen_is_bytes`, `shen_is_procedure`, `shen_fits_fixnum` |
+| Reading | `shen_fixnum`, `shen_number`, `shen_head`, `shen_tail`, `shen_vector_length`, `shen_vector_ref`, `shen_symbol_name`, `shen_string_bytes`, `shen_string_copy`, `shen_bytes_data`, `shen_pointer`, `shen_global`, `shen_function` |
+| Making & writing | `shen_make_fixnum`, `shen_make_bool`, `shen_make_float`, `shen_make_string`, `shen_make_bytes`, `shen_cons`, `shen_make_vector`, `shen_intern`, `shen_make_pointer`, `shen_vector_set` |
+| Roots | `shen_root`, `shen_unroot`, `shen_root_new`, `shen_root_get`, `shen_root_set`, `shen_root_delete` |
+| Calling & errors | `shen_call`, `shen_raise`, `shen_raise_value`, `shen_exception`, `shen_exception_message` |
+| Waiting | `shen_release`, `shen_acquire` |
+
 **Mistakes end the process, with a message naming the procedure:** passing `SHEN_NONE` or `SHEN_ERROR` on, returning `SHEN_NONE`, or a value left over
 from before a collection, where that can be seen. So test with `SHEN_JIT_GC_STRESS=1`: every allocation then collects, and every read checks its value too, which finds
 most of what breaks the first rule. A value that a collection had already kept, and that then lives through an even number more, points back into the heap, as the two spaces take turns, and goes unseen.

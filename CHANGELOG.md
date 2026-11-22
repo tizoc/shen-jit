@@ -82,6 +82,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- The rendered guide now searches across pages and sections (including offline from release archives), shows sibling
+  pages in each document's contents rail, and summarises all libraries, static-build support and C adapters in one table.
 - The libraries that come with Shen/JIT keep no KLambda of their definitions, which only `ps` and `shen-jit.code`
   read, as the kernel's functions keep none. A program using HTTP or JSON keeps about 1 MB less live data, which
   each collection copies: reading an HTTP head took 5.1 µs where it took 8.1, and a built `shen-git` is 3.9 MB

@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>$pagetitle$</title>
-$if(doc)$$else$<meta name="description" content="How to install and use Shen/JIT, a JIT implementation of the Shen language: running programs, saving executables, isolates, calling C, SQLite and sockets.">$endif$
+$if(doc)$$else$<meta name="description" content="How to install and use Shen/JIT, a native JIT implementation of the Shen language: modules, managed structs, isolates, typed programs, libraries, and calling C.">$endif$
 <link rel="icon" type="image/png" href="assets/shen-jit-icon-light.png" media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/png" href="assets/shen-jit-icon-dark.png" media="(prefers-color-scheme: dark)">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -46,7 +46,7 @@ body {
 }
 img { max-width: 100%; height: auto; display: block; }
 a { color: var(--link); text-underline-offset: 0.15em; }
-a:focus-visible, summary:focus-visible { outline: 2px solid var(--slash); outline-offset: 2px; border-radius: 2px; }
+a:focus-visible, summary:focus-visible, input:focus-visible { outline: 2px solid var(--slash); outline-offset: 2px; border-radius: 2px; }
 
 /* The contents rail: the guide's groups, and the sections in each. A document's page has only sections. */
 .rail { position: sticky; top: 0; align-self: start; max-height: 100vh; overflow-y: auto; padding-block: 1.75rem; padding-right: 1.25rem; }
@@ -60,14 +60,26 @@ a:focus-visible, summary:focus-visible { outline: 2px solid var(--slash); outlin
 :root[data-theme="dark"] .logo-light { display: none; }
 .rail summary { display: none; font: 600 0.875rem var(--mono); cursor: pointer; padding-block: 0.5rem; }
 .rail ul { list-style: none; margin: 0; padding: 0; }
-.rail li > a:not(:only-child), section.level1 > h1 { font: 400 0.8125rem var(--mono); color: var(--muted); text-transform: lowercase; }
-.rail li > a:not(:only-child) { display: block; margin: 1.5rem 0 0.35rem; text-decoration: none; }
-.rail li > a:not(:only-child)::before, section.level1 > h1::before { content: "["; }
-.rail li > a:not(:only-child)::after, section.level1 > h1::after { content: "]"; }
+.rail li > a:not(:only-child), .rail .group-label, section.level1 > h1 { font: 400 0.8125rem var(--mono); color: var(--muted); text-transform: lowercase; }
+.rail li > a:not(:only-child), .rail .group-label { display: block; margin: 1.5rem 0 0.35rem; text-decoration: none; }
+.rail li > a:not(:only-child)::before, .rail .group-label::before, section.level1 > h1::before { content: "["; }
+.rail li > a:not(:only-child)::after, .rail .group-label::after, section.level1 > h1::after { content: "]"; }
 .rail li > a:only-child { display: block; padding: 0.16rem 0 0.16rem 0.75rem; border-left: 2px solid var(--rule); color: var(--ink); text-decoration: none; font-size: 0.9375rem; line-height: 1.4; }
 .rail li > a:only-child:hover { color: var(--link); }
 .rail li > a.here { border-left-color: var(--slash); font-weight: 600; }
-.rail .back { margin: 1.5rem 0 0.75rem; font: 400 0.8125rem var(--mono); }
+.rail .back { margin: 1.25rem 0 0.75rem; font: 400 0.8125rem var(--mono); }
+.rail .siblings { margin-top: 1.25rem; padding-top: 0.25rem; border-top: 1px solid var(--rule); }
+.search { margin: 0.9rem 0 0.5rem; }
+.search input {
+  width: 100%; padding: 0.35rem 0.55rem; border: 1px solid var(--rule); border-radius: 4px;
+  background: var(--code); color: var(--ink); font: 400 0.84375rem var(--mono);
+}
+.search input::placeholder { color: var(--muted); }
+.search-results { margin-top: 0.45rem; }
+.search-results a { display: block; padding: 0.25rem 0 0.25rem 0.6rem; border-left: 2px solid var(--rule); text-decoration: none; font-size: 0.875rem; line-height: 1.35; color: var(--ink); }
+.search-results a:hover { border-left-color: var(--slash); color: var(--link); }
+.search-results .sr-page { display: block; font: 400 0.75rem var(--mono); color: var(--muted); }
+.search-empty { font: 400 0.8125rem var(--mono); color: var(--muted); margin: 0.4rem 0 0; }
 
 /* The reading column */
 main { min-width: 0; max-width: 47rem; padding-block: 2.5rem 5rem; padding-left: 2.5rem; }
@@ -116,6 +128,10 @@ footer { margin-top: 3.5rem; padding-top: 1.25rem; border-top: 1px solid var(--r
     <img class="logo-light" src="assets/shen-jit-logo-light.png" alt="Shen/JIT" width="1600" height="400">
     <img class="logo-dark" src="assets/shen-jit-logo-dark.png" alt="Shen/JIT" width="1600" height="400">
   </a>
+  <div class="search" id="search-box" hidden>
+    <input id="search-input" type="search" placeholder="Search docs (/)" aria-label="Search documentation" autocomplete="off" spellcheck="false">
+    <div id="search-results" class="search-results" role="region" aria-live="polite"></div>
+  </div>
   <details id="toc" open>
     <summary>Contents</summary>
     <nav aria-label="Contents">
@@ -123,6 +139,9 @@ $if(doc)$
 <p class="back"><a href="index.html">The guide</a></p>
 $endif$
 $table-of-contents$
+$if(siblings)$
+$siblings$
+$endif$
     </nav>
   </details>
 </aside>
@@ -135,8 +154,9 @@ $body$
 </footer>
 </main>
 
+<script src="search-index.js"></script>
 <script>
-/* The rail: marks the section being read, and folds away on a phone. */
+/* The rail: marks the section being read, folds away on a phone, and searches across pages. */
 (function () {
   var toc = document.getElementById('toc');
   var narrow = window.matchMedia('(max-width: 56rem)');
@@ -145,20 +165,98 @@ $body$
   narrow.addEventListener('change', fit);
   var links = {};
   document.querySelectorAll('.rail li > a:only-child').forEach(function (a) {
-    links[a.getAttribute('href').slice(1)] = a;
-    a.addEventListener('click', function () { if (narrow.matches) toc.open = false; });
+    var href = a.getAttribute('href');
+    if (href && href.charAt(0) === '#') {
+      links[href.slice(1)] = a;
+      a.addEventListener('click', function () { if (narrow.matches) toc.open = false; });
+    }
   });
-  if (!('IntersectionObserver' in window)) return;
-  var current = null;
-  var seen = new IntersectionObserver(function (entries) {
-    entries.forEach(function (e) {
-      if (!e.isIntersecting || !links[e.target.id]) return;
-      if (current) current.classList.remove('here');
-      current = links[e.target.id];
-      current.classList.add('here');
-    });
-  }, { rootMargin: '-10% 0px -80% 0px' });
-  document.querySelectorAll('section.level2').forEach(function (s) { seen.observe(s); });
+  if ('IntersectionObserver' in window) {
+    var current = null;
+    var seen = new IntersectionObserver(function (entries) {
+      entries.forEach(function (e) {
+        if (!e.isIntersecting || !links[e.target.id]) return;
+        if (current) current.classList.remove('here');
+        current = links[e.target.id];
+        current.classList.add('here');
+      });
+    }, { rootMargin: '-10% 0px -80% 0px' });
+    document.querySelectorAll('section.level2').forEach(function (s) { seen.observe(s); });
+  }
+
+  var index = window.SHEN_JIT_SEARCH;
+  var box = document.getElementById('search-box');
+  var input = document.getElementById('search-input');
+  var results = document.getElementById('search-results');
+  if (!index || !box || !input || !results) return;
+  box.hidden = false;
+
+  function clear() {
+    results.textContent = '';
+    toc.hidden = false;
+  }
+
+  function render(query) {
+    var terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!terms.length) { clear(); return; }
+    var scored = [];
+    for (var i = 0; i < index.length; i++) {
+      var item = index[i];
+      var title = item.t.toLowerCase();
+      var page = item.p.toLowerCase();
+      var keys = (item.k || '').toLowerCase();
+      var hay = title + ' ' + page + ' ' + keys;
+      var ok = true, score = 0;
+      for (var j = 0; j < terms.length; j++) {
+        var term = terms[j];
+        if (hay.indexOf(term) === -1) { ok = false; break; }
+        if (title === term) score += 12;
+        else if (title.indexOf(term) === 0) score += 8;
+        else if (title.indexOf(term) !== -1) score += 5;
+        if (keys.indexOf(term) !== -1) score += 3;
+        if (page.indexOf(term) !== -1) score += 2;
+      }
+      if (ok) scored.push({ item: item, score: score });
+    }
+    scored.sort(function (a, b) { return b.score - a.score; });
+    results.textContent = '';
+    toc.hidden = true;
+    if (!scored.length) {
+      var p = document.createElement('p');
+      p.className = 'search-empty';
+      p.textContent = 'No matches';
+      results.appendChild(p);
+      return;
+    }
+    var limit = Math.min(scored.length, 12);
+    for (var k = 0; k < limit; k++) {
+      var hit = scored[k].item;
+      var a = document.createElement('a');
+      a.href = hit.u;
+      a.textContent = hit.t;
+      if (hit.t !== hit.p) {
+        var sub = document.createElement('span');
+        sub.className = 'sr-page';
+        sub.textContent = hit.p;
+        a.appendChild(sub);
+      }
+      results.appendChild(a);
+    }
+  }
+
+  input.addEventListener('input', function () { render(input.value); });
+  input.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') { input.value = ''; clear(); input.blur(); }
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === '/' && !e.ctrlKey && !e.metaKey && !e.altKey &&
+        document.activeElement !== input &&
+        !/^(INPUT|TEXTAREA|SELECT)$$/.test(document.activeElement.tagName)) {
+      e.preventDefault();
+      input.focus();
+      input.select();
+    }
+  });
 })();
 </script>
 </body>

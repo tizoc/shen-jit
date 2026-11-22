@@ -286,6 +286,10 @@ check-generated: generated
 	  if diff -u ../generated.sha256 generated.sha256; then echo "generated files match generated.sha256"; \
 	  else echo "generated files differ from generated.sha256 (make update-generated with the change that made them)"; exit 1; fi
 
+.PHONY: check-docs
+check-docs:
+	python3 tools/check-docs.py
+
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
 GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words option result buffers bytes layout grammar io fs processes parallel tree-sitter framing io-sockets git hyperloglog networking net-udp net-tcp net-tun deadlines http-head http http-streaming http-listener json datalog curl
@@ -295,7 +299,8 @@ GUIDE_PANDOC := $(PANDOC) -f gfm -t html --standalone --toc --toc-depth=2 --sect
 guide:
 	rm -rf $(BUILD)/guide && mkdir -p $(BUILD)/guide/assets
 	$(GUIDE_PANDOC) --shift-heading-level-by=-1 -o $(BUILD)/guide/index.html docs/guide.md
-	for page in $(GUIDE_PAGES); do $(GUIDE_PANDOC) -M doc -o $(BUILD)/guide/$$page.html docs/$$page.md || exit 1; done
+	for page in $(GUIDE_PAGES); do $(GUIDE_PANDOC) -M doc -M page=$$page -o $(BUILD)/guide/$$page.html docs/$$page.md || exit 1; done
+	python3 tools/guide-index.py $(BUILD)/guide/search-index.js docs/guide.md $(foreach p,$(GUIDE_PAGES),docs/$(p).md)
 	cp assets/*.png $(BUILD)/guide/assets/
 
 # A release tarball: the tracked files, generated/, which builds without a host,

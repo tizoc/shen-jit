@@ -49,6 +49,8 @@ on:
       - site/**
       - assets/**
       - tools/ci-deps.sh
+      - tools/check-docs.py
+      - tools/guide-index.py
       - .github/workflows/pages.yml
   workflow_dispatch:
 
@@ -69,8 +71,9 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v7
-      - name: Render the guide
+      - name: Check and render the guide
         run: |
+          make check-docs
           pandoc=$(sh tools/ci-deps.sh pandoc "$RUNNER_TEMP/pandoc")
           make PANDOC="$pandoc" guide
       - uses: actions/upload-pages-artifact@v5

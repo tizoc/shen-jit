@@ -29,7 +29,7 @@ The functions that Shen/Scheme 0.54 replaces in its `src/overrides.shen`, with w
 | `shen.push-factorised-branch`, `shen.eval-factorised-branch` | its own factorised compilation | none | Not applicable: Shen/JIT factorises with the kernel's `shen.factor` |
 | `unwind-types`, `toplevel-display-exception`, `show-exceptions?`, `interactive-error?` | error display with Chez conditions | the port's `shen.toplevel-display-exception` prints backtraces | Done where it applies |
 
-The kernel's `shen.prolog-vector` makes an absvector of `(prolog-memory N)` words per query, 80 KB by default, which the collector handles by skipping repeated pointers and keeping vectors of 32K words or more apart, uncopied.
+`shen.prolog-vector` is overridden below to pool and reuse vectors across queries; the collector also handles large Prolog vectors (80 KB by default, and vectors of 32K words or more) by skipping repeated pointers and keeping large vectors apart, uncopied.
 
 ## Overridden by Shen/JIT only
 

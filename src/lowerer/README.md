@@ -104,8 +104,8 @@ memory and compares it with the files, then checks every code object:
   raise reaches the handler with the slots set at that point; all jumps go
   forward; no code falls off the end or is unreachable.
 
-It also runs 17 unit cases with expected instruction lists, 14 malformed
-inputs that must raise, and 16 broken code objects the checker must reject.
+It also runs unit cases with expected instruction lists (including inlining cases), malformed
+inputs that must raise, and broken code objects the checker must reject.
 
 ## Output syntax
 

@@ -43,7 +43,20 @@ local PAGES = {
   datalog = 'Datalog',
   curl = 'HTTP clients with libcurl',
 }
+local GROUPS = {
+  { label = 'Internals & performance', pages = { 'design', 'semantics', 'bytecode', 'performance', 'ffi' } },
+  { label = 'Language & types', pages = { 'structs', 'modules', 'numbers', 'floats', 'word', 'words', 'option', 'result' } },
+  { label = 'Bytes & parsing', pages = { 'buffers', 'bytes', 'layout', 'grammar', 'json', 'tree-sitter' } },
+  { label = 'I/O & systems', pages = { 'io', 'framing', 'deadlines', 'fs', 'processes', 'io-sockets', 'parallel' } },
+  { label = 'Networking', pages = { 'networking', 'net-udp', 'net-tcp', 'net-tun' } },
+  { label = 'HTTP', pages = { 'http-head', 'http', 'http-streaming', 'http-listener', 'curl' } },
+  { label = 'Data & Git', pages = { 'datalog', 'hyperloglog', 'git' } },
+}
 local REPOSITORY = 'https://github.com/tizoc/shen-jit/blob/main/'
+
+local function escape(text)
+  return (text:gsub('[&<>]', { ['&'] = '&amp;', ['<'] = '&lt;', ['>'] = '&gt;' }))
+end
 
 -- A link to a document with a page goes there, the guide's being index.html, and any other into the
 -- repository goes to GitHub, as the page is not next to it. A document's own links are relative to
@@ -75,6 +88,26 @@ function Link(link)
   return link
 end
 
+-- Sibling pages in the same topic group, for the contents rail of a document page.
+local function group_nav(page)
+  for _, group in ipairs(GROUPS) do
+    local found = false
+    for _, slug in ipairs(group.pages) do
+      if slug == page then found = true; break end
+    end
+    if found then
+      local items = {}
+      for _, slug in ipairs(group.pages) do
+        local cls = slug == page and ' class="here"' or ''
+        items[#items + 1] = '<li><a' .. cls .. ' href="' .. slug .. '.html">' .. escape(PAGES[slug]) .. '</a></li>'
+      end
+      return '<div class="siblings"><p class="group-label">' .. escape(group.label) .. '</p><ul>'
+        .. table.concat(items, '') .. '</ul></div>'
+    end
+  end
+  return nil
+end
+
 -- A document's first heading is its page's title, as the guide's already is. In the page, the
 -- slash in the name is in the logo's colour.
 local function with_slash(inlines)
@@ -99,11 +132,13 @@ function Pandoc(doc)
   end
   doc.meta.pagetitle = pandoc.utils.stringify(doc.meta.title)
   doc.meta.title = pandoc.MetaInlines(with_slash(doc.meta.title))
+  if doc.meta.page then
+    local html = group_nav(pandoc.utils.stringify(doc.meta.page))
+    if html then
+      doc.meta.siblings = pandoc.MetaBlocks({ pandoc.RawBlock('html', html) })
+    end
+  end
   return doc
-end
-
-local function escape(text)
-  return (text:gsub('[&<>]', { ['&'] = '&amp;', ['<'] = '&lt;', ['>'] = '&gt;' }))
 end
 
 local function span(class, text)

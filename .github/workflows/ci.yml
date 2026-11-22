@@ -25,7 +25,7 @@ jobs:
           pandoc=$(sh tools/ci-deps.sh pandoc "$RUNNER_TEMP/pandoc")
           kernel=$(sh tools/ci-deps.sh kernel "$RUNNER_TEMP/kernel")
           host=$(sh tools/ci-deps.sh shen-jit "$RUNNER_TEMP/host")
-          make BOOTSTRAP="$host" KERNEL_KL="$kernel/klambda" PANDOC="$pandoc" check-lowerer dist
+          make BOOTSTRAP="$host" KERNEL_KL="$kernel/klambda" PANDOC="$pandoc" check-docs check-lowerer dist
       - uses: actions/upload-artifact@v7
         with:
           name: tarball

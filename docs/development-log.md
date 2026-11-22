@@ -16,7 +16,8 @@ Terms used throughout:
 - **CACHE** is the saved register holding the last result. **Stage 0** and **stage 1** are the build's stages.
 
 Topics: [the JIT](#the-jit-and-native-code-generation), [the collector](#the-collector-memory-the-guest-stack-and-images), [the lowerer and the port](#the-lowerer-the-bytecode-the-kernel-port-and-prolog),
-[the runtime and platforms](#runtime-threads-platforms-and-usability), [the C FFI](#c-ffi), [benchmark results](#benchmark-results).
+[the runtime and platforms](#runtime-threads-platforms-and-usability), [modules and typed programs](#modules-and-typed-programs), [the C FFI](#c-ffi), [Datalog](#datalog),
+[byte helpers in native code](#byte-helpers-in-native-code), [HyperLogLog++](#hyperloglog), [local Git repositories](#local-git-repositories), [benchmark results](#benchmark-results).
 
 ## The JIT and native code generation
 
