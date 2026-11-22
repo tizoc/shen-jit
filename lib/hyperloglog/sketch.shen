@@ -220,11 +220,10 @@
                (add-hash-range (insert-cells S Cells 0 (fxquotient (fx- Next At) 2)) From Next End))
            true (do (add-dense-hashes (t.storage S) (t.precision S) From At End) S)))
 
+\\ Whole words only: bytes past the last are not a hash.
 (define add-hashes!
   {t --> words.t --> t}
-  S Hashes ->
-    (let B (words.bytes Hashes)
-      (add-hash-range S B 0 (shen-jit.bytes-length B))))
+  S Hashes -> (add-hash-range S (words.bytes Hashes) 0 (fx* (words.length Hashes) 8)))
 
 \\ Eight keys are hashed by each call, which costs more than hashing one.
 (define add-fixed-range!

@@ -217,6 +217,8 @@ All notable changes to this project are documented in this file. The format is b
 - `bytes.find` finds nothing for a `Byte` outside 0 to 255, which matched its low 8 bits on ranges of 16 bytes or
   more, and `bytes.decimal` gives -2 for digits under a `Limit` below 0, where it gave the number, with no bound at
   all from -10 down.
+- `hyperloglog.add-hashes!` of an array whose bytes end in part of a word adds its whole words; it raised "bytes: 8 is
+  not a valid index", after adding some of them to a dense sketch.
 
 ## [0.10] - 2026-11-19
 

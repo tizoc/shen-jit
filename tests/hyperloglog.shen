@@ -235,6 +235,17 @@
           _ (expect (not (h.sparse? S)) "batch promotes while consuming the array")
        (expect (same-storage? S R) "scalar/batch agreement")))
 
+\\ Bytes that end in part of a word: the whole words go in, sparse or dense, and the rest is left out.
+(define partial-word-check
+  {--> boolean}
+  -> (let One (hashes 1)
+          Bytes (shen-jit.copy-bytes (shen-jit.bytes 12) 0 (words.bytes One) 0 8)
+          Sparse (h.add-hashes! (h.new 14) (words.of-bytes Bytes))
+          Dense (h.add-hashes! (add-range (h.new 4) 0 2000) (words.of-bytes Bytes))
+          _ (expect (same-storage? Sparse (h.add-hashes! (h.new 14) One)) "a partial word, sparse")
+          _ (expect (not (h.sparse? Dense)) "a partial word, dense")
+       (expect (same-storage? Dense (h.add-hashes! (add-range (h.new 4) 0 2000) One)) "a partial word, dense")))
+
 (define squared-error
   {fixnum --> fixnum --> fixnum --> float --> float}
   _ 0 _ Sum -> Sum
@@ -273,6 +284,7 @@
                (freeze (extremes-check))
                (freeze (merge-check))
                (freeze (bulk-check))
+               (freeze (partial-word-check))
                (freeze (accuracy-check))]
               0)
        (do (output "~A passed, 0 failed~%" N) true)))
