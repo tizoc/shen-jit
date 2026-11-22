@@ -1,5 +1,5 @@
 \\ Files as memory: lib/mmap.shen. Run by make test-ffi, from build/, after lib/ffi.shen, lib/mmap.shen
-\\ and lib/handle.shen. It leaves its files in build/.
+\\ and lib/handle.shen, and loads io/file for one check. It leaves its files in build/.
 
 (set mmap-test.*passed* 0)
 (set mmap-test.*failed* 0)
@@ -106,6 +106,17 @@
 (mmap-test.check "it replaces what was there" 8 (freeze (shen-jit.bytes-length (value shorter))))
 (mmap-test.check "with zeroes" 0 (freeze (shen-jit.u32 (value shorter) 4)))
 (mmap.close (value shorter))
+
+\\ A name outside ASCII, which Windows takes only as UTF-16, as io/file gives it on every system.
+(module.use [io/file])
+(set wide (mmap.create "mmap-test-c#195;c#169;.bin" 2))
+(shen-jit.u8! (value wide) 0 104)
+(mmap.close (value wide))
+(mmap-test.check "a name outside ASCII is the one io/file opens" true
+                 (freeze (result.ok? (io.read-file "mmap-test-c#195;c#169;.bin" 16))))
+(set wide (mmap.read "mmap-test-c#195;c#169;.bin"))
+(mmap-test.check "and mmap reads it again" 104 (freeze (shen-jit.u8 (value wide) 0)))
+(mmap.close (value wide))
 
 \\ ---------------------------------------------------------------------------
 \\ What it refuses. The system words the first, so only the start is the same everywhere.

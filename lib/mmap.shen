@@ -23,13 +23,13 @@
 \\ It stays mapped until mmap.close, or the end of the process. lib/handle.shen closes it once nothing
 \\ reaches it: (handle.wrap (mmap.read Path) (/. M (mmap.close M))).
 \\
-\\ Windows opens files through its C library too, under its own names, and differs only in the
-\\ mapping. Functions are found at their first call, so a system declares what it never calls
-\\ without harm.
+\\ Windows opens files through its C library too, under its own names and with paths as UTF-16,
+\\ and differs only in the mapping. Functions are found at their first call, so a system declares
+\\ what it never calls without harm.
 
 (shen.x.namespace mmap
   (use shen-jit)
-  (externals [define-foreign int32 int64 pointer])
+  (externals [bytes define-foreign int32 int64 pointer])
   (shadow close fail map open read)
   (export close create read read-write)
 
@@ -39,8 +39,8 @@
 (define windows?
   -> (= (value *os*) "Windows"))
 
-(define-foreign c-open lib (if (windows?) "_open" "open") (string int32) --> int32)
-(define-foreign c-creat lib (if (windows?) "_creat" "creat") (string int32) --> int32)
+(define-foreign c-open lib (if (windows?) "_wopen" "open") ((if (windows?) bytes string) int32) --> int32)
+(define-foreign c-creat lib (if (windows?) "_wcreat" "creat") ((if (windows?) bytes string) int32) --> int32)
 (define-foreign c-close lib (if (windows?) "_close" "close") (int32) --> int32)
 (define-foreign c-lseek lib (if (windows?) "_lseeki64" "lseek") (int32 int64 int32) --> int64)
 (define-foreign c-truncate lib (if (windows?) "_chsize_s" "ftruncate") (int32 int64) --> int32)
@@ -54,6 +54,8 @@
 (define-foreign c-map-view kernel32 "MapViewOfFile" (int64 int32 int32 int32 int64) --> pointer)
 (define-foreign c-unmap-view kernel32 "UnmapViewOfFile" (pointer) --> int32)
 (define-foreign c-close-handle kernel32 "CloseHandle" (int64) --> int32)
+(define-foreign c-wide-size kernel32 "MultiByteToWideChar" (int32 int32 string int32 pointer int32) --> int32)
+(define-foreign c-wide-fill kernel32 "MultiByteToWideChar" (int32 int32 string int32 bytes int32) --> int32)
 
 (define fail
   Path -> (raise Path (shen-jit.c-errno)))
@@ -66,7 +68,19 @@
 \\ would otherwise take a Ctrl-Z off the end of a file opened to write.
 
 (define open
-  Path Flags -> (c-open Path (if (windows?) (+ Flags 32768) Flags)))
+  Path Flags -> (c-open (native Path) (if (windows?) (+ Flags 32768) Flags)))
+
+\\ What C is given for a path: on Windows, its UTF-16, from UTF-8 (65001), refusing what is not
+\\ (MB_ERR_INVALID_CHARS is 8).
+(define native
+  Path -> Path where (not (windows?))
+  Path -> (let Size (c-wide-size 65001 8 Path -1 [] 0)
+            (if (= Size 0)
+                (windows-fail Path (shen-jit.errno))
+                (let Out (shen-jit.bytes (* Size 2))
+                  (if (= 0 (c-wide-fill 65001 8 Path -1 Out Size))
+                      (windows-fail Path (shen-jit.errno))
+                      Out)))))
 
 (define read
   Path -> (map Path (open Path 0) false))
@@ -79,7 +93,7 @@
 \\ emptied the file.
 (define create
   Path N -> (error "mmap: ~A: cannot make a file of ~A bytes" Path N) where (not (and (shen-jit.fixnum? N) (> N 0)))
-  Path N -> (let Fd (c-creat Path (if (windows?) 384 420))
+  Path N -> (let Fd (c-creat (native Path) (if (windows?) 384 420))
               (if (< Fd 0)
                   (fail Path)
                   (do (c-close Fd)
