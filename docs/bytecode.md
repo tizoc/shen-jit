@@ -70,7 +70,7 @@ lowered for `eval-kl` is a code object of arity 0 named `eval-kl`.
 ## Instructions
 
 `D`, `S` and `A` are slot numbers; `K`, `C` and `I` are indices; `L` is a label
-number, local to its code object; `F` is a symbol; `N` is an argument count.
+number below 2^20, local to its code object; `F` is a symbol; `N` is an argument count.
 `O` is an operand: a slot number, or `(const K)` for constant K, which the
 lowerer uses for every literal operand instead of copying it into a slot
 first. Native code takes a constant that is not a pointer (a fixnum, `[]`, a

@@ -209,6 +209,9 @@ All notable changes to this project are documented in this file. The format is b
 - An HTTP request of another version gets 505 whatever its fields, and one with an unsupported transfer coding before
   `chunked` gets 501 whatever its `Trailer`: without Host, the first got 400, and with a `Trailer`, the second got 400
   "Trailer requires chunked framing".
+- Native code with a label or loop below 0 or from 2^20 up is refused as a bad instruction: a negative one failed with
+  "<-address: -1 is not a valid index", and a large one made the checker allocate a table up to it (about 15 GB for
+  2^33) before it was refused.
 
 ## [0.10] - 2026-11-19
 

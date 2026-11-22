@@ -141,6 +141,7 @@
   Ctx Labels I -> (check.assert (check.valid? Ctx Labels I)
                                            (hd Ctx) "bad instruction" I))
 
+\\ A label, as a loop's head, is below 2^20, as the loader requires.
 (define check.valid?
   Ctx _ [move D S] -> (and (check.write? Ctx D) (check.read? Ctx S))
   Ctx _ [const D K] -> (and (check.write? Ctx D) (check.below? K (nth 4 Ctx)))
@@ -149,7 +150,7 @@
                                    (check.reads? Ctx Ss))
   Ctx _ [prim D Op | Ss] -> (and (check.write? Ctx D) (check.operands? Ctx Ss)
                                  (= (length Ss) (check.prim-arity Op)))
-  _ _ [label L] -> (integer? L)
+  _ _ [label L] -> (check.below? L 1048576)
   _ Labels [jump L] -> (element? L Labels)
   Ctx Labels [jump-if-false S L] -> (and (check.operand? Ctx S) (element? L Labels))
   Ctx _ [call D A F N] -> (and (check.write? Ctx D) (check.window? Ctx A N)
@@ -229,7 +230,7 @@
   _ _ vector! A -> (check.below? A 16)
   Ctx _ count [const K] -> (and (check.below? K (nth 4 Ctx)) (check.below? (nth (+ K 1) (nth 7 Ctx)) 8))
   _ Labels label A -> (element? A Labels)
-  _ _ head A -> (integer? A)
+  _ _ head A -> (check.below? A 1048576)
   _ Labels back A -> (element? A Labels))
 
 (define check.raw-op?

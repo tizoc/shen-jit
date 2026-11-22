@@ -355,6 +355,17 @@
 (native-test.raw "unreachable code" [code f 0 4 [1] [[const 2 0] [return 2] [const 2 0] [return 2]] []])
 (native-test.raw "a label twice" [code f 0 4 [1] [[const 2 0] [jump 0] [label 0] [label 0] [return 2]] []])
 (native-test.raw "an undefined label" [code f 0 4 [] [[jump 3]] []])
+\\ A label the loader would refuse is refused as an instruction, before the checker makes a table of
+\\ the labels up to it.
+(define native-test.refusal
+  Code -> (trap-error (do (shen-jit.install-code Code) accepted) (/. E (error-to-string E))))
+(native-test.check "labels from 0 to 2^20"
+  ["native code, code: bad instruction: (label -1)" "native code, code: bad instruction: (label 1048576)"
+   "native code, code: bad instruction: (loop 1048576)"]
+  (freeze (map (function native-test.refusal)
+               [[code f 0 4 [1] [[const 2 0] [jump -1] [label -1] [return 2]] []]
+                [code f 0 4 [1] [[const 2 0] [jump 1048576] [label 1048576] [return 2]] []]
+                [code f 0 3 [] [[loop 1048576] [again 1048576]] []]])))
 
 \\ Handlers: the JIT tracks them by the order of the code.
 (native-test.raw "returns under a handler"
