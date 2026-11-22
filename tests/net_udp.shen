@@ -113,6 +113,19 @@
            (udp-test.expect-int "received payload length" 3 (udp.recv-info.length Info))
            (udp-test.expect "received payload" "abc" (buffer.string (buffer.slice Wire 0 3))))))
 
+\\ RFC 1122 3.2.1.7: a host takes a datagram whatever its TTL. The request with a TTL of 0, and the
+\\ header checksum that gives, 0xF6CA.
+(define udp-test.time-to-live
+  {--> boolean}
+  -> (let L (udp.make-link 2 31 0 (freeze 0))
+          Server (udp.bind (udp.right L) (udp.ipv4 192 0 2 2) 7)
+          Request (udp-test.request (buffer.new 31))
+          Out (buffer.new 3) Info (udp.make-recv-info)
+       (do (buffer.u8-> Request 8 0)
+           (buffer.u8-> Request 10 246)
+           (udp-test.expect "queue a datagram with a TTL of 0" udp.sent (udp.packet-send (udp.left L) Request 31))
+           (udp-test.expect "take a datagram with a TTL of 0" udp.received (udp.recv-into Server Out Info 1)))))
+
 (define udp-test.clock
   {fixnum --> (vector fixnum)}
   Now -> (fxvector-> (vector 1) 1 Now))
@@ -158,4 +171,4 @@
 (define udp-test.run
   {--> boolean}
   -> (and (udp-test.wire) (udp-test.checksum-edges) (udp-test.checksum-span)
-          (udp-test.discards) (udp-test.fifo)))
+          (udp-test.discards) (udp-test.time-to-live) (udp-test.fifo)))

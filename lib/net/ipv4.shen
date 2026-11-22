@@ -103,12 +103,12 @@
   {buffer.view --> fixnum --> fixnum}
   B I -> (fx* 4 (wire.ipv4.header-length B I)))
 
-\\ RFC 791: what a header of Bytes bytes, options included, says of a packet of N.
+\\ RFC 791: what a header of Bytes bytes, options included, says of a packet of N. A host takes one
+\\ whatever its TTL, RFC 1122 3.2.1.7.
 (define sound?
   {buffer.view --> fixnum --> fixnum --> fixnum --> boolean}
   B I N Bytes ->
     (and (= (wire.ipv4.total-length B I) N)
-         (fx> (wire.ipv4.time-to-live B I) 0)
          (= (wire.ipv4.reserved B I) 0)
          (= (packet-checksum B I Bytes) 0)))
 

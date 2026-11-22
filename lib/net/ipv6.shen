@@ -145,13 +145,13 @@
   {buffer.view --> fixnum --> fixnum}
   B I -> (fx+ 56294136348672 (wire.ipv6-address.d B I)))      \\ 33:33, then the low 32 bits (RFC 2464).
 
+\\ A destination takes a packet whatever its Hop Limit, RFC 8200 3.
 (define valid-header?
   {buffer.view --> fixnum --> fixnum --> boolean}
   B I N ->
     (and (fx>= N (wire.ipv6.size))
          (= (wire.ipv6.version B I) 6)
-         (= (wire.ipv6.payload-length B I) (fx- N (wire.ipv6.size)))
-         (fx> (wire.ipv6.hop-limit B I) 0)))
+         (= (wire.ipv6.payload-length B I) (fx- N (wire.ipv6.size)))))
 
 (define write-header
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> address --> address --> buffer.view}

@@ -156,6 +156,8 @@ All notable changes to this project are documented in this file. The format is b
   where it should wait about two.
 - A multicast member answers an IGMPv2 query whose maximum response time is 12.8 seconds or more within that time: it
   read it as IGMPv3 does, and could wait up to 53 minutes where the query allowed 25.5 seconds.
+- The networking libraries take an IPv4 datagram whose TTL is 0, and an IPv6 packet whose Hop Limit is 0, addressed to
+  them, as RFC 1122 and RFC 8200 require of a host: they dropped them.
 
 ## [0.10] - 2026-11-19
 
