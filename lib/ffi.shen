@@ -66,7 +66,7 @@
   [define-foreign | Form]
   -> (error "define-foreign: expected Name Library CName (Types) --> Result Flags, in ~R" Form)
   [define-foreign-procedure Name Library CName Arity]
-  -> (do (if (and (symbol? Name) (not (variable? Name)) (= (arity Name) -1))
+  -> (do (if (and (symbol? Name) (not (variable? Name)) (= (arity Name) -1) (ffi.arity? Arity))
              (shen.store-arity Name Arity)
              skip)
          [ffi.define-procedure Name Library CName Arity])
@@ -146,6 +146,8 @@
 \\ A procedure has one type of its own, in place of every other.
 (define ffi.define-procedure
   Name _ _ _ -> (error "foreign: ~A is a system function" Name) where (shen.sysfunc? Name)
+  Name _ _ Arity -> (error "foreign: ~A: ~S is not an arity from 0 to 8" Name Arity)
+      where (not (ffi.arity? Arity))
   Name Library CName Arity
   -> (let Fields [Name Library (ffi.files Library) CName 9 0 pointer | (ffi.repeat Arity 9)]
           Desc (ffi.fill (absvector (length Fields)) 0 Fields)
@@ -153,6 +155,9 @@
            (shen.store-arity Name Arity)
            (destroy Name)
            Name)))
+
+(define ffi.arity?
+  N -> (and (shen-jit.fixnum? N) (>= N 0) (<= N 8)))
 
 (define ffi.repeat
   0 _ -> []

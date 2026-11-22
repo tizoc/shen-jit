@@ -67,8 +67,14 @@
 (c-test.check "arity" 2 (freeze (arity call-in-c)))
 (c-test.check "too many arguments" [error "forty-two: expected 0 arguments, got 1"]
               (freeze (eval-kl [forty-two 1])))
-(c-test.check "refused: too many" [error "foreign: too-many has too many arguments: at most 8"]
+(c-test.check "refused: too many" [error "foreign: too-many: 9 is not an arity from 0 to 8"]
               (freeze (shen-jit.ffi.define-procedure too-many t "forty_two" 9)))
+(c-test.check "refused: fewer than none" [error "foreign: too-few: -1 is not an arity from 0 to 8"]
+              (freeze (shen-jit.ffi.define-procedure too-few t "forty_two" -1)))
+(c-test.check "refused: a float" [error "foreign: halves: 2.0 is not an arity from 0 to 8"]
+              (freeze (shen-jit.ffi.define-procedure halves t "forty_two" (+ 1.5 0.5))))
+(c-test.check "refused when declared" [error "foreign: declared-badly: 2.5 is not an arity from 0 to 8"]
+              (freeze (eval [define-foreign-procedure declared-badly t "forty_two" 2.5])))
 (c-test.check "refused: a system function" [error "foreign: hd is a system function"]
               (freeze (shen-jit.ffi.define-procedure hd t "forty_two" 1)))
 (define c-test.tail X -> (sum-list X))

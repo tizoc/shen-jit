@@ -171,6 +171,8 @@ All notable changes to this project are documented in this file. The format is b
 - `fs.parent` of a path with repeated separators drops them: `(fs.parent "/a//b")` is `"/a"`, where it was `"/a/"`.
 - On Windows, `mmap.read`, `mmap.read-write` and `mmap.create` open a path outside ASCII by its name, where they took
   it in the ANSI code page.
+- `define-foreign-procedure` with an arity that is not a whole number from 0 to 8, such as -1 or 2.5, raises "foreign:
+  Name: -1 is not an arity from 0 to 8", where -1 overflowed the stack.
 
 ## [0.10] - 2026-11-19
 
