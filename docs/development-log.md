@@ -3840,7 +3840,8 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
 - The one's-complement sum shared by IPv4 and IPv6 validates the packet span
   once and then reads 16-bit words from its storage. A UDP regression covers
   unaligned subviews, odd-length spans, seeded sums, and the subview boundary.
-- Compared with `4cc537b` in three alternating runs per build and device.
+- Compared with the build before it, with HTTP's example connections kept alive, in three alternating runs per
+  build and device.
   Each run timed 240,000 requests across four keep-alive connections, two per
   address family. The mix was 90% `/health` and 10% 8 KiB `/payload`.
   TUN rose from 29,473 to 40,430 requests/s and p99 fell from 475 to 268 µs.
@@ -3929,7 +3930,7 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   expression, and a typed rule still needs a value for each alternative: `(do (update R V)) := true` is as
   long as what it replaces. DHCP's `require` on each option comes from its policy of passing over a known
   option of the wrong length, which makes its catch-all overlap the known ones.
-- Brought IPv6's extension headers and reassembly from the other branch (its 5bbc698) as written,
+- Brought IPv6's extension headers and reassembly from the other branch as written,
   adapted where they met converted code: the transports' `-at` functions read through layouts, and ICMPv6
   errors give their type and code apart. TCP connections 413.4 to 415.0 ms at a load of 3; the TUN and
   TAP suites reassembled 2,189 bytes from three reordered fragments with no heap words. `test-net-ipv6`
@@ -3944,11 +3945,10 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   as its rules compile to untyped definitions; compiling them as typed code would help every grammar.
   The walker's `router-alert?`, which nothing called, was left out, for the multicast code to bring back
   through the options grammar.
-- Brought the other branch's IGMP and MLD memberships and source-specific subscriptions (its bf59fa6
-  and 0a110bb), adapted where they met converted code. The first cost UDP echo 38.1 to 39.1 ms and 38.4
-  to 39.0, as every IPv4 packet received went through the check that accepts options, which only IGMP
-  needs, and every send passed its TTL as a value. Linux's TUN and TAP suites passed both, IGMP and MLD
-  group and source changes included, with no heap words.
+- Brought the other branch's IGMP and MLD memberships and source-specific subscriptions, adapted where they met
+  converted code. The first cost UDP echo 38.1 to 39.1 ms and 38.4 to 39.0, as every IPv4 packet received went
+  through the check that accepts options, which only IGMP needs, and every send passed its TTL as a value. Linux's
+  TUN and TAP suites passed both, IGMP and MLD group and source changes included, with no heap words.
 - Then rewrote them: layouts for IGMP's and MLD's queries, reports, records and both router alerts,
   37 raw byte reads and writes to 0, and MLD's router alert read from what the header walk's grammar
   kept, where it walked the options again. A header without options has its own check again, and a
@@ -3956,7 +3956,7 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   -0.2 ms of UDP echo, TCP within noise. **Found: a case's generality on the frequent path**, IGMP's
   options in every packet's check, cost 2% until the frequent case had its own. Linux's TUN and TAP
   suites pass the rewrite, IGMP and MLD against Linux's own, with no heap words.
-- Brought the other branch's TIME-WAIT records (its 2d072ae), which free a released connection's stream
+- Brought the other branch's TIME-WAIT records, which free a released connection's stream
   slot for the two-minute wait. Its TCP changes did not merge, as they read segments by offsets and walked
   options by hand: written again, a record's segment is read through the options grammar, with a segment
   and state the listener keeps, and answered by rules, its sequences `seq`s and its ACK written with
@@ -3972,15 +3972,15 @@ Eight nonempty object fields still took 13,049 inferences after guarding the emp
   lines); and tcp.shen split into four files of one namespace. Each against the one before: UDP echo
   and TCP connections within 0.3 ms throughout. lib/net grew from 6,433 to 6,608 lines, mostly
   datatypes and names. Linux's TUN and TAP suites pass with no heap words.
-- Brought the other branch's checksum change (its dd24bd7, "Validate checksum spans once"): the sum checks
+- Brought the other branch's checksum change, "Validate checksum spans once": the sum checks
   its span once and reads the view's storage directly. On this branch's workloads UDP echo went from 38.8
   to 27.8 ms and TCP connections from 370.3 to 277.0: a checked read per word had been a quarter of each.
   Then summed in the machine's byte order, 32 bits at a time, and swapped once (RFC 1071 2(B)): TCP 274.2 to
   265.0 ms, UDP 27.0 to 26.2, with the same checksums.
-- **Not adopted from the other branch:** shared packet storage across Ethernet and IP queues (its
-  e41c023), about 300 lines for under 1% in its own HTTP benchmark (TUN 40,102 to 40,384 requests/s),
+- **Not adopted from the other branch:** shared packet storage across Ethernet and IP queues,
+  about 300 lines for under 1% in its own HTTP benchmark (TUN 40,102 to 40,384 requests/s),
   which is the kind of machinery for little gain this project declines; and a cache of Ethernet egress
-  routes, which it reverted itself (66cde9e, 5b203e8) when native runs showed no gain.
+  routes, which it reverted itself when native runs showed no gain.
 - TCP's presence maps, a bit for each byte of its windows received, sacked and repaired, were walked a bit
   at a time: the SACK scans and their `buffer.u8` were about a third of the lossy run's samples. A module of
   their own now, `lib/net/marks.shen`, walks a ring's map a run at a time, 32 positions to a read in the
@@ -4069,7 +4069,7 @@ A review of the networking code after it had been rewritten found what still rea
   calls into the TUN adapter are no longer exported, so `(use net-tun)` gives only its checked API.
 - [Networking](networking.md), a guide page, documents the modules and how their code is written.
 
-### Vacant TCP slots passed over (2026-11-20, Apple M3 Max, against 6802e81)
+### Vacant TCP slots passed over (2026-11-20, Apple M3 Max, against the branch before it)
 
 A review measured an idle `net-interface.poll` and `next-deadline` at 63 ns with 4 TCP slots and 1.6 µs
 with 256, none of them open: both walked every slot, about 6 ns each. The listener now keeps a map of

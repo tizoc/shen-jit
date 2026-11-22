@@ -52,7 +52,7 @@ rank. The table grows at 75% occupancy and becomes dense when the next table wou
 dense size, `2^P` bytes, one byte a register. Growing and becoming dense allocate a new buffer.
 Runs of cells, as `add-hashes!` and `add-fixed!` make them and a merge reads them, go into the
 table by native code, and a merge of dense sketches takes the greater of 16 registers at a time
-with vector registers, written with [`native`](guide.md#native-code-written-by-hand), which the
+with vector registers, written with [`native`](guide.md#native-code-by-hand), which the
 module loads.
 
 Sparse estimates use linear counting at precision 25. Dense estimates use the precision-specific

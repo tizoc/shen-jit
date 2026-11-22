@@ -11,15 +11,15 @@ All notable changes to this project are documented in this file. The format is b
   returns once every isolate spawned in it has ended. The first that fails, or is killed, has the others killed and
   its error raised; if `F` raises, the scope kills its isolates and waits for them before raising the same error. The
   guide now leads with scopes, and keeps `isolate.spawn` for supervisors that keep track of their isolates themselves.
-
 - The module `bytes` finds a byte, skips the bytes of a class from either end, lowercases, and converts hexadecimal
   and decimal digits over a range of bytes, each in one call to native code. HTTP, curl, Git, JSON and the filesystem
   library use it in place of their own loops: parsing an HTTP head took 2.3 µs where it took 3.8.
 - A grammar's repetition of a byte class alone, such as `(+ <tchar>)`, runs as one native `bytes.span`, also when
   reading from a reader: about twice as fast on long runs, and JSON parses 11 to 13% faster.
 - Native code has vector registers of 16 bytes: `(vector X V)`, `v128` and `v128!`, `splat`, `v=`, `vand`, `vor`,
-  `vxor`, `vandnot`, `vmax`, `vmin`, `v+`, `v-`, `vmask`, `vshr` and `vlookup`, with `ctz` and `clz` on words. `bytes.find` and `bytes.span` read 16 bytes at
-  a time with them, about ten times as fast on long ranges, and so do grammars' loops over a byte class.
+  `vxor`, `vandnot`, `vmax`, `vmin`, `v+`, `v-`, `vmask`, `vshr` and `vlookup`, with `ctz` and `clz` on words.
+  `bytes.find` and `bytes.span` read 16 bytes at a time with them, about ten times as fast on long ranges, and so do
+  grammars' loops over a byte class; `hyperloglog` merges dense sketches 16 registers at a time.
 - The module `hyperloglog` estimates how many distinct keys a stream holds, with HyperLogLog++ sketches that start
   as a small sparse table, become one byte a register as the count grows, and merge. Strings, views, packed
   fixed-width keys and prehashed 64-bit words go in from typed code without allocating.
@@ -50,7 +50,6 @@ All notable changes to this project are documented in this file. The format is b
   only when asked, when the request carries a close token, or when the response was marked with `http.close-after`;
   `http.connection-close?` says whether a request asked to close. Code that drives its own connections can answer
   persistent and pipelined requests with replies encoded once.
-
 - `net/udp` exchanges IPv4/UDP datagrams over an in-memory link with bounded packet queues and an injectable clock.
   The typed packet path reuses storage allocated at setup, and `tools/udp-echo.shenmod` demonstrates a round trip.
 - `net/tcp` adds TCP over that link with bounded sliding windows, out-of-order receive buffering,
@@ -72,7 +71,7 @@ All notable changes to this project are documented in this file. The format is b
 - IPv6 receive supports extension headers and bounded fragment reassembly. Each interface can configure
   its slot count and datagram size. The Linux tests check reordering, overlap rejection, and zero Shen
   heap allocations after setup on TUN and TAP.
-- Added bounded IPv4 and IPv6 multicast UDP memberships with IGMPv3 and MLDv2 listener reports.
+- Bounded IPv4 and IPv6 multicast UDP memberships, with IGMPv3 and MLDv2 listener reports.
   Linux TUN and TAP tests cover joins, leaves, query responses, and zero Shen heap allocations after setup.
 - Multicast UDP supports source-specific subscriptions in both families, with setup-sized INCLUDE filters
   and IGMPv3 and MLDv2 reports for source changes and source-specific queries.

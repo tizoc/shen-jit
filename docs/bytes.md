@@ -17,7 +17,7 @@ is a fixnum, a string or the storage, which cross a call without being boxed.
 ```
 
 To use it, add `bytes` to a module's `requires`, and `(use bytes)` to a namespace that calls it. It loads
-[`native`](guide.md#native-code-written-by-hand), and runs on static builds.
+[`native`](guide.md#native-code-by-hand), and runs on static builds.
 
 | Function | Result |
 | --- | --- |
