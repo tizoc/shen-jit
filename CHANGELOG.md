@@ -132,6 +132,8 @@ All notable changes to this project are documented in this file. The format is b
 - The `git` library compares and slices paths and names without copying them: in a repository of 50,000 files, reading
   HEAD's tree as an index takes 0.11 s where it took 0.36, and `git.status-records` without untracked files 0.62 s
   where it took 0.90.
+- Deleting a packed ref with the `git` library takes time in proportion to the packed refs, where it grew with their
+  square: with 40,000 of them, 0.07 s where it took 7.1.
 
 ### Fixed
 

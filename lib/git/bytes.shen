@@ -239,7 +239,10 @@
 (define join-text
   _ [] -> ""
   _ [S] -> S
-  Separator [S | Rest] -> (cn S (cn Separator (join-text Separator Rest))))
+  Separator [S | Rest] ->
+    (let B (store-text (buffer.builder (object-limit)) S)
+      (do (map (/. X (store-text (store-text B Separator) X)) Rest)
+          (buffer.string (buffer.finish B)))))
 
 (define space-byte?
   B -> (element? B [9 10 13 32]))

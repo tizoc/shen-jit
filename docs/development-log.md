@@ -4628,6 +4628,11 @@ run on macOS. What they measured:
   where it took 0.898, and with `git.normal` 1.340 s where it took 1.613. The machine was not quiet, so the numbers
   are noisy.
 
+- **Joining text.** `join-text` was right-recursive with `cn`, so each piece copied all that followed it, and deleting
+  a packed ref, which joins the lines of `packed-refs` that remain, was quadratic. It now appends the pieces to a
+  `buffer.builder`. With 10,000, 20,000 and 40,000 packed refs, `delete-ref!` of a packed tag took 0.017, 0.034 and
+  0.068 s, medians of nine in three processes alternated with the old code, where it took 0.46, 1.81 and 7.11.
+
 ### Not tried yet
 
 - **True parallelism.** `thread` is real threads, one at a time; parallelism is the more advanced case, for later. It needs allocation
