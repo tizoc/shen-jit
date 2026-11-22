@@ -63,9 +63,7 @@ static uint64_t primitive_checksum(void)
 #define IN_SYMBOLS (UINT64_C(1) << 62)
 #define IN_OBJECTS (UINT64_C(1) << 61)
 
-typedef V Rebase(const VM *vm, V v);
-
-static V to_image(const VM *vm, V v)
+static inline V to_image(const VM *vm, V v)
 {
     if (!is_ptr(v))
         return v;
@@ -76,7 +74,7 @@ static V to_image(const VM *vm, V v)
     return v - (V)(uintptr_t)vm->space;
 }
 
-static V from_image(const VM *vm, V v)
+static inline V from_image(const VM *vm, V v)
 {
     if (!is_ptr(v))
         return v;
@@ -88,43 +86,8 @@ static V from_image(const VM *vm, V v)
     return v + (V)(uintptr_t)vm->space;
 }
 
-/* Rebase every value of objects laid out from `at`. `raw` is called on each object so raw
-   fields can be cleared or rebuilt. */
-typedef void RawFields(VM *vm, uint64_t *object);
-
-static void rebase_objects(VM *vm, uint64_t *at, size_t words, Rebase *rebase, RawFields *raw)
+static void clear_raw(uint64_t *o)
 {
-    uint64_t *s = at;
-    while (s < at + words) {
-        uint64_t w = *s;
-        if (is_header(w)) {
-            size_t first, count;
-            obj_values(w, &first, &count);
-            for (size_t i = 0; i < count; i++)
-                s[first + i] = rebase(vm, s[first + i]);
-            raw(vm, s);
-            s += obj_words(w);
-        } else {
-            s[0] = rebase(vm, s[0]);
-            s[1] = rebase(vm, s[1]);
-            s += 2;
-        }
-    }
-}
-
-/* Symbol slots: a free one holds 0 first. */
-static void rebase_symbols(VM *vm, uint64_t *at, size_t words, Rebase *rebase)
-{
-    for (uint64_t *s = at; s < at + words; s += SYM_WORDS)
-        if (s[0]) {
-            s[SYM_NAME] = rebase(vm, s[SYM_NAME]);
-            s[SYM_CELL] &= ~(UINT64_C(1) << MARK_BIT);
-        }
-}
-
-static void clear_raw(VM *vm, uint64_t *o)
-{
-    (void)vm;
     switch (hdr_type(o[0])) {
     case T_CLOSURE: o[PROC_ENTRY] = 0; break;
     case T_FOREIGN:
@@ -148,7 +111,7 @@ static void clear_raw(VM *vm, uint64_t *o)
 }
 
 /* The reconstruction rules of docs/design.md, "Build stages and startup". */
-static void restore_raw(VM *vm, uint64_t *o)
+static void restore_raw(VM *vm, uint64_t *o, bool in_prog)
 {
     switch (hdr_type(o[0])) {
     case T_CLOSURE: o[PROC_ENTRY] = (uint64_t)(uintptr_t)vm->program->compile_stub; break;
@@ -157,6 +120,9 @@ static void restore_raw(VM *vm, uint64_t *o)
         o[CODE_NATIVE] = 0;
         if (o[CODE_FRAME] > vm->program->max_frame)
             vm->program->max_frame = o[CODE_FRAME];
+        /* Code objects take their constant slots again (heap.c), those of the program for good. */
+        if (vm_track_code(vm, tagged(o, TAG_OBJECT)) && in_prog && o[CODE_NCONST] + o[CODE_NCODE])
+            memset(vm->program->owned + o[CODE_CBASE], PROGRAM, o[CODE_NCONST] + o[CODE_NCODE]);
         break;
     case T_STREAM: {
         uint64_t kind = o[STREAM_FLAGS] & STREAM_KIND_MASK;
@@ -172,22 +138,88 @@ static void restore_raw(VM *vm, uint64_t *o)
     }
 }
 
-static bool write_root_array(FILE *f, VM *vm, RootArray *ra)
+static void rebase_save_objects(const VM *vm, uint64_t *at, size_t words)
 {
-    for (size_t i = 0; i < ra->count; i++) {
-        V v = to_image(vm, *ra_at(ra, i));
-        if (fwrite(&v, sizeof v, 1, f) != 1)
+    uint64_t *s = at;
+    while (s < at + words) {
+        uint64_t w = *s;
+        if (is_header(w)) {
+            size_t first, count;
+            obj_values(w, &first, &count);
+            for (size_t i = 0; i < count; i++)
+                s[first + i] = to_image(vm, s[first + i]);
+            clear_raw(s);
+            s += obj_words(w);
+        } else {
+            s[0] = to_image(vm, s[0]);
+            s[1] = to_image(vm, s[1]);
+            s += 2;
+        }
+    }
+}
+
+static void restore_objects(VM *vm, uint64_t *at, size_t words, bool in_prog)
+{
+    uint64_t *s = at;
+    while (s < at + words) {
+        uint64_t w = *s;
+        if (is_header(w)) {
+            size_t first, count;
+            obj_values(w, &first, &count);
+            for (size_t i = 0; i < count; i++)
+                s[first + i] = from_image(vm, s[first + i]);
+            restore_raw(vm, s, in_prog);
+            s += obj_words(w);
+        } else {
+            s[0] = from_image(vm, s[0]);
+            s[1] = from_image(vm, s[1]);
+            s += 2;
+        }
+    }
+}
+
+/* Symbol slots: a free one holds 0 first. */
+static void rebase_save_symbols(const VM *vm, uint64_t *at, size_t words)
+{
+    for (uint64_t *s = at; s < at + words; s += SYM_WORDS)
+        if (s[0]) {
+            s[SYM_NAME] = to_image(vm, s[SYM_NAME]);
+            s[SYM_CELL] &= ~(UINT64_C(1) << MARK_BIT);
+        }
+}
+
+static bool write_root_array(FILE *f, const VM *vm, const RootArray *ra)
+{
+    V buf[1024];
+    for (size_t i = 0; i < ra->count;) {
+        size_t chunk = i >> RA_CHUNK_BITS, off = i & (RA_CHUNK - 1);
+        size_t n = ra->count - i;
+        if (n > RA_CHUNK - off)
+            n = RA_CHUNK - off;
+        if (n > sizeof buf / sizeof buf[0])
+            n = sizeof buf / sizeof buf[0];
+        const V *src = ra->chunks[chunk] + off;
+        for (size_t j = 0; j < n; j++)
+            buf[j] = to_image(vm, src[j]);
+        if (fwrite(buf, sizeof buf[0], n, f) != n)
             return false;
+        i += n;
     }
     return true;
 }
 
-static bool write_globals(FILE *f, VM *vm)
+static bool write_globals(FILE *f, const VM *vm)
 {
-    for (size_t n = 0; n < vm->program->nglobals; n++) {
-        V v = to_image(vm, vm->globals[n]);
-        if (fwrite(&v, sizeof v, 1, f) != 1)
+    V buf[1024];
+    for (size_t i = 0; i < vm->program->nglobals;) {
+        size_t n = vm->program->nglobals - i;
+        if (n > sizeof buf / sizeof buf[0])
+            n = sizeof buf / sizeof buf[0];
+        for (size_t j = 0; j < n; j++)
+            buf[j] = to_image(vm, vm->globals[i + j]);
+        if (fwrite(buf, sizeof buf[0], n, f) != n)
             return false;
+        i += n;
     }
     return true;
 }
@@ -247,9 +279,9 @@ static bool write_copy(VM *vm, const char *path, const char *mode)
     memcpy(symbols, p->base, symbol_words * sizeof(uint64_t));
     memcpy(program, p->objects, program_words * sizeof(uint64_t));
     memcpy(heap, vm->space, words * sizeof(uint64_t));
-    rebase_symbols(vm, symbols, symbol_words, to_image);
-    rebase_objects(vm, program, program_words, to_image, clear_raw);
-    rebase_objects(vm, heap, words, to_image, clear_raw);
+    rebase_save_symbols(vm, symbols, symbol_words);
+    rebase_save_objects(vm, program, program_words);
+    rebase_save_objects(vm, heap, words);
 
     ImageHeader h = {{'S', 'J', 'H', 'I'}, IMAGE_VERSION, {0}, sizeof(V), symbol_words, program_words,
                      words, vm->program->cells.count, vm->program->consts.count, vm->program->nglobals, p->free_symbol,
@@ -309,14 +341,48 @@ bool image_copy_runtime(const char *from, const char *to)
     return ok;
 }
 
-static bool read_root_array(FILE *f, VM *vm, RootArray *ra, size_t count)
+static bool read_root_array(FILE *f, const VM *vm, RootArray *ra, size_t count)
 {
-    for (size_t i = 0; i < count; i++) {
-        V v;
-        size_t index;
-        if (fread(&v, sizeof v, 1, f) != 1 || !ra_push(ra, from_image(vm, v), &index))
+    if (!count)
+        return true;
+    size_t nchunks = (count + RA_CHUNK - 1) / RA_CHUNK;
+    size_t cap = 8;
+    while (cap < nchunks)
+        cap *= 2;
+    V **chunks = malloc(cap * sizeof *chunks);
+    if (!chunks)
+        return false;
+    ra->chunks = chunks;
+    ra->chunks_cap = cap;
+    for (size_t c = 0; c < nchunks; c++) {
+        V *chunk = malloc(RA_CHUNK * sizeof *chunk);
+        if (!chunk)
             return false;
+        ra->chunks[ra->nchunks++] = chunk;
+        size_t n = count - ra->count;
+        if (n > RA_CHUNK)
+            n = RA_CHUNK;
+        if (fread(chunk, sizeof *chunk, n, f) != n)
+            return false;
+        for (size_t j = 0; j < n; j++)
+            chunk[j] = from_image(vm, chunk[j]);
+        ra->count += n;
     }
+    return true;
+}
+
+static bool symbol_table_reserve(SymbolTable *t, size_t count)
+{
+    if (!count)
+        return true;
+    size_t cap = 1024;
+    while (2 * count > cap)
+        cap *= 2;
+    V *slots = calloc(cap, sizeof *slots);
+    if (!slots)
+        return false;
+    t->slots = slots;
+    t->cap = cap;
     return true;
 }
 
@@ -353,42 +419,48 @@ VM *image_load(const char *path, size_t min_semispace_words, size_t stack_words,
     if (!program_reserve(vm, h.symbol_words, h.program_words) ||
         fread(p->base, sizeof(uint64_t), h.symbol_words, f) != h.symbol_words ||
         fread(p->objects, sizeof(uint64_t), h.program_words, f) != h.program_words ||
-        fread(vm->space, sizeof(uint64_t), h.heap_words, f) != h.heap_words)
-        goto fail;
-    p->free_symbol = h.free_symbol;
-    vm->live_end = vm->space + h.heap_words;
-    vm_fresh_area(vm);
-    rebase_symbols(vm, p->base, h.symbol_words, from_image);
-    rebase_objects(vm, p->objects, h.program_words, from_image, restore_raw);
-    rebase_objects(vm, vm->space, h.heap_words, from_image, restore_raw);
-    if (!read_root_array(f, vm, &vm->program->cells, h.cell_entries) ||
+        fread(vm->space, sizeof(uint64_t), h.heap_words, f) != h.heap_words ||
+        !read_root_array(f, vm, &vm->program->cells, h.cell_entries) ||
         !read_root_array(f, vm, &vm->program->consts, h.const_entries) || h.global_entries < 1 ||
         !vm_globals_commit(vm, h.global_entries) ||
         fread(vm->globals, sizeof(V), h.global_entries, f) != h.global_entries)
         goto fail;
+    p->free_symbol = h.free_symbol;
+    vm->live_end = vm->space + h.heap_words;
+    vm_fresh_area(vm);
     vm->program->nglobals = h.global_entries;
     for (size_t n = 0; n < vm->program->nglobals; n++)
         vm->globals[n] = from_image(vm, vm->globals[n]);
-    /* The symbol tables, again. */
+    /* Rebase symbols, then rebuild the symbol tables at their final sizes. */
+    size_t npub = 0, nown = 0;
+    for (uint64_t *s = p->base; s < p->symbols_next; s += SYM_WORDS)
+        if (s[0]) {
+            s[SYM_NAME] = from_image(vm, s[SYM_NAME]);
+            s[SYM_CELL] &= ~(UINT64_C(1) << MARK_BIT);
+            if (symbol_published(tagged(s, TAG_SYMBOL)))
+                npub++;
+            else
+                nown++;
+        }
+    if (!symbol_table_reserve(&vm->program->published, npub) ||
+        !symbol_table_reserve(&vm->own, nown))
+        goto fail;
     for (uint64_t *s = p->base; s < p->symbols_next; s += SYM_WORDS) {
-        V sym = tagged(s, TAG_SYMBOL);
         if (!s[0])
             continue;
-        if (!symbol_table_put(symbol_published(sym) ? &vm->program->published : &vm->own, sym))
+        V sym = tagged(s, TAG_SYMBOL);
+        bool pub = symbol_published(sym);
+        if (!symbol_table_put(pub ? &vm->program->published : &vm->own, sym))
             goto fail;
-        if (symbol_published(sym) && symbol_cell(sym) >= vm->program->published_top)
+        if (pub && symbol_cell(sym) >= vm->program->published_top)
             vm->program->published_top = symbol_cell(sym) + 1;
-        if (symbol_published(sym) && symbol_global(sym) >= vm->program->published_global_top)
+        if (pub && symbol_global(sym) >= vm->program->published_global_top)
             vm->program->published_global_top = symbol_global(sym) + 1;
     }
-    /* The code objects take their constant slots again (heap.c), those of the program for good. */
-    for (uint64_t *s = vm->space; s < vm->live_end; s += is_header(*s) ? obj_words(*s) : 2)
-        if (is_header(*s) && hdr_type(*s) == T_CODE)
-            vm_track_code(vm, tagged(s, TAG_OBJECT));
-    for (uint64_t *s = p->objects; s < p->objects_next; s += is_header(*s) ? obj_words(*s) : 2)
-        if (is_header(*s) && hdr_type(*s) == T_CODE && vm_track_code(vm, tagged(s, TAG_OBJECT)) &&
-            s[CODE_NCONST] + s[CODE_NCODE])
-            memset(vm->program->owned + s[CODE_CBASE], PROGRAM, s[CODE_NCONST] + s[CODE_NCODE]);
+    /* The heap first: a promoted copy shares its original's constant slots (program.c), and those
+       of the program are its for good. */
+    restore_objects(vm, vm->space, h.heap_words, false);
+    restore_objects(vm, p->objects, h.program_words, true);
     vm_find_free_consts(vm);
     fclose(f);
     return vm;

@@ -124,6 +124,7 @@ All notable changes to this project are documented in this file. The format is b
 - The `sqlite-http` example starts its database's owner in a scope: `(counter-app.start Scope Path Host Port F
   Options)` gives `[Db S]`, and the scope waits for the owning isolate once `counter-app.await` ends its stream.
 - Loading and compiling code takes up to 4% less, as the loader finds instructions and primitives by hash.
+- Starting takes about 12% less, of about 4 ms, as an image is read in chunks and restored in one pass.
 
 ### Fixed
 

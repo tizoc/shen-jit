@@ -816,6 +816,13 @@ So that isolates can call them, the two kinds of definition that stayed in the h
   for their size as room in the area, where it had already counted them live. So at `SHEN_JIT_MAX_HEAP` a heap that fitted
   was refused: a 500,000-word vector and the kernel in a semispace of a million words. The room is needed in to-space, which
   the check after the collection measures, so the collection's answer is ignored there now.
+- **Images read and written in chunks** (2026-11-22, Apple M3 Max, load 2.5 to 4.3, 5 interleaved rounds, against
+  main). From an outside agent's branch, reviewed and measured that day. Heap words and relocation bitmaps moved a
+  word at a time; they move in chunks, root arrays are read straight into their chunks, and code objects take their
+  constant slots as they are restored rather than in a second walk. Startup, about 4 ms, read 0.94 of main before this
+  and 0.82 with it. The first version restored the program's objects before the heap's, so a heap original would have
+  marked the constant slots it shares with its promoted copy as its own, and a collection that dropped it would have
+  cleared the copy's; no image holds both today, as a save collects first, but the order is the old one again.
 
 ### What a future collector should know
 
