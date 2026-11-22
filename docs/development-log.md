@@ -4668,6 +4668,13 @@ run on macOS. What they measured:
   edges, 299 rounds) took 0.32 s where it took 0.90, and 300 by 300 (358,800 edges, 599 rounds) 3.73 s where it took
   12.23. `make bench-datalog` is unchanged: none of its workloads keeps one tuple a key.
 
+- **An add's facts in front.** `datalog.add` appended its facts to all those a database keeps, copying the list, and a
+  demand database's later query of a pattern is an add of one seed fact, so each query copied every fact. The new
+  facts go in front, which can change only which tuple a `choice` fed by facts keeps after its component is evaluated
+  again, which the guide leaves open. Over 810,000 facts, 200 queries of distinct keys on a demand database took
+  0.0127 s where they took 0.260, and 50 adds of one fact to a run 0.066 s where they took 0.111 (medians of 5,
+  alternated).
+
 ### Not tried yet
 
 - **True parallelism.** `thread` is real threads, one at a time; parallelism is the more advanced case, for later. It needs allocation

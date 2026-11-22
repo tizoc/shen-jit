@@ -3865,7 +3865,7 @@
 
 (define add
   [parts | _] _ -> (only-parts)
-  [demand Name Kept] New -> (do (demand-store.facts-> Kept (append (demand-store.facts Kept) New))
+  [demand Name Kept] New -> (do (demand-store.facts-> Kept (append New (demand-store.facts Kept)))
                                 (each-kept Kept (/. Db (add Db New)))
                                 [demand Name Kept])
   [db Name S Interned Rounds Plans Facts] New
@@ -3878,7 +3878,7 @@
           _ (load-facts New Relations S Interned (nth 7 Program) (nth 9 Program))
           _ (address-> S 0 (more-values (<-address S 0) (value *fresh*) (shen.dict-count Interned)))
           _ (merge-each S 1 N)
-          All (append Facts New)
+          All (append New Facts)
           Run [Name Relations Constants S]
           _ (set *plans* 0)
           Grown (grown Relations S Marks 1)

@@ -140,6 +140,8 @@ All notable changes to this project are documented in this file. The format is b
   of 50,000 commits, a merge takes 0.47 s where it took 0.53.
 - A Datalog relation that keeps one tuple a key (`min`, `max`, `choice` or a lattice) settles faster when it took many
   rounds: shortest paths over a 300 by 300 grid, 599 rounds, run in 3.7 s where they took 12.2.
+- `datalog.add`, and each query of a `datalog.demand-db` after its first of a pattern, cost what they add, not the
+  facts the database holds: 200 queries of a demand database over 810,000 facts took 0.26 s, and take 0.013.
 
 ### Fixed
 
