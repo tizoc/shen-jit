@@ -368,7 +368,10 @@ static V result_string(VM *vm, const char *s, bool may_be_in_heap)
     size_t length = strlen(s);
     char *copy = NULL;
     /* A function may return a pointer into a byte buffer it was given, which allocating may move. */
-    if (may_be_in_heap && (copy = malloc(length ? length : 1))) {
+    if (may_be_in_heap && length && vm_in_heap(vm, s)) {
+        copy = malloc(length);
+        if (!copy)
+            return V_CLEARED;
         memcpy(copy, s, length);
         s = copy;
     }

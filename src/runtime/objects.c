@@ -358,6 +358,20 @@ static size_t new_cell(VM *vm)
     return entry / 2;
 }
 
+static void release_cell(VM *vm, size_t cell)
+{
+    if (2 * (cell + 1) == vm->program->cells.count) {
+        vm->program->cells.count -= 2;
+        return;
+    }
+    size_t *f = grow_array(vm->program->free_cells, &vm->program->free_cells_cap,
+                           vm->program->nfree_cells, sizeof *f, 1024);
+    if (f) {
+        vm->program->free_cells = f;
+        vm->program->free_cells[vm->program->nfree_cells++] = cell;
+    }
+}
+
 /* Once isolates exist, a new symbol is published as it is made, its name copied into the program
    space, under the lock: every isolate sees one symbol for a name. */
 static V intern_shared(VM *vm, V name, uint64_t hash)
@@ -386,6 +400,7 @@ static V intern_shared(VM *vm, V name, uint64_t hash)
             if (cell >= vm->program->published_top)
                 vm->program->published_top = cell + 1;
         } else { /* outside the table, it would come back from an image as a second symbol */
+            release_cell(vm, cell);
             program_unalloc(vm, copy, words);
             program_free_symbol(vm, p);
             sym = 0;
@@ -420,6 +435,7 @@ static V intern_name(VM *vm, V name)
                                    string_length(name)) << KIND_SHIFT;
     V sym = tagged(p, TAG_SYMBOL);
     if (!symbol_table_put(&vm->own, sym)) {
+        release_cell(vm, cell);
         program_free_symbol(vm, p);
         return FAILED;
     }

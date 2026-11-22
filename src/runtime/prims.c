@@ -1968,7 +1968,7 @@ V sj_primitive(VM *vm, size_t index)
         if (v != V_CLEARED)
             for (int i = 0; i < 3; i++)
                 ptr(v)[1 + i] = vm->args[i];
-        return v;
+        return made(vm, v);
     }
     case P_DICT_FIND: return sj_dict_find(vm);
     case P_DICT_PUT: return sj_dict_put(vm);
