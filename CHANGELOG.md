@@ -204,6 +204,8 @@ All notable changes to this project are documented in this file. The format is b
   did not fit. A byte past the limit is no longer waited for.
 - `json.read` refuses a string that ends in the lead byte of a UTF-8 sequence, such as `"\xE0"`, as soon as the
   closing quote arrives; it waited for more input, and reported the reader's timeout if none came.
+- The HTTP server answers a response source that outlasts `write-timeout` with 500 Internal Server Error; it answered
+  408 Request Timeout, which blames the client and invites it to retry.
 
 ## [0.10] - 2026-11-19
 

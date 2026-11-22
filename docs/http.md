@@ -247,12 +247,13 @@ of head/body limits: larger heads and bodies span refills, and pipelined bytes r
 Small values trade more reads/copies for less live input memory. It applies to both connection drivers
 and `http.listen`; the general I/O reader defaults are unchanged.
 
-Malformed/unsupported requests get an empty 400/413/414/417/431/501/505 response as appropriate; budget
-expiry gets 408. Application exceptions or invalid responses get an empty 500 before any application
-output is committed. Details stay in the local error record. After response output begins, a write failure
-preserves its acknowledged count and closes; it never appends a second error response. Failure while
-sending a rejection is secondary to the original error, as is failed cleanup. A peer can observe a reset
-when rejection closes with unread native input; error-response delivery is best effort in that case.
+Malformed/unsupported requests get an empty 400/413/414/417/431/501/505 response as appropriate; a head or
+body read past its budget gets 408. Application exceptions, invalid responses and a response source that
+outlasts the write budget get an empty 500 before any application output is committed. Details stay in the
+local error record. After response output begins, a write failure preserves its acknowledged count and
+closes; it never appends a second error response. Failure while sending a rejection is secondary to the
+original error, as is failed cleanup. A peer can observe a reset when rejection closes with unread native
+input; error-response delivery is best effort in that case.
 
 ## Running the example
 

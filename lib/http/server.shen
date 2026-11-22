@@ -14,7 +14,7 @@
   (import struct defstruct)
   (externals [application body-limit body-timeout chunk-count-limit chunk-line-limit
     chunk-metadata-limit chunk-size connection-timeout define-foreign head-limit head-timeout
-    http http-head idle-timeout int64 library pointer read-buffer-size request-limit
+    http http-head http-response idle-timeout int64 library pointer read-buffer-size request-limit
     response-body-limit response-chunk-count-limit response-chunk-size response-head-limit timeout
     trailer-fields-limit trailer-limit write-timeout])
   (export chunk-option option request response response-option serve-connection serve-one)
@@ -299,7 +299,7 @@
     (let Domain (io.error-domain Error)
       (cond ((= Domain http) (io.error-code Error))
             ((= Domain application) 500)
-            ((= Domain timeout) 408)
+            ((= Domain timeout) (if (= (io.error-operation Error) http-response) 500 408))
             ((and (= Domain library) (= (io.error-operation Error) http-head))
               (if (= (io.error-message Error) "head exceeds byte limit") 431 400))
             (true 0))))

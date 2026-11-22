@@ -127,6 +127,17 @@
   (server-test.check "invalid application response is rejected before writing" 500
     (freeze (server-test.status Exchange))))
 
+\\ A producer that outlasts the write budget is the server's failure, not the client's: 500, not 408.
+(define server-test.spin
+  D -> (if (deadline.expired? D) (:result.ok [(buffer.from-string "late")]) (server-test.spin D)))
+
+(let Exchange (server-test.exchange "GET / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;" [[write-timeout 20]]
+                 (/. Request (http.stream-response 200 [] [chunked]
+                               (http.source (/. Max D (server-test.spin D)) (freeze (:result.ok [])))))
+                 false)
+  (server-test.check "a producer past the write budget gets 500" [500 timeout]
+    (freeze [(server-test.status Exchange) (io.error-domain (fixture.failure (hd Exchange)))])))
+
 (let Wire "GET / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;"
      Exchange (server-test.exchange (cn Wire Wire) [] (function server-test.handler) false)
   (server-test.check "pipelining never dispatches a second request" 1
