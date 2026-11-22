@@ -1159,6 +1159,18 @@
 (dt.query "demand" dt.equal (value dt.equal-facts) [same a [var "X"]])
 (dt.query "demand" dt.paths [[start 1] [edge 1 2 5] [edge 1 3 1] [edge 3 2 1] [edge 2 4 1]] [dist 4 [var "D"]])
 (dt.query "demand" dt.paths [[start 1] [edge 1 2 5] [edge 1 3 1] [edge 3 2 1] [edge 2 4 1]] [near [var "X"]])
+\* A relation of one tuple a key, or an equivalence, asked by demand, is computed in full: its copy
+   holds the tuples it keeps, not each its rules derive. *\
+(set dt.keyed-facts [[start 1] [edge 1 2 5] [edge 1 3 1] [edge 3 2 1] [edge 2 4 1] [edge 3 4 10]])
+(dt.query "demand, a least" dt.paths (value dt.keyed-facts) [dist 2 [var "D"]])
+(dt.query "demand, a least" dt.paths (value dt.keyed-facts) [dist 4 [var "D"]])
+(dt.query "demand, a greatest" dt.paths (value dt.keyed-facts) [widest 2 [var "W"]])
+(dt.query "demand, a lattice" dt.bits [[start 1 1] [start 4 2] [edge 1 2] [edge 2 3] [edge 4 3]] [reached 3 [var "M"]])
+(dt.check "demand, a choice" (length (datalog.solve dt.paths (value dt.keyed-facts) [via 2 [var "X"]])) 1)
+(dt.check "demand, a least by a database" (datalog.ask (datalog.demand-db dt.paths (value dt.keyed-facts)) (dist 4 D)) [[4 3]])
+(dt.check "demand, an equivalence copied whole"
+  (length (mapcan (/. R (if (= (hd (hd R)) same@bf) [R] [])) (datalog.nth 4 (datalog.program (datalog.demand dt.equal same [b f])))))
+  1)
 (dt.query "demand" dt.lattices (value dt.lattice-facts) [known [var "X"]])
 (dt.query "demand" dt.equal (value dt.equal-facts) [near-big [var "X"]])
 (dt.query "demand" dt.equal (value dt.equal-facts) [classes [var "X"] 2])

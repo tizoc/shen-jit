@@ -219,6 +219,9 @@ All notable changes to this project are documented in this file. The format is b
   all from -10 down.
 - `hyperloglog.add-hashes!` of an array whose bytes end in part of a word adds its whole words; it raised "bytes: 8 is
   not a valid index", after adding some of them to a dense sketch.
+- `datalog.query` and a `datalog.demand-db`'s `datalog.ask` of a relation that keeps one tuple a key (`min`, `max`,
+  `choice` or a lattice) give the tuple it keeps: they gave every candidate its rules derived, `((c 2) (c 5))` where a
+  run gives `((c 2))`.
 
 ## [0.10] - 2026-11-19
 

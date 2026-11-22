@@ -178,12 +178,12 @@ With nodes `a` and `b`, an edge from `a` to `b` and costs 3 and 5 for `a`, `degr
   does not reach. It removes facts given, not tuples derived: a tuple that still follows from what is left stays.
 - **Queries by demand:** `(datalog.query dependencies Facts (depends a X))` gives what asking a run would, but derives only
   what bears on `a`: the program is rewritten for the query's pattern of constants, by magic sets, once for each pattern,
-  and kept with the program. A relation read under a negation or an aggregate is still computed whole, with all it depends
-  on. It gains most when the constants select a small part, and little when what they reach is most of a relation, as
-  `(path X c)` is when nearly every node reaches `c`. Each query runs on its facts afresh. A database from
-  `(datalog.demand-db dependencies Facts)` keeps what its queries derive, for each pattern of constants and variables: a later
-  query computes only what it reaches that those before it did not, and adds and removals change only what they reach of
-  that. Other questions, such as `datalog.count`, need a run.
+  and kept with the program. A relation read under a negation or an aggregate, an equivalence and a relation of one tuple a
+  key are still computed whole, with all they depend on. It gains most when the constants select a small part, and little
+  when what they reach is most of a relation, as `(path X c)` is when nearly every node reaches `c`. Each query runs on its
+  facts afresh. A database from `(datalog.demand-db dependencies Facts)` keeps what its queries derive, for each pattern of
+  constants and variables: a later query computes only what it reaches that those before it did not, and adds and removals
+  change only what they reach of that. Other questions, such as `datalog.count`, need a run.
 - **Explanations:** `(datalog.explain Db [depends a c])` gives
   `[[depends a c] [[depends X Z] <-- [imports X Y] [depends Y Z]] [[imports a b] fact] [[depends b c] ...]]`: a rule as written
   and a proof of each tuple its atoms read, down to the facts given; negations, comparisons and aggregates hold in it but have no

@@ -4592,13 +4592,15 @@
   [aggregate V Op T Atom _] -> [= [var V] [Op [var T] Atom]]
   L -> L)
 
-\\ Copies to make, as [[Rel Adorn] ...]: gives [Rules Copies Full], Full what must be complete.
+\\ Copies to make, as [[Rel Adorn] ...]: gives [Rules Copies Full], Full what must be complete. A
+\\ copy of a relation computed in full, the query's, has no rules of its own: it takes its tuples.
 (define adorn
   [] Done Full _ _ Acc -> [Acc (reverse Done) Full]
   [Copy | Queue] Done Full Rules Derived Acc
-  -> (if (element? Copy Done)
-         (adorn Queue Done Full Rules Derived Acc)
-         (adorn-each (rules-of (hd Copy) Rules) Copy Queue [Copy | Done] Full Rules Derived Acc)))
+  -> (cases (element? Copy Done) (adorn Queue Done Full Rules Derived Acc)
+            (element? (hd Copy) Derived)
+            (adorn-each (rules-of (hd Copy) Rules) Copy Queue [Copy | Done] Full Rules Derived Acc)
+            true (adorn Queue [Copy | Done] Full Rules Derived Acc)))
 
 (define rules-of
   _ [] -> []
