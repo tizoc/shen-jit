@@ -202,6 +202,8 @@ All notable changes to this project are documented in this file. The format is b
   the HTTP server answered a short malformed request, such as `GET` and a line end, with 408 when the client's
   deadline expired, and a grammar refused valid input with "input exceeds the limit" when a longer literal tried first
   did not fit. A byte past the limit is no longer waited for.
+- `json.read` refuses a string that ends in the lead byte of a UTF-8 sequence, such as `"\xE0"`, as soon as the
+  closing quote arrives; it waited for more input, and reported the reader's timeout if none came.
 
 ## [0.10] - 2026-11-19
 

@@ -4655,6 +4655,11 @@ run on macOS. What they measured:
   in-memory reader took 2.740 µs against main's 2.694. The chain kept, one test after another, takes 2.703 against
   2.715, and `http.parse-request` 1.943 against 1.955 (medians of 9, alternated).
 
+- **A UTF-8 sequence checked byte by byte.** JSON's `<sequence>` read a lead byte's continuation bytes before testing
+  the lead byte, so a stream ending in one waited for input. The tests now come first. `json.decode` of 728 KB of
+  multi-byte strings took 3.86 ms against main's 3.93, and `json.read` of it 4.39 against 4.31, with the code shifted
+  by three unrelated definitions 3.92 against 4.01 and 4.43 against 4.37: within where the code lies.
+
 ### Not tried yet
 
 - **True parallelism.** `thread` is real threads, one at a time; parallelism is the more advanced case, for later. It needs allocation

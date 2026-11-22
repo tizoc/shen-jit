@@ -135,15 +135,15 @@
 \\ A string's bytes are its text unless it has escapes, which the decoder above turns into bytes.
 (defgrammar <plain> B where (and (>= B 32) (< B 128) (not (= B 34)) (not (= B 92)));)
 (defgrammar <tail> B where (scan-continuation? B);)
-\\ The first byte is checked before any byte after it is read, so that the closing quote ends a
-\\ string read from a reader without waiting for more input.
+\\ Each byte is checked before any byte after it is read, so that the closing quote ends a string
+\\ read from a reader without waiting for more input, also after a lead byte.
 (defgrammar <utf8> B (where (and (>= B 194) (<= B 244))) (<sequence> B);)
 (defgrammar (<sequence> B)
-  <tail> where (<= B 223);
-  C <tail> where (and (>= B 224) (<= B 239) (scan-continuation? C)
-                      (or (not (= B 224)) (>= C 160)) (or (not (= B 237)) (< C 160)));
-  C <tail> <tail> where (and (>= B 240) (scan-continuation? C)
-                             (or (not (= B 240)) (>= C 144)) (or (not (= B 244)) (< C 144)));)
+  (where (<= B 223)) <tail>;
+  C (where (and (>= B 224) (<= B 239) (scan-continuation? C)
+                (or (not (= B 224)) (>= C 160)) (or (not (= B 237)) (< C 160)))) <tail>;
+  C (where (and (>= B 240) (scan-continuation? C)
+                (or (not (= B 240)) (>= C 144)) (or (not (= B 244)) (< C 144)))) <tail> <tail>;)
 (defgrammar <char> (+ <plain>); <utf8>;)
 (defgrammar <raw> (* <char>);)
 (defgrammar <hex> B where (or (and (>= B 48) (<= B 57)) (and (>= B 65) (<= B 70)) (and (>= B 97) (<= B 102)));)

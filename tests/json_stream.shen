@@ -76,23 +76,37 @@
   (json-stream.check "what follows a value stays unread" [(:result.ok [[object ["a" [number "1"]]]]) "c#10;rest"]
     (freeze [First (buffer.string (fixture.success (io.read-all R 100)))])))
 
-(json-stream.check "closing quote needs no further read" [(:result.ok ["x"]) 1]
-  (freeze
+\\ Reads a value from an endpoint that gives Bytes in one read, and fails any read after it: the
+\\ value, and how many reads there were.
+(define json-stream.once
+  Bytes ->
     (let Calls (io.record [0])
-         Wire (buffer.from-string "c#34;xc#34;")
+         N (length Bytes)
          E (io.endpoint "complete string" read 16
              (/. B
-               (let N (<-address Calls 0)
-                    _ (address-> Calls 0 (+ N 1))
-                 (if (= N 0)
-                     (do (shen-jit.copy-bytes B 0 (buffer.owner Wire) 0 3)
-                         (:result.ok [3]))
+               (let K (<-address Calls 0)
+                    _ (address-> Calls 0 (+ K 1))
+                 (if (= K 0)
+                     (do (json-stream.put B 0 Bytes)
+                         (:result.ok [N]))
                      (:result.err (io.error read "complete string"
                                       "unnecessary read")))))
              (function io.no-write) (freeze (:result.ok [])))
-         Got (json.read (io.reader E []) [])
+         Got (trap-error (json.read (io.reader E []) []) (/. X [raised (error-to-string X)]))
          _ (io.close E)
-      [Got (<-address Calls 0)])))
+      [Got (<-address Calls 0)]))
+
+(define json-stream.put
+  _ _ [] -> true
+  B I [X | Xs] -> (do (shen-jit.u8! B I X) (json-stream.put B (+ I 1) Xs)))
+
+(json-stream.check "closing quote needs no further read" [(:result.ok ["x"]) 1]
+  (freeze (json-stream.once [34 120 34])))
+\\ A byte that cannot begin UTF-8 here, before the closing quote, is refused without waiting for more.
+(json-stream.check "a lead byte before the closing quote needs no further read"
+  [[[raised "json: byte 1: unterminated string"] 1] [[raised "json: byte 1: unterminated string"] 1]
+   [[raised "json: byte 1: unterminated string"] 1]]
+  (freeze (map (function json-stream.once) [[34 224 34] [34 195 34] [34 240 34]])))
 
 (json-stream.check "surrogate errors use the stream offset"
   [[[number "0"]] [raised "json: byte 3: missing low surrogate"]]
