@@ -175,6 +175,11 @@ All notable changes to this project are documented in this file. The format is b
   Name: -1 is not an arity from 0 to 8", where -1 overflowed the stack.
 - `parallel.map` given a whole float as its count, such as `(+ 1.5 0.5)`, raises "parallel.map: 2.0 is not a number of
   isolates", where it raised from `channel.new` about a capacity, or ran with a single element.
+- In the `git` library, a ref refused because another is in its way, as `refs/heads/a` is of `refs/heads/a/b`, leaves
+  no empty directory behind: one left there made every later update of `a` fail with "Is a directory", commits on it
+  included, and now gives way to the ref, as in Git. A loose ref in the way is reported as a conflict, where it gave
+  "File exists". Setting a ref looks only at the refs above and below it: with 40,000 packed refs, it takes 0.14 s
+  where it took 0.27.
 
 ## [0.10] - 2026-11-19
 

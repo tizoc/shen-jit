@@ -549,7 +549,28 @@ def exercise_refs(root):
     assert (repo / ".git/refs/heads").is_dir()
     app(repo, "branch", "feature")
     assert_git_equal(repo, "show-ref")
-    print("PASS deleted refs leave no empty directories")
+
+    # A ref in the way of another, loose or packed, leaves no directory; an empty directory in the
+    # way of a ref, which an earlier version could leave, gives way to it, as in Git.
+    git(repo, "branch", "topic")
+    git(repo, "pack-refs", "--all")
+    app(repo, "update-ref", "refs/heads/topic/x", "HEAD", error="ref conflicts with an existing ref")
+    assert not (repo / ".git/refs/heads/topic").exists()
+    app(repo, "branch", "loose")
+    app(repo, "branch", "loose/y", error="ref conflicts with an existing ref: refs/heads/loose/y")
+    (repo / ".git/refs/heads/topic/a").mkdir(parents=True)
+    git(repo, "switch", "-q", "topic")
+    write(repo, "file", b"two\n")
+    app(repo, "add", "file")
+    second = app(repo, "commit", "-m", "two").strip().decode()
+    assert object_id(repo, "topic") == second
+    git(repo, "switch", "-q", "main")
+    git(repo, "pack-refs", "--all")
+    (repo / ".git/refs/heads/main").mkdir()
+    app(repo, "merge", "--ff-only", "topic")
+    assert object_id(repo, "main") == second
+    assert_git_equal(repo, "show-ref")
+    print("PASS deleted refs leave no empty directories, nor do conflicts")
 
 
 def exercise_diff(root):

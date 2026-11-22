@@ -4610,6 +4610,14 @@ run on macOS. What they measured:
   one call with 1 or 64. 20 M header writes took 1.124 s against 1.114 s, 0.5 ns more each for the call and the TTL's
   range check; 5 M UDP sends and receives took 1.20 to 1.23 s either way. Kept for the code it removes.
 
+- **Ref conflicts.** `set-ref!` checked a ref against every other under its lock, through `git.refs`, which reads,
+  sorts and walks them all; the lock's directories were made first, so a refused `refs/heads/a/b` left `refs/heads/a/`
+  empty, and that blocked `a` for good. It now checks only the ref's proper prefixes, loose or packed, and the refs
+  below it, once before the lock and again under it, and removes empty directories where the ref goes, as Git does.
+  With 10,000, 20,000 and 40,000 packed refs, `set-ref!` of a loose branch took 0.034, 0.066 and 0.137 s, medians of
+  nine in three processes alternated with the old code, where it took 0.061, 0.127 and 0.266. What is left is parsing
+  `packed-refs` for each check, 0.07 s at 40,000, which reading a packed ref's value costs too.
+
 ### Not tried yet
 
 - **True parallelism.** `thread` is real threads, one at a time; parallelism is the more advanced case, for later. It needs allocation

@@ -363,24 +363,42 @@
          Id (lowercase New)
          _ (ensure (or (not (prefix? "refs/heads/" Target)) (= (fst Object) "commit"))
                    "branch must point to a commit")
+         _ (validate-ref-hierarchy Repo Target)
       (with-lock Path
         (/. Lock
           (let Found (ref-value Repo Name)
             (if (and (= Target (ref-target Repo Name [])) (or (= Old any) (= Old Found)))
                 (do (validate-ref-hierarchy Repo Target)
+                    (clear-ref-dir! Path)
                     (finish-lock Lock Path (buffer.from-string (newline Id)))
                     (updated.make [Id]))
                 (changed-concurrently.make Found)))))))
 
-(define ref-conflicts?
-  Target Other ->
-    (or (prefix? (cn Target "/") Other) (prefix? (cn Other "/") Target)))
-
+\\ Target may not be a ref while another is named by one of its proper prefixes or below Target/.
 (define validate-ref-hierarchy
   Repo Target ->
-    (ensure (or (= Target "HEAD")
-                (not (some? (/. Pair (ref-conflicts? Target (fst Pair))) (refs Repo))))
+    (ensure (or (= Target "HEAD") (not (ref-conflict? Repo Target)))
             (cn "ref conflicts with an existing ref: " Target)))
+
+(define ref-conflict?
+  Repo Target ->
+    (let Packed (packed-refs Repo)
+         Below (cn Target "/")
+      (or (some? (/. P (or (cons? (lookup Packed P)) (= (node (fs.join (ref-base Repo P) P)) file)))
+                 (ref-prefixes "refs/" (tl (split Target 47))))
+          (some? (/. Pair (prefix? Below (hd Pair))) (entries Packed))
+          (cons? (entries (loose-names Repo (dictionary) (ref-path Repo Target) Below))))))
+
+(define ref-prefixes
+  _ [_] -> []
+  Prefix [Part | Parts] -> (let Name (cn Prefix Part) [Name | (ref-prefixes (cn Name "/") Parts)]))
+
+\\ Empty directories where a ref is to be written, which Git removes too.
+(define clear-ref-dir!
+  Path -> (if (= (node Path) directory)
+              (do (map (/. Name (clear-ref-dir! (fs.join Path Name))) (names Path))
+                  (unwrap (fs.remove-directory Path)))
+              true))
 
 (define keep-packed-lines
   [] _ _ Acc -> (reverse Acc)

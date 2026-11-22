@@ -276,7 +276,10 @@
 
 (define move-current!
   Repo Current Id ->
-    (let Path (ref-path Repo (head-ref Repo))
+    (let Target (head-ref Repo)
+         Path (ref-path Repo Target)
+         _ (validate-ref-hierarchy Repo Target)
+         _ (clear-ref-dir! Path)
       (transition! Repo Id Path (control Path) Id Current true)))
 
 (define mark-ancestors

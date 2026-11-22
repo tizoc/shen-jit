@@ -84,7 +84,9 @@ lets patterns name the outcomes without the prefix:
 - `(git.set-ref! Repo Name New Expected)` and `(git.delete-ref! Repo Name Expected)` update a ref
   only if it still has the value `Expected` says: `git.any`, `[]` for an absent ref, or `[OldId]`;
   the type of those is `git.expectation`. `git.null-id` gives the repository format's all-zero ID.
-  Deleting a ref removes the directories it leaves empty.
+  A ref cannot be set while another is named by a prefix of it, as `refs/heads/a` is of
+  `refs/heads/a/b`, or lies below it, and a refused ref leaves nothing behind. Setting a ref
+  removes empty directories in its place, and deleting one the directories it leaves empty.
 - `git.read-index` gives a list of `git.entry` records, read with `git.entry.path`, `git.entry.mode`,
   `git.entry.id` and `git.entry.stage`. `(git.write-tree! Repo Entries)` writes an index snapshot as a
   tree object.
