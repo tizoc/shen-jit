@@ -212,6 +212,8 @@ All notable changes to this project are documented in this file. The format is b
 - Native code with a label or loop below 0 or from 2^20 up is refused as a bad instruction: a negative one failed with
   "<-address: -1 is not a valid index", and a large one made the checker allocate a table up to it (about 15 GB for
   2^33) before it was refused.
+- `write-layout` refuses a field given twice, naming it, when the form expands: the values were added, and a constant
+  could carry into the field before it.
 
 ## [0.10] - 2026-11-19
 

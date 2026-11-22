@@ -230,6 +230,7 @@
     (let Fields (trap-error (get Name layout.fields) (/. E (error "write-layout: ~A is not a layout" Name)))
          Spans (layout.spans Fields 0)
          _ (map (/. V (layout.known Name Spans V)) Values)
+         _ (layout.once Name (map (fn hd) Values))
          Chunks (layout.chunks (layout.runs Spans 0 (layout.bits-of Fields)))
          Bound (map (/. V (layout.bind Name Spans V)) Values)
          Vars (gensym (protect V))
@@ -264,6 +265,13 @@
                             (cases (= Span []) (error "write-layout: ~A has no field ~A" Name Field)
                                    (>= (nth 3 Span) 64) (error "write-layout: ~A.~A is written by the caller" Name Field)
                                    true Span)))
+
+\\ A field given twice would have its values added or or-ed together.
+(define layout.once
+  _ [] -> true
+  Name [Field | Fields] -> (if (element? Field Fields)
+                               (error "write-layout: ~A.~A is given twice" Name Field)
+                               (layout.once Name Fields)))
 
 (define layout.span
   _ [] -> []

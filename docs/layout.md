@@ -56,8 +56,8 @@ the given fields shifted into place, so that constants fold into one number:
   (source Src) (destination Dst))
 ```
 
-stores IPv4's first word as `0x45000000` combined with the count. Fields not given are 0; fields of 64 bits or
-more are left as they are, for the caller to write. Each value is checked against its field's width, and the
+stores IPv4's first word as `0x45000000` combined with the count. Fields not given are 0, and a field given twice
+is refused as the form expands; fields of 64 bits or more are left as they are, for the caller to write. Each value is checked against its field's width, and the
 bytes the stores cover against B, once and before any is stored; the stores then go straight to B's storage. It
 gives B.
 

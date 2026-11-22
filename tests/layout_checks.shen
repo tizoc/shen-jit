@@ -126,6 +126,12 @@
                (layout-raises? (freeze (macroexpand [deflayout layout-test.twice [kind 8] [kind 8]])))
                (layout-raises? (freeze (macroexpand [deflayout layout-test.padded [_ 8] [kind 8] [_ 16]])))])
 
+(layout-check "write-layout refuses a field given twice"
+              ["write-layout: layout-test.ipv4.protocol is given twice" false]
+              [(trap-error (do (macroexpand [write-layout layout-test.ipv4 B 0 [protocol 6] [protocol 6]]) false)
+                           (/. E (error-to-string E)))
+               (layout-raises? (freeze (macroexpand [write-layout layout-test.ipv4 B 0 [protocol 6] [time-to-live 6]])))])
+
 (if (= (value *layout-failed*) 0)
     (output "~A passed, 0 failed~%" (value *layout-passed*))
     (error "~A layout checks failed" (value *layout-failed*)))
