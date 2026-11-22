@@ -311,8 +311,24 @@
 (define reads?
   Env [var V] S -> (= (shen-jit.lower.slot V Env) S)
   _ [const _] _ -> false
-  Env [X | Xs] S -> (element? true (map (/. Y (reads? Env Y S)) [X | Xs]))
+  Env [X | Xs] S -> (or (reads? Env X S) (reads-each? Env Xs S))
   _ _ _ -> false)
+
+(define reads-each?
+  Env [X | Xs] S -> (or (reads? Env X S) (reads-each? Env Xs S))
+  _ _ _ -> false)
+
+\\ Whether [var X] occurs anywhere in Y, among the variables vars-of finds, stopping at the first.
+(define var-occurs?
+  X [var X] -> true
+  _ [var _] -> false
+  _ [const _] -> false
+  X [Y | Ys] -> (or (var-occurs? X Y) (var-occurs-each? X Ys))
+  _ _ -> false)
+
+(define var-occurs-each?
+  X [Y | Ys] -> (or (var-occurs? X Y) (var-occurs-each? X Ys))
+  _ _ -> false)
 
 (define named-call
   B F Target A N
@@ -418,7 +434,7 @@
                (jump-to-end B End))
            (emit B [label Handler])
            (reserve B Top)
-           (if (element? E (vars-of H))
+           (if (var-occurs? E H)
                (emit B [exception Top])
                skip)
            (expr B [[E | Top] | Env] H Target (+ Top 1))

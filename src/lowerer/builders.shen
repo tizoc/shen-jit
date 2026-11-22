@@ -50,19 +50,16 @@
 (define mark
   B F Lower -> (if (cons? (<-address B 2))
                    (thaw Lower)
-                   (let Before (<-address B 11)
+                   (let Saved (<-address B 3)
+                        Before (<-address B 11)
+                        Clear (address-> B 3 [])
                         Done (thaw Lower)
                         N (- (<-address B 11) Before)
                      (if (> N 0)
                          (do (address-> B 11 (+ (<-address B 11) 1))
-                             (address-> B 3 (shen-jit.lower.insert N [inline F N] (<-address B 3)))
+                             (address-> B 3 (append (<-address B 3) [[inline F N] | Saved]))
                              Done)
-                         Done))))
-
-\\ X put after the first N of the instructions, which are newest first.
-(define shen-jit.lower.insert
-  0 X Is -> [X | Is]
-  N X [I | Is] -> [I | (shen-jit.lower.insert (- N 1) X Is)])
+                         (do (address-> B 3 Saved) Done)))))
 
 (define new-label
   B -> (let L (<-address B 6) (do (address-> B 6 (+ L 1)) L)))

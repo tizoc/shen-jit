@@ -57,7 +57,8 @@
               Kinds (param-kinds Params Typed Annotated)
               Registers (set *registers* (registers-for? Annotated Typed))
               Body (untyped Params Typed)
-              Code (defun-code F Params (freeze (norm Params (share Body)))
+              Shared (share Body)
+              Code (defun-code F Params (freeze (norm Params Shared))
                                               Sealed Kinds)
            [defun F (append Code [(inline-of F Params Body Sealed Code Kinds)])])))
 

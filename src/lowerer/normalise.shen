@@ -287,7 +287,11 @@
 (define frozen-binds?
   X [call shen.bind! [_ _ _ [var X]]] -> true
   _ [const _] -> false
-  X [Y | Ys] -> (element? true (map (/. Z (frozen-binds? X Z)) [Y | Ys]))
+  X [Y | Ys] -> (or (frozen-binds? X Y) (frozen-binds-each? X Ys))
+  _ _ -> false)
+
+(define frozen-binds-each?
+  X [Y | Ys] -> (or (frozen-binds? X Y) (frozen-binds-each? X Ys))
   _ _ -> false)
 
 (define frozen-uses
@@ -405,25 +409,23 @@
   F [X] -> [apply F X]
   F [X | Xs] -> (norm-apply [apply F X] Xs))
 
-(define norm-named
-  Scope F Args
-  -> (cond ((= (length Args) (prim-arity F))
-            (shen-jit.lower.prim F (norm-list Scope Args)))
-           ((fixed? F)
-            (shen-jit.lower.fail (malformed F) [F | Args]))
-           ((field? F Args)
-            [prim (field-read F) [(norm Scope (hd Args))
-                                  [const (definition-property F shen-jit.struct.field [])]]])
-           (true (shen-jit.lower.call F (norm-list Scope Args)))))
-
 \\ A call of a struct's reader in typechecked code, where the value is that struct: its field is read
 \\ with no check (docs/bytecode.md). Code is typechecked in a definition the annotator went through,
 \\ and in the inlined bodies there of definitions it went through. The reader must be sealed, so that
 \\ it is still that reader.
-(define field?
-  F [_] -> (and (value *typed*) (shen-jit.sealed? F)
-                (number? (definition-property F shen-jit.struct.field [])))
-  _ _ -> false)
+(define norm-named
+  Scope F Args
+  -> (let Entry (fixed-entry F)
+       (cond ((and (number? Entry) (= (length Args) Entry))
+              (shen-jit.lower.prim F (norm-list Scope Args)))
+             ((not (= Entry -1))
+              (shen-jit.lower.fail (malformed F) [F | Args]))
+             ((and (cons? Args) (empty? (tl Args)) (value *typed*) (shen-jit.sealed? F))
+              (let Field (definition-property F shen-jit.struct.field [])
+                (if (number? Field)
+                    [prim (field-read F) [(norm Scope (hd Args)) [const Field]]]
+                    (shen-jit.lower.call F (norm-list Scope Args)))))
+             (true (shen-jit.lower.call F (norm-list Scope Args))))))
 
 \\ The read of F's field: shen-jit.field, or, where the struct gives the field the type fixnum or float,
 \\ shen-jit.field-word or shen-jit.field-float, which register code takes into a register of that kind,

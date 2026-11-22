@@ -5038,6 +5038,14 @@ themselves typecheck.
   lowering time (115–124 to 148–152 ms) and about 3% when loading Datalog.
 - Scope the marker only around definitions. Wrapping ordinary expressions in the restoring error handler
   loses their backtrace. Annotations on shadowed variables cannot be trusted without checking their binding.
+- **Rejected: one pass for a typed definition's kinds, registers and body** (2026-11-22, Apple M3 Max, load 2.5 to
+  4.3). From an outside agent's branch, reviewed and measured that day. Fusing `param-kinds`, `registers-for?` and
+  `untyped` gave the same kinds and body on 100,000 generated trees, but set the registers flag only from a `type`
+  form or a typed field's read, where `registers-for?` takes `float`, `fixnum` or `word.t` anywhere: a definition that
+  only calls the numbers library's `fixnum` or `float` stopped trying registers, and a typed callee was no longer
+  inlined into it in float registers. `tests/typed.shen` has the case. Kept from the same commit: walks that stop at
+  the first match (`reads?`, `reads-register?`, `frozen-binds?`, `var-occurs?`), and `mark` without its
+  non-tail-recursive insert.
 
 ### Floats in registers in typed definitions (2026-11-14, 15 and 16, Apple M3 Max, against the commit before)
 

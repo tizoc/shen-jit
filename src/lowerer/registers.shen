@@ -92,10 +92,11 @@
   -> (let B (builder F (length Params) Sealed)
           Floats (address-> B 12 0)
           Layout (layout B Kinds 2)
-          Env (append (stepped Params Layout (kept F Params Body) [] (self-calls F (length Params) Body)
+          Calls (self-calls F (length Params) Body)
+          Env (append (stepped Params Layout (kept F Params Body) [] Calls
                                (binders Body) 1)
                       (layout-env Params Layout))
-          Loop (if (and (cons? (self-calls F (length Params) Body))
+          Loop (if (and (cons? Calls)
                         (or (element? F Sealed) (shen-jit.sealed? F) (sealing?)))
                    (let L (new-label B)
                      (do (emit B [loop L]) (address-> B 13 [[L Layout Params F (head-tested Env Body Layout)]])))
@@ -1076,11 +1077,17 @@
   _ _ _ -> [])
 
 \\ Whether X has some [var V] with V bound to register Kind R, among the variables vars-of
-\\ finds, bound ones included.
+\\ finds, bound ones included, stopping at the first.
 (define reads-register?
-  Env X KR -> (element? true (map (/. V (let Binding (assoc V Env)
-                                          (and (cons? Binding) (= (tl Binding) KR))))
-                                  (vars-of X))))
+  Env [var V] KR -> (let Binding (assoc V Env)
+                      (and (cons? Binding) (= (tl Binding) KR)))
+  _ [const _] _ -> false
+  Env [X | Xs] KR -> (or (reads-register? Env X KR) (reads-register-each? Env Xs KR))
+  _ _ _ -> false)
+
+(define reads-register-each?
+  Env [X | Xs] KR -> (or (reads-register? Env X KR) (reads-register-each? Env Xs KR))
+  _ _ _ -> false)
 
 \\ X computed into register R: its last instruction writes R, when it is arithmetic, or it is
 \\ moved there. Its operands are read before R is written.
@@ -1101,7 +1108,7 @@
   \\ A let whose body is an if whose else does not read X: X is dead there (into-if).
   B Env Kind [let X V [if C Then Else]] R Top
   -> (released B (freeze (into-if B (bound-to B Env X V Top) Kind C Then Else R Top X)))
-      where (and (unboxed? B Env V) (not (element? X (vars-of Else)))
+      where (and (unboxed? B Env V) (not (var-occurs? X Else))
                  (branch-of? Env Kind Then) (branch-of? Env Kind Else))
   B Env Kind [let X V Body] R Top
   -> (released B (freeze (into B (bound-to B Env X V Top)

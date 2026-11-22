@@ -32,9 +32,9 @@
   _ -> 1)
 
 (define shen-jit.lower.call
-  F Args -> (let Inline (inline-body F (length Args))
-              (cond ((empty? Inline)
-                     (open-call F (open-body F (length Args)) Args))
+  F Args -> (let Inline (inline-at F (length Args))
+              (cond ((empty? Inline) [call F Args])
+                    ((not (shen-jit.sealed? F)) (open-call F Inline Args))
                     ((loop-form? Inline) (inline-loop F Inline Args))
                     (true (shen-jit.lower.inline F (hd Inline) (hd (tl Inline)) Args)))))
 
@@ -43,19 +43,12 @@
 \\ (shen-jit.inlined?), which compiled code makes a nop until the name is
 \\ redefined; the arguments go to fresh variables first, for either branch.
 (define open-call
-  F [] Args -> [call F Args]
   F Inline Args -> (let Vars (map (/. A (shen-jit.lower.fresh arg)) Args)
                         Refs (map (/. V [var V]) Vars)
                      (lets Vars Args
                                             [if [prim shen-jit.inlined? [[const F] [const Inline]]]
                                                 (shen-jit.lower.inline F (hd Inline) (hd (tl Inline)) Refs)
                                                 [call F Refs]])))
-
-(define open-body
-  F N -> (if (shen-jit.sealed? F) [] (inline-at F N)))
-
-(define inline-body
-  F N -> (if (shen-jit.sealed? F) (inline-at F N) []))
 
 \\ A body of primitives over parameters and constants, such as a struct's
 \\ reader or constructor, calls nothing, so it is inlined at any depth. So is

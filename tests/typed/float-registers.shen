@@ -198,3 +198,11 @@
 (define float-after-later {fixnum --> fixnum} M -> (fx+ M (float-later)))
 
 (define float-later {--> fixnum} -> 28)
+
+\\ A definition that calls the numbers library's fixnum tries registers too, and inlines the typed
+\\ definition it calls into float registers.
+(define float-poly {fixnum --> float}
+  N -> (let X (fx->fl N) Y (fl* X X) Z (fl+ Y X) W (fl* Z 0.5) V (fl- W 1.5) (fl+ (fl* V V) (fl* W Z))))
+
+(define float-poly-of {number --> number}
+  X -> (fl->number (float-poly (fixnum X))))
