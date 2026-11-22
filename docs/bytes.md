@@ -21,7 +21,7 @@ To use it, add `bytes` to a module's `requires`, and `(use bytes)` to a namespac
 
 | Function | Result |
 | --- | --- |
-| `(bytes.find B At End Byte)` | Where the first `Byte` from `At` is, or `End` |
+| `(bytes.find B At End Byte)` | Where the first `Byte` from `At` is, or `End`; `End` for a `Byte` outside 0 to 255 |
 | `(bytes.span B At End Class)` | Where the first byte from `At` not in `Class` is, or `End` |
 | `(bytes.span-back B At End Class)` | The least `I` from `At` such that the bytes from `I` to `End` are all in `Class` |
 | `(bytes.class Members)` | A class: the bytes of a list of strings, bytes, and `[Lo Hi]` for those from `Lo` to `Hi` |
@@ -30,7 +30,7 @@ To use it, add `bytes` to a module's `requires`, and `(use bytes)` to a namespac
 | `(bytes.lower Text)` | A new string, `Text` with its ASCII capitals made small |
 | `(bytes.hex B At End)` | The bytes from `At` to `End` as a string of small hexadecimal digits, two a byte |
 | `(bytes.unhex! To I B At End)` | `To`, with the bytes that the hexadecimal digits from `At` to `End` stand for stored from `I`; `[]` for an odd count or a byte that is no digit |
-| `(bytes.decimal B At End Limit)` | The number the decimal digits from `At` to `End` make, from 0 to `Limit`; -1 if there are none or a byte is no digit, -2 past `Limit` |
+| `(bytes.decimal B At End Limit)` | The number the decimal digits from `At` to `End` make, from 0 to `Limit`; -1 if there are none or a byte is no digit, -2 past `Limit`, as any number is past a `Limit` below 0 |
 
 A class is a string of 96 bytes: a bit for each byte, then the same set as tables of 16 by a byte's high and low four
 bits, with which `span` tests 16 bytes at once. A range of 16 bytes or more takes 16 at a time in `find` and `span`,

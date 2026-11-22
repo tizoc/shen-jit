@@ -15,8 +15,9 @@
 
 \\ The first Byte from At, or End. A range of 16 bytes or more is read 16 at a time, and its last
 \\ 16 bytes once more at the end, which covers what is left over: what they hold before I was
-\\ read already, and held no Byte.
+\\ read already, and held no Byte. A number that is no byte is nowhere.
 (define-native find (B At End Byte)
+  (when (u> Byte 255) (return End))
   (word I At)
   (word Last (- End 16))
   (when (<= I Last)
@@ -204,7 +205,8 @@
   (return To))
 
 \\ The decimal number the digits from At to End make, up to Limit, at least 0: -1 if there are
-\\ none or a byte is no digit, and -2 if the number is more than Limit.
+\\ none or a byte is no digit, and -2 if the number is more than Limit. The tests against Limit are
+\\ signed, so that a Limit below 0 refuses the first digit.
 (define-native decimal (B At End Limit)
   (when (>= At End) (return -1))
   (prim Tens shen-jit.quotient Limit 10)
@@ -215,7 +217,7 @@
   (for I At End
     (word D (- (u8 B I) 48))
     (when (u> D 9) (return -1))
-    (when (or (u> V T) (and (= V T) (u> D R))) (return -2))
+    (when (or (> V T) (and (= V T) (> D R))) (return -2))
     (word V (+ (* V 10) D)))
   (return-word V))
 

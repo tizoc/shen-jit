@@ -68,6 +68,11 @@
       (check "find in a string" 3 (bytes.find S 0 7 58))
       (check "find from an offset" 7 (bytes.find "a:b:c:d" 4 7 0))
       (check "find past the end raises" true (raises? (freeze (bytes.find S 0 8 0))))
+      (check "find a number that is no byte" [10 10 36 36 20]
+             (let Short "0123456789" Long "abcdefghijklmnopqrstuvwxyz0123456789" Ff (shen-jit.bytes 20)
+                  _ (shen-jit.u8! Ff 5 255)
+               [(bytes.find Short 0 10 304) (bytes.find Short 0 10 -208) (bytes.find Long 0 36 304)
+                (bytes.find Long 0 36 -208) (bytes.find Ff 0 20 -1)]))
       (check "span of blanks" 15 (bytes.span B 13 27 (bytes-test.blank)))
       (check "span to the end" 27 (bytes.span B 25 27 (bytes-test.blank)))
       (check "span-back of blanks" 25 (bytes.span-back B 15 27 (bytes-test.blank)))
@@ -122,6 +127,9 @@
     (check "decimal of no digit" -1 (bytes.decimal "12a" 0 3 1000))
     (check "decimal of nothing" -1 (bytes.decimal "12" 1 1 1000))
     (check "decimal of a sign" -1 (bytes.decimal "-1" 0 2 1000))
+    (check "decimal below a limit below 0" [-2 -2 -2 -2 -1]
+           [(bytes.decimal "0" 0 1 -1) (bytes.decimal "7" 0 1 -5) (bytes.decimal "12345" 0 5 -10)
+            (bytes.decimal "99999999999999999999999" 0 23 -10) (bytes.decimal "a1" 0 2 -1)])
     (check "decimal of the largest fixnum" 2305843009213693951
            (bytes.decimal "2305843009213693951" 0 19 2305843009213693951))
     (check "decimal past the largest fixnum" -2
