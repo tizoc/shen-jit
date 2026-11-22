@@ -151,6 +151,9 @@ All notable changes to this project are documented in this file. The format is b
 - A TCP connection answers the other end's keepalives and zero-window probes, and an ACK of bytes it never sent, with
   an ACK: it answered none of them, so a Linux peer using keepalives, or probing a window whose update was lost,
   dropped the connection.
+- A half-open TCP connection answers a repeated SYN with its SYN-ACK without counting it as a retry: each one doubled
+  the timeout and spent a retry, so a Linux client's own retries could time the connection out in about a minute,
+  where it should wait about two.
 
 ## [0.10] - 2026-11-19
 

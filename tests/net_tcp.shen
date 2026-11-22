@@ -1079,6 +1079,48 @@
           (expect (= (net-link.packet-recv-into Left Wire) -1) "an acceptable pure ACK is not answered")
           (close-pair F false))))
 
+\\ Delivers the client's SYN to the server Times times, and gives the length of the last SYN-ACK.
+(define answer-syns
+  {pair --> buffer.view --> fixnum --> buffer.view --> fixnum --> fixnum}
+  F Syn N SynAck Times ->
+    (let _ (expect (= (net-link.packet-send (pair.left F) Syn N) net-link.sent) "deliver the SYN again")
+         _ (expect (= (tcp.poll (pair.server F) 2) 1) "the server takes the SYN")
+         M (net-link.packet-recv-into (pair.left F) SynAck)
+         _ (expect (fx> M 0) "each SYN gets a SYN-ACK")
+      (if (= Times 1) M (answer-syns F Syn N SynAck (fx- Times 1)))))
+
+\\ A SYN repeated to a half-open connection gets the SYN-ACK again at once, without spending a retry or
+\\ backing off the timer. A SYN-ACK was lost, so the window starts at one segment, RFC 5681 3.1.
+(define repeated-syn
+  {fixnum --> boolean --> boolean}
+  Mtu Timer ->
+    (let F (setup-link Mtu 8)
+         C (pair.client F) S (pair.server F)
+         Left (pair.left F) Right (pair.right F)
+         Syn (buffer.new Mtu) SynAck (buffer.new Mtu)
+         Out (buffer.new 12)
+         _ (expect (tcp.listen S 100) "listen for a repeated SYN")
+         _ (expect (tcp.connect C 4294967294) "send the SYN to repeat")
+         _ (tcp.poll C 0)
+         N (net-link.packet-recv-into Right Syn)
+         M (answer-syns F Syn N SynAck 8)
+      (do (if Timer
+              (do (advance F 999)
+                  (tcp.poll S 0)
+                  (expect (= (net-link.packet-recv-into Left SynAck) -1) "no SYN-ACK before the timer")
+                  (advance F 1)
+                  (tcp.poll S 0)
+                  (expect (= (net-link.packet-recv-into Left SynAck) M) "repeated SYNs left the timer at a second"))
+              true)
+          (expect (= (net-link.packet-send Right SynAck M) net-link.sent) "deliver the last SYN-ACK")
+          (tcp.poll C 2)
+          (tcp.poll S 2)
+          (expect (= (tcp.state S) tcp.established) "complete the handshake after repeated SYNs")
+          (expect (= (tcp.send S Out 12) 12) "queue four segments")
+          (poll-burst S 8)
+          (expect (fx> (net-link.packet-recv-into Left SynAck) 0) "send the first segment")
+          (expect (= (net-link.packet-recv-into Left SynAck) -1) "and no more after a lost SYN-ACK"))))
+
 (define open-listener
   {tcp.peer --> tcp.listener --> fixnum --> fixnum}
   C L Seq ->
@@ -1466,7 +1508,7 @@
   Mtu -> (and (presence-maps 203) (presence-maps 64) (presence-maps 9)
               (fixture Mtu) (option-fixtures Mtu) (receive-window 41) (partial-read 45)
               (ring-wrap 43) (overlapping-replay 43) (receive-window-edge 43) (reordered-fin 43) (reset-staged-slot 43)
-              (answer-unacceptable Mtu)
+              (answer-unacceptable Mtu) (repeated-syn 43 false) (repeated-syn 43 true)
               (timeout-after-syn-loss Mtu) (listener-reuse Mtu) (listener-fairness Mtu)
               (listener-half-open-timeout Mtu) (exercise-time-wait (make-wait-fixture Mtu))
               (verify 1 false)))

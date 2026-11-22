@@ -46,7 +46,7 @@ The retransmission timer starts when a segment is queued onto the link. Its init
 one second. Clean handshake and data ACKs supply round-trip samples from the link clock.
 The timer uses the smoothed RTT plus four times its variation, clamped to one through 60
 seconds. ACKs that cover retransmitted data leave the estimator and any backoff in place.
-A fresh sample can replace the backed-off timeout. A retried SYN starts the data phase
+A fresh sample can replace the backed-off timeout. A SYN or SYN-ACK sent again starts the data phase
 with a three-second timeout. [TCP retransmission timer](https://www.rfc-editor.org/rfc/rfc6298.html)
 
 A cumulative ACK advances the send buffer across 32-bit sequence wrap. The receiver retains
@@ -91,7 +91,7 @@ bytes the peer may have discarded. [SACK loss detection and pipe estimation](htt
 
 ## Congestion control
 
-A connection starts with a congestion window of four MSS, or one MSS after a retried SYN.
+A connection starts with a congestion window of four MSS, or one MSS after a SYN or SYN-ACK sent again.
 In slow start, each advancing ACK adds up to one MSS, bounded by the newly acknowledged bytes.
 The initial slow-start threshold is the send buffer capacity. At the threshold, congestion
 avoidance adds one MSS for each window's worth of newly acknowledged bytes, up to the buffer cap.
@@ -135,7 +135,8 @@ their cost follows the connections open more than `Slots`.
 | `tcp.connection-abort Listener Token` | Abort the stream and send a reset when the transmit queue has room. An unestablished active open is canceled locally. |
 | `tcp.release Listener Token` | Recycle a terminal connection or move a TIME-WAIT connection to an available TIME-WAIT record. A successful release discards any unread data and invalidates the token. |
 
-Half-open handshakes take up slots and are reclaimed on timeout. A full listener drops new SYNs, allowing
+Half-open handshakes take up slots and are reclaimed on timeout. A repeated SYN gets the SYN-ACK again at once,
+without bringing the timeout closer. A full listener drops new SYNs, allowing
 clients to retry. An accepted connection retains its slot until released. Tokens are scoped to the listener,
 and reuse of a slot gives the next connection a fresh token. Access through a released token raises.
 

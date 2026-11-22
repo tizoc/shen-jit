@@ -212,11 +212,14 @@
             true)
         false))
 
+\\ A SYN or FIN sent first, or again: when the timer expires, which backs it off, or before, in answer
+\\ to a repeated SYN.
 (define send-control
   {peer --> net-link.ring --> fixnum --> boolean}
   P R Now ->
     (let Flags (peer.tx-flags P)
-         First (fx< (peer.tx-due P) 0)
+         Due (peer.tx-due P)
+         First (fx< Due 0)
          Next (peer.send-next P)
       (do (emit-segment P R Now Flags (if First Next (seq-add Next -1)) 0 0)
           (if First
@@ -226,7 +229,7 @@
                     (if (flag? Flags (flag-bits control syn)) (start-rtt-sample P Now End) true)
                     true))
               (do (peer.rtt-sample-at-> P -1)
-                  (backoff P Now))))))
+                  (if (fx<= Due Now) (backoff P Now) true))))))
 
 \\ Queued bytes are split into an in-flight prefix and a never-sent suffix.
 \\ Replay uses offsets within that prefix relative to tx-head.
@@ -452,7 +455,8 @@
              (peer.aborting P) (do (emit-segment P R Now (flag-bits control rst ack) (peer.send-next P) 0 0)
                                    (peer.aborting-> P false)
                                    (stop-peer P reset))
-             (and Control (or (fx< Due 0) Expired)) (send-control P R Now)
+             (and Control (or (fx< Due 0) Expired (and (peer.ack-needed P) (= (state P) syn-received))))
+               (send-control P R Now)
              true (or (and (not Control) (flush-data P R Now Expired))
                       (and (or (peer.ack-needed P) (fx> (peer.rx-duplicate-acks P) 0))
                            (emit-ack P R Now))))))

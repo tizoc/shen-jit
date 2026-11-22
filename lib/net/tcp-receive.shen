@@ -153,10 +153,12 @@
         (peer.tx-retries-> P 0)
         true))
 
+\\ A SYN or SYN-ACK sent again, on a timeout or to a repeated SYN, left no sample, RFC 6298 5.7, and
+\\ one may have been lost, RFC 5681 3.1.
 (define finish-syn
   {peer --> fixnum --> boolean}
   P Now ->
-    (let Retried (fx> (peer.tx-retries P) 0)
+    (let Retried (fx< (peer.rtt-sample-at P) 0)
       (do (peer.cwnd-> P (fx* (peer.send-mss P) (if Retried 1 4)))
           (if Retried (do (peer.tx-rto-> P 3000) true) (take-rtt-sample P Now))
           (restart-timer P 0 Now))))
@@ -500,7 +502,7 @@
   _ _ _ _ _ -> false)
 
 \\ A listener that sent its SYN-ACK: a reset at the sequence expected ends it, the ACK of its SYN
-\\ completes it, and the SYN again is answered again.
+\\ completes it, and the SYN again is answered again, with the SYN-ACK, which leaves the timer alone.
 (define half-open
   {fixnum --> peer --> segment --> fixnum --> boolean}
   Flags P Seg _ -> (stop-peer P reset)
@@ -508,7 +510,7 @@
   Flags P Seg Now -> (connected syn-received Flags P Seg Now)
     where (and (= (segment.sequence Seg) (peer.recv-next P)) (flag? Flags (flag-bits control ack))
                (acknowledge? P (segment.acknowledgement Seg)))
-  (flag-bits control syn) P Seg Now -> (do (peer.tx-due-> P Now) true)
+  (flag-bits control syn) P Seg _ -> (do (peer.ack-needed-> P true) true)
     where (and (= (seq-add (segment.sequence Seg) 1) (peer.recv-next P)) (fx>= (peer.tx-due P) 0))
   _ _ _ _ -> false)
 
