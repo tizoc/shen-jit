@@ -299,7 +299,10 @@
 
 (preclude [request.%match])
 
+\\ Another version is refused (505) before anything else in its head is checked, and an unsupported
+\\ coding (501) before its trailers.
 (define validate-request
+  [_ _ Version] _ _ -> (http.problem 505 "only HTTP/1.1 is supported") where (not (= Version "HTTP/1.1"))
   [Method Target Version] Fields Limit ->
     (let Hosts (field-values Fields "host")
          _ (if (and (= (length Hosts) 1) (host? (hd Hosts)))
@@ -309,8 +312,7 @@
          Connection (token-list (field-values Fields "connection"))
          _ (if (connection-framing? Connection)
                (invalid "Connection nominates a framing field") true)
-      (cond ((not (= Version "HTTP/1.1")) (http.problem 505 "only HTTP/1.1 is supported"))
-            ((and (not (empty? Coding)) (not (empty? Lengths)))
+      (cond ((and (not (empty? Coding)) (not (empty? Lengths)))
               (http.problem 400 "Transfer-Encoding with Content-Length"))
             ((not (empty? (field-values Fields "expect")))
               (http.problem 417 "expectations are unsupported"))
@@ -320,7 +322,7 @@
               (http.problem 501 "tunnels and upgrades are unsupported"))
             (true
               (let Framing (transfer Coding)
-                   Trailers (field-values Fields "trailer")
+                   Trailers (if (= Framing unsupported) [] (field-values Fields "trailer"))
                    _ (if (and (not (empty? Trailers)) (not (= Framing chunked)))
                          (invalid "Trailer requires chunked framing") true)
                    _ (trailer-names (token-list Trailers) Connection)

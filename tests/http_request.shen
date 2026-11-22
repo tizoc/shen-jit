@@ -54,6 +54,8 @@
    ["Content-Length: 1025c#13;c#10;" 413]
    ["Content-Length: 999999999999999999999999999999999c#13;c#10;" 413]
    ["Transfer-Encoding: chunkedc#13;c#10;" 0]
+   ["Transfer-Encoding: gzip, chunkedc#13;c#10;" 501]
+   ["Transfer-Encoding: gzip, chunkedc#13;c#10;Trailer: xc#13;c#10;" 501]
    ["Transfer-Encoding: identityc#13;c#10;Content-Length: 0c#13;c#10;" 400]
    ["Content-Length: 0c#13;c#10;Transfer-Encoding: chunkedc#13;c#10;" 400]
    ["Expect: 100-continuec#13;c#10;" 417]
@@ -113,6 +115,8 @@
 
 (request-test.check "missing Host" 400
   (freeze (request-test.code (request-test.parse "GET / HTTP/1.1c#13;c#10;c#13;c#10;" 0))))
+(request-test.check "the version before Host" 505
+  (freeze (request-test.code (request-test.parse "GET / HTTP/1.0c#13;c#10;c#13;c#10;" 0))))
 (request-test.check "bare LF" 400
   (freeze (request-test.code (request-test.parse "GET / HTTP/1.1c#10;Host: localhostc#10;c#10;" 0))))
 (request-test.check "trailing body passed to head parser" 400

@@ -86,14 +86,15 @@ and response semantics in [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html
 - Transfer-Encoding accepts a single field containing `chunked`, with case-insensitive token matching.
   Its combination with Content-Length, repeated chunked coding, coding parameters or a final coding other
   than chunked is rejected (400). Bare coding lists ending in chunked with an additional unsupported
-  coding return 501. All Expect fields return 417 before waiting for a body. Upgrades/tunnels return 501.
-  Trailer declarations require chunked framing and cannot name protected fields.
+  coding return 501, before any Trailer is checked. All Expect fields return 417 before waiting for a body.
+  Upgrades/tunnels return 501. Trailer declarations require chunked framing and cannot name protected fields.
   Connection values are validated token lists and cannot nominate Host or body-framing fields. A peer's
   close token ends a persistent connection after the current response; `http.serve-one` always closes.
 
-Ordinary syntax errors return 400, line/field limits use 414/431, unsupported versions use 505, and body
-limits use 413. These policies are a documented subset, not a claim of complete HTTP/1.1 conformance.
-No close-delimited request body is inferred, and malformed framing is never repaired by guessing.
+Ordinary syntax errors return 400, line/field limits use 414/431, unsupported versions use 505 before any
+field is checked, and body limits use 413. These policies are a documented subset, not a claim of complete
+HTTP/1.1 conformance. No close-delimited request body is inferred, and malformed framing is never repaired
+by guessing.
 
 ## Bounded bodies
 

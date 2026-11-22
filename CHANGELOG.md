@@ -206,6 +206,9 @@ All notable changes to this project are documented in this file. The format is b
   closing quote arrives; it waited for more input, and reported the reader's timeout if none came.
 - The HTTP server answers a response source that outlasts `write-timeout` with 500 Internal Server Error; it answered
   408 Request Timeout, which blames the client and invites it to retry.
+- An HTTP request of another version gets 505 whatever its fields, and one with an unsupported transfer coding before
+  `chunked` gets 501 whatever its `Trailer`: without Host, the first got 400, and with a `Trailer`, the second got 400
+  "Trailer requires chunked framing".
 
 ## [0.10] - 2026-11-19
 
