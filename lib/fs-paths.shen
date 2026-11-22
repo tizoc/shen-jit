@@ -119,7 +119,7 @@
          Slash (split.slash P)
       (cases (fx<= End Root) (shen-jit.bytes->string B 0 Root)
              (fx< Slash 0) "."
-             true (shen-jit.bytes->string B 0 (if (fx< Slash Root) Root Slash)))))
+             true (shen-jit.bytes->string B 0 (trim-end B Root (if (fx< Slash Root) Root Slash))))))
 
 (define name
   {string --> string}

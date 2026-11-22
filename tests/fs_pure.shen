@@ -13,7 +13,8 @@
   Name F -> (fs-pure.check Name true (freeze (trap-error (do (thaw F) false) (/. X true)))))
 
 (map (/. Case (fs-pure.check "lexical parent" (snd Case) (freeze (fs.parent (fst Case)))))
-  [(@p "a/b" "a") (@p "a/b///" "a") (@p "file" ".") (@p "/file" "/") (@p "/" "/")])
+  [(@p "a/b" "a") (@p "a/b///" "a") (@p "file" ".") (@p "/file" "/") (@p "/" "/")
+   (@p "/a//b" "/a") (@p "a//b" "a") (@p "/a/b//c/" "/a/b") (@p "/a//" "/")])
 (map (/. Case (fs-pure.check "lexical name" (snd Case) (freeze (fs.name (fst Case)))))
   [(@p "a/b" "b") (@p "a/b/" "b") (@p "/" "") (@p ".env" ".env")])
 (map (/. Case (fs-pure.check "lexical extension" (snd Case) (freeze (fs.extension (fst Case)))))
@@ -30,6 +31,8 @@
    [[entry-limit 1] [entry-limit 2]] [[unknown 1]] [[entry-limit (+ 0.5 0.5)]]])
 (if (io.file-windows?)
     (do (fs-pure.check "drive root parent" "C:c#92;" (freeze (fs.parent "C:c#92;file")))
+        (fs-pure.check "drive path parent trims separators" "C:c#92;a"
+          (freeze (fs.parent "C:c#92;ac#92;/b")))
         (fs-pure.check "UNC share stays a root" "c#92;c#92;hostc#92;share"
           (freeze (fs.parent "c#92;c#92;hostc#92;share")))
         (fs-pure.check "extended UNC share parent" "c#92;c#92;?c#92;UNCc#92;hostc#92;sharec#92;"
@@ -38,5 +41,7 @@
     (do (fs-pure.check "POSIX double-slash root is preserved" "//"
           (freeze (fs.parent "//file")))
         (fs-pure.check "POSIX repeated root is preserved" "///"
-          (freeze (fs.parent "///file")))))
+          (freeze (fs.parent "///file")))
+        (fs-pure.check "POSIX double-slash root keeps a trimmed parent" "//a"
+          (freeze (fs.parent "//a//b")))))
 (output "~A passed, ~A failed~%" (value fs-pure.passed) (value fs-pure.failed))

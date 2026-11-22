@@ -168,6 +168,7 @@ All notable changes to this project are documented in this file. The format is b
   the new one and reports the error, where it succeeded with both names left.
 - Isolates can make their first curl calls at once with libcurl older than 7.84, without a call to `curl.version` or
   `curl.open` in the builder first.
+- `fs.parent` of a path with repeated separators drops them: `(fs.parent "/a//b")` is `"/a"`, where it was `"/a/"`.
 
 ## [0.10] - 2026-11-19
 
