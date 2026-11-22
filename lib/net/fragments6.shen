@@ -159,7 +159,8 @@
                    (if (and (fx> (assembly.header-size A) 0) (= Total (assembly.end A)))
                        (complete T A Index) (fixnum 0))))))
 
-\\ Atomic fragments are handled by the header walker, outside the slot table.
+\\ Atomic fragments are handled by the header walker, outside the slot table. A fragment that store would
+\\ find too large, with the prefix it takes for a new datagram, does not take a free slot.
 (define receive
   {table --> buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum}
   T B I N Frag Prev Now ->
@@ -167,7 +168,7 @@
          More (= (wire.ipv6-fragment.more B Frag) 1)
          Bytes (fx- (fx+ I N) (fx+ Frag (wire.ipv6-fragment.size)))
          Id (wire.ipv6-fragment.identification B Frag)
-         TooLarge (fx> (fx+ (fx+ Offset Bytes) (wire.ipv6.size)) (table.limit T))
+         TooLarge (fx> (fx+ (fx+ Offset Bytes) (if (= Offset 0) (fx- Frag I) (wire.ipv6.size))) (table.limit T))
       (if (and (fx> Bytes 0)
                (or More (fx> Offset 0))
                (or (not More) (= (fxremainder Bytes 8) 0)))

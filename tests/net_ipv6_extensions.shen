@@ -5,6 +5,7 @@
   (use net-ipv6)
   (use net-ndp)
   (use net-interface)
+  (use net-fragments6)
   (use net-ipv6-test)
   (use udp)
   (import struct defstruct)
@@ -237,6 +238,25 @@
           (deliver-fragment F 16 16 7 false 17 false)
           (net-ipv6-test.expect (payload? F) "oversize tail does not consume the free slot"))))
 
+\\ A first fragment behind a hop-by-hop header, too large to reassemble with that header, does not take
+\\ the free slot from a datagram that fits.
+(define oversize-first
+  {fixture --> boolean}
+  F ->
+    (let T (net-fragments6.make 1 1500)
+         B (buffer.new 1512)
+         _ (net-ipv6.write-header B 0 1512 0 64 (fixture.source F) (fixture.destination F))
+         _ (buffer.u32-be-> B 40 738197504)                    \\ Hop-by-hop options, then a fragment
+         _ (buffer.u32-be-> B 48 285212673)                    \\ of UDP at offset 0, more to come,
+         _ (buffer.u32-be-> B 52 8)                            \\ with ID 8, and 1,456 bytes.
+         First (make-fragment F 0 16 9 true 17 true)
+      (and (net-ipv6-test.expect (= (net-fragments6.receive T B 0 1512 48 40 0) 0) "drop an oversize first fragment")
+           (net-ipv6-test.expect (= (net-fragments6.receive T (fixture.wire F) 0 First 48 40 0) 0)
+                                 "keep a first fragment that fits")
+           (let Last (make-fragment F 16 16 9 false 17 false)
+             (net-ipv6-test.expect (= (net-fragments6.receive T (fixture.wire F) 0 Last 40 6 0) 80)
+                                   "an oversize first fragment leaves the slot free")))))
+
 (define discovery
   {fixnum --> boolean}
   Slots ->
@@ -270,8 +290,9 @@
   -> (do (extension-options 1)
          (bounded-headers 1)
          (bounded-fragments 1)
+         (oversize-first (setup 1 true))
          (discovery 1)
-         (output "4 passed, 0 failed~%")
+         (output "5 passed, 0 failed~%")
          true))
 
 (preclude [fixture.%match])
