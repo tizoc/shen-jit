@@ -1353,6 +1353,11 @@ bool sj_init_host(VM *vm)
             return false;
         *slot = empty;
     }
+    V iso = intern_cstr(vm, "shen-jit.*isolate*");
+    V *iso_slot = iso == V_CLEARED ? NULL : global_slot_new(vm, iso);
+    if (!iso_slot)
+        return false;
+    *iso_slot = vm_is_builder(vm) ? V_FALSE : V_TRUE;
     return true;
 }
 

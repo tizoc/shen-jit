@@ -22,7 +22,7 @@ sets shen-jit.*isolate* as it starts (shen-jit.start-isolate), so eval and
 eval-kl refuse there at once, before they would reach the builder's globals,
 which it has not got; the runtime refuses to install anything there too."
 
-(defun shen-jit.builder? () (trap-error (not (value shen-jit.*isolate*)) (lambda E true)))
+(defun shen-jit.builder? () (not (value shen-jit.*isolate*)))
 
 (defun shen-jit.not-builder (F)
   (simple-error (cn (str F) ": only the builder can evaluate or define code")))
@@ -527,6 +527,13 @@ is not a string fails on one inline test."
         (simple-error (if (shen-jit.quiet?) "" (shen.app X (cn " has no attributes: " (shen.app P "
 " shen.s)) shen.a))))))
 
+(defun shen-jit.property (X P Default)
+  (let Entry (shen-jit.dict-find (value *property-vector*) X)
+    (if (cons? Entry)
+        (let A (assoc P (tl Entry))
+          (if (cons? A) (tl A) Default))
+        Default)))
+
 "Sealing. Kernel functions are
 sealed: user code binds calls to them once, and redefining them raises an
 error. (shen-jit.seal +) seals every definition installed from then on,
@@ -988,68 +995,20 @@ which the printer calls."
 (defun shen-jit.print-given (V) (cn "<given endpoint " (cn (str (<-address V 1)) ">")))
 
 (defun shen-jit.register-primitives ()
-  (do (shen-jit.primitive shen-jit.fixnum? 1)
-  (do (do (shen-jit.primitive shen-jit.tagged? 2) (do (shen-jit.primitive shen-jit.struct-ref 3)
-                                                       (shen-jit.primitive shen-jit.xxh64 5)))
-    (do (shen-jit.primitive shen-jit.bytes 1)
-    (do (shen-jit.primitive shen-jit.bytes? 1)
-    (do (shen-jit.primitive shen-jit.bytes-length 1)
-    (do (shen-jit.primitive shen-jit.u8 2)
-    (do (shen-jit.primitive shen-jit.u16 2)
-    (do (shen-jit.primitive shen-jit.u32 2)
-    (do (shen-jit.primitive shen-jit.u8! 3)
-    (do (shen-jit.primitive shen-jit.u16! 3)
-    (do (shen-jit.primitive shen-jit.u32! 3)
-    (do (shen-jit.primitive shen-jit.string->bytes 1)
-    (do (shen-jit.primitive shen-jit.bytes->string 3)
-    (do (shen-jit.primitive shen-jit.copy-bytes 5)
-    (do (shen-jit.primitive shen-jit.bit-and 2)
-    (do (shen-jit.primitive shen-jit.bit-or 2)
-    (do (shen-jit.primitive shen-jit.bit-xor 2)
-    (do (shen-jit.primitive shen-jit.bit-not 1)
-    (do (shen-jit.primitive shen-jit.shift-left 2)
-    (do (shen-jit.primitive shen-jit.shift-right 2)
-    (do (shen-jit.primitive shen-jit.rotate32 2)
-    (do (shen-jit.primitive shen-jit.bswap32 1)
-    (do (shen-jit.primitive shen-jit.popcount 1)
-    (do (shen-jit.primitive shen-jit.clz 1)
-    (do (shen-jit.primitive shen-jit.ctz 1)
-    (do (shen-jit.primitive shen-jit.pvar 1)
-    (do (shen-jit.primitive shen-jit.pvar? 1)
-    (do (shen-jit.primitive shen-jit.pvar-offset 1)
-    (do (shen-jit.primitive shen-jit.deref 3)
-    (do (shen-jit.primitive shen-jit.same? 2)
-    (do (shen-jit.primitive shen-jit.newpv 2)
-    (do (shen-jit.primitive shen-jit.gc 2)
-    (do (shen-jit.primitive shen-jit.foreign 2)
-    (do (shen-jit.primitive shen-jit.pointer? 1)
-    (do (shen-jit.primitive shen-jit.pointer-kind 1)
-    (do (shen-jit.primitive shen-jit.pointer-address 1)
-    (do (shen-jit.primitive shen-jit.bytes->pointer 3)
-    (do (shen-jit.primitive shen-jit.pointer->string 1)
-    (do (shen-jit.primitive shen-jit.pointer->bytes 3)
-    (do (shen-jit.primitive shen-jit.errno 0)
-    (do (shen-jit.primitive shen-jit.c-errno 0)
-    (do (shen-jit.primitive shen-jit.s32 2)
-    (do (shen-jit.primitive shen-jit.s64 2)
-    (do (shen-jit.primitive shen-jit.f32 2)
-    (do (shen-jit.primitive shen-jit.f64 2)
-    (do (shen-jit.primitive shen-jit.s32! 3)
-    (do (shen-jit.primitive shen-jit.s64! 3)
-    (do (shen-jit.primitive shen-jit.f32! 3)
-    (do (shen-jit.primitive shen-jit.f64! 3)
-    (do (shen-jit.primitive shen-jit.pointer-sized 2)
-    (do (shen-jit.primitive shen-jit.pointer! 3)
-    (do (shen-jit.primitive shen-jit.pointer-kill 1)
-    (do (shen-jit.primitive shen-jit.pointer-guard 2)
-    (do (shen-jit.primitive shen-jit.pointer-owner 1)
-    (do (shen-jit.primitive shen-jit.pointers-dead 0)
-    (do (shen-jit.primitive shen-jit.pointer-read-only 1)
-    (do (shen-jit.primitive shen-jit.collect 0)
-    (do (shen-jit.primitive shen-jit.write-bytes 4)
-    (do (shen-jit.primitive shen-jit.arity 1) (do (shen-jit.primitive shen-jit.function 1)
-    (do (shen-jit.primitive shen-jit.set-arity 2) (do (shen-jit.primitive shen-jit.apply 2) (do (shen-jit.primitive shen-jit.isolate 3) (do (shen-jit.primitive shen-jit.float 1) (do (shen-jit.primitive shen-jit.sqrt 1) (do (shen-jit.primitive shen-jit.quotient 2)
-    (do (shen-jit.primitive shen-jit.remainder 2) (do (shen-jit.primitive shen-jit.word-op 3) (do (shen-jit.primitive shen-jit.truncate 1) shen.skip))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+  (shen.for-each (lambda Group
+                   (if (number? (hd Group))
+                       (shen.for-each (lambda F (if (shen-jit.prefix? "shen-jit." (str F))
+                                                    (shen-jit.set-arity F (hd Group))
+                                                    shen.skip))
+                                      (hd (tl Group)))
+                       shen.skip))
+                 (shen-jit.lower.fixed-names)))
+
+(defun shen-jit.prefix? (P S)
+  (cond ((= P "") true)
+        ((= S "") false)
+        ((= (pos P 0) (pos S 0)) (shen-jit.prefix? (tlstr P) (tlstr S)))
+        (true false)))
 
 "Cleanup, as a library that holds something outside the heap needs it.
 (shen-jit.finally Body Cleanup) thaws Body, then Cleanup however Body ended,
@@ -1155,11 +1114,12 @@ shen.shendef->kldef-h, with the definition remembered:"
             (do (shen.store-arity F (length (hd (tl (tl Kl)))))
                 (let Factor (= Kl (value shen-jit.defined))
                   (let Annotate (and (optimise?) (= F (value shen-jit.*checked*)))
-                    (do (eval-kl (shen-jit.compiled-kl Kl Factor Annotate))
-                        (do (shen.record-kl F Kl)
-                            (do (put F shen-jit.factorised Factor (value *property-vector*))
-                                (do (put F shen-jit.annotated (cons (shen-jit.function F) Annotate) (value *property-vector*))
-                                    (shen.fn-print F))))))))))
+                    (do (set shen-jit.defined ())
+                        (do (eval-kl (shen-jit.compiled-kl Kl Factor Annotate))
+                            (do (shen.record-kl F Kl)
+                                (do (put F shen-jit.factorised Factor (value *property-vector*))
+                                    (do (put F shen-jit.annotated (cons (shen-jit.function F) Annotate) (value *property-vector*))
+                                        (shen.fn-print F)))))))))))
       Kl))
 
 "What a definition's KLambda is compiled as: factorised, if define produced it, and under
@@ -1203,7 +1163,7 @@ fixnums, as the program's own conversions make sure. Until a type is declared, n
       X))
 
 (defun shen-jit.representation-of (T)
-  (if (symbol? T) (trap-error (get T shen-jit.representation (value *property-vector*)) (lambda E T)) T))
+  (if (symbol? T) (shen-jit.property T shen-jit.representation T) T))
 
 "An annotated definition's body is marked (shen-jit.annotated Body), which tells the lowerer
 that the typechecker gave its type forms: (type X T) written in untyped code changes nothing."

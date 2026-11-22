@@ -1160,6 +1160,14 @@ all that Shen/Scheme and the earlier prototype replace.
   `shen-jit.lambda-form1` and so on, without gensym so that the counter moved as the kernel's does, and a function of
   one of those names was captured: `(fn F)` of `shen-jit.lambda-form1` applied the argument to itself. They are
   `F/1` and so on now, never F. `tests/overrides.shen` compares such names with the kernel's.
+- **Lookups without raising** (2026-11-22, Apple M3 Max, load 2.5 to 4.3). From an outside agent's branch, reviewed
+  and measured that day. `shen-jit.builder?` trapped an unbound `shen-jit.*isolate*` on every `eval`, and struct and
+  representation lookups raised and caught an error on a miss; the runtime now sets the variable as it starts, and
+  `shen-jit.property` gives a default. 100,000 `eval`s of `[+ N 1]`: 0.153 s before and after.
+  `shen-jit.register-primitives` loops over the fixed names, which gives 20 internal primitives an arity, so `fn` and
+  partial application work on them. **Rejected:** a fixed symbol in place of the fresh gensym that `sealing` asks
+  `shen-jit.sealed?` about, said to leak: an unreachable gensym is collected like any symbol, and a definition of the
+  fixed name turned the answer.
 
 ### Prolog
 

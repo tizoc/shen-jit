@@ -209,7 +209,17 @@
 
 \\ The public functions a declaration defines: all but the private tag's printer.
 (define operations
-  Name Fields -> (map (fn hd) (tl (functions Name [] Fields [] []))))
+  Name Fields -> [(member Name make) (member Name %make) (predicate-name Name)
+                  | (accessor-names Name Fields)])
+
+(define accessor-names
+  _ [] -> []
+  Name [Field | Fields]
+  -> (let Label (hd Field)
+          Rest (accessor-names Name Fields)
+       (if (hd (tl Field))
+           [(reader-name Name Label) (setter-name Name Label) | Rest]
+           [(reader-name Name Label) | Rest])))
 
 (define distinct?
   [] -> true
@@ -228,7 +238,7 @@
 
 \\ [Tag Fields] for a struct without parameters, and [Tag Fields Params] for one with them.
 (define schema
-  Name -> (trap-error (get Name shen-jit.struct.schema) (/. E [])))
+  Name -> (shen-jit.property Name shen-jit.struct.schema []))
 
 (define schema-params
   [_ _ Params] -> Params
@@ -244,7 +254,7 @@
 \\ The struct whose declaration generates F: declarations read together are all expanded before
 \\ any is defined, so arity does not yet show another's.
 (define operation-of
-  F Name -> (trap-error (get F shen-jit.struct.operation-of) (/. E Name)))
+  F Name -> (shen-jit.property F shen-jit.struct.operation-of Name))
 
 (define register
   Name Params Fields
@@ -374,7 +384,7 @@
   F -> (or (not (shen.type-theory-enabled?))
            (let Entry (assoc F (value shen.*sigf*))
              (or (empty? Entry)
-                 (not (shen-jit.same? Entry (trap-error (get F constructor-signature) (/. E []))))))))
+                 (not (shen-jit.same? Entry (shen-jit.property F constructor-signature [])))))))
 
 (define generate
   Name Params Fields Printer
@@ -594,7 +604,7 @@
 
 \\ The struct whose internal constructor T.%make is, or [].
 (define struct-of
-  Make -> (trap-error (get Make shen-jit.struct.of) (/. E [])))
+  Make -> (shen-jit.property Make shen-jit.struct.of []))
 
 (define constructor?
   Make -> (symbol? (struct-of Make)))
@@ -641,12 +651,13 @@
 (define pattern
   Self AddTest Bind [Make | Ps]
   -> (let Name (struct-of Make)
-          Fields (hd (tl (schema Name)))
-       (if (= (length Ps) (length Fields))
-           (do (AddTest [(predicate-name Name) Self])
-               (bind-fields Self Bind Name Fields Ps))
+       (if (symbol? Name)
+           (let Fields (hd (tl (schema Name)))
+             (if (= (length Ps) (length Fields))
+                 (do (AddTest [(predicate-name Name) Self])
+                     (bind-fields Self Bind Name Fields Ps))
+                 (fail)))
            (fail)))
-    where (constructor? Make)
   _ _ _ _ -> (fail))
 
 (define bind-fields
@@ -656,7 +667,7 @@
          (bind-fields Self Bind Name Fields Ps)))
 
 (define missing?
-  X -> (and (variable? X) (trap-error (get X shen-jit.struct.left-out) (/. E false))))
+  X -> (and (variable? X) (shen-jit.property X shen-jit.struct.left-out false)))
 
 \\ One annotation per syntax head, independent of any particular struct's schema.
 (define namespace-syntax
