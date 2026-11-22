@@ -4606,9 +4606,9 @@ reproduced where it could be: about a third held as written, a third in part, an
 not worth their code. The commits after f219b198 fix what held, each with a test that failed before it, where one can
 run on macOS. What they measured:
 
-- One IPv4 header writer: `net-ipv4.write-header` is a tail call to `write-header-ttl` with 64, and UDP's send makes
-  one call with 1 or 64. 20 M header writes took 1.124 s against 1.114 s, 0.5 ns more each for the call and the TTL's
-  range check; 5 M UDP sends and receives took 1.20 to 1.23 s either way. Kept for the code it removes.
+- **One IPv4 header writer.** `net-ipv4.write-header` is a tail call to `write-header-ttl` with 64, and UDP's send
+  makes one call with 1 or 64. 20 M header writes took 1.124 s against 1.114 s, 0.5 ns more each for the call and the
+  TTL's range check; 5 M UDP sends and receives took 1.20 to 1.23 s either way. Kept for the code it removes.
 
 - **Ref conflicts.** `set-ref!` checked a ref against every other under its lock, through `git.refs`, which reads,
   sorts and walks them all; the lock's directories were made first, so a refused `refs/heads/a/b` left `refs/heads/a/`
@@ -4680,6 +4680,39 @@ run on macOS. What they measured:
   length. They read bytes in place now, in about as many lines. On 200,000 tuples of two paths of 25 to 37 bytes,
   `relation->bytes` took 0.085 s as tsv and 0.092 as csv, where it took 0.272 and 0.291, `datalog.sorted` 0.684 s
   where it took 2.440, and a run of `strlen` and `substr` rules 0.073 s where it took 0.164 (medians, alternated).
+
+Left out, and why:
+
+- A child's and its pipes' pointers left live after a failed spawn: nothing reaches them, so there is no use after
+  free. Busy flags left set when a process cleanup raises: only running out of memory raises there.
+- `strerror` across isolates: known error numbers give constant strings, so at worst a message is garbled. Pointer
+  kinds in the Tree-sitter adapter and bounds in the TUN adapter: only the libraries' own code calls them.
+- EOPNOTSUPP in the Linux rename fallback: the kernel reports an unsupported rename flag as EINVAL.
+- On Windows, a dotted program name tried as it is, which would run the `npm` script beside `npm.cmd`; `path_at`
+  reading past its base, which is always a full path; `\\?\Volume` prefixes from `fs.real-path`, not what Windows
+  gives for a DOS name as far as can be told here; and `fs.getenv`'s ANSI, which the guide states.
+- In `mmap`, one `open(O_RDWR|O_CREAT|O_TRUNC)`, whose flags differ by platform and which is variadic; `O_CLOEXEC`,
+  as the process library closes inherited descriptors itself; and a mapping lost when its pointer cannot be made,
+  which only running out of memory does. The same for `getaddrinfo`'s list in `socket`.
+- A socket wait charged a whole slice for EINTR: only Ctrl-C and the profiler's signal interrupt one. Handle
+  accounting across an image: at most one collection more.
+- One copy less in `feed-write`: about 3% on a 32 MB `cat`, for a change to the adapter's interface.
+- Reads out of bounds through `buffer.make` and in HyperLogLog: every access is checked and raises. A native handler
+  label reached by falling through: it reads a valid exception, so it is meaningless, not unsafe.
+- A stream's end reported before an earlier `require` failure: the documented design. Closing a source that another
+  response holds active: that needs a callback to come back in, and the fix proposed would stop closing fresh
+  sources.
+- `udp.store-inbox`'s MTU check: reassembly is already capped at the link MTU. `ssm6?` as FF3x::/96: RFC 4607
+  reserves FF3x::/32. One segment after a repeated SYN: RFC 5681 requires it. A reset for a bad ACK in SYN-RECEIVED:
+  a peer made alone has no listener to send it. DHCP options of the wrong length: each reads as absent, which is
+  safe. Bitmaps in the fragment tables: a few hundred bytes, on no per-packet path.
+- Datalog: aggregates sharing a variable's name, a documented rule with a clear error; `*fresh*`, which is bounded;
+  word registers in nested scans and one native insert loop for four, whose registers were fitted to the 16 there
+  are; and one fixpoint for `ready-h` and `close-h`, which would need a function argument and read worse.
+- Git: whitespace after empty quotes, which Git keeps too; no prune after a concurrent change, which would leave
+  directories; `refs/remotes/origin/<branch>` in a clone, as documented; `merge-by`'s recursion, as 1M entries sort
+  in 0.29 s and the stack grows to 1 GiB; re-sorting the log's frontier, about one commit; and a lazy ignore memo,
+  `diff-split`'s append and one skip-worktree test, which gain nothing.
 
 ### Not tried yet
 
