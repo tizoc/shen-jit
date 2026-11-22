@@ -1757,12 +1757,16 @@
 (define step-uses
   [filter _ A B] -> (union (expr-vars A) (expr-vars B))
   [assign _ E] -> (expr-vars E)
-  [fold bind _ _ _ _ _ Terms _] -> (term-vars Terms [])
-  [fold compare V _ _ _ _ Terms _] -> (adjoin V (term-vars Terms []))
+  [fold bind _ _ _ _ _ Terms Columns] -> (term-vars Terms (columns-read Columns))
+  [fold compare V _ _ _ _ Terms Columns] -> (adjoin V (term-vars Terms (columns-read Columns)))
   [absent _ _ Terms] -> (term-vars Terms [])
   [emit _ | Terms] -> (term-vars Terms [])
-  [scan _ _ Columns] -> (columns-use Columns)
-  [lookup _ _ _ Terms Columns] -> (term-vars Terms (columns-use Columns)))
+  [scan _ _ Columns] -> (columns-read Columns)
+  [lookup _ _ _ Terms Columns] -> (term-vars Terms (columns-read Columns)))
+
+\\ What columns read from before them: what they use and do not bind themselves.
+(define columns-read
+  Columns -> (difference (columns-use Columns) (columns-bind Columns)))
 
 (define columns-use
   [] -> []
@@ -2093,15 +2097,17 @@
   max T -> [let t T [if [= a none] t [if [> t a] t a]]])
 
 \\ What a fold gives: a loop over the relation in r, or for a whole tuple's keys whether it is
-\\ there.
+\\ there. The loop takes what its columns read from before it.
 (define fold-form
   Op Target Rel Keys Terms Columns [Relations Constants Indexes] Prefix N
   -> (let Name (loop-name Prefix N)
+          Live (loop-live Columns [])
           Update (fold-update Op (if (= Target none) 0 (number-form [var Target] Constants)))
           Body (gen-columns-or Columns [eq [hd [hd l]] [hd [tl [hd l]]]] Constants Update a)
-          _ (set *forms* [[defun Name [l s a] [if [cons? l] [Name [tl l] s Body] a]] | (value *forms*)])
+          _ (set *forms* [[defun Name [l s a | Live] [if [cons? l] [Name [tl l] s Body | Live] a]]
+                          | (value *forms*)])
           Call [Name [eq-pairs r all (list-form Keys) (list-form (map (/. T (value-form T Constants)) Terms))]
-                     s (fold-init Op)]
+                     s (fold-init Op) | Live]
        Call)
      where (and (equivalence? Rel) (not (= Op mean)))
   mean Target Rel Keys Terms Columns Ctx Prefix N
@@ -2111,25 +2117,26 @@
   -> (let Stride (stride (arity-in Rel Relations))
           Update (fold-update Op (if (= Target none) 0 (number-form [var Target] Constants)))
           Name (loop-name Prefix N)
+          Live (loop-live Columns [])
           Body (gen-columns-or Columns l Constants Update a)
        (cases (empty? Keys)
-              (do (set *forms* [[defun Name [l e b s a]
-                                          [if [< l e] [Name [+ l Stride] e b s Body] a]]
+              (do (set *forms* [[defun Name [l e b s a | Live]
+                                          [if [< l e] [Name [+ l Stride] e b s Body | Live] a]]
                                         | (value *forms*)])
-                  [Name 0 [* [<-address r 6] Stride] [<-address r 2] s (fold-init Op)])
+                  [Name 0 [* [<-address r 6] Stride] [<-address r 2] s (fold-init Op) | Live])
               (whole-tuple? Rel Keys Relations)
               [if (found-form Rel Keys Terms [Relations Constants Indexes]) 1 0]
               true
               (let Forms (map (/. T (value-form T Constants)) Terms)
                    Find (find-kernel (arity-in Rel Relations) Keys)
-                   _ (set *forms* [[defun Name [p n b s a]
+                   _ (set *forms* [[defun Name [p n b s a | Live]
                                              [if [> p 0]
-                                                 [let q [- p 1] [let l [* q Stride] [Name [shen-jit.u32 n [* q 4]] n b s Body]]]
+                                                 [let q [- p 1] [let l [* q Stride] [Name [shen-jit.u32 n [* q 4]] n b s Body | Live]]]
                                                  a]]
                                            | (value *forms*)])
                 [let i [<-address r (index-slot Rel Keys Indexes)]
                   [Name [Find [index.table i] [<-address r 2] [index.mask i] | Forms]
-                        [index.next i] [<-address r 2] s (fold-init Op)]]))))
+                        [index.next i] [<-address r 2] s (fold-init Op) | Live]]))))
 
 (define gen-plan
   Steps Ctx Prefix

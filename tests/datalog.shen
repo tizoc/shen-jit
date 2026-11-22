@@ -597,6 +597,38 @@
 (dt.same "aggregates" (value dt.agg-facts) dt.agg linked [[a b 1] [a c 1] [b c 1] [c c 1]])
 (dt.same "aggregates, nothing" [] dt.agg total [[0]])
 
+\* Aggregates over records with a field bound before them, over a whole relation, by a key and
+   over an equivalence, and with that field bound only for the aggregate, two loops out. *\
+(defdatalog dt.agg-records
+  (type pr [p symbol integer])
+  (relation n [symbol])
+  (relation k [symbol])
+  (relation b [pr])
+  (relation c [symbol pr])
+  (relation same [pr pr] equivalence)
+  (relation avg [symbol integer])
+  (relation total [symbol integer])
+  (relation half [symbol integer])
+  (relation by-key [symbol symbol integer])
+  (relation classes [symbol integer])
+  (relation sums [symbol integer])
+  (rule (avg X M) <-- (n X) (= M (mean W (b [p X W]))))
+  (rule (total X S) <-- (n X) (= S (sum W (b [p X W]))))
+  (rule (half X H) <-- (n X) (= M (min W (b [p X W]))) (= H (/ M 2)))
+  (rule (by-key Y X S) <-- (n X) (k Y) (= S (sum W (c Y [p X W]))))
+  (rule (classes X N) <-- (n X) (= N (count (same [p X _] _))))
+  (rule (sums Y S) <-- (n X) (k Y) (= S (sum W (c Y [p X W])))))
+(set dt.agg-record-facts [[n x] [n y] [n z] [k u] [k v] [b [p x 2]] [b [p x 4]] [b [p y 10]]
+                          [c u [p x 1]] [c u [p x 5]] [c u [p y 3]] [c v [p x 7]] [same [p x 1] [p y 2]]])
+(dt.same "aggregates of records" (value dt.agg-record-facts) dt.agg-records avg [[x 3] [y 10]])
+(dt.same "aggregates of records" (value dt.agg-record-facts) dt.agg-records total [[x 6] [y 10] [z 0]])
+(dt.same "aggregates of records" (value dt.agg-record-facts) dt.agg-records half [[x 1] [y 5]])
+(dt.same "aggregates of records" (value dt.agg-record-facts) dt.agg-records by-key
+  [[u x 6] [u y 3] [u z 0] [v x 7] [v y 0] [v z 0]])
+(dt.same "aggregates of records" (value dt.agg-record-facts) dt.agg-records classes [[x 2] [y 2] [z 0]])
+(dt.same "aggregates of records" (value dt.agg-record-facts) dt.agg-records sums [[u 0] [u 3] [u 6] [v 0] [v 7]])
+(dt.check "an aggregate of records by demand" (datalog.query dt.agg-records (value dt.agg-record-facts) (avg x M)) [[x 3]])
+
 (defdatalog dt.agg-sum
   (relation w [symbol integer])
   (relation weight [symbol integer])

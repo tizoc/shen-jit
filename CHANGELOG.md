@@ -222,6 +222,9 @@ All notable changes to this project are documented in this file. The format is b
 - `datalog.query` and a `datalog.demand-db`'s `datalog.ask` of a relation that keeps one tuple a key (`min`, `max`,
   `choice` or a lattice) give the tuple it keeps: they gave every candidate its rules derived, `((c 2) (c 5))` where a
   run gives `((c 2))`.
+- A Datalog aggregate over a record whose field is bound before it, such as `(= M (mean W (b [p X W])))`, gives what
+  it reads: `mean` gave no tuples, and `count`, `sum`, `min` and `max` gave 0 or nothing when the rule ran as KL, as
+  with division, strings or a lattice of a Shen function.
 
 ## [0.10] - 2026-11-19
 
