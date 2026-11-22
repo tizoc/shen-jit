@@ -786,6 +786,8 @@ static sljit_s32 raw_register(const Emit *e, uint32_t n, sljit_s32 through)
    lets a program build only integers, and shen-jit.install checks shapes alone. */
 static sljit_s32 word_kind(const Emit *e, uint32_t x) { return x & OPERAND_CONST ? SLJIT_IMM : raw_kind(e, x); }
 
+enum { LENGTH_MASK = 0x7FFFu, LENGTH_UNSHARED = 0x8000u };
+
 /* One more way into a label, with the current state. */
 static void reach_label(Emit *e, uint32_t label)
 {
@@ -803,9 +805,11 @@ static void reach_label(Emit *e, uint32_t label)
             if (e->at_label[label].kept[k] != e->kept[k])
                 e->at_label[label].kept[k] = NONE;
         e->at_label[label].pairs &= e->pairs;
-        for (int k = 0; k < 64; k++)
-            if (e->lengths[k] < e->at_label[label].lengths[k])
-                e->at_label[label].lengths[k] = e->lengths[k];
+        for (int k = 0; k < 64; k++) {
+            uint16_t a = e->at_label[label].lengths[k], b = e->lengths[k];
+            uint16_t len = (a & LENGTH_MASK) < (b & LENGTH_MASK) ? (a & LENGTH_MASK) : (b & LENGTH_MASK);
+            e->at_label[label].lengths[k] = len ? len | ((a & b) & LENGTH_UNSHARED) : 0;
+        }
     }
 }
 
@@ -2942,7 +2946,8 @@ static void emit_prim(Emit *e, const uint32_t *p)
                                k * (sljit_sw)sizeof(V));
             if (k < words)
                 sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0), k * (sljit_sw)sizeof(V), R3);
-            sljit_emit_op2(c, SLJIT_ADD, HOME(e, dst), R0, IMM(TAG_OBJECT));
+            sljit_emit_op2(c, SLJIT_ADD, R0, R0, IMM(TAG_OBJECT));
+            store_result(e, dst);
             break;
         }
         sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, arg[0]));
@@ -2984,7 +2989,8 @@ static void emit_prim(Emit *e, const uint32_t *p)
         struct sljit_jump *even = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, R2);
         sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R1), 0, R3);
         sljit_set_label(even, sljit_emit_label(c));
-        sljit_emit_op2(c, SLJIT_ADD, HOME(e, dst), R0, IMM(TAG_OBJECT));
+        sljit_emit_op2(c, SLJIT_ADD, R0, R0, IMM(TAG_OBJECT));
+        store_result(e, dst);
         break;
     }
     case P_VALUE:
@@ -3161,14 +3167,14 @@ static void emit_prim(Emit *e, const uint32_t *p)
         sljit_sw k = fixval(*operand_cell(e, arg[1])), n = fixval(*operand_cell(e, arg[2]));
         bool slot = !(arg[0] & OPERAND_CONST) && arg[0] < 64;
         sljit_s32 r = operand_reg(e, arg[0]);
-        if (!(slot && e->lengths[arg[0]] >= n)) {
+        if (!(slot && (e->lengths[arg[0]] & LENGTH_MASK) >= (uint16_t)n)) {
             sljit_s32 t = r == SLJIT_R2 ? SLJIT_R1 : SLJIT_R2;
             slow = slow_path(e, SLOW_PRIM, tag_cmp(c, SLJIT_NOT_EQUAL, t, 0, r, 0, TAG_OBJECT));
             slow->catch_label = quiet_catch(e);
             sljit_emit_op1(c, SLJIT_MOV, t, 0, SLJIT_MEM1(r), -TAG_OBJECT);
             slow->from[1] = unless_longer_vector(c, t, n - 1, true);
             if (slot)
-                e->lengths[arg[0]] = (uint16_t)n;
+                e->lengths[arg[0]] = (uint16_t)n | (e->lengths[arg[0]] & LENGTH_UNSHARED);
         }
         put_result(e, dst, SLJIT_MEM1(r), (1 + k) * (sljit_sw)sizeof(V) - TAG_OBJECT);
         break;
@@ -3178,26 +3184,42 @@ static void emit_prim(Emit *e, const uint32_t *p)
         /* An absvector and a fixnum index within it. Anything else takes the
            slow path, which raises. The index, i << 2, compares unsigned with
            length << 2, and addresses element i at offset (i << 2) << 1. */
+        if (fixnum_operand(e, arg[1]) && (uint64_t)*operand_cell(e, arg[1]) < fix(4096)) {
+            /* A small constant index i: the length must exceed it, which the
+               type test checks too, and the element is at a constant offset. */
+            sljit_sw i = fixval(*operand_cell(e, arg[1]));
+            bool slot = !(arg[0] & OPERAND_CONST) && arg[0] < 64;
+            sljit_s32 r = operand_reg(e, arg[0]);
+            bool known = slot && (e->lengths[arg[0]] & LENGTH_MASK) > (uint16_t)i &&
+                         (prim == P_GET_ADDRESS || (e->lengths[arg[0]] & LENGTH_UNSHARED));
+            if (!known) {
+                sljit_s32 t = r == SLJIT_R2 ? SLJIT_R1 : SLJIT_R2;
+                slow = slow_path(e, SLOW_PRIM, tag_cmp(c, SLJIT_NOT_EQUAL, t, 0, r, 0, TAG_OBJECT));
+                slow->catch_label = quiet_catch(e);
+                sljit_emit_op1(c, SLJIT_MOV, t, 0, SLJIT_MEM1(r), -TAG_OBJECT);
+                slow->from[1] = unless_longer_vector(c, t, i, prim == P_GET_ADDRESS);
+                if (slot) {
+                    uint16_t cur = e->lengths[arg[0]];
+                    uint16_t len = (cur & LENGTH_MASK) > (uint16_t)(i + 1) ? (cur & LENGTH_MASK) : (uint16_t)(i + 1);
+                    e->lengths[arg[0]] = len | (cur & LENGTH_UNSHARED) | (prim == P_SET_ADDRESS ? LENGTH_UNSHARED : 0);
+                }
+            }
+            sljit_sw at = (1 + i) * (sljit_sw)sizeof(V) - TAG_OBJECT;
+            if (prim == P_GET_ADDRESS) {
+                put_result(e, dst, SLJIT_MEM1(r), at);
+            } else {
+                sljit_s32 t = r == SLJIT_R2 ? SLJIT_R1 : SLJIT_R2;
+                sljit_emit_op1(c, SLJIT_MOV, t, 0, OPND(e, arg[2]));
+                sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(r), at, t, 0);
+                put_result(e, dst, r, 0);
+            }
+            break;
+        }
         sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, arg[0]));
         slow = slow_path(e, SLOW_PRIM, tag_cmp(c, SLJIT_NOT_EQUAL, R2, R0, TAG_OBJECT));
         slow->catch_label = quiet_catch(e); /* C raises wherever these checks fail */
         sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), -TAG_OBJECT);
         /* A read takes a shared vector too; a store sends one to C, which refuses it. */
-        if (fixnum_operand(e, arg[1]) && (uint64_t)*operand_cell(e, arg[1]) < fix(4096)) {
-            /* A small constant index i: the length must exceed it, which the
-               type test checks too, and the element is at a constant offset. */
-            sljit_sw i = fixval(*operand_cell(e, arg[1]));
-            slow->from[1] = unless_longer_vector(c, SLJIT_R2, i, prim == P_GET_ADDRESS);
-            sljit_sw at = (1 + i) * (sljit_sw)sizeof(V) - TAG_OBJECT;
-            if (prim == P_GET_ADDRESS) {
-                put_result(e, dst, SLJIT_MEM1(SLJIT_R0), at);
-            } else {
-                sljit_emit_op1(c, SLJIT_MOV, R2, OPND(e, arg[2]));
-                sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0), at, R2);
-                sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), OPND(e, arg[0]));
-            }
-            break;
-        }
         sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(prim == P_GET_ADDRESS ? 0xFF & ~SHARED_BIT : 0xFF));
         slow->from[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM(T_VECTOR << 3 | TAG_HEADER));
         sljit_emit_op2(c, SLJIT_LSHR, R2, R2, IMM(8));
@@ -4352,6 +4374,8 @@ static void *compile_code(VM *vm, V code)
                 i = after; /* the loop then steps over the jump */
                 if (p[2] == P_CONSP && p[4] < 64)
                     e.pairs |= UINT64_C(1) << p[4];
+                else if (p[2] == P_TAGGEDP && p[4] < 64 && (e.lengths[p[4]] & LENGTH_MASK) < 1)
+                    e.lengths[p[4]] = 1 | (e.lengths[p[4]] & LENGTH_UNSHARED);
             } else {
                 emit_prim(&e, p);
             }
@@ -4481,6 +4505,33 @@ static void *compile_code(VM *vm, V code)
         } else if (ends_known(p)) {
             e.pairs = 0;
             memset(e.lengths, 0, sizeof e.lengths);
+        } else if (p[0] == OP_MOVE) {
+            if (p[1] < 64) {
+                if (p[2] < 64 && ((e.pairs >> p[2]) & 1))
+                    e.pairs |= UINT64_C(1) << p[1];
+                else
+                    e.pairs &= ~(UINT64_C(1) << p[1]);
+                e.lengths[p[1]] = p[2] < 64 ? e.lengths[p[2]] : 0;
+            }
+        } else if (p[0] == OP_PRIM && i == (size_t)(p - words) && p[1] < 64) {
+            uint32_t prim = p[2];
+            if (prim == P_CONS) {
+                e.pairs |= UINT64_C(1) << p[1];
+                e.lengths[p[1]] = 0;
+            } else if (prim == P_ABSVECTOR3) {
+                e.pairs &= ~(UINT64_C(1) << p[1]);
+                e.lengths[p[1]] = 3 | LENGTH_UNSHARED;
+            } else if ((prim == P_ABSVECTOR || prim == P_FILLED_VECTOR) && fixnum_operand(&e, p[4])) {
+                int64_t n = fixval(*operand_cell(&e, p[4]));
+                e.pairs &= ~(UINT64_C(1) << p[1]);
+                e.lengths[p[1]] = n > 0 && n <= 4096 ? (uint16_t)n | LENGTH_UNSHARED : 0;
+            } else if (prim == P_SET_ADDRESS) {
+                e.pairs &= ~(UINT64_C(1) << p[1]);
+                e.lengths[p[1]] = p[4] < 64 ? e.lengths[p[4]] : 0;
+            } else {
+                e.pairs &= ~(UINT64_C(1) << p[1]);
+                e.lengths[p[1]] = 0;
+            }
         } else if (!keeps_cache(p)) { /* register code writes a slot only where it boxes */
             if (p[1] < 64 && writes_slot(p, p[1])) {
                 e.pairs &= ~(UINT64_C(1) << p[1]);

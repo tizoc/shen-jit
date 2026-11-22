@@ -127,6 +127,8 @@ All notable changes to this project are documented in this file. The format is b
 - Starting takes about 12% less, of about 4 ms, as an image is read in chunks and restored in one pass.
 - A small message between isolates no longer allocates a 32 KB block: a million two-element lists sent from an isolate
   to the builder took 0.21 s where they took 0.67.
+- Constructing a struct stores its fields without checks: 100 million three-field structs took 0.27 s where they took
+  0.36.
 
 ### Fixed
 

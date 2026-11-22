@@ -196,6 +196,14 @@ Lowering rules, the collector and the kernel port have their own sections.
   - **Suite.** M3, 3 rounds: 1.00 open and sealed, VM 0.98 and 0.95, pipeline 1.00, results the same. Ryzen, 2 rounds: 0.99, VM 0.96, pipeline 0.96. Independent: M3 0.93 to 1.02, the kernel suite 1.00; Ryzen 0.96 to 1.02, the kernel suite 1.00, THORN 1.01 to 1.02.
   - **Rejected: reading past labels and jumps too, when deciding what to keep.** More to choose from, but no better alone (VM sealed 0.500 against 0.494, pipeline sealed 0.1273 against 0.1256), and in the suite on the M3 `compile pipeline` read 1.04 open and 1.06 sealed, which alone it did not.
   - **Against Shen/Scheme 0.54, normal mode, after this.** Ryzen: `bytecode VM` 0.91, from 1.05 before these two changes, and `compile pipeline` 1.05. M3, before this one: `bytecode VM` 0.88 and `compile pipeline` 1.06.
+- **Rejected: memory caches without the limits they do not use, and small code generation changes** (2026-11-22, Apple
+  M3 Max, load 2.5 to 4.3, against the commit before). From an outside agent's branch, reviewed and measured that day.
+  Each cached memory recorded whether code reads or stores through it, to skip computing, saving and reloading the
+  limit it does not use and the read-only test of one only read; calls that refill the caches stopped saving them; a
+  constant byte index, constant shift counts and `fixnum?` got shorter code; only self loops aligned their body.
+  Correct on review, 86 lines more, and nothing moved: the numeric programs boxed and with registers within 1% (matmul
+  0.321 to 0.320 s, heat 0.518 to 0.515 s), JSON from a reader 2.5 ms before and after, framed 2.9 to 2.8 ms, the
+  bench suite 1.00.
 
 ### Branch shapes and code placement
 
@@ -369,6 +377,15 @@ Lowering rules, the collector and the kernel port have their own sections.
   `format_int`, which `put_int` already used: 2,000,000 `(intern (cn "sym" (str N)))` 0.297 to 0.223 s. The same
   commit shares `is_type`, `made` and `grow_array` among the files that had copies, and `sj_dict_put` checks for fixed
   entries in the walk it already makes: the bench suite's `dict create` read 0.90, its other rows 1.00.
+- **Stores into a fresh vector without checks** (2026-11-22, Apple M3 Max, load 2.5 to 4.3, best of 3, against the
+  commit before). From an outside agent's branch, reviewed and measured that day. After `absvector` of a constant
+  length, `absvector3`, a filled vector, or a checked access at a constant index, the JIT knows the vector's least
+  length and, for one it allocated, that it is not shared, so a later access at a constant index below that length
+  skips the tag, length and shared tests. The facts merge at labels and end at calls, jumps and loop heads, and hold
+  across collections, as an object's length and sharing never change. 100,000,000 constructions of a three-field
+  struct, each dropped: 0.356 to 0.269 s. Kept alive in a chain, copying dominates and the gain hides in the noise.
+  The bench suite read 1.00. Not measured on their own: the length fact after a fused `tagged?` and the pair fact
+  after `cons`.
 
 ### Errors and handlers
 
