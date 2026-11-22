@@ -254,9 +254,6 @@ V sj_raise_value(VM *vm, const char *message, V value)
 
 V sj_raise(VM *vm, const char *message) { return sj_raise_value(vm, message, V_CLEARED); }
 
-/* What a constructor made, or "out of memory" raised when it could not (objects.c). */
-static V made(VM *vm, V v) { return v == V_CLEARED ? sj_raise(vm, "out of memory") : v; }
-
 /* For rare errors whose text is built when they are raised, or lasts no longer. */
 V sj_raise_text_value(VM *vm, const char *text, V value)
 {
@@ -275,10 +272,9 @@ V sj_raise_text_value(VM *vm, const char *text, V value)
 
 V sj_raise_text(VM *vm, const char *text) { return sj_raise_text_value(vm, text, V_CLEARED); }
 
-static bool is_float(V v) { return is_object(v) && obj_type(v) == T_FLOAT; }
+static bool is_float(V v) { return is_type(v, T_FLOAT); }
 static bool is_number(V v) { return is_fix(v) || is_float(v); }
 static double number(V v) { return is_fix(v) ? (double)fixval(v) : float_value(v); }
-static bool is_type(V v, unsigned type) { return is_object(v) && obj_type(v) == type; }
 
 static void pointer_text(V v, char *text, size_t size)
 {
@@ -707,17 +703,22 @@ static void put(Show *s, const char *bytes, size_t n)
 
 static void put_text(Show *s, const char *text) { put(s, text, strlen(text)); }
 
-/* Error-to-string is on the path of some handlers, so integers avoid
-   snprintf, which is slow. */
-static void put_int(Show *s, int64_t n)
+/* Error-to-string and str avoid snprintf for integers, which is slow.
+   Formats n into the tail of [end - 24, end) and returns the first byte. */
+static char *format_int(int64_t n, char *end)
 {
-    char digits[24], *p = digits + sizeof digits;
     uint64_t u = n < 0 ? -(uint64_t)n : (uint64_t)n;
     do
-        *--p = (char)('0' + u % 10);
+        *--end = (char)('0' + u % 10);
     while (u /= 10);
     if (n < 0)
-        *--p = '-';
+        *--end = '-';
+    return end;
+}
+
+static void put_int(Show *s, int64_t n)
+{
+    char digits[24], *p = format_int(n, digits + sizeof digits);
     put(s, p, (size_t)(digits + sizeof digits - p));
 }
 
@@ -734,9 +735,7 @@ static void show(VM *vm, Show *s, V v)
             show(vm, s, v);
         }
         put_text(s, "]");
-    } else if (is_type(v, T_VECTOR) && hdr_size(ptr(v)[0]) == 3 && is_symbol(ptr(v)[1]) &&
-               string_length(ptr(ptr(v)[1])[SYM_NAME]) == 10 &&
-               memcmp(string_bytes(ptr(ptr(v)[1])[SYM_NAME]), "shen.tuple", 10) == 0) {
+    } else if (is_type(v, T_VECTOR) && hdr_size(ptr(v)[0]) == 3 && symbol_named(ptr(v)[1], "shen.tuple")) {
         put_text(s, "(@p ");
         show(vm, s, ptr(v)[2]);
         put_text(s, " ");
@@ -841,9 +840,10 @@ static V to_string(VM *vm, V v)
     char small[80];
     const char *text = small;
     size_t len;
-    if (is_fix(v))
-        snprintf(small, sizeof small, "%lld", (long long)fixval(v));
-    else if (v == V_TRUE || v == V_FALSE)
+    if (is_fix(v)) {
+        char *p = format_int(fixval(v), small + sizeof small);
+        return made(vm, make_string(vm, p, (size_t)(small + sizeof small - p)));
+    } else if (v == V_TRUE || v == V_FALSE)
         text = v == V_TRUE ? "true" : "false";
     else if (v == V_NIL)
         text = "()";
@@ -859,7 +859,7 @@ static V to_string(VM *vm, V v)
             memcpy(string_bytes(s) + 1, string_bytes(vm->args[0]), n);
             string_bytes(s)[n + 1] = '"';
         }
-        return s;
+        return made(vm, s);
     } else if (is_float(v))
         format_float(float_value(v), small, sizeof small);
     else if (is_pair(v))
@@ -993,14 +993,11 @@ static V save_executable(VM *vm)
 
 static V open_file(VM *vm)
 {
-    V out = intern_cstr(vm, "out"), in = intern_cstr(vm, "in");
     V path = vm->args[0], direction = vm->args[1];
-    if (out == V_CLEARED || in == V_CLEARED)
-        return sj_raise(vm, "out of memory");
     if (!is_type(path, T_STRING))
         return sj_raise_value(vm, "open: ~S is not a string", path);
-    bool output = direction == out;
-    if (!output && direction != in)
+    bool output = symbol_named(direction, "out");
+    if (!output && !symbol_named(direction, "in"))
         return sj_raise_value(vm, "open: the direction ~S is not in or out", direction);
     FILE *f = open_path(vm, output ? "wb" : "rb");
     if (!f)
@@ -1711,20 +1708,14 @@ static bool word_of(V v, uint64_t *w)
 
 static V word_made(VM *vm, uint64_t w) { return made(vm, make_bytes(vm, &w, sizeof w)); }
 
-static bool op_named(V op, const char *name)
-{
-    V s = ptr(op)[SYM_NAME];
-    return string_length(s) == strlen(name) && memcmp(string_bytes(s), name, string_length(s)) == 0;
-}
-
 static V word_op(VM *vm, V op, V a, V b)
 {
     uint64_t x, y;
     if (!is_symbol(op))
         return sj_raise_value(vm, "shen-jit.word-op: ~S is not an operation", op);
-    if (op_named(op, "wof"))
+    if (symbol_named(op, "wof"))
         return is_fix(a) ? word_made(vm, (uint64_t)fixval(a)) : sj_raise_value(vm, "~S is not an integer", a);
-    if (op_named(op, "wget")) {
+    if (symbol_named(op, "wget")) {
         char *base;
         size_t length;
         if (!memory_of(a, &base, &length))
@@ -1736,13 +1727,13 @@ static V word_op(VM *vm, V op, V a, V b)
     }
     if (!word_of(a, &x))
         return sj_raise_value(vm, "~S is not a word", a);
-    if (op_named(op, "wfixnum"))
+    if (symbol_named(op, "wfixnum"))
         return fix_fits((int64_t)x) ? fix((int64_t)x) : sj_raise(vm, "integer overflow");
-    if (op_named(op, "wfloat"))
+    if (symbol_named(op, "wfloat"))
         return made(vm, make_float(vm, (double)(int64_t)x));
     static const char *const counted[] = {"wshl", "wshr", "wsar", "wrotl", "wrotr"};
     for (unsigned k = 0; k < 5; k++)
-        if (op_named(op, counted[k])) {
+        if (symbol_named(op, counted[k])) {
             if (!is_fix(b))
                 return sj_raise_value(vm, "~S is not an integer", b);
             unsigned n = (unsigned)((uint64_t)fixval(b) & 63);
@@ -1756,16 +1747,16 @@ static V word_op(VM *vm, V op, V a, V b)
         }
     if (!word_of(b, &y))
         return sj_raise_value(vm, "~S is not a word", b);
-    if (op_named(op, "w+")) return word_made(vm, x + y);
-    if (op_named(op, "w-")) return word_made(vm, x - y);
-    if (op_named(op, "w*")) return word_made(vm, x * y);
-    if (op_named(op, "wand")) return word_made(vm, x & y);
-    if (op_named(op, "wor")) return word_made(vm, x | y);
-    if (op_named(op, "wxor")) return word_made(vm, x ^ y);
-    if (op_named(op, "w<")) return boolean((int64_t)x < (int64_t)y);
-    if (op_named(op, "w<=")) return boolean((int64_t)x <= (int64_t)y);
-    if (op_named(op, "wu<")) return boolean(x < y);
-    if (op_named(op, "wu<=")) return boolean(x <= y);
+    if (symbol_named(op, "w+")) return word_made(vm, x + y);
+    if (symbol_named(op, "w-")) return word_made(vm, x - y);
+    if (symbol_named(op, "w*")) return word_made(vm, x * y);
+    if (symbol_named(op, "wand")) return word_made(vm, x & y);
+    if (symbol_named(op, "wor")) return word_made(vm, x | y);
+    if (symbol_named(op, "wxor")) return word_made(vm, x ^ y);
+    if (symbol_named(op, "w<")) return boolean((int64_t)x < (int64_t)y);
+    if (symbol_named(op, "w<=")) return boolean((int64_t)x <= (int64_t)y);
+    if (symbol_named(op, "wu<")) return boolean(x < y);
+    if (symbol_named(op, "wu<=")) return boolean(x <= y);
     return sj_raise_value(vm, "shen-jit.word-op: ~S is not an operation", op);
 }
 

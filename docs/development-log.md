@@ -364,6 +364,11 @@ Lowering rules, the collector and the kernel port have their own sections.
   run's 1.02 and 1.03 not repeating, and startup, 40 alternating runs, 5.11 → 5.03 ms. Each evaluation of such a lambda now gives the same closure, as in
   Shen/Scheme, where before each gave a new one; a small definition inlined into its callers still gives each its own,
   which semantics records as a deviation. Such a closure also crosses to an isolate by pointer, where it was refused.
+- **`str` of a fixnum without `snprintf`** (2026-11-22, Apple M3 Max, load 2.5 to 4.3, best of 3 interleaved, against
+  main). From an outside agent's branch, reviewed and measured that day. `to_string` formats a fixnum with
+  `format_int`, which `put_int` already used: 2,000,000 `(intern (cn "sym" (str N)))` 0.297 to 0.223 s. The same
+  commit shares `is_type`, `made` and `grow_array` among the files that had copies, and `sj_dict_put` checks for fixed
+  entries in the walk it already makes: the bench suite's `dict create` read 0.90, its other rows 1.00.
 
 ### Errors and handlers
 
@@ -677,6 +682,14 @@ So that isolates can call them, the two kinds of definition that stayed in the h
 - **What else grows, left as it is.** After four runs, `*property-vector*` reaches 4,043 KB from 70 KB, 75% of the live heap,
   almost all `shen.source`. Each `(datatype ...)` defines new `gensym`-named helpers, about 0.5 MB of source per run here. It
   is the kernel's behaviour in every port.
+- **Rejected: a cheaper symbol sweep and probes without atomics** (2026-11-22, Apple M3 Max, load 2.5 to 4.3, against
+  the commit before). From an outside agent's branch, reviewed and measured that day. `scan_values` skipped writing
+  back a value that had not moved; `sweep_symbols` swept the builder's own table in place when no symbol died or was
+  published, rather than rebuilding it at each collection; `table_find` and `symbol_table_put` had a second probe loop
+  without acquire loads for unshared tables; `intern` passed bytes straight to `intern_shared` and skipped its second
+  lookup. Correct on review, 71 lines more, and nothing moved: 300,000 lists of 1,000 made and dropped, 0.553 s before
+  and after; 2,000,000 `(intern (cn "sym" (str N)))` 0.223 to 0.227 s; the independent workloads 0.97 to 1.01 of the
+  commit before. Most symbols are the program's, so the builder's table that the sweep rebuilt is small.
 
 ### Semispace size and growth
 

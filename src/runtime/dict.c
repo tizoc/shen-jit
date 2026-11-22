@@ -32,16 +32,6 @@ static bool entry_cell(V c) { return is_pair(c) && is_pair(ptr(c)[0]); }
    dictionary that is not shared may hold its buckets or entries, as a copy of one that is. */
 static bool fixed(VM *vm, V o) { return in_program(vm, ptr(o)); }
 
-/* Whether any bucket cell or entry of b is fixed, which growing would relink. */
-static bool any_fixed(VM *vm, V *b, size_t n)
-{
-    for (size_t i = 0; i < n; i++)
-        for (V c = b[i]; entry_cell(c); c = ptr(c)[1])
-            if (fixed(vm, c) || fixed(vm, ptr(c)[0]))
-                return true;
-    return false;
-}
-
 /* The entry for k, [] if there is none, or V_CLEARED if the bucket is
    malformed. */
 static V find(V *b, size_t n, V k, uint64_t h)
@@ -56,14 +46,19 @@ static V find(V *b, size_t n, V k, uint64_t h)
     return V_NIL;
 }
 
-/* The number of entries, or -1 if a bucket is malformed. */
-static long entries(V *b, size_t n)
+/* The number of entries, or -1 if a bucket is malformed. When has_fixed is not
+   NULL, sets *has_fixed if any bucket cell or entry is fixed, which growing
+   would relink. */
+static long entries(VM *vm, V *b, size_t n, bool *has_fixed)
 {
     long count = 0;
     for (size_t i = 0; i < n; i++) {
         V c = b[i];
-        for (; entry_cell(c); c = ptr(c)[1])
+        for (; entry_cell(c); c = ptr(c)[1]) {
+            if (has_fixed && !*has_fixed && (fixed(vm, c) || fixed(vm, ptr(c)[0])))
+                *has_fixed = true;
             count++;
+        }
         if (c != V_NIL)
             return -1;
     }
@@ -120,10 +115,10 @@ V sj_dict_put(VM *vm)
         return vm->args[2];
     }
     /* A new key: check every bucket first if the dictionary will grow. */
-    bool full = (size_t)fixval(ptr(vm->args[0])[DICT_COUNT]) + 1 > n;
-    if (full && entries(b, n) < 0)
+    bool full = (size_t)fixval(ptr(vm->args[0])[DICT_COUNT]) + 1 > n, has_fixed = false;
+    if (full && entries(vm, b, n, &has_fixed) < 0)
         return sj_raise_value(vm, "~S is not a dictionary", vm->args[0]);
-    if (fixed(vm, ptr(vm->args[0])[DICT_BUCKETS]) || (full && any_fixed(vm, b, n)))
+    if (fixed(vm, ptr(vm->args[0])[DICT_BUCKETS]) || has_fixed)
         return sj_raise_value(vm, "~S is shared, and cannot change", vm->args[0]);
     uint64_t *p = vm_alloc(vm, 4); /* the entry and its bucket cell */
     if (!p)
@@ -175,7 +170,7 @@ V sj_dict_entries(VM *vm)
 {
     size_t n;
     V *b = buckets(vm->args[0], &n);
-    long count = b ? entries(b, n) : -1;
+    long count = b ? entries(vm, b, n, NULL) : -1;
     if (count < 0)
         return sj_raise_value(vm, "~S is not a dictionary", vm->args[0]);
     uint64_t *p = vm_alloc(vm, 4 * (size_t)count);

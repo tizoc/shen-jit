@@ -291,7 +291,7 @@ static void free_blocks(Converted *c)
 }
 
 /* Returns V_NIL, or V_CLEARED with the error raised. Allocates only to raise. */
-static V convert(VM *vm, Converted *c, unsigned type, V v, int i)
+static V convert(VM *vm, Converted *c, unsigned type, V v)
 {
     switch (type) {
     case F_INT64:
@@ -430,7 +430,7 @@ V h_foreign(VM *vm)
     for (size_t i = 0; i < n; i++) {
         unsigned type = (unsigned)fixval(desc[DESC_TYPES + i]);
         buffers |= type == F_BYTES;
-        if (convert(vm, &c, type, vm->fp[2 + i], (int)i) == V_CLEARED) {
+        if (convert(vm, &c, type, vm->fp[2 + i]) == V_CLEARED) {
             free_blocks(&c);
             return V_CLEARED;
         }
@@ -701,20 +701,18 @@ static V checked(VM *vm, V v, const char *who)
     if (vm->stress)             \
         check_pointer(vm, v, who)
 
-static bool has_type(V v, unsigned type) { return is_object(v) && obj_type(v) == type; }
-
-static int api_is_string(shen_vm *sv, shen_value v) { READ(v, "shen_is_string was given"); return has_type(v, T_STRING); }
+static int api_is_string(shen_vm *sv, shen_value v) { READ(v, "shen_is_string was given"); return is_type(v, T_STRING); }
 static int api_is_pair(shen_vm *sv, shen_value v) { READ(v, "shen_is_pair was given"); return is_pair(v); }
-static int api_is_vector(shen_vm *sv, shen_value v) { READ(v, "shen_is_vector was given"); return has_type(v, T_VECTOR); }
+static int api_is_vector(shen_vm *sv, shen_value v) { READ(v, "shen_is_vector was given"); return is_type(v, T_VECTOR); }
 static int api_is_symbol(shen_vm *sv, shen_value v) { READ(v, "shen_is_symbol was given"); return is_symbol(v); }
-static int api_is_float(shen_vm *sv, shen_value v) { READ(v, "shen_is_float was given"); return has_type(v, T_FLOAT); }
-static int api_is_bytes(shen_vm *sv, shen_value v) { READ(v, "shen_is_bytes was given"); return has_type(v, T_BYTES); }
+static int api_is_float(shen_vm *sv, shen_value v) { READ(v, "shen_is_float was given"); return is_type(v, T_FLOAT); }
+static int api_is_bytes(shen_vm *sv, shen_value v) { READ(v, "shen_is_bytes was given"); return is_type(v, T_BYTES); }
 static int api_is_procedure(shen_vm *sv, shen_value v) { READ(v, "shen_is_procedure was given"); return is_proc(v); }
 
 static double api_number(shen_vm *sv, shen_value v)
 {
     READ(v, "shen_number was given");
-    return is_fix(v) ? (double)fixval(v) : has_type(v, T_FLOAT) ? float_value(v) : __builtin_nan("");
+    return is_fix(v) ? (double)fixval(v) : is_type(v, T_FLOAT) ? float_value(v) : __builtin_nan("");
 }
 
 static shen_value api_head(shen_vm *sv, shen_value v)
@@ -732,13 +730,13 @@ static shen_value api_tail(shen_vm *sv, shen_value v)
 static int64_t api_vector_length(shen_vm *sv, shen_value v)
 {
     READ(v, "shen_vector_length was given");
-    return has_type(v, T_VECTOR) ? (int64_t)hdr_size(ptr(v)[0]) : -1;
+    return is_type(v, T_VECTOR) ? (int64_t)hdr_size(ptr(v)[0]) : -1;
 }
 
 static shen_value api_vector_ref(shen_vm *sv, shen_value v, int64_t i)
 {
     READ(v, "shen_vector_ref was given");
-    return has_type(v, T_VECTOR) && i >= 0 && (uint64_t)i < hdr_size(ptr(v)[0]) ? ptr(v)[1 + i] : V_NONE;
+    return is_type(v, T_VECTOR) && i >= 0 && (uint64_t)i < hdr_size(ptr(v)[0]) ? ptr(v)[1 + i] : V_NONE;
 }
 
 static shen_value api_symbol_name(shen_vm *sv, shen_value v)
@@ -750,7 +748,7 @@ static shen_value api_symbol_name(shen_vm *sv, shen_value v)
 static const char *api_string_bytes(shen_vm *sv, shen_value v, size_t *length)
 {
     READ(v, "shen_string_bytes was given");
-    if (!has_type(v, T_STRING))
+    if (!is_type(v, T_STRING))
         return NULL;
     if (length)
         *length = string_length(v);
@@ -760,7 +758,7 @@ static const char *api_string_bytes(shen_vm *sv, shen_value v, size_t *length)
 static int64_t api_string_copy(shen_vm *sv, shen_value v, char *to, size_t size)
 {
     READ(v, "shen_string_copy was given");
-    if (!has_type(v, T_STRING))
+    if (!is_type(v, T_STRING))
         return -1;
     if (size) {
         size_t n = string_length(v) < size - 1 ? string_length(v) : size - 1;
@@ -773,7 +771,7 @@ static int64_t api_string_copy(shen_vm *sv, shen_value v, char *to, size_t size)
 static unsigned char *api_bytes_data(shen_vm *sv, shen_value v, size_t *length)
 {
     READ(v, "shen_bytes_data was given");
-    if (!has_type(v, T_BYTES))
+    if (!is_type(v, T_BYTES))
         return NULL;
     if (length)
         *length = string_length(v);
@@ -783,13 +781,10 @@ static unsigned char *api_bytes_data(shen_vm *sv, shen_value v, size_t *length)
 static void *api_pointer(shen_vm *sv, shen_value v, const char *kind)
 {
     READ(v, "shen_pointer was given");
-    if (!has_type(v, T_POINTER))
+    if (!is_type(v, T_POINTER))
         return NULL;
-    if (kind) {
-        V name = ptr(ptr(v)[POINTER_KIND])[SYM_NAME];
-        if (string_length(name) != strlen(kind) || memcmp(string_bytes(name), kind, strlen(kind)) != 0)
-            return NULL;
-    }
+    if (kind && !symbol_named(ptr(v)[POINTER_KIND], kind))
+        return NULL;
     return (void *)(uintptr_t)ptr(v)[POINTER_ADDRESS];
 }
 
@@ -808,9 +803,6 @@ static shen_value api_function(shen_vm *sv, const char *name)
     V value = symbol == V_NIL ? V_CLEARED : *cell_function(vm, symbol_cell(symbol));
     return value == V_CLEARED ? V_NONE : value;
 }
-
-/* What the makers below come to. */
-static V made(VM *vm, V v) { return v == V_CLEARED ? sj_raise(vm, "out of memory") : v; }
 
 static shen_value api_make_float(shen_vm *sv, double d)
 {
@@ -910,7 +902,7 @@ static int api_vector_set(shen_vm *sv, shen_value v, int64_t i, shen_value x)
 {
     VM *vm = vm_of(sv);
     checked(vm, x, "shen_vector_set was given");
-    if (!has_type(v, T_VECTOR) || i < 0 || (uint64_t)i >= hdr_size(ptr(v)[0]))
+    if (!is_type(v, T_VECTOR) || i < 0 || (uint64_t)i >= hdr_size(ptr(v)[0]))
         return 0;
     if (hdr_shared(ptr(v)[0]) || in_program(vm, ptr(v))) /* never changes, nor points into a heap */
         return 0;

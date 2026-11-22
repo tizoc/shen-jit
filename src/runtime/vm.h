@@ -252,6 +252,7 @@ typedef struct Handler {
    callers treat as "an error is propagating". The message is a string
    literal; with a value, ~S in it marks where the value is shown. */
 V sj_raise(VM *vm, const char *message);
+static inline V made(VM *vm, V v) { return v == V_CLEARED ? sj_raise(vm, "out of memory") : v; }
 bool sj_take_interrupt(VM *vm);
 V jit_call_nested(VM *vm, V proc, size_t n, const V *args);
 V sj_raise_arity(VM *vm, V name, size_t arity, size_t given);

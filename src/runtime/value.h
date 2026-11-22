@@ -155,6 +155,7 @@ static inline void obj_values(uint64_t h, size_t *first, size_t *count)
 }
 
 static inline unsigned obj_type(V v) { return hdr_type(ptr(v)[0]); }
+static inline bool is_type(V v, unsigned type) { return is_object(v) && obj_type(v) == type; }
 
 /* Stream flags. */
 enum {

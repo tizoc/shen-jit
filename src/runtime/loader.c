@@ -58,26 +58,14 @@ static V nth(V list, size_t i)
     return ptr(list_drop(list, i))[0];
 }
 
-static bool symbol_is(V v, const char *name)
-{
-    if (!is_symbol(v))
-        return false;
-    V s = ptr(v)[SYM_NAME];
-    return string_length(s) == strlen(name) && memcmp(string_bytes(s), name, string_length(s)) == 0;
-}
-
 static bool emit(Loader *l, uint64_t word)
 {
     if (word > UINT32_MAX)
         return fail(l, "operand out of range");
-    if (l->len == l->cap) {
-        size_t cap = l->cap ? 2 * l->cap : 256;
-        uint32_t *buf = realloc(l->buf, cap * sizeof *buf);
-        if (!buf)
-            return fail(l, "out of memory");
-        l->buf = buf;
-        l->cap = cap;
-    }
+    uint32_t *buf = grow_array(l->buf, &l->cap, l->len, sizeof *buf, 256);
+    if (!buf)
+        return fail(l, "out of memory");
+    l->buf = buf;
     l->buf[l->len++] = (uint32_t)word;
     return true;
 }
@@ -101,7 +89,7 @@ static bool byte_count(Loader *l, V v, uint64_t *out, const char *limit_error)
 static bool operand(V v, uint64_t frame, uint64_t nconst, uint64_t *out)
 {
     if (is_pair(v)) {
-        if (list_length(v) != 2 || !symbol_is(nth(v, 0), "const") || !small_int(nth(v, 1), nconst, out))
+        if (list_length(v) != 2 || !symbol_named(nth(v, 0), "const") || !small_int(nth(v, 1), nconst, out))
             return false;
         *out |= OPERAND_CONST;
         return true;
@@ -112,10 +100,10 @@ static bool operand(V v, uint64_t frame, uint64_t nconst, uint64_t *out)
 static long primitive_index(V name)
 {
     for (size_t i = 0; i < primitive_count; i++)
-        if (symbol_is(name, primitive_table[i].name))
+        if (symbol_named(name, primitive_table[i].name))
             return (long)i;
-    return symbol_is(name, "raise-cond") ? (long)PRIM_RAISE_COND
-           : symbol_is(name, "shen-jit.field") ? (long)PRIM_FIELD : -1;
+    return symbol_named(name, "raise-cond") ? (long)PRIM_RAISE_COND
+           : symbol_named(name, "shen-jit.field") ? (long)PRIM_FIELD : -1;
 }
 
 static int primitive_arity(size_t index)
@@ -154,7 +142,7 @@ static bool encode(Loader *l, V insn, uint64_t frame, uint64_t nconst, uint64_t 
         return fail(l, "malformed instruction");
     V head = nth(insn, 0);
     unsigned op = 0;
-    while (op < OP_COUNT && !symbol_is(head, op_names[op]))
+    while (op < OP_COUNT && !symbol_named(head, op_names[op]))
         op++;
     if (op == OP_COUNT)
         return fail(l, "unknown instruction");
@@ -340,7 +328,7 @@ static V build_code(Loader *l, V form)
     uint64_t arity, frame;
     /* (code Name Arity Frame Constants Instructions Codes [Inline]) */
     size_t n = list_length(form);
-    if ((n != 7 && n != 8) || !symbol_is(nth(form, 0), "code") ||
+    if ((n != 7 && n != 8) || !symbol_named(nth(form, 0), "code") ||
         !byte_count(l, nth(form, 2), &arity, "function has more than 255 parameters") ||
         !small_int(nth(form, 3), 1u << 20, &frame) ||
         frame < arity + 2 || list_length(nth(form, 4)) == (size_t)-1 ||
@@ -421,7 +409,7 @@ static V build_closure(Loader *l, V code_form)
 
 static bool is_defun_form(V form)
 {
-    return list_length(form) == 3 && symbol_is(nth(form, 0), "defun") && is_symbol(nth(form, 1));
+    return list_length(form) == 3 && symbol_named(nth(form, 0), "defun") && is_symbol(nth(form, 1));
 }
 
 /* Binds sealed calls to the current function bindings of their targets. A
@@ -515,7 +503,7 @@ V sj_install(VM *vm, V form)
     }
     if (defun)
         result = build_closure(&l, nth(form, 2));
-    else if (is_pair(form) && symbol_is(nth(form, 0), "code"))
+    else if (is_pair(form) && symbol_named(nth(form, 0), "code"))
         result = build_closure(&l, form);
     else
         fail(&l, "install: expected (defun Name Code) or a code object");

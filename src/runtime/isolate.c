@@ -189,9 +189,6 @@ static V handle(VM *vm, V tag, size_t index, uint32_t generation)
     return v;
 }
 
-/* What a constructor made, or "out of memory" raised when it could not. */
-static V made(VM *vm, V v) { return v == V_CLEARED ? sj_raise(vm, "out of memory") : v; }
-
 static bool handle_of(V v, V tag, size_t *index, uint32_t *generation)
 {
     if (!is_object(v) || obj_type(v) != T_VECTOR || hdr_size(ptr(v)[0]) != 3 || ptr(v)[1] != tag ||

@@ -86,17 +86,13 @@ void profile_code(const void *start, size_t size, const char *name, size_t len)
     memcpy(copy, name, len);
     copy[len] = 0;
     pthread_mutex_lock(&ranges_lock);
-    if (nranges == ranges_cap) {
-        size_t cap = ranges_cap ? 2 * ranges_cap : 1024;
-        Range *r = realloc(ranges, cap * sizeof *r);
-        if (!r) {
-            pthread_mutex_unlock(&ranges_lock);
-            free(copy);
-            return;
-        }
-        ranges = r;
-        ranges_cap = cap;
+    Range *r = grow_array(ranges, &ranges_cap, nranges, sizeof *ranges, 1024);
+    if (!r) {
+        pthread_mutex_unlock(&ranges_lock);
+        free(copy);
+        return;
     }
+    ranges = r;
     ranges[nranges++] = (Range){(uintptr_t)start, (uintptr_t)start + size, copy};
     pthread_mutex_unlock(&ranges_lock);
 }

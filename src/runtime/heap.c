@@ -306,14 +306,10 @@ bool ra_push(RootArray *ra, V v, size_t *index)
    them. */
 static bool weak_push(V **list, size_t *n, size_t *cap, V v)
 {
-    if (*n == *cap) {
-        size_t c = *cap ? 2 * *cap : 16;
-        V *l = realloc(*list, c * sizeof *l);
-        if (!l)
-            return false;
-        *list = l;
-        *cap = c;
-    }
+    V *l = grow_array(*list, cap, *n, sizeof *l, 16);
+    if (!l)
+        return false;
+    *list = l;
     (*list)[(*n)++] = v;
     return true;
 }
@@ -324,14 +320,10 @@ bool vm_track_native(VM *vm, V code) { return weak_push(&vm->program->natives, &
 
 bool vm_guard(VM *vm, V pointer, V value)
 {
-    if (vm->nguards == vm->guards_cap) {
-        size_t cap = vm->guards_cap ? 2 * vm->guards_cap : 16;
-        Guard *guards = realloc(vm->guards, cap * sizeof *guards);
-        if (!guards)
-            return false;
-        vm->guards = guards;
-        vm->guards_cap = cap;
-    }
+    Guard *guards = grow_array(vm->guards, &vm->guards_cap, vm->nguards, sizeof *guards, 16);
+    if (!guards)
+        return false;
+    vm->guards = guards;
     vm->guards[vm->nguards++] = (Guard){pointer, value};
     return true;
 }
@@ -345,14 +337,11 @@ bool vm_guard(VM *vm, V pointer, V value)
    loaded. */
 static bool add_free_consts(VM *vm, size_t start, size_t len)
 {
-    if (vm->program->nfree_consts == vm->program->free_consts_cap) {
-        size_t cap = vm->program->free_consts_cap ? 2 * vm->program->free_consts_cap : 256;
-        void *ranges = realloc(vm->program->free_consts, cap * sizeof *vm->program->free_consts);
-        if (!ranges)
-            return false; /* the slots are lost, nothing else */
-        vm->program->free_consts = ranges;
-        vm->program->free_consts_cap = cap;
-    }
+    void *ranges = grow_array(vm->program->free_consts, &vm->program->free_consts_cap,
+                              vm->program->nfree_consts, sizeof *vm->program->free_consts, 256);
+    if (!ranges)
+        return false; /* the slots are lost, nothing else */
+    vm->program->free_consts = ranges;
     vm->program->free_consts[vm->program->nfree_consts].start = start;
     vm->program->free_consts[vm->program->nfree_consts++].len = len;
     return true;
@@ -490,14 +479,10 @@ bool vm_in_heap(const VM *vm, const void *at)
 
 void vm_root(VM *vm, V *slot)
 {
-    if (vm->ncroots == vm->croots_cap) {
-        size_t cap = vm->croots_cap ? 2 * vm->croots_cap : 64;
-        V **roots = realloc(vm->croots, cap * sizeof *roots);
-        if (!roots)
-            fatal("cannot grow the C root stack");
-        vm->croots = roots;
-        vm->croots_cap = cap;
-    }
+    V **roots = grow_array(vm->croots, &vm->croots_cap, vm->ncroots, sizeof *roots, 64);
+    if (!roots)
+        fatal("cannot grow the C root stack");
+    vm->croots = roots;
     vm->croots[vm->ncroots++] = slot;
 }
 
@@ -530,14 +515,10 @@ static V reach_large(Copy *c, V v)
         fatal("collector found a pointer outside the heap");
     if (!vm->large[lo].reached) {
         vm->large[lo].reached = true;
-        if (c->npending == c->pending_cap) {
-            size_t cap = c->pending_cap ? 2 * c->pending_cap : 16;
-            size_t *more = realloc(c->pending, cap * sizeof *more);
-            if (!more)
-                fatal("cannot grow the large object list");
-            c->pending = more;
-            c->pending_cap = cap;
-        }
+        size_t *more = grow_array(c->pending, &c->pending_cap, c->npending, sizeof *more, 16);
+        if (!more)
+            fatal("cannot grow the large object list");
+        c->pending = more;
         c->pending[c->npending++] = lo;
     }
     return v;
@@ -695,14 +676,10 @@ static void free_spares(VM *vm)
 
 static bool push_free(size_t **list, size_t *n, size_t *cap, size_t value)
 {
-    if (*n == *cap) {
-        size_t c = *cap ? 2 * *cap : 1024;
-        size_t *l = realloc(*list, c * sizeof *l);
-        if (!l)
-            return false;
-        *list = l;
-        *cap = c;
-    }
+    size_t *l = grow_array(*list, cap, *n, sizeof *l, 1024);
+    if (!l)
+        return false;
+    *list = l;
     (*list)[(*n)++] = value;
     return true;
 }
