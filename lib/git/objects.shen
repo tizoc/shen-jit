@@ -189,8 +189,11 @@
       (first-lines (cn Key " ") (split S 10))))
 
 (define one-header
-  V Key ->
-    (let H (header-values V Key)
+  V Key -> (one-header-line (split (buffer.string V) 10) Key))
+
+(define one-header-line
+  Lines Key ->
+    (let H (first-lines (cn Key " ") Lines)
       (do (ensure (= (length H) 1) (cn "expected exactly one " (cn Key " header"))) (hd H))))
 
 (define commit-parents

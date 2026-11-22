@@ -4633,6 +4633,12 @@ run on macOS. What they measured:
   `buffer.builder`. With 10,000, 20,000 and 40,000 packed refs, `delete-ref!` of a packed tag took 0.017, 0.034 and
   0.068 s, medians of nine in three processes alternated with the old code, where it took 0.46, 1.81 and 7.11.
 
+- **One split per commit in a log.** `log-record` split a commit's body into lines for its subject and parents, and
+  `one-header` split it again to find the committer. `one-header` now hands its lines to `one-header-line`, which
+  `log-record` calls with the lines it has. A warm `each-commit` over a linear history of 50,000 commits, in one pack,
+  took 0.067 s, medians of fifteen in three processes alternated: 0.110 on main, and 0.094 with the strings read in
+  place and the one-pass join but without this.
+
 ### Not tried yet
 
 - **True parallelism.** `thread` is real threads, one at a time; parallelism is the more advanced case, for later. It needs allocation

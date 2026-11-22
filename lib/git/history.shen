@@ -19,7 +19,7 @@
   Repo Id ->
     (let V (require-type Repo Id "commit")
          Lines (split (buffer.string V) 10)
-         Identity (one-header V "committer")
+         Identity (one-header-line Lines "committer")
          Tail (trim (snd (partition-text Identity 62)))
          Date (decimal (fst (partition-text Tail 32)))
       (log-entry.make Date Id (commit-subject Lines)
