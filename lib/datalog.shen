@@ -4102,10 +4102,10 @@
   [db Name S Interned | Rest] [Rel | Values]
   -> (let Rec (relation-of [db Name S Interned | Rest] Rel)
           Ids (find-values Values (types-of Name Rel) Interned [S | (nth 7 (datalog.program Name))])
-          Find (finder (length Values))
        (cases (= Ids no) false
+              (empty? Values) (> (<-address Rec 6) 0)
               (has-classes? Rec) (cons? (eq-pairs Rec all [1 2] Ids))
-              true (> (Find Rec Ids) 0))))
+              true (> ((finder (length Values)) Rec Ids) 0))))
 
 (define match
   [demand Name Kept] Pattern -> (match-demand Name Kept Pattern)

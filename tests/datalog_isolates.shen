@@ -171,6 +171,34 @@
   [(datalog.sorted (value dp.lattice-db) reached-by) (datalog.sorted (value dp.lattice-db) const)
    (datalog.sorted (value dp.lattice-db) known)])
 
+\* A relation of no columns: whether it holds, and a database by demand asked twice of a pattern of
+   no constants, whose magic relation has no columns, after the builder made its demand programs. *\
+(defdatalog dp.nullary
+  (relation imports [symbol symbol])
+  (relation depends [symbol symbol])
+  (relation some [])
+  (rule (depends X Y) <-- (imports X Y))
+  (rule (depends X Z) <-- (imports X Y) (depends Y Z))
+  (rule (some) <-- (imports _ _)))
+
+(set dp.nullary-facts [[imports a b] [imports b c]])
+
+(define dp.nullary-ask
+  [Shared Facts Out] -> (let Name (datalog.use Shared)
+                             Kept (datalog.demand-db Name Facts)
+                             First (datalog.sort (datalog.ask Kept (depends X Y)))
+                             Again (datalog.sort (datalog.ask Kept (depends X Y)))
+                          (channel.send Out [(datalog.holds? (datalog.run Name Facts) [some])
+                                             (datalog.holds? (datalog.run Name []) [some])
+                                             First Again (datalog.ask Kept (some)) (datalog.ask Kept (some))])))
+
+(datalog.run dp.nullary (value dp.nullary-facts))
+(datalog.solve dp.nullary (value dp.nullary-facts) [depends [var "X"] [var "Y"]])
+(datalog.solve dp.nullary (value dp.nullary-facts) [some])
+(dp.check "a relation of no columns in an isolate"
+  (dp.ask dp.nullary-ask (datalog.share dp.nullary) (value dp.nullary-facts))
+  [true false [[a b] [a c] [b c]] [[a b] [a c] [b c]] [[]] [[]]])
+
 (dp.check "only a shared program is used" true
   (trap-error (do (datalog.use [dp.paths]) false) (/. E true)))
 

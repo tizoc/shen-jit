@@ -225,6 +225,8 @@ All notable changes to this project are documented in this file. The format is b
 - A Datalog aggregate over a record whose field is bound before it, such as `(= M (mean W (b [p X W])))`, gives what
   it reads: `mean` gave no tuples, and `count`, `sum`, `min` and `max` gave 0 or nothing when the rule ran as KL, as
   with division, strings or a lattice of a Shen function.
+- In an isolate, `datalog.holds?` of a Datalog relation of no columns, and asking a `datalog.demand-db` a second time
+  a pattern with no constants, answer: they raised "datalog.k.find.0 was not prepared".
 
 ## [0.10] - 2026-11-19
 
