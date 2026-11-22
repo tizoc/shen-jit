@@ -4599,6 +4599,17 @@ and Linux's TUN and TAP suites pass with no heap words.
 - **Rejected: writing them in Shen.** Only `bit-not`, `rotate32` and `bswap32` could move, freeing about 21 of 230 lines of C. `popcount`,
   `clz` and `ctz` take 9 to 11 ns against 2, and `bytes->string` built with `cn` is quadratic, about 64,000 times slower at 64 KB.
 
+### What a review of the libraries found (2026-11-22, Apple M3 Max, against main f219b198)
+
+An outside review of `lib/` listed about 60 findings, each with a fix. Each was checked against the code, and
+reproduced where it could be: about a third held as written, a third in part, and the rest were wrong, unreachable, or
+not worth their code. The commits after f219b198 fix what held, each with a test that failed before it, where one can
+run on macOS. What they measured:
+
+- One IPv4 header writer: `net-ipv4.write-header` is a tail call to `write-header-ttl` with 64, and UDP's send makes
+  one call with 1 or 64. 20 M header writes took 1.124 s against 1.114 s, 0.5 ns more each for the call and the TTL's
+  range check; 5 M UDP sends and receives took 1.20 to 1.23 s either way. Kept for the code it removes.
+
 ### Not tried yet
 
 - **True parallelism.** `thread` is real threads, one at a time; parallelism is the more advanced case, for later. It needs allocation

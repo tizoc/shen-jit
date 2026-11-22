@@ -80,16 +80,11 @@
     (let Pseudo (sum16 B (wire.ipv4.source-at I) 8 (fx+ Proto N))
       (checksum (sum16 B (fx+ I (wire.ipv4.size)) N Pseudo))))
 
+\\ A header of TTL 64, or of another TTL, as a group's datagrams take 1.
 (define write-header
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> buffer.view}
-  B I Count Proto Src Dst ->
-    (do (write-layout wire.ipv4 B I
-          (version 4) (header-length 5) (total-length Count)
-          (dont-fragment 1) (time-to-live 64) (protocol Proto)
-          (source Src) (destination Dst))
-        (wire.ipv4.checksum-> B I (packet-checksum B I (wire.ipv4.size)))))
+  B I Count Proto Src Dst -> (write-header-ttl B I Count Proto Src Dst 64))
 
-\\ The same with another TTL, as a group's datagrams take 1.
 (define write-header-ttl
   {buffer.view --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> fixnum --> buffer.view}
   B I Count Proto Src Dst TTL ->

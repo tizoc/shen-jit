@@ -136,8 +136,8 @@
   B I Src SrcPort Dst DstPort Payload Start N ->
     (let Length (fx+ N (wire.udp.size))
          T (datagram4 I)
-      (do (if (net-ipv4.multicast? Dst) (net-ipv4.write-header-ttl B I (fx+ N (headers4)) (wire.udp-protocol) Src Dst 1)
-              (net-ipv4.write-header B I (fx+ N (headers4)) (wire.udp-protocol) Src Dst))
+      (do (net-ipv4.write-header-ttl B I (fx+ N (headers4)) (wire.udp-protocol) Src Dst
+                                     (if (net-ipv4.multicast? Dst) 1 64))
           (write-layout wire.udp B T (source-port SrcPort) (destination-port DstPort) (length Length))
           (buffer.copy-into! B (fx+ T (wire.udp.size)) Payload Start N)
           (wire.udp.checksum-> B T (as-sent (udp-checksum B I Length))))))

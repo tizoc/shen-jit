@@ -126,6 +126,17 @@
            (udp-test.expect "queue a datagram with a TTL of 0" udp.sent (udp.packet-send (udp.left L) Request 31))
            (udp-test.expect "take a datagram with a TTL of 0" udp.received (udp.recv-into Server Out Info 1)))))
 
+\\ A group's datagrams go out with a TTL of 1; the exact bytes in udp-test.wire show others' 64.
+(define udp-test.group-ttl
+  {--> boolean}
+  -> (let L (udp.make-link 2 31 0 (freeze 0))
+          Client (udp.bind (udp.left L) (udp.ipv4 192 0 2 1) 12345)
+          Wire (buffer.new 31)
+       (do (udp-test.expect "send to a group" udp.sent (udp.send Client (udp.ipv4 239 1 2 3) 7 (buffer.from-string "abc") 3))
+           (udp-test.expect-int "a group's datagram" 31 (udp.packet-recv-into (udp.right L) Wire))
+           (udp-test.expect-int "a group's TTL" 1 (buffer.u8 Wire 8))
+           (udp-test.expect-int "a group's header checksum" 0 (net-ipv4.packet-checksum Wire 0 20)))))
+
 (define udp-test.clock
   {fixnum --> (vector fixnum)}
   Now -> (fxvector-> (vector 1) 1 Now))
@@ -171,4 +182,4 @@
 (define udp-test.run
   {--> boolean}
   -> (and (udp-test.wire) (udp-test.checksum-edges) (udp-test.checksum-span)
-          (udp-test.discards) (udp-test.time-to-live) (udp-test.fifo)))
+          (udp-test.discards) (udp-test.time-to-live) (udp-test.group-ttl) (udp-test.fifo)))
