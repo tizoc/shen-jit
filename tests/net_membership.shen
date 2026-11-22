@@ -154,6 +154,20 @@
           (expect (and (net-multicast.leave4 M IP 0) (poll F 0) (= (take F) -1))
                   "IGMPv1 has no leave report"))))
 
+\\ RFC 2236 2.2: an IGMPv2 query's Max Resp Time counts tenths of a second, up to 25.5 seconds, and
+\\ IGMPv1's, 0, stands for 10 seconds.
+(define legacy-delay
+  {fixnum --> fixnum --> boolean}
+  Code Limit ->
+    (let F (setup 1 8)
+         M (fixture.members F)
+      (do (expect (and (net-multicast.join4 M (fixture.group4 F) 0) (poll F 0) (fx> (take F) 0)
+                       (poll F 1000) (fx> (take F) 0) (= (net-multicast.next-deadline M true) -1))
+                  "send a join and its repeat")
+          (expect (legacy4 F 17 Code 0) "an older general query")
+          (let Due (net-multicast.next-deadline M true)
+            (expect (and (fx> Due 0) (fx<= Due Limit)) "report within an older query's response time")))))
+
 (define source-query4
   {fixture --> fixnum --> fixnum --> fixnum --> boolean}
   F Group Source Now ->
@@ -232,6 +246,7 @@
   {--> boolean}
   -> (do (capacity 2)
          (legacy 2)
+         (legacy-delay 200 20000) (legacy-delay 255 25500) (legacy-delay 0 10000)
          (source-filters 1)
          (output "3 passed, 0 failed~%")
          true))

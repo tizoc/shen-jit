@@ -154,6 +154,8 @@ All notable changes to this project are documented in this file. The format is b
 - A half-open TCP connection answers a repeated SYN with its SYN-ACK without counting it as a retry: each one doubled
   the timeout and spent a retry, so a Linux client's own retries could time the connection out in about a minute,
   where it should wait about two.
+- A multicast member answers an IGMPv2 query whose maximum response time is 12.8 seconds or more within that time: it
+  read it as IGMPv3 does, and could wait up to 53 minutes where the query allowed 25.5 seconds.
 
 ## [0.10] - 2026-11-19
 

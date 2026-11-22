@@ -484,7 +484,7 @@
          Old (= Bytes (wire.igmp.size))
          Modern (fx>= Bytes (wire.igmp3-query.size))
          Count (if Modern (wire.igmp3-query.sources B At) (fixnum 0))
-         Span (if (and Old (= Code 0)) (fixnum 10000) (igmp-delay Code))
+         Span (if Old (if (= Code 0) (fixnum 10000) (fx* 100 Code)) (igmp-delay Code))   \\ RFC 2236 2.2.
       (and (or (and (= IP 0) (= Dst (all-systems)) (= Count 0))
                (and (net-ipv4.multicast? IP) (= IP Dst) (or Modern (not (ssm4? IP)))))
            (or (and Old (or (not (= Code 0)) (= IP 0)))
