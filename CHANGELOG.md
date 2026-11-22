@@ -182,6 +182,8 @@ All notable changes to this project are documented in this file. The format is b
   where it took 0.27.
 - `git.merge!` gives `(:git.conflict Paths)`, with the paths below the file, when one side adds a file where the other
   adds a directory, where it raised "file and directory collide" and wrote nothing.
+- The `git` library refuses revisions such as `HEAD~{tree}` and `v1~{}`, as Git does, where it read them as
+  `HEAD^{tree}` and `v1^{}`.
 
 ## [0.10] - 2026-11-19
 

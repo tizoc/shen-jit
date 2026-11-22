@@ -241,6 +241,9 @@ def exercise_repository(root, object_format):
     app(repo, "branch", "first", first[:10])
     git(repo, "tag", "-a", "original", "-m", "annotation", first)
     assert_git_equal(repo, "rev-parse", "original^{}", "HEAD^0", "HEAD:")
+    for spec in ("HEAD~{tree}", "HEAD~{}", "original~{}", "original~{commit}"):
+        git(repo, "rev-parse", spec, error="")
+        app(repo, "rev-parse", spec, error="invalid decimal field")
 
     git(repo, "update-index", "--index-version", "4")
     assert_git_equal(repo, "ls-files", "-s", "-z")

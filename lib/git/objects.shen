@@ -309,12 +309,13 @@
   Repo Id V At End ->
     (let Stop (revision-end V (+ At 1) End)
          S (buffer.string (buffer.slice V (+ At 1) (- (- Stop At) 1)))
-         Next (cases (= S "{}") (peel Repo Id 0)
-                     (= S "{commit}") (as-commit Repo Id)
-                     (= S "{tree}") (as-tree Repo Id)
+         Caret (= (buffer.u8 V At) 94)
+         Next (cases (and Caret (= S "{}")) (peel Repo Id 0)
+                     (and Caret (= S "{commit}")) (as-commit Repo Id)
+                     (and Caret (= S "{tree}")) (as-tree Repo Id)
                      true (let N (if (= S "") 1 (decimal S))
                                 _ (ensure (<= N 100000) "revision parent count exceeds limit")
-                             (if (= (buffer.u8 V At) 94)
+                             (if Caret
                                  (nth-parent Repo Id N)
                                  (first-parent Repo (as-commit Repo Id) N))))
       (revision-suffix Repo Next V Stop End)))
