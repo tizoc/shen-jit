@@ -25,8 +25,8 @@
 #include <sys/resource.h>
 #endif
 
-/* A fragment's blocks, and a new isolate's heap and stack, in words. Both grow as needed. */
-enum { BLOCK_WORDS = 1 << 12, CONTEXT_WORDS = 1 << 14, CONTEXT_STACK = 1 << 12 };
+/* A fragment's inline buffer and overflow blocks, and a new isolate's heap and stack, in words. */
+enum { INLINE_WORDS = 32, BLOCK_WORDS = 1 << 12, CONTEXT_WORDS = 1 << 14, CONTEXT_STACK = 1 << 12 };
 
 /* ---------------------------------------------------------------------------------------------
    Fragments */
@@ -42,6 +42,8 @@ typedef struct Fragment {
     Block *blocks;
     size_t nblocks, cap, words;
     V root;
+    size_t inline_used;
+    uint64_t inline_words[INLINE_WORDS];
 } Fragment;
 
 static void fragment_free(Fragment *f)
@@ -56,6 +58,14 @@ static void fragment_free(Fragment *f)
 
 static uint64_t *fragment_alloc(Fragment *f, size_t words)
 {
+    /* Use inline storage until the first overflow block is needed so the breadth-first
+       scan finishes inline_words before moving on to blocks[]. */
+    if (!f->nblocks && f->inline_used + words <= INLINE_WORDS) {
+        uint64_t *at = f->inline_words + f->inline_used;
+        f->inline_used += words;
+        f->words += words;
+        return at;
+    }
     Block *b = f->nblocks ? &f->blocks[f->nblocks - 1] : NULL;
     if (!b || b->used + words > (b->used > BLOCK_WORDS ? b->used : BLOCK_WORDS)) {
         Block *blocks = grow_array(f->blocks, &f->cap, f->nblocks, sizeof *blocks, 8);
@@ -280,30 +290,39 @@ static V out_value(Out *o, V v)
     }
 }
 
+static void out_scan_object(Out *o, uint64_t *s)
+{
+    if (is_header(*s)) {
+        size_t first, count;
+        obj_values(*s, &first, &count);
+        for (size_t i = 0; i < count; i++)
+            s[first + i] = out_value(o, s[first + i]);
+    } else {
+        s[0] = out_value(o, s[0]);
+        s[1] = out_value(o, s[1]);
+    }
+}
+
 /* A fragment of v, or NULL with the reason in *error and the value at fault in *offender. */
 static Fragment *fragment_out(VM *vm, V v, bool spawn, uint64_t **given, size_t *ngiven, const char **error,
                               V *offender)
 {
-    Out o = {vm, vm->program->isolates, calloc(1, sizeof(Fragment)), {NULL, NULL, 0, 0}, spawn, NULL, V_NIL,
-             NULL, 0, 0};
+    Out o = {.vm = vm, .ps = vm->program->isolates, .f = calloc(1, sizeof(Fragment)), .spawn = spawn, .offender = V_NIL};
     Fragment *f = o.f;
     if (!f) {
         o.error = "out of memory";
     } else {
         f->root = out_value(&o, v);
+        for (size_t w = 0; w < f->inline_used && !o.error;) {
+            uint64_t *s = f->inline_words + w;
+            w += fragment_object_words(s);
+            out_scan_object(&o, s);
+        }
         for (size_t b = 0; b < f->nblocks && !o.error; b++)
             for (size_t w = 0; w < f->blocks[b].used && !o.error;) {
                 uint64_t *s = f->blocks[b].words + w;
                 w += fragment_object_words(s);
-                if (is_header(*s)) {
-                    size_t first, count;
-                    obj_values(*s, &first, &count);
-                    for (size_t i = 0; i < count; i++)
-                        s[first + i] = out_value(&o, s[first + i]);
-                } else {
-                    s[0] = out_value(&o, s[0]);
-                    s[1] = out_value(&o, s[1]);
-                }
+                out_scan_object(&o, s);
             }
     }
     addr_map_free(&o.map);
@@ -353,11 +372,34 @@ static V in_value(In *in, V v)
         return o[1];
     if (in->adopt && !is_pair(v) && adoptable(o)) /* taken by the heap, as it is */
         return v;
-    size_t words = is_pair(v) ? 2 : obj_words(o[0]);
     uint64_t *q = in->next;
+    q[0] = o[0];
+    q[1] = o[1];
+    if (is_pair(v)) {
+        in->next += 2;
+        V copy = tagged(q, TAG_PAIR);
+        o[0] = V_FORWARD;
+        o[1] = copy;
+        /* Copy a list's spine contiguously, as the collector does (heap.c). */
+        for (V t = q[1]; is_pair(t);) {
+            uint64_t *to = ptr(t);
+            if (in_program(in->vm, to) || to[0] == V_FORWARD)
+                break;
+            uint64_t *tq = in->next;
+            tq[0] = to[0];
+            tq[1] = to[1];
+            in->next += 2;
+            to[0] = V_FORWARD;
+            to[1] = tagged(tq, TAG_PAIR);
+            t = tq[1];
+        }
+        return copy;
+    }
+    size_t words = obj_words(o[0]);
+    for (size_t i = 2; i < words; i++)
+        q[i] = o[i];
     in->next += words;
-    memcpy(q, o, words * sizeof(uint64_t));
-    if (in->shared && !is_pair(v) && (hdr_type(q[0]) == T_VECTOR || hdr_type(q[0]) == T_BYTES))
+    if (in->shared && (hdr_type(q[0]) == T_VECTOR || hdr_type(q[0]) == T_BYTES))
         q[0] |= SHARED_BIT;
     V copy = tagged(q, tag3(v));
     o[0] = V_FORWARD; /* every object has two words at least, as for a collection */

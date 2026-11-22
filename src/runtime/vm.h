@@ -315,10 +315,13 @@ V program_promote_foreign(VM *vm, V proc, const char **why);
 bool program_install(VM *vm, V name, V proc);
 
 /* From an object's old address to its copy, so that a copy keeps sharing and cycles (program.c). */
+enum { ADDR_MAP_SMALL = 16 };
 typedef struct {
     uintptr_t *keys;
     V *values;
     size_t cap, n;
+    uintptr_t small_keys[ADDR_MAP_SMALL];
+    V small_values[ADDR_MAP_SMALL];
 } AddrMap;
 V addr_map_get(const AddrMap *m, uintptr_t key);
 bool addr_map_put(AddrMap *m, uintptr_t key, V value);

@@ -436,8 +436,9 @@ port's Shen source takes definitions only; what the datatypes define is left off
 `shen.*userdefs*`.
 
 **Spawning** (`isolate.c`). `isolate.spawn` takes the name of a function of one argument
-whose procedure is in the program space, and a value, which it copies into a fragment: blocks
-outside every heap. The new thread makes a context (`vm_create_context`), with a heap that
+whose procedure is in the program space, and a value, which it copies into a fragment: 32 words
+of its own, then blocks outside every heap. The new thread makes a context
+(`vm_create_context`), with a heap that
 reserves 8 GiB for each region rather than the builder's 64, as reserving and releasing that
 much took most of a spawn, a small stack that grows, and a slot for each global number. It
 starts as above and copies the fragment into its heap.

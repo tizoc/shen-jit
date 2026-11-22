@@ -218,18 +218,40 @@ V addr_map_get(const AddrMap *m, uintptr_t key)
 
 bool addr_map_put(AddrMap *m, uintptr_t key, V value)
 {
-    if (2 * (m->n + 1) > m->cap) {
-        size_t cap = m->cap ? 2 * m->cap : 64;
-        AddrMap grown = {calloc(cap, sizeof(uintptr_t)), malloc(cap * sizeof(V)), cap, 0};
-        if (!grown.keys || !grown.values) {
-            addr_map_free(&grown);
+    if (!m->cap) {
+        memset(m->small_keys, 0, sizeof m->small_keys);
+        m->keys = m->small_keys;
+        m->values = m->small_values;
+        m->cap = ADDR_MAP_SMALL;
+    } else if (2 * (m->n + 1) > m->cap) {
+        size_t cap = m->cap >= 32 ? 2 * m->cap : 64;
+        uintptr_t *keys = calloc(cap, sizeof(uintptr_t));
+        V *values = malloc(cap * sizeof(V));
+        if (!keys || !values) {
+            free(keys);
+            free(values);
             return false;
         }
-        for (size_t i = 0; i < m->cap; i++)
-            if (m->keys[i])
-                addr_map_put(&grown, m->keys[i], m->values[i]);
-        addr_map_free(m);
-        *m = grown;
+        size_t old_cap = m->cap;
+        uintptr_t *old_keys = m->keys;
+        V *old_values = m->values;
+        m->keys = keys;
+        m->values = values;
+        m->cap = cap;
+        m->n = 0;
+        for (size_t i = 0; i < old_cap; i++)
+            if (old_keys[i]) {
+                size_t j = addr_map_index(m, old_keys[i]);
+                while (m->keys[j])
+                    j = (j + 1) & (cap - 1);
+                m->keys[j] = old_keys[i];
+                m->values[j] = old_values[i];
+                m->n++;
+            }
+        if (old_keys != m->small_keys) {
+            free(old_keys);
+            free(old_values);
+        }
     }
     size_t i = addr_map_index(m, key);
     while (m->keys[i])
@@ -242,8 +264,10 @@ bool addr_map_put(AddrMap *m, uintptr_t key, V value)
 
 void addr_map_free(AddrMap *m)
 {
-    free(m->keys);
-    free(m->values);
+    if (m->keys != m->small_keys) {
+        free(m->keys);
+        free(m->values);
+    }
     m->keys = NULL;
     m->values = NULL;
     m->cap = m->n = 0;

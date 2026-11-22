@@ -2509,6 +2509,21 @@ and blank lines.
   wait on monitors, so they see a failure as it happens. A parent recorded in the runtime would only police bare
   spawns.
 
+### Small messages without a block (2026-11-22, Apple M3 Max, load 2.5 to 4.3, against main)
+
+From an outside agent's branch, reviewed and measured that day. Every fragment, the copy of a message between
+isolates, allocated a block of 4,096 words, 32 KB, even for a list of two numbers. A fragment now has 32 words of its
+own, used before any block, and an address map 16 entries before it allocates; copying a fragment in lays a list's
+spine out contiguously, in a loop rather than a recursion per pair. 1,000,000 sends of `[N N]` from an isolate to the
+builder through a channel of 64, best of 3: 0.674 to 0.211 s.
+
+- **Rejected: waking one sender per dequeue,** in place of all. It passed over a sender marked killed, and an isolate
+  stays marked once killed: one that catches "killed" and sends again, as handlers may, waited for good on a full
+  channel. A sender that took a slot without being woken also stays listed, so the one signal could go to it while
+  another waits. Waking all costs a spurious wakeup at worst, and the time above is the same either way.
+- **Rejected: reading `kill_pending` without the lock,** with atomic stores, in `sj_isolate_killed`, which input waits
+  call every 100 ms.
+
 ### x86-64 and Linux (2026-11-03)
 
 Every suite ran in Docker (arm64 with gcc 15, x86-64 through Rosetta with gcc 14, from the release tarball), then natively on
