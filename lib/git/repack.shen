@@ -152,7 +152,7 @@
               (mapcan (index-roots Repo) [(repo.common Repo) | Linked])
               (mapcan (/. Dir (let Head (strip-eol (control-or (fs.join Dir "HEAD") ""))
                                 (if (hex? Head (repo.width Repo)) [Head] [])))
-                      Linked))))
+                      [(repo.common Repo) | Linked]))))
 
 (define index-roots
   Repo Dir ->

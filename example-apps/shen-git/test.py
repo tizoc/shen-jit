@@ -353,6 +353,14 @@ def exercise_repository(root, object_format):
     app(root, "-C", linked, "add", "another")
     app(linked, "commit", "-m", "worktree")
     assert git(repo, "show", "linked:another") == b"linked worktree\n"
+    # A repack from the linked worktree packs what only the main worktree's HEAD reaches.
+    git(repo, "switch", "-q", "--detach")
+    write(repo, "detached", b"reached by the main worktree's HEAD alone\n")
+    git(repo, "add", "detached")
+    git(repo, "commit", "-qm", "detached")
+    detached = object_id(repo, "HEAD")
+    app(linked, "repack")
+    assert not (repo / ".git/objects" / detached[:2] / detached[2:]).exists()
     git(repo, "fsck", "--strict")
     print(f"PASS {object_format} objects, refs, indexes, patch, worktree, clone and pack")
 
