@@ -282,13 +282,6 @@
          _ (clear-ref-dir! Path)
       (transition! Repo Id Path (control Path) Id Current true)))
 
-(define mark-ancestors
-  _ [] Seen -> Seen
-  Repo [Id | Rest] Seen ->
-    (if (cons? (lookup Seen Id)) (mark-ancestors Repo Rest Seen)
-        (do (remember Seen Id true)
-            (mark-ancestors Repo (append (commit-parents Repo Id) Rest) Seen))))
-
 (define first-commons
   _ [] _ _ Found -> Found
   Repo [Id | Rest] Seen Ours Found ->
@@ -297,10 +290,10 @@
             (if (cons? (lookup Ours Id)) (first-commons Repo Rest Seen Ours [Id | Found])
                 (first-commons Repo (append (commit-parents Repo Id) Rest) Seen Ours Found)))))
 
+\\ The best common ancestors of B and the commit whose ancestors Ours holds.
 (define merge-bases
-  Repo A B ->
-    (let Ours (mark-ancestors Repo [A] (dictionary))
-         Common (first-commons Repo [B] (dictionary) Ours [])
+  Repo Ours B ->
+    (let Common (first-commons Repo [B] (dictionary) Ours [])
          Best (mapcan (/. Id
                   (if (some? (/. Other (and (not (= Id Other)) (reaches Repo Id [Other] (dictionary)))) Common)
                       [] [Id])) Common)
@@ -335,16 +328,18 @@
          Hit (has-index-parent? Seen (parent-prefix Path))
       (do (remember Seen Path true) (index-collisions More Seen (if Hit [Path | Found] Found)))))
 
-\\ A three-way merge of paths each side changed, or the reason it stopped.
+\\ A three-way merge of paths each side changed, or the reason it stopped. Looking for Id among
+\\ HEAD's ancestors without finding it leaves them all in Ours.
 (define merge!
   Repo Spec Message ->
     (let Id (as-commit Repo (resolve-revision Repo Spec))
          Current (ref-value Repo "HEAD")
+         Ours (dictionary)
       (if (or (empty? Current) (reaches Repo (hd Current) [Id] (dictionary))
-              (reaches Repo Id Current (dictionary)))
+              (reaches Repo Id Current Ours))
           (fast-forward! Repo Spec)
           (let A (hd Current)
-               Bases (merge-bases Repo A Id)
+               Bases (merge-bases Repo Ours Id)
             (if (cons? (tl Bases)) (multiple-bases.make Bases)
                 (let Index (merge-index (committed-index Repo (hd Bases)) (committed-index Repo A)
                                         (committed-index Repo Id))

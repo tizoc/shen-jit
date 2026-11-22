@@ -4639,6 +4639,15 @@ run on macOS. What they measured:
   took 0.067 s, medians of fifteen in three processes alternated: 0.110 on main, and 0.094 with the strings read in
   place and the one-pass join but without this.
 
+- **One walk of HEAD's history in a merge.** `merge!` first looks for HEAD among the other commit's ancestors and for
+  that commit among HEAD's, each walk stopping at its goal, so a fast-forward and a merge already made stay cheap;
+  then `merge-bases` walked all of HEAD's ancestors again. The second search, when it fails, has marked exactly those,
+  so `merge-bases` now takes its dictionary, and `mark-ancestors` is gone. Marking HEAD's ancestors first and finding
+  the bases from them alone, with no searches, was not done: a fast-forward would then walk all of HEAD's history,
+  where its search usually stops after the new commits. A merge of two branches over a linear history of 50,000
+  commits, cold, in one process each, took 0.466 s, medians of five alternated: 0.569 on main, and 0.531 with the
+  day's earlier changes but not this.
+
 ### Not tried yet
 
 - **True parallelism.** `thread` is real threads, one at a time; parallelism is the more advanced case, for later. It needs allocation
