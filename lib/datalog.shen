@@ -878,7 +878,9 @@
   bshl A B -> (arithmetic bshr A (- 0 B)) where (< B 0)
   bshr A B -> (arithmetic bshl A (- 0 B)) where (< B 0)
   bshl 0 _ -> 0
-  bshl A B -> (in-range (shen-jit.shift-left A (if (> B 32) 32 B)))
+  bshl -1 31 -> -2147483648
+  bshl _ B -> (overflowed) where (> B 30)
+  bshl A B -> (in-range (shen-jit.shift-left A B))
   bshr A B -> (shen-jit.shift-right A (if (> B 31) 31 B)))
 
 \\ A / B truncated toward zero, B not 0, by long division.

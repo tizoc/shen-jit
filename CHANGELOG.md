@@ -227,6 +227,8 @@ All notable changes to this project are documented in this file. The format is b
   with division, strings or a lattice of a Shen function.
 - In an isolate, `datalog.holds?` of a Datalog relation of no columns, and asking a `datalog.demand-db` a second time
   a pattern with no constants, answer: they raised "datalog.k.find.0 was not prepared".
+- A Datalog `(bshl A B)` whose result is not 32 bits raises however the rule runs: by 31 places or more, or by a
+  column, it could give 0 or -2147483648 for an `A` at the edge of 32 bits, as `(bshl -2147483648 31)` gave 0.
 
 ## [0.10] - 2026-11-19
 

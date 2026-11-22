@@ -880,6 +880,31 @@
   (freeze (datalog.run (datalog.define dt.bad [[relation a [integer]] [rule [a [var "Y"]] [[a [var "X"]] [= [var "Y"] [bshl 1 [var "X"]]] [< [var "Y"] 0]]]]) [[a 40]])))
 (dt.raises "a shift too far, natively" "outside 32 bits"
   (freeze (datalog.run (datalog.define dt.bad [[relation a [integer]] [relation b [integer]] [rule [b [var "Y"]] [[a [var "X"]] [= [var "Y"] [bshl [var "X"] 31]]]]]) [[a 4]])))
+\* Shifts at the edge of 32 bits, by a constant, which runs natively, and by a column, which runs as
+   KL: of what is not 0, only -1 shifted by 31 stays within them. *\
+(defdatalog dt.shift-edge
+  (relation u [integer])
+  (relation v [integer])
+  (relation s [integer])
+  (relation by-31 [integer integer])
+  (relation by-column [integer integer integer])
+  (rule (by-31 X Z) <-- (u X) (= Z (bshl X 31)))
+  (rule (by-column X S Z) <-- (v X) (s S) (= Z (bshl X S))))
+(dt.same "a shift by 31" [[u -1] [u 0] [v -1] [s 31]] dt.shift-edge by-31 [[-1 -2147483648] [0 0]])
+(dt.same "a shift by 31" [[u -1] [u 0] [v -1] [s 31]] dt.shift-edge by-column [[-1 31 -2147483648]])
+(dt.same "a shift of 0" [[v 0] [s 31] [s 32] [s 100]] dt.shift-edge by-column [[0 31 0] [0 32 0] [0 100 0]])
+(define dt.shift-raises
+  Facts -> (do (dt.raises (make-string "a shift past 32 bits ~R" Facts) "outside 32 bits"
+                 (freeze (datalog.run dt.shift-edge Facts)))
+               (dt.raises (make-string "a shift past 32 bits ~R, KL" Facts) "outside 32 bits"
+                 (freeze (dt.run-kl dt.shift-edge Facts)))
+               (set datalog.*native* true)
+               (datalog.forget-code dt.shift-edge)
+               (dt.raises (make-string "a shift past 32 bits ~R, reference" Facts) "outside 32 bits"
+                 (freeze (datalog.run-naive dt.shift-edge Facts)))))
+(map (function dt.shift-raises)
+     [[[u -2147483648]] [[u 2147483647]] [[u 1]] [[v -2147483648] [s 31]] [[v 1073741824] [s 32]]
+      [[v -1073741824] [s 32]] [[v -2147483648] [s 33]] [[v -1] [s 32]] [[v 1] [s 2147483647]]])
 (dt.raises "a string function's types" "cat takes"
   (freeze (datalog.define dt.bad [[relation a [string]] [rule [a [var "S"]] [[a [var "T"]] [= [var "S"] [cat [var "T"] 1]]]]])))
 (dt.raises "a string function's arity" "strlen takes 1 values, not 2"
