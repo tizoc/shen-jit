@@ -14,14 +14,18 @@
               (output "FAIL ~A: wanted ~S, got ~S~%" Name Expected Actual)))))
 
 (define read-test.feed
-  Wire Step -> (let State (io.record [0])
-                 (io.endpoint "chunks" read 65536
-                   (/. Out (let At (<-address State 0)
-                                N (io.min Step (io.min (shen-jit.bytes-length Out) (- (buffer.length Wire) At)))
-                             (if (= N 0) (:result.ok [])
-                                 (do (shen-jit.copy-bytes Out 0 (buffer.owner Wire) (+ (buffer.offset Wire) At) N)
-                                     (address-> State 0 (+ At N)) (:result.ok [N])))))
-                   (function io.no-write) (freeze (:result.ok [])))))
+  Wire Step -> (read-test.feed-then Wire Step (:result.ok [])))
+
+\\ Step bytes a read, then Last: (:result.ok []) for EOF, or an error.
+(define read-test.feed-then
+  Wire Step Last -> (let State (io.record [0])
+                      (io.endpoint "chunks" read 65536
+                        (/. Out (let At (<-address State 0)
+                                     N (io.min Step (io.min (shen-jit.bytes-length Out) (- (buffer.length Wire) At)))
+                                  (if (= N 0) Last
+                                      (do (shen-jit.copy-bytes Out 0 (buffer.owner Wire) (+ (buffer.offset Wire) At) N)
+                                          (address-> State 0 (+ At N)) (:result.ok [N])))))
+                        (function io.no-write) (freeze (:result.ok [])))))
 (define read-test.summary
   (:result.ok [Q]) -> [0 (http.method Q) (http.target Q) (http.headers Q)]
   (:result.err E) -> [(io.error-code E)])
@@ -81,6 +85,15 @@
 (read-test.check "a hundred and one fields" [431]
   (freeze (read-test.summary (http.read-request (io.reader (read-test.feed (buffer.from-string
             (read-test.head (read-test.fields 101 ""))) 4096) []) 16384 0))))
+
+\\ A short invalid head is refused as soon as it shows, not when the client's deadline expires.
+(read-test.check "a short invalid head, then a stall"
+  [[400 "invalid request line"] [400 "unsupported or invalid request target"] [400 "invalid request line"]]
+  (freeze (map (/. Text (let Stall (:result.err (io.native-error read timeout 0 "chunks" "deadline expired"))
+                             E (read-test.feed-then (buffer.from-string Text) 100 Stall)
+                             Got (http.read-request (io.reader E []) 16384 0)
+                          [(io.error-code (fixture.failure Got)) (io.error-message (fixture.failure Got))]))
+               ["GETc#13;c#10;" "GET /c#13;c#10;" "XYZc#13;c#10;c#13;c#10;"])))
 
 (read-test.check "pipelined head still obeys its byte limit" [0 431]
   (freeze

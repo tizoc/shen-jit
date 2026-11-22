@@ -4648,6 +4648,13 @@ run on macOS. What they measured:
   commits, cold, in one process each, took 0.466 s, medians of five alternated: 0.569 on main, and 0.531 with the
   day's earlier changes but not this.
 
+- **Streamed literals byte by byte.** A literal of several bytes has one bounds check, on its last byte; read from a
+  reader, that check waited for all of them before comparing the first, so a short malformed HTTP request waited out
+  its deadline. The stream's rewrite now checks and compares each byte in turn, and a complete parse's code is
+  unchanged. A first version nested each byte's test inside the last: `http.read-request` of a ten-field head from an
+  in-memory reader took 2.740 µs against main's 2.694. The chain kept, one test after another, takes 2.703 against
+  2.715, and `http.parse-request` 1.943 against 1.955 (medians of 9, alternated).
+
 ### Not tried yet
 
 - **True parallelism.** `thread` is real threads, one at a time; parallelism is the more advanced case, for later. It needs allocation

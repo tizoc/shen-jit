@@ -196,4 +196,20 @@
 (stream-test.check "a counted skip, read a byte at a time" (:result.ok [5])
   (freeze (grammar.read <s.counted> (stream-test.reader (cn (n->string 5) "abcde;") 1) (function stream-test.fail))))
 
+\\ A literal's bytes are compared as each arrives: one that differs early does not wait for the rest,
+\\ which may never come, nor need room for it under the limit.
+(defgrammar <s.keyword> "ABCDEFGHIJ" := long; "AB" ";" := short;)
+(stream-test.check "a literal that differs early does not wait for its length"
+  [(:result.ok [short]) [fail 0 "no match"] (:result.ok [short])]
+  (freeze (let Stall (:result.err (io.native-error read timeout 0 "chunks" "deadline expired"))
+            [(grammar.read <s.keyword> (io.reader (stream-test.feed (buffer.from-string "AB;") 100 Stall) [])
+                           (function stream-test.fail))
+             (grammar.read <s.keyword> (io.reader (stream-test.feed (buffer.from-string "XY") 100 Stall) [])
+                           (function stream-test.fail))
+             (grammar.read-within <s.keyword> (stream-test.reader "AB;" 100) 5 (function stream-test.fail))])))
+(stream-test.check "a check past the limit reads no more" [[fail 10 "input exceeds the limit"] ready]
+  (freeze (let Stall (:result.err (io.native-error read timeout 0 "chunks" "deadline expired"))
+               R (io.reader (stream-test.feed (buffer.from-string (cn (n->string 100) "abc")) 100 Stall) [])
+            [(grammar.read-within <s.counted> R 10 (function stream-test.fail)) (io.reader-status R)])))
+
 (output "~A passed, ~A failed~%" (value stream-test.passed) (value stream-test.failed))

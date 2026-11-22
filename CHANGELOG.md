@@ -198,6 +198,10 @@ All notable changes to this project are documented in this file. The format is b
   newline is refused, as in Git.
 - `git.repack!` run from a linked worktree packs what only the main worktree's detached HEAD reaches, which it left
   loose.
+- A grammar read from a reader compares a literal's bytes as they arrive, so input that differs early fails at once:
+  the HTTP server answered a short malformed request, such as `GET` and a line end, with 408 when the client's
+  deadline expired, and a grammar refused valid input with "input exceeds the limit" when a longer literal tried first
+  did not fit. A byte past the limit is no longer waited for.
 
 ## [0.10] - 2026-11-19
 

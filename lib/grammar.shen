@@ -1138,7 +1138,7 @@
 (define finish-read
   P S E Start Fail ->
     (let R (<-address E 1) Why (<-address E 2) End (<-address E 0)
-      (cases (= Why limit) (Fail (+ Start End) "input exceeds the limit")
+      (cases (= Why limit) (Fail (+ Start (<-address E 3)) "input exceeds the limit")
              (= Why (with-externals [failed] failed)) (io.reader-terminal R)
              (>= P 0) (do (io.consume R P) (result.ok [(<-address S 0)]))
              (and (= End 0) (= Why eof)) (result.ok [])
@@ -1147,13 +1147,14 @@
              true (Fail Start "no match"))))
 
 \\ A bounds check that failed: fill towards the byte at X, and say why there is none if there is not.
+\\ A byte past the limit is not waited for.
 (define refill
-  E X -> (let R (<-address E 1)
-              Limit (<-address E 3)
-              N (io.min (io.window-fill R (io.min (+ X 1) Limit)) Limit)
-              _ (address-> E 0 N)
-           (or (> N X)
-               (do (address-> E 2 (if (>= X Limit) limit (io.reader-status R))) false))))
+  E X -> (if (>= X (<-address E 3))
+             (do (address-> E 2 limit) false)
+             (let R (<-address E 1)
+                  N (io.min (io.window-fill R (+ X 1)) (<-address E 3))
+                  _ (address-> E 0 N)
+               (or (> N X) (do (address-> E 2 (io.reader-status R)) false)))))
 
 (define copy-span
   Buf At End -> (buffer.wrap (shen-jit.copy-bytes (shen-jit.bytes (- End At)) 0 Buf At (- End At))))
@@ -1251,6 +1252,7 @@
 
 (define rewrite
   Buf End [< X End] -> (let Y (rewrite Buf End X) [or [< Y [<-address End 0]] [refill End Y]])
+  Buf End [and [< _ End] Tests] -> (conj (each-byte Buf End Tests)) where (literal? Buf Tests)
   Buf End [buffer.make Buf A Z] -> [copy-span Buf (rewrite Buf End A) (rewrite Buf End Z)]
   Buf End [at-position X] -> [+ (rewrite Buf End X) [io.position [<-address End 1]]]
   Buf End [F Buf A End S | Rest] ->
@@ -1258,5 +1260,16 @@
     where (and (symbol? F) (cons? (source F)))
   Buf End [X | Y] -> (map (/. Z (rewrite Buf End Z)) [X | Y])
   _ _ X -> X)
+
+\\ A run of literal bytes has one bounds check, on its last byte (terminals). A stream checks each
+\\ byte as it arrives instead, so that a byte that differs fails at once, without waiting for the rest.
+(define literal?
+  Buf [and [= [shen-jit.u8 Buf _] _] Tests] -> (literal? Buf Tests)
+  Buf [= [shen-jit.u8 Buf _] _] -> true
+  _ _ -> false)
+
+(define each-byte
+  Buf End [and Test Tests] -> (append (each-byte Buf End Test) (each-byte Buf End Tests))
+  Buf End [= [shen-jit.u8 Buf X] Byte] -> [(rewrite Buf End [< X End]) [= [shen-jit.u8 Buf X] Byte]])
 
 )
