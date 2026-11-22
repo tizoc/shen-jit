@@ -4675,6 +4675,12 @@ run on macOS. What they measured:
   0.0127 s where they took 0.260, and 50 adds of one fact to a run 0.066 s where they took 0.111 (medians of 5,
   alternated).
 
+- **Strings by byte index.** `tlstr` copies the rest of a string, so checking that a field needs no quotes or holds no
+  tab, doubling quotes, comparing strings for `datalog.sorted`, `strlen` and `substr` were quadratic in a string's
+  length. They read bytes in place now, in about as many lines. On 200,000 tuples of two paths of 25 to 37 bytes,
+  `relation->bytes` took 0.085 s as tsv and 0.092 as csv, where it took 0.272 and 0.291, `datalog.sorted` 0.684 s
+  where it took 2.440, and a run of `strlen` and `substr` rules 0.073 s where it took 0.164 (medians, alternated).
+
 ### Not tried yet
 
 - **True parallelism.** `thread` is real threads, one at a time; parallelism is the more advanced case, for later. It needs allocation

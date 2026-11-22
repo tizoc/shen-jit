@@ -847,6 +847,13 @@
   (do (dt.check "strings made while running" (datalog.holds? Db [joined "ab" "hello" "ab-hello"]) true)
       (dt.check "strings made, counted" (datalog.count Db joined) 25)))
 (dt.same "a mean of nothing" [[word "x"]] dt.functions middle [])
+\* Strings by their bytes: sorted through shared prefixes, and parts at and past their ends. *\
+(dt.check "strings sorted" (datalog.sort [["ab"] ["a"] ["abc"] ["b"] [""] ["abd"] ["c#233;"] ["Z"]])
+  [[""] ["Z"] ["a"] ["ab"] ["abc"] ["abd"] ["b"] ["c#233;"]])
+(dt.check "parts of strings"
+  (map (/. A (datalog.string-op substr A)) [["hello" 0 5] ["hello" 3 10] ["hello" 5 1] ["hello" 9 2] ["hello" 2 0]
+                                            ["hello" 1 -1] ["hello" -2 2] ["" 0 3]])
+  ["hello" "lo" "" "" "" "" "he" ""])
 (defdatalog dt.native-bits
   (relation n [integer])
   (relation masked [integer integer])

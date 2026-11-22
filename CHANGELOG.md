@@ -142,6 +142,9 @@ All notable changes to this project are documented in this file. The format is b
   rounds: shortest paths over a 300 by 300 grid, 599 rounds, run in 3.7 s where they took 12.2.
 - `datalog.add`, and each query of a `datalog.demand-db` after its first of a pattern, cost what they add, not the
   facts the database holds: 200 queries of a demand database over 810,000 facts took 0.26 s, and take 0.013.
+- Datalog writes fact files, sorts strings, and runs `strlen` and `substr` in time linear in a string's length:
+  writing 200,000 tuples of two paths as tsv or csv takes a third of the time it did, and `datalog.sorted` of them
+  0.68 s where it took 2.44.
 
 ### Fixed
 

@@ -895,21 +895,20 @@
                   R (- N (* Q (* 2 D)))
                (+ (* 2 Q) (if (< R D) 0 1)))))
 
-\\ The string functions, on Shen's strings, by the characters pos and tlstr count; substr keeps
+\\ The string functions, on Shen's strings, by their bytes, which pos and tlstr count; substr keeps
 \\ what of its range the string has.
 (define string-op
   _ Args -> [] where (element? [] Args)
   cat [A B] -> (cn A B)
-  strlen [S] -> (length (explode S))
+  strlen [S] -> (shen-jit.bytes-length S)
   substr [S I N] -> (substring S (if (< I 0) 0 I) N)
   to-number [S] -> (let N (parse-integer S) (if (= N []) [] (in-range N)))
   to-string [N] -> (str N))
 
 (define substring
-  S I N -> (cases (<= N 0) ""
-                  (= S "") ""
-                  (> I 0) (substring (tlstr S) (- I 1) N)
-                  true (cn (pos S 0) (substring (tlstr S) 0 (- N 1)))))
+  S I N -> (let L (shen-jit.bytes-length S)
+                From (if (> I L) L I)
+             (shen-jit.bytes->string S From (cases (<= N 0) 0 (> N (- L From)) (- L From) true N))))
 
 (define parse-integer
   S -> (let Cs (explode S)
@@ -4415,23 +4414,26 @@
 \\ A tab or a line break cannot be in a tab-separated field.
 (define text-field
   T true -> (csv-quote T)
-  T false -> (if (plain-tsv? T) T (error "datalog: ~S has a tab or a line break, which a tab-separated file cannot hold" T)))
-
-(define plain-tsv?
-  "" -> true
-  (@s C Rest) -> (and (not (element? C ["c#9;" "c#10;" "c#13;"])) (plain-tsv? Rest)))
+  T false -> (if (without? T 0 (shen-jit.bytes-length T) [9 10 13])
+                 T
+                 (error "datalog: ~S has a tab or a line break, which a tab-separated file cannot hold" T)))
 
 (define csv-quote
-  S -> (if (plain? S) S (cn "c#34;" (cn (double-quotes S) "c#34;"))))
+  S -> (let N (shen-jit.bytes-length S)
+         (if (without? S 0 N [44 34 10 13]) S (cn "c#34;" (cn (double-quotes S 0 N) "c#34;")))))
 
-(define plain?
-  "" -> true
-  (@s C Rest) -> (and (not (element? C ["," "c#34;" "c#10;" "c#13;"])) (plain? Rest)))
+\\ Whether none of S's bytes from I to N is one of these.
+(define without?
+  S I N Bytes -> (cases (= I N) true
+                        (element? (shen-jit.u8 S I) Bytes) false
+                        true (without? S (+ I 1) N Bytes)))
 
+\\ S's bytes from I to N, each quote doubled.
 (define double-quotes
-  "" -> ""
-  (@s "c#34;" Rest) -> (cn "c#34;c#34;" (double-quotes Rest))
-  (@s C Rest) -> (cn C (double-quotes Rest)))
+  S I N -> (let J (quote-end S I N)
+             (if (= J N)
+                 (shen-jit.bytes->string S I (- N I))
+                 (cn (shen-jit.bytes->string S I (- (+ J 1) I)) (cn "c#34;" (double-quotes S (+ J 1) N))))))
 
 \\ ---------------------------------------------------------------------------
 \\ Demand, by magic sets. (datalog.query Name Facts (Rel Term ...)) gives what datalog.ask would of
@@ -4705,14 +4707,14 @@
   A _ -> (string? A))
 
 (define text<
-  "" "" -> false
-  "" _ -> true
-  _ "" -> false
-  A B -> (let X (string->n (pos A 0))
-              Y (string->n (pos B 0))
-           (cases (< X Y) true
-                  (> X Y) false
-                  true (text< (tlstr A) (tlstr B)))))
+  A B -> (text-from< A B 0))
+
+\\ Whether A's bytes from I come before B's.
+(define text-from<
+  A B I -> (cases (= I (shen-jit.bytes-length B)) false
+                  (= I (shen-jit.bytes-length A)) true
+                  (= (shen-jit.u8 A I) (shen-jit.u8 B I)) (text-from< A B (+ I 1))
+                  true (< (shen-jit.u8 A I) (shen-jit.u8 B I))))
 
 (define tuple<
   [] [] -> false
