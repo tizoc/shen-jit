@@ -464,6 +464,20 @@ def exercise_merge(root):
     assert object_id(repo, "HEAD") == ours
     assert git(repo, "status", "--porcelain") == b""
     assert not (repo / ".git/index.lock").exists()
+    # A file on one side where the other has a directory, with foo-x sorted between them.
+    git(repo, "switch", "-qc", "file-side")
+    write(repo, "foo", b"file\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "foo file")
+    git(repo, "switch", "-q", "main")
+    write(repo, "foo-x", b"beside\n")
+    write(repo, "foo/bar", b"nested\n")
+    git(repo, "add", ".")
+    git(repo, "commit", "-qm", "foo directory")
+    ours = object_id(repo, "HEAD")
+    app(repo, "merge", "file-side", error="merge conflict in: foo/bar")
+    assert object_id(repo, "HEAD") == ours
+    assert git(repo, "status", "--porcelain") == b""
     print("PASS clean three-way merge and conflict refusal")
 
 

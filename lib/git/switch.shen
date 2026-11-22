@@ -327,6 +327,14 @@
                      (order-by (fn ref-before?) (entries Paths)))
       (@p (mapcan (/. X (if (string? X) [] X)) Merged) (mapcan (/. X (if (string? X) [X] [])) Merged))))
 
+\\ The paths of a sorted index below another of its paths, which no tree can hold.
+(define index-collisions
+  [] _ Found -> (reverse Found)
+  [E | More] Seen Found ->
+    (let Path (entry.path E)
+         Hit (has-index-parent? Seen (parent-prefix Path))
+      (do (remember Seen Path true) (index-collisions More Seen (if Hit [Path | Found] Found)))))
+
 \\ A three-way merge of paths each side changed, or the reason it stopped.
 (define merge!
   Repo Spec Message ->
@@ -340,7 +348,8 @@
             (if (cons? (tl Bases)) (multiple-bases.make Bases)
                 (let Index (merge-index (committed-index Repo (hd Bases)) (committed-index Repo A)
                                         (committed-index Repo Id))
-                  (if (cons? (snd Index)) (conflict.make (snd Index))
+                     Conflicts (append (snd Index) (index-collisions (fst Index) (dictionary) []))
+                  (if (cons? Conflicts) (conflict.make Conflicts)
                       (let Tree (write-tree! Repo (fst Index))
                            New (write-object! Repo "commit" (commit-data Repo Tree [A Id] Message))
                         (moved (move-current! Repo Current New) (merged.make New))))))))))

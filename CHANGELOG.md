@@ -180,6 +180,8 @@ All notable changes to this project are documented in this file. The format is b
   included, and now gives way to the ref, as in Git. A loose ref in the way is reported as a conflict, where it gave
   "File exists". Setting a ref looks only at the refs above and below it: with 40,000 packed refs, it takes 0.14 s
   where it took 0.27.
+- `git.merge!` gives `(:git.conflict Paths)`, with the paths below the file, when one side adds a file where the other
+  adds a directory, where it raised "file and directory collide" and wrote nothing.
 
 ## [0.10] - 2026-11-19
 

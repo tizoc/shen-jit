@@ -101,7 +101,8 @@ lets patterns name the outcomes without the prefix:
 - `(git.switch! Repo Spec Detached)` switches to a branch or, with `Detached` true, a revision.
   `(git.fast-forward! Repo Spec)` moves the current branch to a descendant, and
   `(git.merge! Repo Spec Message)` also makes a three-way merge, which combines changes at distinct
-  paths. `(git.commit! Repo Message AllowEmpty)` commits the index.
+  paths; a path that one side puts below a file of the other is a conflict.
+  `(git.commit! Repo Message AllowEmpty)` commits the index.
 - `(git.config-value Repo Key)` gives `[]` or `[Value]`, `[""]` for a key without a value.
   `(git.set-config! Repo Key Value)` writes a local `section.name` setting.
 
