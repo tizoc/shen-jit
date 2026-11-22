@@ -160,6 +160,8 @@ All notable changes to this project are documented in this file. The format is b
   them, as RFC 1122 and RFC 8200 require of a host: they dropped them.
 - An IPv6 first fragment that is too large to reassemble once its extension headers are counted no longer holds a
   reassembly slot for a minute, keeping out other datagrams.
+- `net-tun.wait` lets `isolate.kill` end a waiting isolate within 100 ms: it waited out the whole wait first, which
+  could be days.
 
 ## [0.10] - 2026-11-19
 

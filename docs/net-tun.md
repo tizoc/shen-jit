@@ -17,7 +17,7 @@ and removes its own device inside a disposable namespace.
 | `net-tun.monotonic Origin` | Return integer monotonic milliseconds since `Origin`. Pass 0 for the system clock reading, or use an earlier reading as the origin. |
 | `net-tun.attach Device Name` | Open the named TUN device in nonblocking mode and allocate its fixed ingress scratch buffer. The caller owns the returned adapter. |
 | `net-tun.pump Adapter Budget` | Attempt up to `Budget` packets per direction and return the number handled. Oversize ingress counts against the budget and is discarded. A blocked write keeps the outgoing packet queued. |
-| `net-tun.wait Adapter Millis` | Wait for a readable descriptor when the incoming queue has space, or for a writable descriptor when a packet is ready to send. Returns true on readiness or false on timeout or interruption. |
+| `net-tun.wait Adapter Millis` | Wait for a readable descriptor when the incoming queue has space, or for a writable descriptor when a packet is ready to send. Returns true on readiness or false on timeout. It polls 100 ms at a time, so `isolate.kill` reaches a waiting isolate. |
 | `net-tun.close Adapter` | Release the descriptor. Returns false for a closed or stale adapter. |
 
 Use `net-link.make` with a frozen `(net-tun.monotonic 0)` clock for a live link. One isolate owns the link,

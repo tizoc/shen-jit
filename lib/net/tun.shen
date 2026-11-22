@@ -110,7 +110,16 @@
          _ (if (fx<= T 2147483647) true (error "net/tun: wait exceeds Linux poll limit"))
          Read (not (net-link.full? (net-link.device.tx D)))
          Write (net-link.ready? (net-link.device.rx D) (net-link.now D))
-      (fx> (checked (fixnum (c-wait (fx->number Fd) Read Write (fx->number T))) poll) 0)))
+      (wait-slices Fd Read Write T)))
+
+\\ Polls in slices of 100 ms at most, between which a kill reaches the isolate, as sockets do.
+(define wait-slices
+  {fixnum --> boolean --> boolean --> fixnum --> boolean}
+  Fd Read Write Left ->
+    (let Slice (net-link.smaller 100 Left)
+         _ (isolate.check-kill)
+         Ready (fx> (checked (fixnum (c-wait (fx->number Fd) Read Write (fx->number Slice))) poll) 0)
+      (if (or Ready (fx<= Left Slice)) Ready (wait-slices Fd Read Write (fx- Left Slice)))))
 
 (preclude [adapter.%match])
 )
