@@ -162,6 +162,8 @@ All notable changes to this project are documented in this file. The format is b
   reassembly slot for a minute, keeping out other datagrams.
 - `net-tun.wait` lets `isolate.kill` end a waiting isolate within 100 ms: it waited out the whole wait first, which
   could be days.
+- On Windows, a child process gets its environment sorted by name, as Windows requires: sorted on `NAME=VALUE`, an
+  inherited `ProgramFiles(x86)` came before `ProgramFiles`.
 
 ## [0.10] - 2026-11-19
 

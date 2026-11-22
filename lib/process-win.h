@@ -193,9 +193,14 @@ static wchar_t *command_line(Spawn *s, Error *e)
     return out;
 }
 
+/* CreateProcessW wants the block sorted by name alone: "ProgramFiles(x86)=" must follow
+   "ProgramFiles=", though '(' sorts below '='. A name runs to the first '=' after its first
+   character, which entries never start with. */
 static int compare_environment(const void *a, const void *b)
 {
-    return CompareStringOrdinal(*(wchar_t *const *)a, -1, *(wchar_t *const *)b, -1, TRUE) -
+    const wchar_t *x = *(wchar_t *const *)a, *y = *(wchar_t *const *)b;
+    return CompareStringOrdinal(x, (int)(wcschr(x + 1, L'=') - x), y,
+                                (int)(wcschr(y + 1, L'=') - y), TRUE) -
            CSTR_EQUAL;
 }
 
