@@ -178,10 +178,10 @@
                To))
 
 (define nth-byte
-  S From Count -> (shen-jit.bytes->string (shen-jit.string->bytes S) From Count))
+  S From Count -> (shen-jit.bytes->string S From Count))
 
 (define size
-  S -> (shen-jit.bytes-length (shen-jit.string->bytes S)))
+  S -> (shen-jit.bytes-length S))
 
 (define same-bytes-at?
   _ _ _ 0 -> true
@@ -214,29 +214,20 @@
 
 (define prefix?
   Prefix Text ->
-    (let P (shen-jit.string->bytes Prefix)
-         T (shen-jit.string->bytes Text)
-         N (shen-jit.bytes-length P)
-      (and (<= N (shen-jit.bytes-length T)) (same-bytes-at? T 0 P N))))
+    (let N (size Prefix)
+      (and (<= N (size Text)) (same-bytes-at? Text 0 Prefix N))))
 
 (define suffix?
   Suffix Text ->
-    (let S (shen-jit.string->bytes Suffix)
-         T (shen-jit.string->bytes Text)
-         N (shen-jit.bytes-length S)
-         M (shen-jit.bytes-length T)
-      (and (<= N M) (same-bytes-at? T (- M N) S N))))
+    (let N (size Suffix)
+         M (size Text)
+      (and (<= N M) (same-bytes-at? Text (- M N) Suffix N))))
 
 (define after
-  Prefix Text ->
-    (let T (shen-jit.string->bytes Text)
-         N (size Prefix)
-      (shen-jit.bytes->string T N (- (shen-jit.bytes-length T) N))))
+  Prefix Text -> (let N (size Prefix) (nth-byte Text N (- (size Text) N))))
 
 (define before
-  Text Suffix ->
-    (let T (shen-jit.string->bytes Text)
-      (shen-jit.bytes->string T 0 (- (shen-jit.bytes-length T) (size Suffix)))))
+  Text Suffix -> (nth-byte Text 0 (- (size Text) (size Suffix))))
 
 (define partition-text
   S B ->
@@ -274,13 +265,12 @@
          (if (< Value 0) (git-error "invalid decimal field") Value)))
 
 (define bytes<
-  A B -> (let X (buffer.from-string A) Y (buffer.from-string B)
-           (bytes-before? X Y 0 (buffer.length X) (buffer.length Y))))
+  A B -> (bytes-before? A B 0 (size A) (size B)))
 
 (define bytes-before?
   _ _ A A B -> (< A B)
   _ _ B _ B -> false
-  A B At X Y -> (let L (buffer.u8 A At) R (buffer.u8 B At)
+  A B At X Y -> (let L (shen-jit.u8 A At) R (shen-jit.u8 B At)
                   (if (= L R) (bytes-before? A B (+ At 1) X Y) (< L R))))
 
 (define store-u32

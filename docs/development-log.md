@@ -4618,6 +4618,16 @@ run on macOS. What they measured:
   nine in three processes alternated with the old code, where it took 0.061, 0.127 and 0.266. What is left is parsing
   `packed-refs` for each check, 0.07 s at 40,000, which reading a packed ref's value costs too.
 
+- **Strings read in place.** The library's byte order, `bytes<`, which sorts every index, tree and ref list, copied
+  both strings with `shen-jit.string->bytes` and read them through checked views, and `prefix?`, `suffix?`, `after`,
+  `before`, `size` and `nth-byte` copied theirs too. They now read the strings with `shen-jit.u8`,
+  `shen-jit.bytes-length` and `shen-jit.bytes->string`, which take strings as read-only memory, in fewer lines.
+  Medians of nine runs, three processes each alternated with the old code: sorting 200,000 paths of the form
+  `src/moduleN/subN/file-N.c` with `order-by` took 0.170 s where it took 1.358; on a repository of 50,000 files in 500
+  directories, `committed-index` of HEAD took 0.106 s where it took 0.357, `status-records` with `git.no` 0.622 s
+  where it took 0.898, and with `git.normal` 1.340 s where it took 1.613. The machine was not quiet, so the numbers
+  are noisy.
+
 ### Not tried yet
 
 - **True parallelism.** `thread` is real threads, one at a time; parallelism is the more advanced case, for later. It needs allocation
