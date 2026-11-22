@@ -57,6 +57,8 @@
   (freeze (par.raises? (freeze (parallel.map 1 par.add [1])))))
 (par.check "nor a count that is not one" true
   (freeze (par.raises? (freeze (parallel.map 0 par.square [1])))))
+(par.check "nor a float, though it is whole" [raised "parallel.map: 2.0 is not a number of isolates"]
+  (freeze (parallel.map (+ 1.5 0.5) par.square [1])))
 
 \\ A table shared once crosses to every isolate by pointer.
 (let Table (isolate.share (@v a b c <>))

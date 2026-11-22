@@ -173,6 +173,8 @@ All notable changes to this project are documented in this file. The format is b
   it in the ANSI code page.
 - `define-foreign-procedure` with an arity that is not a whole number from 0 to 8, such as -1 or 2.5, raises "foreign:
   Name: -1 is not an arity from 0 to 8", where -1 overflowed the stack.
+- `parallel.map` given a whole float as its count, such as `(+ 1.5 0.5)`, raises "parallel.map: 2.0 is not a number of
+  isolates", where it raised from `channel.new` about a capacity, or ran with a single element.
 
 ## [0.10] - 2026-11-19
 

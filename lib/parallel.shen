@@ -31,7 +31,7 @@
 
 (define check
   N F Xs ->
-    (do (if (and (integer? N) (> N 0)) true (error "parallel.map: ~S is not a number of isolates" N))
+    (do (if (and (shen-jit.fixnum? N) (> N 0)) true (error "parallel.map: ~S is not a number of isolates" N))
         (if (list? Xs) true (error "parallel.map: ~S is not a list" Xs))
         (function-check F)))
 
