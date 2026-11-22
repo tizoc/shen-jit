@@ -441,16 +441,17 @@
                   (acceptable? P Seg) (do (peer.ack-needed-> P true) true)
                   true false))
 
-\\ A segment past the handshake, RFC 9293 3.10.7.4, by the state and the flags, in order.
+\\ A segment past the handshake, RFC 9293 3.10.7.4, by the state and the flags, in order. One outside the
+\\ window, a keepalive or a probe among them, or acknowledging what was never sent, is answered and dropped.
 (define connected
   {phase --> fixnum --> peer --> segment --> fixnum --> boolean}
   time-wait Flags _ _ _ -> false where (flag? Flags (flag-bits control rst))   \\ RFC 1337.
   time-wait _ P Seg Now -> (answer-duplicate P Seg Now)
   _ Flags P Seg _ -> (reset-received P Seg) where (flag? Flags (flag-bits control rst))
   _ Flags P Seg Now -> (answer-duplicate P Seg Now) where (flag? Flags (flag-bits control syn))
-  _ Flags P Seg _ -> false
-    where (or (not (flag? Flags (flag-bits control ack))) (seq-after? (segment.acknowledgement Seg) (peer.send-next P)))
-  _ _ P Seg Now -> (answer-duplicate P Seg Now) where (not (acceptable? P Seg))
+  _ Flags _ _ _ -> false where (not (flag? Flags (flag-bits control ack)))
+  _ _ P Seg _ -> (do (peer.ack-needed-> P true) true)
+    where (or (seq-after? (segment.acknowledgement Seg) (peer.send-next P)) (not (acceptable? P Seg)))
   _ _ P Seg Now -> (take-segment P Seg Now))
 
 \\ An acceptable segment: its acknowledgement and SACK blocks, then its data, from where we expect it.

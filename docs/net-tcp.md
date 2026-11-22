@@ -65,7 +65,9 @@ The original deadline remains armed after a fast retry. On timeout, the sender d
 the interval up to 60 seconds and replays outstanding bytes from the oldest unacknowledged
 byte within the current window. A cumulative ACK can cancel the rest of the replay. The
 peer enters `tcp.timed-out` when the sixth retry expires. One byte can probe a zero window
-and recover a lost window update. The clock makes these transitions reproducible.
+and recover a lost window update. A segment outside the receive window, such as the other end's
+keepalive or zero-window probe, and an ACK of bytes not yet sent, get an ACK and are dropped.
+The clock makes these transitions reproducible.
 [TCP incoming segment processing](https://www.rfc-editor.org/rfc/rfc9293.html#section-3.10.7.4)
 
 ## Selective acknowledgments

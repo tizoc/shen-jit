@@ -1040,6 +1040,45 @@
           (expect (buffer.equal? Out (pair.payload F)) "data before EOF remains intact")
           (expect (= (tcp.recv-into S Out 3) -1) "EOF follows the last byte"))))
 
+\\ A pure ACK from the client to the server, with its sequence and acknowledgement.
+(define client-ack
+  {pair --> fixnum --> fixnum --> boolean}
+  F Seq Ack ->
+    (let B (pair.wire F)
+      (do (net-ipv4.write-header B 0 40 6 (net-ipv4.address 192 0 2 1) (net-ipv4.address 192 0 2 2))
+          (buffer.u16-be-> B 20 12345)
+          (buffer.u16-be-> B 22 7)
+          (buffer.u32-be-> B 24 Seq)
+          (buffer.u32-be-> B 28 Ack)
+          (buffer.u16-be-> B 32 20496)                 \\ Five words of header, and ACK.
+          (buffer.u16-be-> B 34 64)
+          (buffer.u32-be-> B 36 0)
+          (checksum-segment B 20)
+          (= (net-link.packet-send (pair.left F) B 40) net-link.sent))))
+
+\\ RFC 9293 3.10.7.4: a keepalive or a zero-window probe, empty at RCV.NXT - 1, and an ACK of what was
+\\ never sent are each answered with an ACK and dropped; an acceptable pure ACK is not answered.
+(define answer-unacceptable
+  {fixnum --> boolean}
+  Mtu ->
+    (let F (setup Mtu)
+         C (pair.client F) S (pair.server F)
+         Left (pair.left F) Wire (pair.wire F)
+      (do (open-pair C S)
+          (expect (client-ack F 4294967294 101) "send a keepalive at RCV.NXT - 1")
+          (expect (= (tcp.poll S 2) 1) "the server takes the keepalive")
+          (expect (= (net-link.packet-recv-into Left Wire) 40) "a keepalive is answered")
+          (expect (and (= (buffer.u8 Wire 33) 16) (= (buffer.u32-be Wire 24) 101)
+                       (= (buffer.u32-be Wire 28) 4294967295)) "with an ACK of RCV.NXT")
+          (expect (client-ack F 4294967295 201) "acknowledge what was never sent")
+          (tcp.poll S 2)
+          (expect (= (net-link.packet-recv-into Left Wire) 40) "an ACK above SND.NXT is answered")
+          (expect (= (buffer.u32-be Wire 24) 101) "and dropped")
+          (expect (client-ack F 4294967295 101) "a pure ACK at RCV.NXT")
+          (tcp.poll S 2)
+          (expect (= (net-link.packet-recv-into Left Wire) -1) "an acceptable pure ACK is not answered")
+          (close-pair F false))))
+
 (define open-listener
   {tcp.peer --> tcp.listener --> fixnum --> fixnum}
   C L Seq ->
@@ -1427,6 +1466,7 @@
   Mtu -> (and (presence-maps 203) (presence-maps 64) (presence-maps 9)
               (fixture Mtu) (option-fixtures Mtu) (receive-window 41) (partial-read 45)
               (ring-wrap 43) (overlapping-replay 43) (receive-window-edge 43) (reordered-fin 43) (reset-staged-slot 43)
+              (answer-unacceptable Mtu)
               (timeout-after-syn-loss Mtu) (listener-reuse Mtu) (listener-fairness Mtu)
               (listener-half-open-timeout Mtu) (exercise-time-wait (make-wait-fixture Mtu))
               (verify 1 false)))

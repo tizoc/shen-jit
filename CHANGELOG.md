@@ -148,6 +148,9 @@ All notable changes to this project are documented in this file. The format is b
   sealed and cannot be redefined".
 - With the kernel sealed, as it always is, each `eval` that called a sealed function kept a constant slot for good,
   which every collection scans: 20,000 such `eval`s ended with about 44,500 slots, and end with about 24,300 now.
+- A TCP connection answers the other end's keepalives and zero-window probes, and an ACK of bytes it never sent, with
+  an ACK: it answered none of them, so a Linux peer using keepalives, or probing a window whose update was lost,
+  dropped the connection.
 
 ## [0.10] - 2026-11-19
 
