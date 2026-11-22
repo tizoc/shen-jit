@@ -123,6 +123,7 @@ All notable changes to this project are documented in this file. The format is b
   connections costs little while few are open.
 - The `sqlite-http` example starts its database's owner in a scope: `(counter-app.start Scope Path Host Port F
   Options)` gives `[Db S]`, and the scope waits for the owning isolate once `counter-app.await` ends its stream.
+- Loading and compiling code takes up to 4% less, as the loader finds instructions and primitives by hash.
 
 ### Fixed
 
@@ -140,6 +141,8 @@ All notable changes to this project are documented in this file. The format is b
 - `(grammar.finish)` has a type, `(--> boolean)`, so a typed source can call it as it loads. Called while sealing is
   on, as a sealed build loads, it no longer makes the first `grammar.read` of a rule fail with "`<rule>/stream` is
   sealed and cannot be redefined".
+- With the kernel sealed, as it always is, each `eval` that called a sealed function kept a constant slot for good,
+  which every collection scans: 20,000 such `eval`s ended with about 44,500 slots, and end with about 24,300 now.
 
 ## [0.10] - 2026-11-19
 

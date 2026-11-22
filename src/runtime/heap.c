@@ -256,6 +256,7 @@ void vm_destroy(VM *vm)
         free(p->free_globals);
         free(p->owned);
         free(p->free_consts);
+        free(p->sealed_slot);
         free(p);
     }
 #ifdef _WIN32
@@ -730,6 +731,7 @@ static void sweep_symbols(VM *vm, Copy *c)
                 push_free(&vm->program->free_cells, &vm->program->nfree_cells, &vm->program->free_cells_cap, symbol_cell(s))) {
                 if (n)
                     vm->globals[n] = V_CLEARED;
+                program_clear_sealed_slot(vm->program, symbol_cell(s), false);
                 program_free_symbol(vm, p);
                 continue;
             }

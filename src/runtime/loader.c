@@ -5,10 +5,11 @@
 #include "ops.h"
 #include "reader.h"
 
+#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 
-enum { MAX_CAPTURES = 4096 };
+enum { MAX_CAPTURES = 4096, LOOKUP_SIZE = 512 };
 
 typedef struct {
     VM *vm;
@@ -16,8 +17,10 @@ typedef struct {
     const char *error;
     uint32_t *buf; /* encoding buffer, outside the heap */
     size_t len, cap;
-    size_t *sealed_slot; /* const slot of each sealed target, by cell index */
-    size_t sealed_cap;
+    uint8_t *packed; /* packing buffer, reused across code objects */
+    size_t packed_cap;
+    size_t *touched; /* cells whose sealed slots need binding after this load */
+    size_t ntouched, touched_cap;
 } Loader;
 
 static const char *const op_names[] = {
@@ -30,6 +33,30 @@ static const unsigned op_fixed[] = {
     SJ_OPCODES(SJ_OP_FIXED)
 #undef SJ_OP_FIXED
 };
+
+static int16_t op_table[LOOKUP_SIZE];
+static int16_t prim_table[LOOKUP_SIZE];
+static pthread_once_t tables_once = PTHREAD_ONCE_INIT;
+
+static void table_put(int16_t *table, const char *name, int16_t value)
+{
+    size_t i = (size_t)hash_bytes(name, strlen(name)) & (LOOKUP_SIZE - 1);
+    while (table[i] >= 0)
+        i = (i + 1) & (LOOKUP_SIZE - 1);
+    table[i] = value;
+}
+
+static void init_tables(void)
+{
+    for (size_t i = 0; i < LOOKUP_SIZE; i++)
+        op_table[i] = prim_table[i] = -1;
+    for (unsigned op = 0; op < OP_COUNT; op++)
+        table_put(op_table, op_names[op], (int16_t)op);
+    for (size_t i = 0; i < primitive_count; i++)
+        table_put(prim_table, primitive_table[i].name, (int16_t)i);
+    table_put(prim_table, "raise-cond", (int16_t)PRIM_RAISE_COND);
+    table_put(prim_table, "shen-jit.field", (int16_t)PRIM_FIELD);
+}
 
 static bool fail(Loader *l, const char *message)
 {
@@ -97,13 +124,34 @@ static bool operand(V v, uint64_t frame, uint64_t nconst, uint64_t *out)
     return small_int(v, frame, out);
 }
 
+static unsigned opcode_index(V head)
+{
+    if (!is_symbol(head))
+        return OP_COUNT;
+    for (size_t i = (size_t)ptr(head)[SYM_HASH] & (LOOKUP_SIZE - 1); op_table[i] >= 0; i = (i + 1) & (LOOKUP_SIZE - 1)) {
+        unsigned op = (unsigned)op_table[i];
+        if (symbol_named(head, op_names[op]))
+            return op;
+    }
+    return OP_COUNT;
+}
+
+static const char *prim_name(unsigned idx)
+{
+    return idx == PRIM_RAISE_COND ? "raise-cond"
+         : idx == PRIM_FIELD ? "shen-jit.field" : primitive_table[idx].name;
+}
+
 static long primitive_index(V name)
 {
-    for (size_t i = 0; i < primitive_count; i++)
-        if (symbol_named(name, primitive_table[i].name))
-            return (long)i;
-    return symbol_named(name, "raise-cond") ? (long)PRIM_RAISE_COND
-           : symbol_named(name, "shen-jit.field") ? (long)PRIM_FIELD : -1;
+    if (!is_symbol(name))
+        return -1;
+    for (size_t i = (size_t)ptr(name)[SYM_HASH] & (LOOKUP_SIZE - 1); prim_table[i] >= 0; i = (i + 1) & (LOOKUP_SIZE - 1)) {
+        unsigned idx = (unsigned)prim_table[i];
+        if (symbol_named(name, prim_name(idx)))
+            return (long)idx;
+    }
+    return -1;
 }
 
 static int primitive_arity(size_t index)
@@ -111,25 +159,42 @@ static int primitive_arity(size_t index)
     return index == PRIM_RAISE_COND ? 0 : index == PRIM_FIELD ? 2 : primitive_table[index].arity;
 }
 
-/* The constant slot of sealed calls to sym, shared within one load. It holds
-   sym until bind_sealed puts the procedure there. */
+static bool touch_sealed(Loader *l, size_t cell)
+{
+    size_t *t = grow_array(l->touched, &l->touched_cap, l->ntouched, sizeof *t, 32);
+    if (!t)
+        return fail(l, "out of memory");
+    l->touched = t;
+    l->touched[l->ntouched++] = cell;
+    return true;
+}
+
+/* The constant slot of sealed calls to sym, cached on the program by cell index.
+   It holds sym until bind_sealed (or the first call) puts the procedure there. */
 static bool sealed_slot(Loader *l, V sym, size_t *slot)
 {
+    Program *p = l->vm->program;
     size_t cell = symbol_cell(sym);
-    if (cell >= l->sealed_cap) {
-        size_t cap = 2 * cell + 64;
-        size_t *s = realloc(l->sealed_slot, cap * sizeof *s);
+    if (cell >= p->sealed_cap) {
+        size_t cap = p->sealed_cap ? p->sealed_cap : 256;
+        while (cap <= cell)
+            cap *= 2;
+        size_t *s = realloc(p->sealed_slot, cap * sizeof *s);
         if (!s)
             return fail(l, "out of memory");
-        for (size_t i = l->sealed_cap; i < cap; i++)
+        for (size_t i = p->sealed_cap; i < cap; i++)
             s[i] = SIZE_MAX;
-        l->sealed_slot = s;
-        l->sealed_cap = cap;
+        p->sealed_slot = s;
+        p->sealed_cap = cap;
     }
-    if (l->sealed_slot[cell] == SIZE_MAX &&
-        !ra_push(&l->vm->program->consts, sym, &l->sealed_slot[cell]))
-        return fail(l, "out of memory");
-    *slot = l->sealed_slot[cell];
+    if (p->sealed_slot[cell] == SIZE_MAX) {
+        if (!ra_push(&p->consts, sym, &p->sealed_slot[cell]) || !touch_sealed(l, cell))
+            return fail(l, "out of memory");
+    } else if (!is_proc(*ra_at(&p->consts, p->sealed_slot[cell]))) {
+        if (!touch_sealed(l, cell))
+            return false;
+    }
+    *slot = p->sealed_slot[cell];
     return true;
 }
 
@@ -140,10 +205,7 @@ static bool encode(Loader *l, V insn, uint64_t frame, uint64_t nconst, uint64_t 
     size_t n = list_length(insn);
     if (n == (size_t)-1 || n == 0)
         return fail(l, "malformed instruction");
-    V head = nth(insn, 0);
-    unsigned op = 0;
-    while (op < OP_COUNT && !symbol_named(head, op_names[op]))
-        op++;
+    unsigned op = opcode_index(nth(insn, 0));
     if (op == OP_COUNT)
         return fail(l, "unknown instruction");
     if (!emit(l, op))
@@ -207,7 +269,7 @@ static bool encode(Loader *l, V insn, uint64_t frame, uint64_t nconst, uint64_t 
         default: /* 'f' */
             ok = is_symbol(v);
             if (ok && (op == OP_CALL_SEALED || op == OP_TAIL_CALL_SEALED)) {
-                size_t slot;
+                size_t slot = 0;
                 ok = sealed_slot(l, v, &slot);
                 x = slot;
             } else if (ok) {
@@ -263,7 +325,9 @@ static bool check_control(Loader *l)
             nlabels = buf[i + 1] + 1;
     if (nlabels > (1u << 20))
         return fail(l, "too many labels");
-    unsigned char *defined = calloc(2 * (nlabels + 1), 1);
+    unsigned char small[256];
+    size_t need = 2 * (size_t)(nlabels + 1);
+    unsigned char *defined = need <= sizeof small ? memset(small, 0, need) : calloc(need, 1);
     if (!defined)
         return fail(l, "out of memory");
     unsigned char *head = defined + nlabels + 1; /* the loops passed so far */
@@ -292,7 +356,8 @@ static bool check_control(Loader *l)
         ok = op == OP_RETURN || op == OP_JUMP || op == OP_AGAIN || op == OP_TAIL_CALL ||
              op == OP_TAIL_CALL_SEALED || op == OP_TAIL_CALL_VALUE;
     }
-    free(defined);
+    if (defined != small)
+        free(defined);
     return ok || fail(l, "bad control flow: labels or the final instruction");
 }
 
@@ -370,12 +435,19 @@ static V build_code(Loader *l, V form)
         }
         arity |= (uint64_t)l->buf[1] << 32;
     }
-    uint8_t *packed = malloc(5 * l->len + 1);
-    if (!packed)
-        goto done;
-    size_t packed_len = bytecode_pack(l->buf, l->len, packed);
-    V bytes = make_bytes(vm, packed, packed_len);
-    free(packed);
+    size_t need = 5 * l->len + 1;
+    if (need > l->packed_cap) {
+        size_t cap = l->packed_cap ? l->packed_cap : 1024;
+        while (cap < need)
+            cap *= 2;
+        uint8_t *packed = realloc(l->packed, cap);
+        if (!packed)
+            goto done;
+        l->packed = packed;
+        l->packed_cap = cap;
+    }
+    size_t packed_len = bytecode_pack(l->buf, l->len, l->packed);
+    V bytes = make_bytes(vm, l->packed, packed_len);
     if (bytes == V_CLEARED)
         goto done;
     l->stats->bytecode_bytes += packed_len;
@@ -412,19 +484,31 @@ static bool is_defun_form(V form)
     return list_length(form) == 3 && symbol_named(nth(form, 0), "defun") && is_symbol(nth(form, 1));
 }
 
-/* Binds sealed calls to the current function bindings of their targets. A
-   target not defined yet keeps its symbol in the slot when forward is true:
-   the first call binds it (jit.c); at stage 0 every target must exist. */
+/* Binds sealed calls touched by this load to the current function bindings of
+   their targets. A target not defined yet keeps its symbol in the slot when
+   forward is true: the first call binds it (jit.c); at stage 0 every target
+   must exist. A slot left unbound, or touched by a load that failed, leaves the
+   program's cache and stays this load's: a later load would otherwise bind it
+   under callers whose first call would find another definition. So a slot that
+   loads share is always bound to its target's current definition, and a
+   redefinition takes it out of the cache (program_install). */
 static void bind_sealed(Loader *l, bool forward)
 {
-    for (size_t cell = 0; !l->error && cell < l->sealed_cap; cell++) {
-        if (l->sealed_slot[cell] == SIZE_MAX)
+    Program *p = l->vm->program;
+    for (size_t i = 0; i < l->ntouched; i++) {
+        size_t cell = l->touched[i];
+        if (cell >= p->sealed_cap || p->sealed_slot[cell] == SIZE_MAX)
             continue;
         V target = *cell_function(l->vm, cell);
-        if (is_proc(target))
-            *ra_at(&l->vm->program->consts, l->sealed_slot[cell]) = target;
-        else if (!forward)
+        V *slot = ra_at(&p->consts, p->sealed_slot[cell]);
+        if (!l->error && is_proc(target)) {
+            if (*slot != target) /* not rewritten under code already bound to it */
+                *slot = target;
+            continue;
+        }
+        if (!l->error && !forward)
             fail(l, "sealed call to a function that is not defined");
+        p->sealed_slot[cell] = SIZE_MAX;
     }
 }
 
@@ -439,7 +523,10 @@ bool load_stage0(VM *vm, const char *text, size_t len, LoadStats *stats, const c
 bool load_stage0_sealed(VM *vm, const char *text, size_t len, size_t seal_until, LoadStats *stats,
                         const char **error)
 {
-    Loader l = {vm, stats, NULL, NULL, 0, 0, NULL, 0};
+    pthread_once(&tables_once, init_tables);
+    Loader l = {0};
+    l.vm = vm;
+    l.stats = stats;
     Reader r = {vm, text, text + len, NULL, false};
     V form = V_NIL;
     vm_root(vm, &form);
@@ -463,9 +550,11 @@ bool load_stage0_sealed(VM *vm, const char *text, size_t len, size_t seal_until,
             fail(&l, why);
             break;
         }
+        size_t cell = symbol_cell(nth(form, 1));
         if (vm->program->redefine)
-            vm->program->redefine(vm, symbol_cell(nth(form, 1)));
-        *cell_function(vm, symbol_cell(nth(form, 1))) = closure;
+            vm->program->redefine(vm, cell);
+        *cell_function(vm, cell) = closure;
+        program_clear_sealed_slot(vm->program, cell, true);
         if (at < seal_until)
             symbol_seal(nth(form, 1));
         stats->defuns++;
@@ -474,7 +563,8 @@ bool load_stage0_sealed(VM *vm, const char *text, size_t len, size_t seal_until,
     /* Sealed calls bind once everything is loaded, so they may refer forward. */
     bind_sealed(&l, false);
     free(l.buf);
-    free(l.sealed_slot);
+    free(l.packed);
+    free(l.touched);
     *error = l.error;
     return !l.error;
 }
@@ -484,8 +574,11 @@ bool load_stage0_sealed(VM *vm, const char *text, size_t len, size_t seal_until,
    unless the whole definition was built and its sealed calls bound. */
 V sj_install(VM *vm, V form)
 {
+    pthread_once(&tables_once, init_tables);
     LoadStats stats = {0};
-    Loader l = {vm, &stats, NULL, NULL, 0, 0, NULL, 0};
+    Loader l = {0};
+    l.vm = vm;
+    l.stats = &stats;
     if (!vm_is_builder(vm))
         return sj_raise(vm, "only the builder can define functions");
     vm_root(vm, &form);
@@ -507,8 +600,7 @@ V sj_install(VM *vm, V form)
         result = build_closure(&l, form);
     else
         fail(&l, "install: expected (defun Name Code) or a code object");
-    if (!l.error)
-        bind_sealed(&l, true);
+    bind_sealed(&l, true);
     const char *refused = NULL;
     if (!l.error && defun) {
         result = program_promote(vm, result, &refused);
@@ -518,7 +610,8 @@ V sj_install(VM *vm, V form)
     }
     vm_unroot(vm, 1);
     free(l.buf);
-    free(l.sealed_slot);
+    free(l.packed);
+    free(l.touched);
     if (refused)
         return sj_raise_text_value(vm, refused, result);
     return l.error ? sj_raise(vm, l.error) : result;

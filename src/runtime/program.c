@@ -516,6 +516,7 @@ bool program_install(VM *vm, V name, V proc)
     if (vm->program->redefine)
         vm->program->redefine(vm, cell);
     *cell_function(vm, cell) = proc;
+    program_clear_sealed_slot(vm->program, cell, true);
     if (vm->seal_user)
         symbol_seal(name);
     return true;

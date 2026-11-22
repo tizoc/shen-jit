@@ -107,6 +107,9 @@ typedef struct Program {
     size_t owned_cap;
     struct { size_t start, len; } *free_consts;
     size_t nfree_consts, free_consts_cap;
+    /* Sealed-call constant slot for each target cell, or SIZE_MAX (loader.c). */
+    size_t *sealed_slot;
+    size_t sealed_cap;
     /* Code objects with native code, held weakly: a collection hands
        those that nothing else reaches to free_native, which the JIT sets. */
     V *natives;
@@ -280,6 +283,13 @@ bool ra_push(RootArray *ra, V v, size_t *index);
 static inline V *cell_function(VM *vm, size_t cell) { return ra_at(&vm->program->cells, 2 * cell); }
 /* A name's arity, a fixnum, or V_CLEARED for none: program, as functions are. */
 static inline V *cell_arity(VM *vm, size_t cell) { return ra_at(&vm->program->cells, 2 * cell + 1); }
+
+static inline void program_clear_sealed_slot(Program *p, size_t cell, bool only_bound)
+{
+    if (cell < p->sealed_cap && p->sealed_slot[cell] != SIZE_MAX &&
+        (!only_bound || is_proc(*ra_at(&p->consts, p->sealed_slot[cell]))))
+        p->sealed_slot[cell] = SIZE_MAX;
+}
 
 /* program.c */
 static inline bool in_program(const VM *vm, const void *at)

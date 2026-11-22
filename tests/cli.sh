@@ -338,6 +338,17 @@ fi
 "$SHEN" --seal eval -e '(define sum-to 0 A -> A N A -> (sum-to (- N 1) (+ A N)))' -e '(sum-to 100000 0)' \
     > "$dir/sealed-loop.out" 2>&1
 check sealed-loop "$dir/sealed-loop.out" "5000050000"
+# A sealed call to a function not defined yet binds at its first call, to what it finds then, though
+# a later load bound its own call to a definition since unsealed and replaced, as after a failed
+# module load. The handlers keep the target from being inlined.
+"$SHEN" eval -e '(shen-jit.seal +)' \
+    -e '(eval-kl [defun cli-fa [X] [trap-error [cons a [cli-target X]] [lambda E e]]])' \
+    -e '(eval-kl [defun cli-target [X] [trap-error v1 [lambda E e]]])' \
+    -e '(eval-kl [defun cli-fb [X] [trap-error [cons b [cli-target X]] [lambda E e]]])' \
+    -e '(eval-kl [shen-jit.sealing cli-target])' \
+    -e '(eval-kl [defun cli-target [X] [trap-error v2 [lambda E e]]])' \
+    -e '(output "forward-sealed ~A~%" (eval-kl [cons [cli-fa 0] [cli-fb 0]]))' > "$dir/forward-sealed.out" 2>&1
+check forward-sealed "$dir/forward-sealed.out" "forward-sealed [[a | v2] b | v1]"
 
 # Saving an image: what eval defines
 # loads with the kernel, an image saved from a saved image keeps both, and

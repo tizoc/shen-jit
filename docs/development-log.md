@@ -428,6 +428,17 @@ Lowering rules, the collector and the kernel port have their own sections.
   What the 6,400 calls still cost there was the search of the constant pool, which the index above now removes. The loader alone, this build with main's `loader.c`: 12,800 lambdas 1.73 to 1.39 G, 6,400 0.87 to 0.80. With the index and the reused liveness buffers, and the fixed names in a `shen.dict`, three alternating runs each: kernel suite 3.106-3.174 to 2.951-2.961 G, building the standard library's executable 0.823-0.839 to 0.760-0.765 G. Before those two, three runs each: lowering the standard library 1.147-1.150 to 1.046-1.051 G, kernel suite 3.153-3.174 to 2.975-2.988 G. proof-bench, 3 runs, same inference counts: steam 3.57-3.59 to 3.47-3.62 G, yql 4.49-4.61 to 4.44-4.61, thm13 25.83-26.33 to 26.14-26.35, rcc10 19.18-19.27 to 18.87-19.12, which is noise either way. The lowered output is the same: the generated files changed only for the lowerer itself, and with `Sealed` empty, where inlined code is marked, 15 shapes and the standard library's 326 definitions lower the same under both lowerers. **Rejected: walking the later arguments without the slot test first.** The Prolog clause stayed at 0.69 G, as each level walks all the goals after it. **Rejected: arities in the property list,** as `get` raises on a miss and formats a message. A table of 64 buckets by `hash`, from a first version, was about 0.3% faster on the kernel suite than the `shen.dict`, but the dictionary is code the kernel already has. **Not fixed:** `capture-index` appends each captured variable and takes a `length`, quadratic in a closure's captures, which are few.
 
   **Taken back, the same day, as they move no real work** (Apple M3 Max, instructions retired, median of 7, load about 3, against the merge). `add-code`'s count, the loader's cursor, and the test of whether `Env` has a variable in the slot before walking. The kernel suite reads 1.002, the stlib build 1.001, THORN set 1.003 and L 1.001, a list of 2,000 goals in one Prolog clause and 4,000 inlined calls 1.000. 4,000 lambdas in one definition read 1.91, and stay quadratic: that case works, and a pathological one gets no code.
+- **Instructions and primitives found by hash, and sealed slots shared** (2026-11-22, Apple M3 Max, load 2.5 to 4.3, 5
+  interleaved rounds, against main). From an outside agent's branch, reviewed and measured that day. The loader found
+  an opcode or a primitive by scanning their names for every instruction; it looks them up by the symbol's hash in
+  tables of 512 slots. Independent workloads, as fractions of main before and after this: standard library install
+  0.99 to 0.95, extension tests 1.00 to 0.97, contract examples 0.99 to 0.96, kernel suite 0.98 both. A load also took
+  a constant slot for each sealed function it called, owned by no code object, so each `eval` that called one kept a
+  slot for good: 20,000 `eval`s of `(append [1] (reverse [2]))` ended with 44,546 slots on main and 24,333 now, where
+  the program keeps one slot per target, shared once bound. The first version shared unbound slots too, so a later
+  load bound an earlier forward call to a definition that was then unsealed and replaced, as after a failed module
+  load, where its first call would have found the new one. A slot still unbound when its load ends now stays that
+  load's; `tests/cli.sh` has the case.
 
 ### Prolog and byte-buffer primitives
 

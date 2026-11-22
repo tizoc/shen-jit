@@ -245,8 +245,9 @@ tail call:     load and check P; move P and the arguments into
                slots 1..n+1; COUNT = n; jump to P's entry
 ```
 
-A sealed call loads P from a constant slot of its own instead, with no test: it was bound at install or, for a
-definition not there yet, is bound once at its first call. A stage 0 definition is sealed, and with `--seal` a user's too.
+A sealed call loads P from a constant slot instead, with no test: it was bound at install, in a slot the program keeps
+for that definition and every load shares, or, for a definition not there yet, in a slot of its load's own, bound once
+at its first call. A stage 0 definition is sealed, and with `--seal` a user's too.
 
 Some refinements are built on that:
 

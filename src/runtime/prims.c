@@ -1908,6 +1908,7 @@ V sj_primitive(VM *vm, size_t index)
            (src/port/module.shen); callers bound to it meanwhile keep what they found. */
         if (is_symbol(a)) {
             symbol_unseal(a);
+            program_clear_sealed_slot(vm->program, symbol_cell(a), false);
             return a;
         }
         if (!is_boolean(a))
