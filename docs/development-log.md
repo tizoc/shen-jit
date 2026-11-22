@@ -4660,6 +4660,14 @@ run on macOS. What they measured:
   multi-byte strings took 3.86 ms against main's 3.93, and `json.read` of it 4.39 against 4.31, with the code shifted
   by three unrelated definitions 3.92 against 4.01 and 4.43 against 4.37: within where the code lies.
 
+- **A cursor over a keyed relation's merges.** When its component is done, a relation of one tuple a key is made again
+  from its live tuples, each with the merge it came in (`compact-h`), and that merge was found by reading the list of
+  merges from its start for every tuple: compaction cost the tuples times the rounds, most of a shortest-path run. The
+  list is now a cursor that moves on with the position, as is `datalog.explain`'s reading of it (`with-merges`). The
+  docs' `shortest` program on an N by N grid, weights 1 to 5, medians in alternation with main: 150 by 150 (89,400
+  edges, 299 rounds) took 0.32 s where it took 0.90, and 300 by 300 (358,800 edges, 599 rounds) 3.73 s where it took
+  12.23. `make bench-datalog` is unchanged: none of its workloads keeps one tuple a key.
+
 ### Not tried yet
 
 - **True parallelism.** `thread` is real threads, one at a time; parallelism is the more advanced case, for later. It needs allocation

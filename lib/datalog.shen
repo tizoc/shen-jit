@@ -3536,7 +3536,7 @@
           N (arity-in Rel Relations)
           New (new-relation N keyed)
           Merges (compact-h Rec New 0 (count-of Rec) N (key-finder N) (adder-for N Mode)
-                   (reverse (<-address Rec 9)) [])
+                   [[0 | 0] | (reverse (<-address Rec 9))] [])
           _ (address-> New 6 (count-of New))
           _ (address-> New 9 Merges)
           _ (shen-jit.s64! (<-address New 4) 24 (shen-jit.s64 (<-address Rec 4) 24))
@@ -3549,9 +3549,10 @@
          (let Words (words-at (<-address Rec 2) (* P (<-address Rec 7)) N)
               Live (= (Find Rec (reverse (tl (reverse Words)))) (+ P 1))
               At (count-of New)
-              M (merge-at P Merges 0)
+              Ms (merges-at P Merges)
+              M (hd (hd Ms))
               _ (if Live (Add New Words) skip)
-           (compact-h Rec New (+ P 1) Count N Find Add Merges
+           (compact-h Rec New (+ P 1) Count N Find Add Ms
              (if (and Live (or (empty? Acc) (not (= (hd (hd Acc)) M)))) [[M | At] | Acc] Acc)))))
 
 (define words-at
@@ -4227,18 +4228,20 @@
                         Rec (relation-of Db Rel)
                         Tuples (if (has-classes? Rec)
                                    (map (/. T [T | 0]) (tuples Db Rel))
-                                   (with-merges (reverse (tuples Db Rel)) 0 (reverse (<-address Rec 9))))
+                                   (with-merges (reverse (tuples Db Rel)) 0 [[0 | 0] | (reverse (<-address Rec 9))]))
                         _ (shen.dict-> Cache Rel Tuples)
                      Tuples))))
 
 \\ Tuples in the order stored, each paired with the merge of its position.
 (define with-merges
   [] _ _ -> []
-  [T | Ts] P Merges -> [[T | (merge-at P Merges 0)] | (with-merges Ts (+ P 1) Merges)])
+  [T | Ts] P Merges -> (let Ms (merges-at P Merges) [[T | (hd (hd Ms))] | (with-merges Ts (+ P 1) Ms)]))
 
-(define merge-at
-  P [[M | First] | More] Last -> (if (< P First) Last (merge-at P More M))
-  _ [] Last -> Last)
+\\ A relation's merges, oldest first, from the one position P came in, which heads them: a cursor
+\\ that moves on with P, from [[0 | 0] | Merges], 0 for a position before them all.
+(define merges-at
+  P [_ | Ms] -> (merges-at P Ms) where (and (cons? Ms) (<= (tl (hd Ms)) P))
+  _ Ms -> Ms)
 
 (define merge-of
   Ctx [Rel | Values] -> (let Entry (assoc Values (read-relation Ctx Rel))

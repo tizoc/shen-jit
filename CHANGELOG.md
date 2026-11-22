@@ -138,6 +138,8 @@ All notable changes to this project are documented in this file. The format is b
   it took 0.094.
 - `git.merge!` walks the current branch's history once rather than twice when it is not a fast-forward: on a history
   of 50,000 commits, a merge takes 0.47 s where it took 0.53.
+- A Datalog relation that keeps one tuple a key (`min`, `max`, `choice` or a lattice) settles faster when it took many
+  rounds: shortest paths over a 300 by 300 grid, 599 rounds, run in 3.7 s where they took 12.2.
 
 ### Fixed
 
