@@ -5,6 +5,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.11] - 2026-11-22
+
 ### Added
 
 - Isolate scopes: `(isolate.scope F)` calls `F` with a scope, in which `(isolate.spawn-in Scope G X)` spawns, and
@@ -36,8 +38,9 @@ All notable changes to this project are documented in this file. The format is b
   path with its links resolved, a link's target, a new link and an environment variable.
 - The module `layout`: `(deflayout Name (Field Bits) ...)` declares a fixed binary format as its specification draws
   it and defines typed readers, writers and offsets of each field and the layout's size, which inline where called;
-  `write-layout` writes a whole layout in packed stores, with its constants folded; `defflags` and `flag-bits` name a
-  field's bits as constants made as the code is read. The frame library's header is a layout.
+  `write-layout` writes a whole layout in packed stores, with its constants folded, checks the view once before it
+  stores, and refuses a field given twice or a value too wide for its field; `defflags` and `flag-bits` name a field's
+  bits as constants made as the code is read. The frame library's header is a layout.
 - Typed grammar rules have `<rule>.parse-at`, which parses a range of a view, and `<rule>.end-at`, which gives where a
   match of a prefix ends, both with a `(grammar.state)` the caller keeps, so that a parse allocates nothing but its
   values.
@@ -59,9 +62,10 @@ All notable changes to this project are documented in this file. The format is b
   against Linux kernel sockets and measures Shen heap allocations through the last shutdown.
 - `net/interface` serves TCP, UDP, and ICMP echo on one IPv4 link. When the bounded UDP receive queue fills,
   TCP and ICMP continue to make progress.
-- The IPv4 interface shares a bounded TCP table across listeners and outbound connections, with separate UDP
-  queues per port. It handles IPv4 fragment reassembly, ICMP errors, limited in rate, TCP path MTU updates, scaled windows,
-  and closed-port resets. A host is set up from one record that names its ports, slots, buffer sizes and keys.
+- The IPv4 interface shares a bounded TCP table across listeners and outbound connections, with separate UDP queues
+  per port. It handles IPv4 fragment reassembly, ICMP errors, limited in rate, TCP path MTU updates, scaled windows,
+  and closed-port resets. A host is set up from one record that names its ports, slots, buffer sizes and keys. Polling
+  it passes over vacant slots a run at a time, so a table sized for many connections costs little while few are open.
 - `net/ethernet` adds IPv4 routing and ARP over Linux TAP. `net/dhcp`, `net/dns`, and `net/stream` support address
   acquisition and renewal, DNS A lookups, and application streams. The Linux tests exercise outbound HTTP and
   verify zero Shen heap allocations after setup on both transports.
@@ -106,8 +110,6 @@ All notable changes to this project are documented in this file. The format is b
   or nothing, runs as a loop, in constant stack.
 - `(let G (freeze E) Body)` whose value is used, where Body only thaws G as its value, compiles to a label rather
   than a closure, so typed code with such a chain inlined where its value goes on keeps its values in registers.
-- `write-layout` checks the bytes it stores against the view once, before storing any, and then stores into the
-  view's storage directly, which `buffer.offset-at` gives; a value too wide for its field raises naming the field.
 - A small sealed function whose code calls nothing but to make an error's message inlines at any depth, so a typed
   loop that reads a buffer through such helpers keeps its values in registers. An error's message inlines only
   primitives, which makes code smaller and raising an error with a formatted message a little slower.
@@ -117,10 +119,6 @@ All notable changes to this project are documented in this file. The format is b
   that did not typecheck, such as an untyped rule's guard, compiles as before.
 - A definition made while sealing is on over one made unsealed, as a grammar's rule replaces its stub, loops in
   registers and inlines as a loop, as it does where its name was new.
-- TCP and IPv6 parse option lists faster by matching one option per iteration.
-- Polling a TCP listener or interface and asking for its next deadline pass over vacant connection slots and
-  unused TIME-WAIT records a run at a time, and over all of them while none is used, so a table sized for many
-  connections costs little while few are open.
 - The `sqlite-http` example starts its database's owner in a scope: `(counter-app.start Scope Path Host Port F
   Options)` gives `[Db S]`, and the scope waits for the owning isolate once `counter-app.await` ends its stream.
 - Loading and compiling code takes up to 4% less, as the loader finds instructions and primitives by hash.
@@ -129,15 +127,6 @@ All notable changes to this project are documented in this file. The format is b
   to the builder took 0.21 s where they took 0.67.
 - Constructing a struct stores its fields without checks: 100 million three-field structs took 0.27 s where they took
   0.36.
-- The `git` library compares and slices paths and names without copying them: in a repository of 50,000 files, reading
-  HEAD's tree as an index takes 0.11 s where it took 0.36, and `git.status-records` without untracked files 0.62 s
-  where it took 0.90.
-- Deleting a packed ref with the `git` library takes time in proportion to the packed refs, where it grew with their
-  square: with 40,000 of them, 0.07 s where it took 7.1.
-- `git.each-commit` splits each commit into lines once rather than twice: a log of 50,000 commits takes 0.067 s where
-  it took 0.094.
-- `git.merge!` walks the current branch's history once rather than twice when it is not a fast-forward: on a history
-  of 50,000 commits, a merge takes 0.47 s where it took 0.53.
 - A Datalog relation that keeps one tuple a key (`min`, `max`, `choice` or a lattice) settles faster when it took many
   rounds: shortest paths over a 300 by 300 grid, 599 rounds, run in 3.7 s where they took 12.2.
 - `datalog.add`, and each query of a `datalog.demand-db` after its first of a pattern, cost what they add, not the
@@ -164,20 +153,6 @@ All notable changes to this project are documented in this file. The format is b
   sealed and cannot be redefined".
 - With the kernel sealed, as it always is, each `eval` that called a sealed function kept a constant slot for good,
   which every collection scans: 20,000 such `eval`s ended with about 44,500 slots, and end with about 24,300 now.
-- A TCP connection answers the other end's keepalives and zero-window probes, and an ACK of bytes it never sent, with
-  an ACK: it answered none of them, so a Linux peer using keepalives, or probing a window whose update was lost,
-  dropped the connection.
-- A half-open TCP connection answers a repeated SYN with its SYN-ACK without counting it as a retry: each one doubled
-  the timeout and spent a retry, so a Linux client's own retries could time the connection out in about a minute,
-  where it should wait about two.
-- A multicast member answers an IGMPv2 query whose maximum response time is 12.8 seconds or more within that time: it
-  read it as IGMPv3 does, and could wait up to 53 minutes where the query allowed 25.5 seconds.
-- The networking libraries take an IPv4 datagram whose TTL is 0, and an IPv6 packet whose Hop Limit is 0, addressed to
-  them, as RFC 1122 and RFC 8200 require of a host: they dropped them.
-- An IPv6 first fragment that is too large to reassemble once its extension headers are counted no longer holds a
-  reassembly slot for a minute, keeping out other datagrams.
-- `net-tun.wait` lets `isolate.kill` end a waiting isolate within 100 ms: it waited out the whole wait first, which
-  could be days.
 - On Windows, a child process gets its environment sorted by name, as Windows requires: sorted on `NAME=VALUE`, an
   inherited `ProgramFiles(x86)` came before `ProgramFiles`.
 - On a Linux filesystem without `RENAME_NOREPLACE`, such as NFS, `fs.rename` that cannot remove the old name removes
@@ -191,20 +166,6 @@ All notable changes to this project are documented in this file. The format is b
   Name: -1 is not an arity from 0 to 8", where -1 overflowed the stack.
 - `parallel.map` given a whole float as its count, such as `(+ 1.5 0.5)`, raises "parallel.map: 2.0 is not a number of
   isolates", where it raised from `channel.new` about a capacity, or ran with a single element.
-- In the `git` library, a ref refused because another is in its way, as `refs/heads/a` is of `refs/heads/a/b`, leaves
-  no empty directory behind: one left there made every later update of `a` fail with "Is a directory", commits on it
-  included, and now gives way to the ref, as in Git. A loose ref in the way is reported as a conflict, where it gave
-  "File exists". Setting a ref looks only at the refs above and below it: with 40,000 packed refs, it takes 0.14 s
-  where it took 0.27.
-- `git.merge!` gives `(:git.conflict Paths)`, with the paths below the file, when one side adds a file where the other
-  adds a directory, where it raised "file and directory collide" and wrote nothing.
-- The `git` library refuses revisions such as `HEAD~{tree}` and `v1~{}`, as Git does, where it read them as
-  `HEAD^{tree}` and `v1^{}`.
-- The `git` library reads a config value continued by a backslash before a CRLF line end as Git does, where it raised
-  "invalid escape in config value" and so could not open the repository; a subsection name with a backslash before a
-  newline is refused, as in Git.
-- `git.repack!` run from a linked worktree packs what only the main worktree's detached HEAD reaches, which it left
-  loose.
 - A grammar read from a reader compares a literal's bytes as they arrive, so input that differs early fails at once:
   the HTTP server answered a short malformed request, such as `GET` and a line end, with 408 when the client's
   deadline expired, and a grammar refused valid input with "input exceeds the limit" when a longer literal tried first
@@ -219,13 +180,6 @@ All notable changes to this project are documented in this file. The format is b
 - Native code with a label or loop below 0 or from 2^20 up is refused as a bad instruction: a negative one failed with
   "<-address: -1 is not a valid index", and a large one made the checker allocate a table up to it (about 15 GB for
   2^33) before it was refused.
-- `write-layout` refuses a field given twice, naming it, when the form expands: the values were added, and a constant
-  could carry into the field before it.
-- `bytes.find` finds nothing for a `Byte` outside 0 to 255, which matched its low 8 bits on ranges of 16 bytes or
-  more, and `bytes.decimal` gives -2 for digits under a `Limit` below 0, where it gave the number, with no bound at
-  all from -10 down.
-- `hyperloglog.add-hashes!` of an array whose bytes end in part of a word adds its whole words; it raised "bytes: 8 is
-  not a valid index", after adding some of them to a dense sketch.
 - `datalog.query` and a `datalog.demand-db`'s `datalog.ask` of a relation that keeps one tuple a key (`min`, `max`,
   `choice` or a lattice) give the tuple it keeps: they gave every candidate its rules derived, `((c 2) (c 5))` where a
   run gives `((c 2))`.
@@ -902,7 +856,8 @@ All notable changes to this project are documented in this file. The format is b
 
 - Initial release
 
-[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.10...HEAD
+[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.11...HEAD
+[0.11]: https://github.com/tizoc/shen-jit/compare/v0.10...v0.11
 [0.10]: https://github.com/tizoc/shen-jit/compare/v0.9...v0.10
 [0.9]: https://github.com/tizoc/shen-jit/compare/v0.8...v0.9
 [0.8]: https://github.com/tizoc/shen-jit/compare/v0.7...v0.8
