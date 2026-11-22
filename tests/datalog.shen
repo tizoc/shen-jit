@@ -854,6 +854,8 @@
   (map (/. A (datalog.string-op substr A)) [["hello" 0 5] ["hello" 3 10] ["hello" 5 1] ["hello" 9 2] ["hello" 2 0]
                                             ["hello" 1 -1] ["hello" -2 2] ["" 0 3]])
   ["hello" "lo" "" "" "" "" "he" ""])
+(dt.check "numbers of strings" (map (/. S (datalog.string-op to-number [S])) ["12" "-7" "" "-" "--5" "12a" "007" "-0" "+3"])
+  [12 -7 [] [] [] [] 7 0 []])
 (defdatalog dt.native-bits
   (relation n [integer])
   (relation masked [integer integer])
@@ -1058,6 +1060,11 @@
   (freeze (datalog.bytes->facts dt.quoted r (shen-jit.string->bytes "c#34;ac#34;bcc#10;dc#10;") csv)))
 (dt.raises "a return and text after a quoted field" "bytes of r, line 2: text after a quoted field"
   (freeze (datalog.bytes->facts dt.quoted r (shen-jit.string->bytes "dc#10;c#34;ac#34;c#13;xyzc#10;") csv)))
+(dt.check "quoted fields of every type"
+  (datalog.bytes->facts dt.files row (shen-jit.string->bytes "c#34;ec#34;,c#34;xc#34;,c#34;-5c#34;,c#34;[pt 1 1]c#34;c#10;") csv)
+  [[row e "x" -5 [pt 1 1]]])
+(dt.raises "a quoted integer" "line 1: c#34;5xc#34; is not an integer"
+  (freeze (datalog.bytes->facts dt.files row (shen-jit.string->bytes "e,x,c#34;5xc#34;,[pt 1 1]c#10;") csv)))
 
 \* Relations of one tuple a key: the least or greatest last column, or the first tuple derived, on
    graphs with cycles, where a shortest path needs no bound to end. *\

@@ -902,7 +902,7 @@
   cat [A B] -> (cn A B)
   strlen [S] -> (shen-jit.bytes-length S)
   substr [S I N] -> (substring S (if (< I 0) 0 I) N)
-  to-number [S] -> (let N (parse-integer S) (if (= N []) [] (in-range N)))
+  to-number [S] -> (let N (byte-integer S 0 (shen-jit.bytes-length S)) (if (= N []) [] (in-range N)))
   to-string [N] -> (str N))
 
 (define substring
@@ -910,20 +910,9 @@
                 From (if (> I L) L I)
              (shen-jit.bytes->string S From (cases (<= N 0) 0 (> N (- L From)) (- L From) true N))))
 
-(define parse-integer
-  S -> (let Cs (explode S)
-         (cases (and (cons? Cs) (= (hd Cs) "-") (cons? (tl Cs))) (negate (digits (tl Cs) 0))
-                (cons? Cs) (digits Cs 0)
-                true [])))
-
 (define negate
   [] -> []
   N -> (- 0 N))
-
-(define digits
-  [] N -> N
-  [C | Cs] N -> (let D (- (string->n C) 48)
-                  (if (and (>= D 0) (<= D 9)) (digits Cs (+ (* 10 N) D)) [])))
 
 (define in-range
   X -> (if (int32? X) X (error "datalog: arithmetic gave ~A, outside 32 bits" X)))
@@ -4353,7 +4342,7 @@
   -> (let V (field-value (if (cons? F) (shen-jit.bytes->string B (hd F) (- (tl F) (hd F))) F) T Line Path Cs)
        [V | (field-values-of B Fs Ts Line Path Cs)]))
 
-\\ The integer of these bytes, or [] if they are not one.
+\\ The integer of the bytes from I to J of a buffer or a string, or [] if they are not one.
 (define byte-integer
   B I J -> (cases (>= I J) []
                   (and (= (shen-jit.u8 B I) 45) (< (+ I 1) J)) (negate (byte-digits B (+ I 1) J 0))
@@ -4367,7 +4356,7 @@
 
 (define field-value
   Text integer Line Path _
-  -> (let N (parse-integer Text)
+  -> (let N (byte-integer Text 0 (shen-jit.bytes-length Text))
        (if (and (integer? N) (int32? N))
            N
            (error "datalog: ~A, line ~A: ~S is not an integer of 32 bits" Path Line Text)))
