@@ -161,6 +161,17 @@
   I J -> (fx- I J) where (fx>= I J)
   I J -> (word-leapfrog J (fx+ I 2305843009213693951)))
 
+\\ A large step below a bound, in an if whose value goes to a register: the sum is checked there, as
+\\ what reads it, a difference, a float or a comparison, would take a sum past the greatest fixnum.
+(define word-if-sub {fixnum --> fixnum --> fixnum}
+  I N -> (fx- (if (fx< I N) (fx+ I 2305843009213693951) 0) 2305843009213693951))
+
+(define word-if-float {fixnum --> fixnum --> float}
+  I N -> (fl+ (fx->fl (if (fx< I N) (fx+ I 2305843009213693951) 0)) 0.5))
+
+(define word-if-less {fixnum --> fixnum --> boolean}
+  I N -> (fx< (if (fx< I N) (fx+ I 2305843009213693951) 0) 0))
+
 \\ A float truncated towards zero in a register (fl->fx), and a pixel's byte from a value in 0 to 1,
 \\ as the typed tracer computes it.
 (define float-truncated {float --> fixnum}

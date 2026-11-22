@@ -365,6 +365,9 @@
    (shen-jit.apply (shen-jit.function word-past-other) [-1 0 1]) (typed.step2 word-past-nested -3 0)])
 (typed.check "a step below a bound the loop steps too is checked" [true "integer overflow"]
   [(typed.has? fix+ word-leapfrog) (typed.step2 word-leapfrog 0 1)])
+(typed.check "a large step in an if to a register is checked"
+  ["integer overflow" "integer overflow" "integer overflow"]
+  [(typed.step2 word-if-sub 1 2) (typed.step2 word-if-float 1 2) (typed.step2 word-if-less 1 2)])
 (typed.check "an index stepped past the greatest fixnum raises at its read"
   "bytes: 2305843009213693952 is not a valid index"
   (trap-error (shen-jit.apply (shen-jit.function word-stride) [(shen-jit.bytes 4) 1 2305843009213693951 0])

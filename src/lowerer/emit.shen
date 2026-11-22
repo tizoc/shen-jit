@@ -157,6 +157,8 @@
   G [if C X Y] Tail -> (thaws-all G [[C false] [X Tail] [Y Tail]])
   G [let G _ _] _ -> -1
   \\ A frozen E that is itself a label is code in tail position.
+  G [let _ [freeze E] Body] true -> (thaws G Body true)
+      where (not (shen-jit.lower.occurs? G E))
   G [let H [freeze E] Body] true -> (thaws-all G [[E true] [Body true]])
       where (> (thaws H Body true) 0)
   G [let _ V Body] Tail -> (thaws-all G [[V false] [Body Tail]])

@@ -975,6 +975,14 @@ cannot. The kernel suite is the kernel's `tests/runme.shen`; the stlib install l
   - **Constant branches stay values.** At first a constant branch was a test too, a jump for `false` and nothing for
     `true`, which made `not` two jumps. `(not (number? X))` then went 14.2 → 15.4 ms: the JIT already follows the
     Boolean `not` makes to the one jump it takes, where a test, with no jump-if-true, needs a jump over a jump.
+- **Linear call and thaw checks, and registers given back** (2026-11-22, Apple M3 Max, load 2.5 to 4.3). From an
+  outside agent's branch, reviewed and measured that day. Whether code keeps nothing across a call was a forward
+  search from each call with a limit of 4,000 instructions, past which code was made boxed; one backward pass gives
+  the same answers within the limit, on 85,000 generated sequences, and the exact one past it. `thaws` no longer
+  counts the thaws of a frozen binding's own variable when its code does not mention the one asked about, which was
+  exponential on `share`'s chains of `[let G [freeze Else] ...]`. The helpers that compute a register give back what
+  their operands took in the other bank, and an `if` to a register goes through `into-if`: four functions in `net/tcp`
+  use fewer word registers, and the kernel's lowered code is the same.
 
 ### Sealing and inlining
 
@@ -5463,6 +5471,13 @@ The fourth step towards typed programs: a call of a struct's reader that typeche
     their loops differs only by a check at each exit, and n-body's inner loop starting at `(fx+ I 56)`, checked
     once per outer step. A loop of four steps by 8, inlined into one run 20 million times, where an exit's
     check weighs most: 70.2 -> 70.7 ms, eight alternating rounds, medians; one of 100 million steps 49.9 in both.
+- **Rejected: a test's bounds in the branches of an `if` to a register** (2026-11-22, Apple M3 Max, load 2.5 to 4.3).
+  From an outside agent's branch, reviewed and measured that day, before the rule above changed. `into-if` passed its
+  branches what the test proves, as `if` to a slot does, and `in-register` sent its `if` there, so under the first
+  rule, in `(fx- (if (fx< I N) (fx+ I 2305843009213693951) 0) 2305843009213693951)`, the sum became an unchecked
+  `word+` and its value past the greatest fixnum reached `fix-`, `fx->fl` and `fx<`, which do not check their
+  operands: 1, 2.3e18 and false where `+` raises. The rule as it is now checks such a sum anyway, but the bounds
+  changed no library's code, so `into-if` still passes none. `tests/typed.shen` has the three cases.
 
 ### A shorter overflow test for a constant step: rejected (2026-11-16, Apple M3 Max, load near 5, against the commit before)
 

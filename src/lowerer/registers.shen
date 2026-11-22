@@ -142,7 +142,7 @@
 \\ error's message is made: inlined, it calls nothing either but where the message is made, which
 \\ inlines no calling body.
 (define calls-only-to-raise?
-  Is -> (and (not (tail-calls? Is)) (calls-before? Is Is [])))
+  Is -> (and (not (tail-calls? Is)) (calls-safe-back? (reverse Is) [] false [])))
 
 (define tail-calls?
   [] -> false
@@ -159,41 +159,29 @@
 \\ an error's message, made by calls, does. A handler keeps nothing of them, so none is allowed.
 \\ The builder holds its instructions last first.
 (define keeps-nothing-across?
-  Backwards -> (let Is (reverse Backwards)
-                 (calls-before? Is Is [return tail-call tail-call-sealed tail-call-value])))
+  Backwards -> (calls-safe-back? Backwards [return tail-call tail-call-sealed tail-call-value] false []))
 
-\\ Whether every call in Is is followed by a raise or one of Exits.
-(define calls-before?
-  [] _ _ -> true
-  [[push-handler | _] | _] _ _ -> false
-  [[Op | _] | Is] All Exits -> (and (exits-first? Is All Exits [] 0) (calls-before? Is All Exits))
+\\ Single backward pass over reversed instructions: every call is followed on every path by a
+\\ raise or one of Exits before any register instruction, handler, or loop.
+(define calls-safe-back?
+  [] _ _ _ -> true
+  [[push-handler | _] | _] _ _ _ -> false
+  [[Op | _] | Is] Exits _ SafeLabels -> (calls-safe-back? Is Exits true SafeLabels)
+      where (element? Op Exits)
+  [[prim _ simple-error | _] | Is] Exits _ SafeLabels -> (calls-safe-back? Is Exits true SafeLabels)
+  [[jump L] | Is] Exits _ SafeLabels -> (calls-safe-back? Is Exits (element? L SafeLabels) SafeLabels)
+  [[jump-if-false _ L] | Is] Exits Safe SafeLabels
+  -> (calls-safe-back? Is Exits (and Safe (element? L SafeLabels)) SafeLabels)
+  [[jump-unless-entry _ _ L] | Is] Exits Safe SafeLabels
+  -> (calls-safe-back? Is Exits (and Safe (element? L SafeLabels)) SafeLabels)
+  [[label L] | Is] Exits Safe SafeLabels
+  -> (calls-safe-back? Is Exits Safe (if Safe [L | SafeLabels] SafeLabels))
+  [[Op | _] | Is] Exits Safe SafeLabels
+  -> (if Safe (calls-safe-back? Is Exits true SafeLabels) false)
       where (element? Op [call call-sealed call-value])
-  [_ | Is] All Exits -> (calls-before? Is All Exits))
-
-\\ Whether every way on from Is leaves the definition first, by a raise or one of Exits, looking
-\\ at a bounded number of instructions: past that, it is taken not to, and the code is made boxed.
-(define exits-first?
-  _ _ _ _ 4000 -> false
-  [] _ _ _ _ -> false
-  [[Op | _] | _] _ Exits _ _ -> true where (element? Op Exits)
-  [[prim _ simple-error | _] | _] _ _ _ _ -> true
-  [[jump L] | _] All Exits Seen N -> (exits-first-at? L All Exits Seen (+ N 1))
-  [[jump-if-false _ L] | Is] All Exits Seen N
-  -> (and (exits-first-at? L All Exits Seen (+ N 1)) (exits-first? Is All Exits Seen (+ N 1)))
-  [[jump-unless-entry _ _ L] | Is] All Exits Seen N
-  -> (and (exits-first-at? L All Exits Seen (+ N 1)) (exits-first? Is All Exits Seen (+ N 1)))
-  [[label L] | Is] All Exits Seen N -> (or (element? L Seen) (exits-first? Is All Exits [L | Seen] (+ N 1)))
-  [[Op | _] | Is] All Exits Seen N -> (exits-first? Is All Exits Seen (+ N 1))
-      where (element? Op [const move prim closure capture call call-sealed call-value inline])
-  _ _ _ _ _ -> false)
-
-(define exits-first-at?
-  L All Exits Seen N -> (or (element? L Seen) (exits-first? (after-label L All) All Exits [L | Seen] N)))
-
-(define after-label
-  _ [] -> []
-  L [[label L] | Is] -> Is
-  L [_ | Is] -> (after-label L Is))
+  [[Op | _] | Is] Exits Safe SafeLabels -> (calls-safe-back? Is Exits Safe SafeLabels)
+      where (element? Op [const move prim closure capture inline])
+  [_ | Is] Exits _ SafeLabels -> (calls-safe-back? Is Exits false SafeLabels))
 
 (define computes?
   [] -> false
@@ -430,14 +418,10 @@
 
 (define unboxed-test
   B Env Op X Y Else Top
-  -> (let RMark (<-address B 12)
-          WMark (<-address B 14)
-          Float (or (float-kind? Env X) (float-kind? Env Y))
-          OX (if Float (shen-jit.lower.float B Env X Top) (shen-jit.lower.word B Env X Top))
-          OY (if Float (shen-jit.lower.float B Env Y Top) (shen-jit.lower.word B Env Y Top))
-          Jump (emit B [(unless Float Op) OX OY Else])
-          Back (address-> B 12 RMark)
-       (address-> B 14 WMark)))
+  -> (released B (freeze (let Float (or (float-kind? Env X) (float-kind? Env Y))
+                              OX (if Float (shen-jit.lower.float B Env X Top) (shen-jit.lower.word B Env X Top))
+                              OY (if Float (shen-jit.lower.float B Env Y Top) (shen-jit.lower.word B Env Y Top))
+                           (emit B [(unless Float Op) OX OY Else])))))
 
 (define unless
   true < -> float-unless<
@@ -461,25 +445,19 @@
       where (and (element? Op [+ - * /]) (float-kind? Env [prim Op [X Y]]))
   B Env [prim shen-jit.float [X]] Top -> (shen-jit.lower.float B Env X Top)
   B Env [call F Args] Top
-  -> (let Mark (<-address B 12)
-          Rs (floats B Env Args Top)
-          Back (address-> B 12 Mark)
+  -> (let Rs (released B (freeze (floats B Env Args Top)))
           R (float-register B)
        (do (emit B [(float-call (length Args)) R F | Rs]) R))
       where (foreign-float? F Args)
   B Env [prim shen-jit.sqrt [X]] Top
-  -> (let Mark (<-address B 12)
-          RX (shen-jit.lower.float B Env X Top)
-          Back (address-> B 12 Mark)
+  -> (let RX (released B (freeze (shen-jit.lower.float B Env X Top)))
           R (float-register B)
        (do (emit B [float-sqrt R RX]) R))
   B Env [prim shen-jit.f64 [M I]] Top
   -> (let OM (operand B Env M Top)
           Top1 (if (= OM Top) (+ Top 1) Top)
-          WMark (<-address B 14)
           Scaled (scaled-index? B Env I)
-          OI (if Scaled (element-index B Env I Top1) (byte-index B Env I Top1))
-          Back (address-> B 14 WMark)
+          OI (released B (freeze (if Scaled (element-index B Env I Top1) (byte-index B Env I Top1))))
           R (float-register B)
        (do (emit B [(if Scaled float-load-index float-load-at) R OM OI]) R))
       where (word-index? B Env I)
@@ -488,7 +466,8 @@
           R (float-register B)
        (do (emit B [float-load R | Operands]) R))
   B Env [prim shen-jit.word-op [[const wfloat] X _]] Top
-  -> (shen-jit.lower.float-from-word B (shen-jit.lower.word B Env X Top))
+  -> (let W (released B (freeze (shen-jit.lower.word B Env X Top)))
+       (shen-jit.lower.float-from-word B W))
       where (= bits (kind Env X))
   B Env [prim shen-jit.field-float Args] Top
   -> (float-from B (read-slot B Env shen-jit.field-float Args Top))
@@ -520,15 +499,12 @@
 \\ infinity. The result goes into register To, or into a new one when To is new.
 (define float-arithmetic-to
   B Env Op X Y Top To
-  -> (let Mark (<-address B 12)
-          OX (float-operand B Env X Top)
-          Top1 (if (= OX Top) (+ Top 1) Top)
-          OY (float-operand B Env Y Top1)
-          RX (float-of B OX)
-          RY (float-of B OY)
-          Back (address-> B 12 Mark)
+  -> (let Pair (released B (freeze (let OX (float-operand B Env X Top)
+                                        Top1 (if (= OX Top) (+ Top 1) Top)
+                                        OY (float-operand B Env Y Top1)
+                                     [(float-of B OX) | (float-of B OY)])))
           R (if (= To new) (float-register B) To)
-       (do (emit B [(float-op Op) R RX RY]) R)))
+       (do (emit B [(float-op Op) R (hd Pair) (tl Pair)]) R)))
 
 \\ A float operand is [float R], already in register R, as is a fixnum, converted; any other
 \\ is a slot or a constant.
@@ -556,18 +532,14 @@
   B Env [prim Op [M I]] Top
   -> (let OM (operand B Env M Top)
           Top1 (if (= OM Top) (+ Top 1) Top)
-          Mark (<-address B 14)
-          OI (byte-index B Env I Top1)
-          Back (address-> B 14 Mark)
+          OI (released B (freeze (byte-index B Env I Top1)))
           W (word-register B)
        (do (emit B [(word-load Op) W OM OI]) W))
       where (element? Op [shen-jit.u8 shen-jit.u16 shen-jit.u32 shen-jit.s32])
   \\ A shift right keeps the sign, as word-sar does. What a shift left moves past the 62 bits of a
   \\ fixnum is gone, so its result shifts 2 further, then back with the sign.
   B Env [prim Op [X [const K]]] Top
-  -> (let Mark (<-address B 14)
-          OX (shen-jit.lower.word B Env X Top)
-          Back (address-> B 14 Mark)
+  -> (let OX (released B (freeze (shen-jit.lower.word B Env X Top)))
           W (word-register B)
        (do (if (= Op shen-jit.shift-right)
                (emit B [word-sar W OX [const (constant B K)]])
@@ -580,9 +552,7 @@
   -> (word-instruction-to B Env (if (= Op shen-jit.shift-left) fix-shl fix-sar) X Y Top new)
       where (and (element? Op [shen-jit.shift-left shen-jit.shift-right]) (word-kind? Env X) (word-kind? Env Y))
   B Env [prim Op [X]] Top
-  -> (let Mark (<-address B 14)
-          OX (shen-jit.lower.word B Env X Top)
-          Back (address-> B 14 Mark)
+  -> (let OX (released B (freeze (shen-jit.lower.word B Env X Top)))
           W (word-register B)
        (do (emit B [(bit-count Op) W OX]) W))
       where (and (element? Op [shen-jit.clz shen-jit.ctz shen-jit.popcount]) (word-kind? Env X))
@@ -590,9 +560,7 @@
       where (element? (word-op-kind Env Op X Y) [word bits])
   \\ A float truncated, raising out of line for one outside the fixnums.
   B Env [prim shen-jit.truncate [X]] Top
-  -> (let Mark (<-address B 12)
-          F (shen-jit.lower.float B Env X Top)
-          Back (address-> B 12 Mark)
+  -> (let F (released B (freeze (shen-jit.lower.float B Env X Top)))
           W (word-register B)
        (do (emit B [fix-from-float W F]) W))
       where (= float (kind Env X))
@@ -605,18 +573,14 @@
 (define word-op-to
   B Env wof X _ Top To -> (word-into B (shen-jit.lower.word B Env X Top) To)
   B Env wfixnum X _ Top To
-  -> (let Mark (<-address B 14)
-          OX (shen-jit.lower.word B Env X Top)
-          Back (address-> B 14 Mark)
+  -> (let OX (released B (freeze (shen-jit.lower.word B Env X Top)))
           W (word-to B To)
        (do (emit B [fix+ W OX [const (constant B 0)]]) W))
   B Env wget M I Top To
   -> (let OM (operand B Env M Top)
           Top1 (if (= OM Top) (+ Top 1) Top)
-          Mark (<-address B 14)
           Scaled (scaled-index? B Env I)
-          OI (if Scaled (element-index B Env I Top1) (byte-index B Env I Top1))
-          Back (address-> B 14 Mark)
+          OI (released B (freeze (if Scaled (element-index B Env I Top1) (byte-index B Env I Top1))))
           W (word-to B To)
        (do (emit B [(if Scaled word-load-index word-load64) W OM OI]) W))
   B Env Op X Y Top To -> (word-instruction-to B Env (word-instruction Op) X Y Top To))
@@ -670,26 +634,14 @@
   B Kind Env [do X Y] Top -> (do (shen-jit.lower.effect B Env X Top) (register-of B Kind Env Y Top))
   B Kind Env [if C X Y] Top
   -> (let R (new-register B Kind)
-          Field (register-field Kind)
-          Mark (<-address B Field)
-          Else (new-label B)
-          End (new-label B)
-          Move (move-op Kind)
-       (do (test B Env C Else Top)
-           (branch-into B Kind Env X R Top)
-           (address-> B Field Mark)
-           (emit B [jump End])
-           (emit B [label Else])
-           (branch-into B Kind Env Y R Top)
-           (address-> B Field Mark)
-           (emit B [label End])
-           R))
+       (do (into-if B Env Kind C X Y R Top none) R))
       where (and (branch-of? Env Kind X) (branch-of? Env Kind Y))
   B Kind Env X Top -> (converted B Kind Env X Top))
 
 \\ X in a register of Kind: a float or a fixnum one gives, converted, or what it gives boxed, checked.
 (define converted
-  B float Env X Top -> (shen-jit.lower.float-from-word B (shen-jit.lower.word B Env X Top))
+  B float Env X Top -> (let W (released B (freeze (shen-jit.lower.word B Env X Top)))
+                         (shen-jit.lower.float-from-word B W))
       where (unboxed? B Env X)
   B float Env X Top -> (float-from B (operand B Env X Top))
   B word Env X Top -> (word-from B (operand B Env X Top))
@@ -702,10 +654,6 @@
 (define new-register
   B float -> (float-register B)
   B _ -> (word-register B))
-
-(define register-field
-  float -> 12
-  _ -> 14)
 
 (define move-op
   float -> float-move
@@ -762,12 +710,11 @@
 \\ one that computing them took and gave back.
 (define word-instruction-to
   B Env Op X Y Top To
-  -> (let Mark (<-address B 14)
-          OX (shen-jit.lower.word B Env X Top)
-          OY (shen-jit.lower.word B Env Y Top)
-          Back (address-> B 14 Mark)
+  -> (let Pair (released B (freeze (let OX (shen-jit.lower.word B Env X Top)
+                                        OY (shen-jit.lower.word B Env Y Top)
+                                     [OX | OY])))
           W (word-to B To)
-       (do (emit B [Op W OX OY]) W)))
+       (do (emit B [Op W (hd Pair) (tl Pair)]) W)))
 
 (define word-to
   B new -> (word-register B)
@@ -1229,8 +1176,8 @@
 (define inline-of
   F Params Body Sealed Code Kinds
   -> (let Inline (inline-form F Params Body (cons? Sealed))
-          Contained (calls-only-to-raise? (instructions Code))
-       (cond ((cons? Inline) (if Contained (append Inline [contained]) Inline))
+       (cond ((cons? Inline)
+              (if (calls-only-to-raise? (instructions Code)) (append Inline [contained]) Inline))
              ((or (not (value *typed*)) (not (computes? (instructions Code)))
                   (> (size Body) 800))
               Inline)
