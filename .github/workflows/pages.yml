@@ -19,6 +19,7 @@ on:
       - docs/floats.md
       - docs/word.md
       - docs/words.md
+      - docs/bignum.md
       - docs/option.md
       - docs/result.md
       - docs/buffers.md

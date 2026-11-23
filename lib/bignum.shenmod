@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name bignum)
+  (requires ffi numbers memory)
+  (sources tc- "bignum.shen" tc+ "bignum-typed.shen"))

@@ -6417,6 +6417,51 @@ about 30 elsewhere and a 140-line header for C written for Shen. Timings are fro
   `docs/curl.md` is its own rendered reference page. No throughput or retained-memory comparison
   was made. Streaming sinks, multi transfers and cancellation remain separate work.
 
+### Bignums over GMP (2026-11-23, Apple M3 Max, GMP 6.3, at a load of 3 to 10)
+
+- **Built:** `lib/bignum.shen`, in Shen alone over the FFI, named for what it gives and not for GMP. A bignum is a
+  fixnum where it fits one, and otherwise a struct of its signed number of limbs and their bytes, with no limb to
+  spare, so that `=`, `hash`, images, messages and the collector need nothing. Sums, products, comparisons and
+  divisions by a fixnum call GMP's `mpn` functions on the byte buffers. The rest copy operands into `mpz_t` registers
+  outside the heap, one set for each isolate, and results out of them. The struct's layout is relied on, as every
+  program compiled against `gmp.h` does: reading its size and limb pointer takes no call.
+- **The first version used the registers throughout,** and `mpn` functions were rejected as more code: signs, carries
+  and trimming are Shen's with them, and the registers stay for what they lack, as `mpn_tdiv_qr` takes seven arguments
+  and the FFI six, and there is no modular power. That was wrong: 123 lines more, and half or more of a small
+  operation was copying. Best of three runs, as sealed executables:
+
+  | Operation | Registers | Limbs in place |
+  | --- | ---: | ---: |
+  | `bignum.+` on fixnums (the kernel's `+`, 0.8) | 2.0 ns | 2.0 ns |
+  | `bignum.+`, 160 bits | 75 ns | 36 ns |
+  | `bignum.*`, 160 bits | 88 ns | 44 ns |
+  | `bignum.<`, 160 bits | 52 ns | 19 ns |
+  | `bignum.+`, 160 bits and 5 | 73 ns | 28 ns |
+  | `bignum.*`, 160 bits by 10 | 80 ns | 30 ns |
+  | `bignum.quotient`, 160 bits by 10 | 85 ns | 38 ns |
+  | `bignum.remainder`, 160 bits by 10 | 92 ns | 27 ns |
+  | `bignum.quotient` of two of 160 bits | 62 ns | 62 ns |
+  | `bignum.*` of fixnums that overflows | 76 ns | 66 ns |
+  | `bignum.+`, 30,000 bits | 385 ns | 232 ns |
+  | `bignum.*`, 30,000 bits | 19.5 µs | 19.8 µs |
+  | The 100,000th Fibonacci number, by sums | 42 ms | 26 ms |
+  | 5000! | 1.4 ms | 1.3 ms |
+
+  A new buffer and the call to `mpn_add` take 25 ns of the 36. Python took 33 ns for a sum and 77 for a product of 160
+  bits, 0.91 µs and 408 µs at 30,000, 102 ms for the Fibonacci number and 5.8 ms for 5000!.
+- **Rejected: an adapter in C,** with `include/shen.h`. An `mpn_add_n` into a new buffer took 22 ns in one, and an
+  `mpz_add` with its result in a buffer 49. It needs a compiler and GMP's headers, and a closed program needs `--keep`
+  for each procedure, where C functions need nothing.
+- **Rejected: values that are pointers to GMP's integers,** released by `lib/handle.shen`. They would be dead in a saved
+  image, could not go to an isolate, would not be `=` by value, and their limbs would bring no collection.
+- **GMP ends the process** for a division by zero, a root of a negative integer or a conversion of an infinity, and when
+  it runs out of memory. The first are checked before each call, and a result is limited to 2^31 bits, estimated first.
+- **Checked** against Python's integers, 6,010 cases in `make test-bignum` and 80,100 more over ten seeds, 4,010 with a
+  collection every 1000 words and as many with every primitive in C; the 109 checks also with a collection at every
+  allocation, and with the standard library, whose `negative?` had stopped the module loading.
+- **Left out:** rationals and GMP's floats, in-place operations, random integers, and a call that can be interrupted.
+  Division of one large integer by another still copies, at 62 ns for 160 bits.
+
 ### SQLite and sockets (2026-11-05)
 
 First libraries, to test whether declarations cover real use: 128 and 206 lines of Shen with no C.

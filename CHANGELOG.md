@@ -13,6 +13,8 @@ All notable changes to this project are documented in this file. The format is b
   `--keep FUNCTION` keeps more.
 - `(shen-jit.before-save F)` has a function of no arguments called before `shen-jit build` saves a program, as the
   grammar library does: a built program holds its grammars compiled, where each compiled at its first use.
+- The module `bignum`: bignums, over GMP, for typed code and untyped code. They are plain data, equal with `=`, printed
+  as their digits, saved in images and sent to isolates, and one that fits a fixnum is a fixnum.
 
 ### Changed
 

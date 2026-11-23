@@ -202,6 +202,7 @@ The module `numbers` adds two kinds of number for typed code, `fixnum` and `floa
 `floats` adds arrays of doubles, unboxed, which typed code reads and writes in registers by element
 ([Arrays of doubles](floats.md)), `word` 64-bit words, whose arithmetic wraps, which typed code keeps in
 registers too ([64-bit words](word.md)), and `words` arrays of them, read by element ([Arrays of words](words.md)).
+The module `bignum` adds bignums, integers of any size, for typed code and untyped code alike ([Bignums](bignum.md)).
 
 Prolog and a compiler-compiler are built in:
 
@@ -291,7 +292,8 @@ inlined too, and patched when a function is redefined.
 - **No stlib in the default image.** Only the kernel and its extensions for features, programmable pattern matching, namespaces and the launcher are in use: see
   [The standard library](#the-standard-library).
 - **Integers are 62-bit, without bignums.** An integer result outside that range raises `integer overflow`, where
-  Shen/Scheme goes on in bignums. Floats are IEEE doubles, as there.
+  Shen/Scheme goes on in bignums. Floats are IEEE doubles, as there. The module `bignum` gives
+  [bignums](bignum.md), with operations of their own.
 - **Sealing.** Internal kernel functions cannot be redefined, where Shen/Scheme accepts such definitions.
 - **Numbers hash by value.** A float and an integer that are `=` have the same `hash`, where Shen/Scheme's tells them apart.
 - **No `thread`.** Shen/Scheme's `(thread Frozen)` is not provided. [Isolates](#isolates) run in parallel, each
@@ -622,6 +624,7 @@ adapter shipped beside it, or in its `lib/`.
 | Modules | What they provide | Static Linux | C adapter | Reference |
 | --- | --- | --- | --- | --- |
 | `numbers`, `floats`, `word`, `words` | Typed fixnums, floats, 64-bit words and unboxed arrays | Yes | No | [Numbers](numbers.md), [Floats](floats.md), [Word](word.md), [Words](words.md) |
+| `bignum` | Bignums, over GMP | No | No | [Bignums](bignum.md) |
 | `option`, `result` | Optional values and typed error results (`let-ok`) | Yes | No | [Option](option.md), [Result](result.md) |
 | `buffer`, `cursor`, `bytes` | Checked byte views, cursors and SIMD byte scans/conversions | Yes | No | [Buffers](buffers.md), [Bytes](bytes.md) |
 | `layout`, `grammar`, `json` | Binary wire layouts, compiled byte grammars and JSON | Yes | No | [Layout](layout.md), [Grammar](grammar.md), [JSON](json.md) |
@@ -1307,7 +1310,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | Target | What it does |
 | --- | --- |
 | `make test-core` | `test`, `test-jit`, `test-ops`, `test-kl`, `check-lowerer`, `check-generated`, `test-kernel`, `test-stlib`, `test-thorn`, `test-native`, `test-ffi`, `test-overrides`, `test-structs`, `test-isolates`, `test-modules`, `test-closed` and `test-typed` |
-| `make test-libs` | `test-buffer`, `test-bytes`, `test-layout`, `test-hyperloglog`, `test-json`, `test-io`, `test-net-udp`, `test-net-tcp`, `test-net-interface`, `test-net-clients`, `test-net-ipv6`, `test-net-multicast`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl`, `test-namespaces`, `test-parallel` and `test-shen-git` |
+| `make test-libs` | `test-buffer`, `test-bytes`, `test-layout`, `test-hyperloglog`, `test-json`, `test-io`, `test-net-udp`, `test-net-tcp`, `test-net-interface`, `test-net-clients`, `test-net-ipv6`, `test-net-multicast`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl`, `test-namespaces`, `test-parallel`, `test-shen-git` and `test-bignum` |
 | `make test` | The runtime's unit tests |
 | `make test-jit`, `make test-ops` | The JIT and the instructions, on small programs |
 | `make test-kl` | The `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
@@ -1315,6 +1318,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-modules` | Modules: names, the path, requirements in order and loaded once, type checking per source, features, sources that raise, refused descriptors and typed modules; `-m` and `build` are in `tests/cli.sh`, which `make test-kernel` runs |
 | `make test-closed` | Closed executables: that they run as the sealed ones of the same modules, and with a collection at every allocation in `make test-kernel-stress`, and what is refused |
 | `make test-typed` | Typed programs: `numbers`, `floats`, `word` and `words`, and typed definitions compiled with their types, values in registers among them |
+| `make test-bignum` | Bignums, also against Python's where there is Python 3, with typing, an image, isolates and a closed program; needs GMP's library, and skips what does without it |
 | `make test-parallel` | `parallel.map` over isolates: order, balance, errors, what crosses and shared arguments |
 | `make test-kernel` | The kernel's test suite, the extension tests, the contract examples and `tests/cli.sh` |
 | `make test-stlib` | The executable with the standard library |

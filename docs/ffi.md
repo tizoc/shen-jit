@@ -12,7 +12,7 @@ Both are in `lib/ffi.shen`, which stays out of the image and has to be loaded be
 shen-jit eval -m ffi -l program.shen
 ```
 
-`lib/sqlite.shen` and `lib/socket.shen` are written over it in Shen alone, and show what it covers. **None of this is stable until 1.0:**
+`lib/sqlite.shen`, `lib/socket.shen` and `lib/bignum.shen` are written over it in Shen alone, and show what it covers. **None of this is stable until 1.0:**
 it may change before then. `SHEN_API_VERSION` numbers the layout of the table of functions that the C API calls
 through, which an adapter can check: a function renamed in its slot, as `shen_make_real` became
 `shen_make_float`, keeps the layout and its number, and adapters built before still work.

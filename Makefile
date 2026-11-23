@@ -114,6 +114,12 @@ test-process: $(BUILD)/shen-jit
 	sh tests/refused.sh $(SHEN_JIT) tests/process_env_refused.shen -m process
 	CC="$(CC)" sh tests/process.sh $(SHEN_JIT)
 
+# Bignums, which need GMP's library.
+.PHONY: test-bignum
+test-bignum: $(BUILD)/shen-jit $(BUILD)/shen-jit-stlib
+	sh tests/bignum.sh $(SHEN_JIT) $(abspath $(BUILD)/shen-jit-stlib)
+	sh tests/refused.sh $(SHEN_JIT) tests/bignum_refused.shen -m bignum
+
 .PHONY: tree-sitter test-tree-sitter deps-tree-sitter
 tree-sitter: $(TREE_SITTER_ADAPTER)
 
@@ -292,7 +298,7 @@ check-docs:
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words option result buffers bytes layout grammar io fs processes parallel tree-sitter framing io-sockets git hyperloglog networking net-udp net-tcp net-tun deadlines http-head http http-streaming http-listener json datalog curl
+GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words bignum option result buffers bytes layout grammar io fs processes parallel tree-sitter framing io-sockets git hyperloglog networking net-udp net-tcp net-tun deadlines http-head http http-streaming http-listener json datalog curl
 PANDOC ?= pandoc
 GUIDE_PANDOC := $(PANDOC) -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
@@ -412,7 +418,7 @@ test-isolates-stress: $(BUILD)/shen-jit
 
 # Every library's suite, without the collections test-lib-stress adds (about 30 s).
 test-libs: test-buffer test-bytes test-layout test-hyperloglog test-json test-io test-net-udp test-net-tcp test-net-interface test-net-clients test-net-ipv6 test-net-multicast test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces \
-  test-parallel test-shen-git
+  test-parallel test-shen-git test-bignum
 
 .PHONY: test-isolates test-isolates-stress test-parallel
 
@@ -436,6 +442,7 @@ LIB_IMAGE_TESTS = buffer_image json_image io_image frame_image io_socket_image h
 test-lib-stress: $(BUILD)/shen-jit
 	for t in $(LIB_IMAGE_TESTS); do TEST_GC_STRESS=1 sh tests/$$t.sh $(SHEN_JIT) || exit 1; done
 	TEST_GC_STRESS=1 CC="$(CC)" sh tests/curl.sh $(SHEN_JIT)
+	TEST_GC_STRESS=1 sh tests/bignum.sh $(SHEN_JIT)
 	TEST_GC_STRESS=1 CC="$(CC)" sh example-apps/source-deps/test.sh $(SHEN_JIT)
 	TEST_GC_STRESS=1 CC="$(CC)" sh example-apps/shen-git/test.sh $(SHEN_JIT)
 
