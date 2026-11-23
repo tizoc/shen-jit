@@ -141,6 +141,8 @@ const Primitive primitive_table[] = {
     {"shen-jit.truncate", 1, NULL},
     {"shen-jit.struct-ref", 3, NULL},
     {"shen-jit.xxh64", 5, NULL},
+    {"shen-jit.save-closed", 3, NULL},
+    {"shen-jit.printer", 1, NULL},
 };
 
 const size_t primitive_count = sizeof primitive_table / sizeof primitive_table[0];
@@ -932,7 +934,7 @@ static FILE *open_path(VM *vm, const char *mode)
    constants and symbols reach and no frames, so there is nothing to go on
    with: here the frames are dropped, as the launcher's return does. The file
    is written beside Path and renamed, so a binary can replace itself. */
-static V save_executable(VM *vm)
+static V save_executable(VM *vm, bool closed)
 {
     if (!vm_is_builder(vm))
         return sj_raise(vm, "save-executable: only the builder can save");
@@ -941,6 +943,8 @@ static V save_executable(VM *vm)
     V path = vm->args[0], entry = vm->args[1];
     if (!is_type(path, T_STRING))
         return sj_raise_value(vm, "~S is not a path", path);
+    if (closed && (entry == V_NIL || !is_pair(vm->args[2]) || !is_pair(ptr(vm->args[2])[1])))
+        return sj_raise(vm, "save-closed: it takes an entry point, and the functions to keep and to dispatch to");
     if (entry != V_NIL) {
         V f = is_symbol(entry) ? *cell_function(vm, symbol_cell(entry)) : V_NIL;
         if (!is_proc(f) || hdr_type(ptr(f)[0]) != T_CLOSURE ||
@@ -967,6 +971,7 @@ static V save_executable(VM *vm)
        collect, which would drop it. */
     V *entry_slot = global_slot_new(vm, intern_cstr(vm, "shen-jit.*entry*"));
     if (!entry_slot) {
+        remove(temporary);
         free(name);
         free(temporary);
         return sj_raise(vm, "out of memory");
@@ -976,8 +981,13 @@ static V save_executable(VM *vm)
     *hush = base[0];
     *argv = base[1];
     vm->fp = vm->top = base;
+    bool program = *entry_slot != V_NIL;
+    ImageContents image = {0};
+    if (closed)
+        image_closed(vm, vm->args[2], temporary, &image);
     /* The old file is replaced only by a whole new one. */
-    bool written = image_append(vm, temporary) && chmod(temporary, 0755) == 0;
+    bool written = (closed ? image_append_contents(temporary, &image, program)
+                           : image_append(vm, temporary, program)) && chmod(temporary, 0755) == 0;
 #ifdef _WIN32
     written = written && win_replace(temporary, name);
 #else
@@ -1984,7 +1994,11 @@ V sj_primitive(VM *vm, size_t index)
         if (vm->program->isolates)
             program_exit(vm, (int)fixval(a)); /* other isolates may be blocked reading a stream */
         exit((int)fixval(a)); /* flushes every open stream */
-    case P_SAVE_EXECUTABLE: return save_executable(vm);
+    case P_SAVE_EXECUTABLE: return save_executable(vm, false);
+    case P_SAVE_CLOSED: return save_executable(vm, true);
+    case P_PRINTER:
+        return is_symbol(a) && is_proc(*cell_function(vm, symbol_cell(a))) && *cell_arity(vm, symbol_cell(a)) == fix(1)
+            ? *cell_function(vm, symbol_cell(a)) : V_NIL;
     case P_BYTESP: return boolean(is_type(a, T_BYTES));
     case P_BYTES: case P_BYTES_LENGTH: case P_STRING_BYTES: case P_BYTES_STRING: case P_COPY_BYTES:
         return bytes_primitive(vm, (unsigned)index);

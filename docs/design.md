@@ -70,6 +70,40 @@ stays out: `make stlib` loads the kernel's precompiled `stlib.kl` into a running
 
 An image is tied to the exact build that wrote it, by an identifier and a checksum of the primitive names.
 
+A root array is stored as the ranges of its slots that are in use, and the loader clears the others. An image
+of a program, one with an entry point, is marked in its trailer, so that the executable that ends with it starts
+from it and no other.
+
+**A closed program's image** (`closed.c`, [Closed builds](modules.md#closed-builds)) holds what its entry point can
+reach, found after the collection that any image starts with:
+
+- **Nodes** are function cells, arities, constant slots, global slots and objects. Marking goes from the entry point
+  and `--keep`'s functions through what each holds, and, for a code object, what its bytecode names: the cells it
+  calls, and what its primitives look up.
+- **Reading a code object** is a forward analysis of its slots, joined at labels and repeated until nothing changes:
+  each holds a value that the code names, a parameter, a procedure, the property table, or anything. So a name is
+  known where a primitive that looks it up is given it, also through branches, handlers and what a closure captures.
+- **Parameters** are followed through calls. What a function does with each, as a name it calls or reads, or as a list
+  whose head is one, is recorded, and done at each call to what the caller passes, which may be the caller's own
+  parameter. That holds for
+  a function that is only called by its name: one that is ever a value, or called from C, may be given anything. As
+  callers and callees are read in any order, all code is read again until nothing more is found, each time knowing
+  no less of what is kept and no more of what a slot holds.
+- **A computed name** refuses the program, unless `--dispatch` declares what it can be, for the function the code is
+  in, one it is nested in or one inlined there, which the bytecode marks. A name that came in a message is computed:
+  `shen-jit.call-target` calls it, and is taken to be given only what `shen-jit.target` was, where it was sent.
+- **The property table** can go only to `get`, `put` and `unput`, and the image's has the properties that those name.
+- **Compiling** is the builder's, as it is among isolates, and nothing in a closed program is the builder:
+  `shen-jit.*isolate*`, which `(shen-jit.builder?)` reads, is true, also as its code is read, so that what it does
+  only there is not followed.
+- **Replacements:** the kernel's printing of vectors and its error for a partial function need an evaluator, and have
+  others in their place (`shen-jit.*closed*`), by identity, so that a program's own definitions of those names are
+  left alone.
+
+Symbols and objects are packed. Cells, constants and globals keep their places, which code holds, with what is not
+kept cleared, so the bytecode is copied as it is. Inline bodies are left out: the lowerer reads them, and a guard of
+an open call, which calls without one.
+
 ## The lowerer and code objects
 
 The lowerer does normalisation, tail positions, closure conversion, slot and call-window assignment, and

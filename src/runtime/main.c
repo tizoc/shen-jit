@@ -312,7 +312,9 @@ static int run(int argc, char **argv)
 #endif
     char path[4096];
     const char *self = executable_file(argv[0], path, sizeof path);
-    const char *image = getenv("SHEN_JIT_IMAGE") ? getenv("SHEN_JIT_IMAGE") : self;
+    const char *image = getenv("SHEN_JIT_IMAGE");
+    if (!image || image_is_program(self))
+        image = self;
     Jit *jit = jit_create();
     size_t semispace = size_setting("SHEN_JIT_SEMISPACE");
     VM *vm = jit ? image_load(image, semispace ? semispace : 1 << 22, 1 << 16, jit_compile_stub(jit), jit_foreign_stub(jit)) : NULL;
@@ -443,7 +445,9 @@ static void raise_on_broken_pipes(void) {}
 
 static int start(int argc, char **argv)
 {
-    if (argc == 4 && strcmp(argv[1], "--stage1") == 0)
+    char path[4096];
+    if (argc == 4 && strcmp(argv[1], "--stage1") == 0 &&
+        !image_is_program(executable_file(argv[0], path, sizeof path)))
         return stage1(argv[2], argv[3]);
     raise_on_broken_pipes();
     return run(argc, argv);

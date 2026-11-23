@@ -24,7 +24,7 @@
                        Works (works K)
                        Senders (senders Works)
                     (shen-jit.on-error
-                      (freeze (isolate.spawn-each work (work-args F Works (channel.sender Back))
+                      (freeze (isolate.spawn-each work (work-args (shen-jit.target F) Works (channel.sender Back))
                                 (/. Started (serve Back Started (first-runs Senders Started Runs) (after K Runs)
                                                    none (vector (length Runs))))))
                       (freeze (close-quietly [Back | (append Works Senders)])))))))
@@ -115,11 +115,7 @@
 
 (define each
   _ [] Ys -> (reverse Ys)
-  F [X | Xs] Ys -> (each F Xs [(apply-to F X) | Ys]))
-
-(define apply-to
-  [F | Args] X -> (shen-jit.apply F (append Args [X]))
-  F X -> (shen-jit.apply F [X]))
+  F [X | Xs] Ys -> (each F Xs [(shen-jit.call-target F X) | Ys]))
 
 \\ A run for each isolate, which is then busy: [Monitor Sender I], I being the run it has.
 (define first-runs

@@ -195,9 +195,71 @@ a function of no arguments:
   loaded during the build can still be shared.
 - **Loading is quiet,** and `*hush*` and sealing are as they were when it saves, so the program starts as the
   command that built it did.
+- **What a library leaves for later** is done once everything is loaded, before the program is saved, if the library
+  asked with `(shen-jit.before-save F)`, `F` being the name of a function of no arguments. A grammar's rules are
+  compiled so.
 - **What it carries** is the whole image, compiler included: about 2 MB, and more with the libraries it loads,
-  about 4 MB with `json`. A library's C adapter, for `fs`, `process`, `tree-sitter` or `curl`, is still looked for
-  at run time, as for any program.
+  about 4 MB with `json`. With [`--closed`](#closed-builds) it is only what the program can reach. A library's C
+  adapter, for `fs`, `process`, `tree-sitter` or `curl`, is still looked for at run time, as for any program.
+- **What it starts with is its own:** its arguments, whatever they are, and its image, whatever `SHEN_JIT_IMAGE` says.
+
+### Closed builds
+
+```sh
+shen-jit build app/app.shenmod --closed -o hello
+```
+
+With `--closed` the executable holds only what the entry point can reach: the functions called, the data and the
+globals read, and the parts of the kernel and the port they need in turn. The rest of the file is the runtime, about
+400 KB, and a small program's image adds a few kilobytes to that. It is built as any other, so what its sources do
+as they load still happens, and its definitions are sealed. It still compiles to native code as it runs.
+
+It cannot evaluate or define anything, not with `eval` or `load`, nor with `read`, `input` or `read-from-string`,
+which apply macros. If the entry point can reach any of that, the build fails and shows how it gets there:
+
+```text
+shen-jit: closed build: app.main -> app.settings -> requires eval
+```
+
+What a library compiles only in the builder, as [an isolate cannot](guide.md#isolates), it does not compile in a
+closed program either: `(shen-jit.builder?)` is false there. A program's [grammars](grammar.md), and so `json` and
+`http`, are compiled before it is saved. `datalog` finds the functions it makes by names it computes, and cannot be
+in a closed program.
+
+**Names.** A function called by its name is followed. So is one whose name is given, where the code can be read,
+to a function that calls it, alone or with arguments for it in a list, as `[F X]`: to `fn`, `isolate.spawn`,
+`isolate.spawn-in`, `parallel.map`, `http.listen`, or to one of the program's that calls its argument's function in
+turn. A name that is computed, as one taken from another list is, can be any function's, so each it can be is
+declared:
+
+```sh
+shen-jit build app/app.shenmod --closed --dispatch app.run app.start --dispatch app.run app.stop
+```
+
+That lets the code of `app.run`, its lambdas included, call `app.start` and `app.stop` by a computed name. The
+build does not know whether those are all: calling another raises, as it would if there were no such function.
+Where a declaration is missing, the message names the caller to give. The names of globals cannot be computed.
+
+**What else differs** from the sealed executable:
+
+- **Properties:** `get`, `put` and `unput` work, on any subject, if the property is named where they are called, and
+  the executable holds the properties so named, of the subjects that are named too, or of all. Nothing else can use
+  `*property-vector*`. The error for a subject that lacks a property can say that it has no attributes.
+- **Printing:** a vector is printed by the function its first element names, as by a struct's printer, if the code
+  or the data puts that name there. `--keep FUNCTION` keeps one that a computed first element names, which is
+  printed as other vectors are otherwise.
+- **Partial functions** raise `partial function F`, without asking whether to track F.
+- **C functions** are kept, as they cannot reach Shen. C written for Shen (`include/shen.h`) can look names up, so
+  `--keep` is needed for each such procedure that the program can reach, and for what it looks up.
+
+`--keep` also keeps any other function, with what it can reach.
+
+**A library's code** can be in a closed program if it asks `(shen-jit.builder?)` before it evaluates anything, as for
+an isolate. What should have been made in the builder, and was not, raises with `(shen-jit.unprepared Message)`: a
+program that can reach that is refused. A name that goes to an isolate in a message is computed where it arrives, so
+it is sent as `(shen-jit.target F)`, which is `F`, a name or `[Name | Args]`, as it is, and called there with
+`(shen-jit.call-target F X)`, with the arguments and then `X`. What is given to the first is kept, and the second is
+taken to be given only that: another name raises, if nothing else kept its function.
 
 ### Checking library boundaries
 

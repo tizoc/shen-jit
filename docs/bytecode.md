@@ -184,6 +184,11 @@ plus:
 - `shen-jit.save-executable`: arity 2, the path and an entry point or `[]`. It
   writes the running executable's runtime and an image of the heap, and ends the
   process. Its arguments are checked first, and a path it cannot write raises.
+- `shen-jit.save-closed`: arity 3, the path, an entry point, and a list of the functions to keep and of those that
+  each caller may call by computed names, as `build --closed` is given them. The image is of what the entry point
+  can reach (docs/design.md).
+- `shen-jit.printer`: arity 1, the function of one argument that a symbol names, or `[]`, which prints vectors whose
+  first element it is in a closed program.
 
 - `shen-jit.bytes` (arity 1), `shen-jit.bytes?` (1), `shen-jit.bytes-length` (1),
   `shen-jit.u8`, `shen-jit.u16`, `shen-jit.u32` (2), `shen-jit.u8!`, `shen-jit.u16!`,

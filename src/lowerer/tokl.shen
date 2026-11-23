@@ -23,6 +23,8 @@
 (put shen-jit.struct-ref arity 3)
 (put shen-jit.property arity 3)
 (put shen-jit.save-executable arity 2)
+(put shen-jit.save-closed arity 3)
+(put shen-jit.run-before-save arity 0)
 \\ The struct expander calls these from the pinned namespace extension. Older bootstrap
 \\ hosts do not know their arities yet; compilation must still make the same direct calls.
 (put shen.x.namespaces.register-syntax arity 2)

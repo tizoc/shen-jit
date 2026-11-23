@@ -11,12 +11,10 @@
    raises an error rather than being trusted. */
 #include "ops.h"
 
-enum { DICT_COUNT = 2, DICT_BUCKETS = 3 }; /* words of the dictionary absvector */
-
 /* The bucket array of d and its length, or NULL if d is not a dictionary. */
-static V *buckets(V d, size_t *n)
+V *sj_dict_buckets(V d, size_t *n)
 {
-    if (!is_object(d) || obj_type(d) != T_VECTOR || hdr_size(ptr(d)[0]) != 3 ||
+    if (!is_object(d) || obj_type(d) != T_VECTOR || hdr_size(ptr(d)[0]) != DICT_FIELDS ||
         !is_fix(ptr(d)[DICT_COUNT]) || fixval(ptr(d)[DICT_COUNT]) < 0)
         return NULL;
     V b = ptr(d)[DICT_BUCKETS];
@@ -69,7 +67,7 @@ static long entries(VM *vm, V *b, size_t n, bool *has_fixed)
 V sj_dict_find(VM *vm)
 {
     size_t n;
-    V *b = buckets(vm->args[0], &n);
+    V *b = sj_dict_buckets(vm->args[0], &n);
     V e = b ? find(b, n, vm->args[1], sj_hash(vm->args[1])) : V_CLEARED;
     return e == V_CLEARED ? sj_raise_value(vm, "~S is not a dictionary", vm->args[0]) : e;
 }
@@ -103,7 +101,7 @@ V sj_dict_put(VM *vm)
     size_t n;
     if (is_object(vm->args[0]) && hdr_shared(ptr(vm->args[0])[0]))
         return sj_raise_value(vm, "~S is shared, and cannot change", vm->args[0]);
-    V *b = buckets(vm->args[0], &n);
+    V *b = sj_dict_buckets(vm->args[0], &n);
     uint64_t h = sj_hash(vm->args[1]);
     V e = b ? find(b, n, vm->args[1], h) : V_CLEARED;
     if (e == V_CLEARED)
@@ -124,7 +122,7 @@ V sj_dict_put(VM *vm)
     if (!p)
         return sj_raise(vm, "out of memory");
     V d = vm->args[0];
-    b = buckets(d, &n);
+    b = sj_dict_buckets(d, &n);
     size_t i = h & (n - 1);
     p[0] = vm->args[1];
     p[1] = vm->args[2];
@@ -144,7 +142,7 @@ V sj_dict_remove(VM *vm)
     V d = vm->args[0], k = vm->args[1];
     if (is_object(d) && hdr_shared(ptr(d)[0]))
         return sj_raise_value(vm, "~S is shared, and cannot change", d);
-    V *b = buckets(d, &n);
+    V *b = sj_dict_buckets(d, &n);
     if (!b)
         return sj_raise_value(vm, "~S is not a dictionary", vm->args[0]);
     V *link = &b[sj_hash(k) & (n - 1)];
@@ -169,14 +167,14 @@ V sj_dict_remove(VM *vm)
 V sj_dict_entries(VM *vm)
 {
     size_t n;
-    V *b = buckets(vm->args[0], &n);
+    V *b = sj_dict_buckets(vm->args[0], &n);
     long count = b ? entries(vm, b, n, NULL) : -1;
     if (count < 0)
         return sj_raise_value(vm, "~S is not a dictionary", vm->args[0]);
     uint64_t *p = vm_alloc(vm, 4 * (size_t)count);
     if (!p && count)
         return sj_raise(vm, "out of memory");
-    b = buckets(vm->args[0], &n);
+    b = sj_dict_buckets(vm->args[0], &n);
     V list = V_NIL;
     for (size_t i = 0; i < n; i++)
         for (V c = b[i]; c != V_NIL; c = ptr(c)[1], p += 4) {

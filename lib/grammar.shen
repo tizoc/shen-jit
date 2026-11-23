@@ -355,17 +355,21 @@
 \\ variants of the rules that reads name. In the builder they otherwise compile at their first use;
 \\ an isolate, which cannot compile, needs them made, and an image saved after this carries them
 \\ made. It is called in the builder once the grammars are loaded, before spawning isolates that
-\\ parse or saving the program, as http.listen does.
+\\ parse, as http.listen does, or saving the program, as a build does (shen-jit.before-save).
 (define finish
+  -> (if (shen-jit.builder?) (finish-pending) true))
+
+(define finish-pending
   -> (let Loops (pending loops)
           Ready (keep-if (/. E (defined? (hd (tl E)))) Loops)
           _ (put pending loops (difference Loops Ready))
           _ (map (/. E (compile-loop (hd E))) (reverse Ready))
           Reads (pending reads)
-          _ (put pending reads (keep-if (/. R (not (trap-error (do (prepare R) true) (/. E false)))) Reads))
+          _ (put pending reads (keep-if (/. R (not (trap-error (do (prepare-variant R) true) (/. E false)))) Reads))
        true))
 
 (declare finish [--> boolean])
+(shen-jit.before-save finish)
 
 (define keep-if
   _ [] -> []
@@ -908,7 +912,8 @@
 (define compile
   H Args -> (if (shen-jit.builder?)
                 (do (compile-loop H) (put pending loops (unpend H (pending loops))) (apply (fn H) Args))
-                (error "grammar: ~A was not compiled before isolates started: call (grammar.finish) in the builder first" H)))
+                (shen-jit.unprepared (cn (make-string "grammar: ~A was not compiled before isolates started: " H)
+                                         "call (grammar.finish) in the builder first"))))
 
 \\ A typed rule whose alternatives typechecked under (optimise +), as a typed program's do, compiles
 \\ as the definitions that typechecked there do (shen-jit.*checked*), with its types, and so do its
@@ -1038,12 +1043,13 @@
     where (rule-form? Rule)
   [read-within Rule Reader Limit Fail] ->
     (client Rule ".read" [Reader Limit Fail] (read-form Rule Reader Limit Fail))
-    where (rule-form? Rule))
+    where (rule-form? Rule)
+  [prepare Rule] -> [prepared Rule (variant Rule)] where (nonterminal? Rule))
 
 (define read-form
   Rule Reader Limit Fail ->
     (do (add-pending reads (rule-name Rule))
-        [read-from (rule-name Rule) (list (rule-args Rule)) Reader Limit Fail]))
+        [read-from (rule-name Rule) (variant (rule-name Rule)) (list (rule-args Rule)) Reader Limit Fail]))
 
 \\ Typed code calls a typed rule's own functions, which have types.
 (define client
@@ -1112,15 +1118,15 @@
 \\ consumes the value's bytes only when it is complete. It needs the module io, which module grammar requires.
 
 (define read
-  Rule Reader Fail -> (read-from Rule [] Reader (io.window-size Reader) Fail))
+  Rule Reader Fail -> (read-from Rule (variant Rule) [] Reader (io.window-size Reader) Fail))
 
 (define read-within
-  Rule Reader Limit Fail -> (read-from Rule [] Reader Limit Fail))
+  Rule Reader Limit Fail -> (read-from Rule (variant Rule) [] Reader Limit Fail))
 
 \\ The stream record: what has arrived, the reader, why there is no more, and the limit.
 (define read-from
-  Rule Args R Limit Fail ->
-    (let G (prepare Rule)
+  Rule Variant Args R Limit Fail ->
+    (let _ (prepared Rule Variant)
          Storage (io.window R)
          Start (io.position R)
          Bound (io.min (buffer.index Limit) (io.window-size R))
@@ -1128,7 +1134,7 @@
          End (io.min (io.window-fill R 0) Bound)
          E (address-> (address-> (address-> (address-> (absvector 4) 0 End) 1 R) 2 ready) 3 Bound)
          S (state)
-         P (apply (fn G) [Storage 0 E S | Args])
+         P (apply (fn Variant) [Storage 0 E S | Args])
       (finish-read P S E Start Fail)))
 
 \\ A parse that read into the end of the input could have matched with more: at EOF, that is
@@ -1166,7 +1172,7 @@
 \\ F's streaming variant, defined as a stub that compiles it at its first call, again if F changed.
 \\ The variant replaces the stub, which is defined with sealing off, as a loop's is.
 (define stream
-  F -> (let G (intern (cn (str F) "/stream"))
+  F -> (let G (variant F)
             Def (source F)
             _ (if (empty? Def) (error "grammar: ~A is not a grammar rule" F) skip)
             _ (if (shen-jit.same? (trap-error (get G made-from) (/. E [])) Def)
@@ -1182,20 +1188,28 @@
 \\ A rule redefined after a streaming read: its variant, which its callers' variants call by
 \\ name, becomes a stub again, compiled from the new definition at its next call.
 (define restream
-  F -> (let G (intern (cn (str F) "/stream"))
+  F -> (let G (variant F)
          (if (cons? (trap-error (get G made-from) (/. E []))) (stream F) skip)))
 
 \\ Compiles F's streaming variant and every one it calls now, rather than at their first calls, so
 \\ that the compiling happens before a parse, and outside any deadline. A variant compiled for
 \\ the current definition is left as it is.
+\\ A rule's variant is found by the name the macro gives for it, G, as it is for a rule that is named,
+\\ and by one made of the rule's for a rule that is passed.
 (define prepare
-  F -> (if (shen-jit.builder?) (prepare-variant F) (prepared F (intern (cn (str F) "/stream")))))
+  F -> (prepared F (variant F)))
+
+(define variant
+  F -> (intern (cn (str F) "/stream")))
 
 (define prepared
-  F G -> (if (= (shen-jit.arity G) -1) (unprepared F) G))
+  F G -> (if (shen-jit.builder?)
+             (prepare-variant F)
+             (if (= (shen-jit.arity G) -1) (simple-error (unprepared-message F)) G)))
 
-(define unprepared
-  F -> (error "grammar: ~A was not prepared before isolates started: call (grammar.finish), or (grammar.prepare ~A), in the builder first" F F))
+(define unprepared-message
+  F -> (cn (make-string "grammar: ~A was not prepared before isolates started: " F)
+           (make-string "call (grammar.finish), or (grammar.prepare ~A), in the builder first" F)))
 
 \\ In an isolate, a variant is the one the builder prepared, found by name: its property list is
 \\ not the builder's.
@@ -1215,7 +1229,7 @@
 (define compile-stream
   G F Args -> (if (shen-jit.builder?)
                   (do (install G F) (apply (fn G) Args))
-                  (unprepared F)))
+                  (shen-jit.unprepared (unprepared-message F))))
 
 \\ Defines G from F's code rewritten, and gives the rules whose streaming variants it calls.
 (define install

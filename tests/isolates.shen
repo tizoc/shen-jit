@@ -216,6 +216,24 @@
 \\ What crosses: copied, with sharing and cycles kept; symbols and the program's functions as they
 \\ are.
 
+\\ What an isolate is to call goes by name, and nothing else does.
+(define pt.inc X -> (+ X 1))
+(define pt.plus N X -> (+ N X))
+(define pt.calls [F X Out] -> (channel.send Out (shen-jit.call-target F X)))
+(define pt.called F X -> (let R (channel.new 1)
+                              _ (isolate.spawn pt.calls [(shen-jit.target F) X (channel.sender R)])
+                              Y (channel.receive R)
+                              _ (channel.close R)
+                           Y))
+(pt.check "a target is the name, or the list, that it was given" [pt.inc [pt.plus 2] pt.not-yet]
+  [(shen-jit.target pt.inc) (shen-jit.target [pt.plus 2]) (shen-jit.target pt.not-yet)])
+(pt.check "an isolate calls it" [4 5] [(pt.called pt.inc 3) (pt.called [pt.plus 2] 3)])
+(pt.check "a function is no target, nor a closure"
+  ["#<procedure> is not a symbol" "#<procedure> is not a symbol" "#<procedure> is not a symbol"]
+  [(pt.message (freeze (shen-jit.target (shen-jit.function pt.inc))))
+   (pt.message (freeze (shen-jit.target (let N 2 (/. X (+ X N))))))
+   (pt.message (freeze (shen-jit.target [(let N 2 (/. X (+ X N))) 1])))])
+
 (pt.check "a value goes there and back" [a "text" 1.5 -7 [nested (@p 1 2)] true []]
   (pt.ask pt.reply [a "text" 1.5 -7 [nested (@p 1 2)] true []]))
 

@@ -143,6 +143,7 @@ The commands come from the kernel's launcher (`shen-jit --help`), with `-m` and 
 | `script FILE [ARGS]` | Runs FILE, with `*argv*` set to `[FILE \| ARGS]`. FILE can be a module's `.shenmod` |
 | `eval ARGS` | Evaluates, from left to right: `-e EXPR`, `-l FILE`, `-m MODULE`, `-s KEY VALUE`. `-q` silences output, and `-r` starts the REPL afterwards. `*argv*` has no value here |
 | `build FILE.shenmod [-o OUTPUT] [--open]` | Writes an executable of the module FILE describes, which runs the function its `main` names: see [Modules](#modules) |
+| `build FILE.shenmod [-o OUTPUT] --closed [--keep FUNCTION] [--dispatch CALLER FUNCTION]` | The same, with only what `main` can reach: see [Closed builds](modules.md#closed-builds) |
 
 An error that nothing catches, or an unknown argument, ends the process with status 1.
 
@@ -496,6 +497,9 @@ else is loaded. A program whose descriptor says `(typed)` is built with its type
 numeric loops, and always sealed, and a library whose descriptor says it is compiled so wherever it loads ([Typed
 programs](modules.md#typed-programs)).
 
+With `--closed` the executable holds only what `app.main` can reach, and is refused if that can evaluate or define
+anything ([Closed builds](modules.md#closed-builds)).
+
 Typed clients can construct a result with `(result.ok V)` or `(result.err E)` and match it with
 `(:result.ok X)` or `(:result.err E)`. When building similar tuple rows from values of
 different member types, `map` can establish their common type once.
@@ -647,7 +651,7 @@ native code, which the HTTP, curl, Git, JSON and filesystem libraries share.
 `defgrammar`, Shen-YACC's notation for parsers over views, compiled to the loops a scanner written by hand would use.
 A grammar can have types, as `defcc` does, and `grammar.read` parses from an I/O reader as the bytes arrive. Its
 loops compile at their first use; `(grammar.finish)` compiles them all ahead, in the builder, before spawning isolates
-that parse, which cannot compile, or saving the program, as `http.listen` does.
+that parse, which cannot compile, as `http.listen` does, or saving an image. `shen-jit build` does that itself.
 
 [Binary layouts](https://github.com/tizoc/shen-jit/blob/main/docs/layout.md): `lib/layout.shen` declares a fixed binary
 format as its specification draws it, fields in order with their widths, and defines typed accessors for each field,
@@ -1233,7 +1237,7 @@ flat profile at exit, and `SHEN_JIT_STATS=1` prints the collector's work and the
 
 | Variable | What it does |
 | --- | --- |
-| `SHEN_JIT_IMAGE` | An image to load instead of the executable's own |
+| `SHEN_JIT_IMAGE` | An image to load instead of the executable's own, unless that is a program's, with an entry point |
 | `SHEN_JIT_PATH=DIRS` | Directories to look for modules in, before the installation's `lib/`, separated by `:`, or `;` on Windows ([Modules](modules.md)) |
 | `SHEN_JIT_SEAL=1` | The same as `--seal` |
 | `SHEN_JIT_SEMISPACE=SIZE` | Starts the heap at SIZE bytes (with K, M or G; anything that is not a size is refused) instead of 32 MB, or at what the image needs if that is more: what a collection keeps and the room for new objects add up to this. It still grows with live data, up to 64 GiB, or stays at SIZE if that is more. Less collects more often and uses less memory |
@@ -1302,13 +1306,14 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 
 | Target | What it does |
 | --- | --- |
-| `make test-core` | `test`, `test-jit`, `test-ops`, `test-kl`, `check-lowerer`, `check-generated`, `test-kernel`, `test-stlib`, `test-thorn`, `test-native`, `test-ffi`, `test-overrides`, `test-structs`, `test-isolates`, `test-modules` and `test-typed` |
+| `make test-core` | `test`, `test-jit`, `test-ops`, `test-kl`, `check-lowerer`, `check-generated`, `test-kernel`, `test-stlib`, `test-thorn`, `test-native`, `test-ffi`, `test-overrides`, `test-structs`, `test-isolates`, `test-modules`, `test-closed` and `test-typed` |
 | `make test-libs` | `test-buffer`, `test-bytes`, `test-layout`, `test-hyperloglog`, `test-json`, `test-io`, `test-net-udp`, `test-net-tcp`, `test-net-interface`, `test-net-clients`, `test-net-ipv6`, `test-net-multicast`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl`, `test-namespaces`, `test-parallel` and `test-shen-git` |
 | `make test` | The runtime's unit tests |
 | `make test-jit`, `make test-ops` | The JIT and the instructions, on small programs |
 | `make test-kl` | The `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
 | `make test-isolates` | Isolates: what one starts with, spawning, channels, monitors, kill, sharing, what crosses, types and namespace clients, and the same with a collection at every allocation in `make test-isolates-stress` |
 | `make test-modules` | Modules: names, the path, requirements in order and loaded once, type checking per source, features, sources that raise, refused descriptors and typed modules; `-m` and `build` are in `tests/cli.sh`, which `make test-kernel` runs |
+| `make test-closed` | Closed executables: that they run as the sealed ones of the same modules, and with a collection at every allocation in `make test-kernel-stress`, and what is refused |
 | `make test-typed` | Typed programs: `numbers`, `floats`, `word` and `words`, and typed definitions compiled with their types, values in registers among them |
 | `make test-parallel` | `parallel.map` over isolates: order, balance, errors, what crosses and shared arguments |
 | `make test-kernel` | The kernel's test suite, the extension tests, the contract examples and `tests/cli.sh` |
@@ -1345,7 +1350,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make check-docs` | Checks documentation links, heading anchors, guide page registration and module coverage |
 | `make test-kl-stress`, `make test-kernel-stress` | The same with frequent collections |
 | `make test-lib-stress` | The libraries' saved images reloaded with a collection at every allocation, which their own suites leave out |
-| `make test-san` | `test`, `test-jit`, `test-ops`, `test-kl`, FFI, isolates, typed programs, and the libcurl, filesystem, subprocess and Tree-sitter adapters under AddressSanitizer and UBSan |
+| `make test-san` | `test`, `test-jit`, `test-ops`, `test-kl`, FFI, isolates, typed programs, closed executables, and the libcurl, filesystem, subprocess and Tree-sitter adapters under AddressSanitizer and UBSan |
 | `make test-x86` | `test`, `test-jit`, `test-ops`, `test-kl`, FFI and typed programs, built as x86-64 code (under Rosetta on Apple silicon) |
 | `make test-differential` | Each primitive over generated values, however it is compiled and through C, and properties they must keep. `make differential-scheme` lists what differs from Shen/Scheme, to read and not to pass |
 | `make fuzz-native` | Mutated code objects, run if the checker accepts them |

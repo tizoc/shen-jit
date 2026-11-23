@@ -49,7 +49,7 @@ endif
 # name.
 VERSION := $(shell cat VERSION)
 
-RUNTIME_SRC := src/runtime/heap.c src/runtime/objects.c src/runtime/image.c src/runtime/prims.c \
+RUNTIME_SRC := src/runtime/heap.c src/runtime/objects.c src/runtime/image.c src/runtime/closed.c src/runtime/prims.c \
                src/runtime/reader.c src/runtime/loader.c src/runtime/jit.c src/runtime/dict.c \
                src/runtime/profile.c src/runtime/ffi.c src/runtime/win32.c \
                src/runtime/program.c src/runtime/isolate.c
@@ -374,16 +374,21 @@ test-kernel-stress: test-isolates-stress
 	$(MAKE) test-native GC_STRESS=1000
 	$(MAKE) test-ffi GC_STRESS=1000
 	cd $(BUILD) && SHEN_JIT_GC_STRESS=1 ./shen-jit eval -m ffi -l ../tests/ffi_c.shen | $(FFI_RESULT)
+	TEST_GC_STRESS=1 $(MAKE) test-closed
 
 # What a change to the runtime, the JIT, the lowerer or the port must pass (about 20 s).
 test-core: test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn \
-  test-native test-ffi test-overrides test-structs test-isolates test-modules test-typed
+  test-native test-ffi test-overrides test-structs test-isolates test-modules test-closed test-typed
 
 # Modules (src/port/module.shen), over the descriptors in tests/modules/.
 test-modules: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -l tests/modules.shen | $(FFI_RESULT)
 
-.PHONY: test-modules
+# Executables of what a program can reach alone (src/runtime/closed.c).
+test-closed: $(BUILD)/shen-jit $(FFI_TEST_LIB)
+	sh tests/closed.sh $(SHEN_JIT) $(abspath $(FFI_TEST_LIB))
+
+.PHONY: test-modules test-closed
 
 # Numbers by kind (lib/numbers.shen), a datatype rule concluding a difference, and typed definitions
 # compiled with their types (docs/modules.md, Typed programs).
@@ -748,6 +753,8 @@ test-san: $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stage0/.done 
 	  ./shen-jit-san eval -l ../tests/isolates.shen | $(FFI_RESULT)
 	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=$(abspath $(BUILD)/shen-jit-san.img) \
 	  $(BUILD)/shen-jit-san eval -l tests/typed.shen | $(FFI_RESULT)
+	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=$(abspath $(BUILD)/shen-jit-san.img) \
+	  sh tests/closed.sh $(abspath $(BUILD)/shen-jit-san$(EXE)) $(abspath $(FFI_TEST_LIB))
 	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=$(abspath $(BUILD)/shen-jit-san.img) \
 	  CC="$(CC)" CFLAGS="$(SAN_FLAGS)" sh tests/curl.sh $(BUILD)/shen-jit-san$(EXE)
 	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=$(abspath $(BUILD)/shen-jit-san.img) \

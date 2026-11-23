@@ -399,8 +399,9 @@
   Argument -> (module.load Argument) where (shenmod? Argument)
   Argument -> (module.use [(intern Argument)]))
 
-\\ shen-jit build FILE.shenmod [-o OUTPUT] [--open]: the module and what it requires loaded, sealed
-\\ unless --open is given, then saved as an executable that runs the module's main (docs/modules.md).
+\\ shen-jit build FILE.shenmod [-o OUTPUT] [--open | --closed ...]: the module and what it requires
+\\ loaded, sealed unless --open is given, then saved as an executable that runs the module's main, with
+\\ --closed of what that can reach alone (docs/modules.md, closed.c).
 \\ OUTPUT is the last part of the module's name by default, with .exe on Windows. Loading is quiet,
 \\ and *hush*, sealing and the module path are as they were when it saves, so the program starts as
 \\ the caller did, and finds modules where it runs.
@@ -408,21 +409,46 @@
 \\ loads, compiles with its types (docs/modules.md), and is always sealed, as its code will rely on
 \\ which definition each call reaches.
 (define build-command
-  Args -> (build-options Args none true none))
+  Args -> (build-options Args none []))
 
+\\ The options that were given, the last first.
 (define build-options
-  [] File Seal Output -> (build File Seal Output)
-  ["-o" Output | Args] File Seal _ -> (build-options Args File Seal Output)
-  ["--open" | Args] File _ Output -> (build-options Args File false Output)
-  [Arg | Args] none Seal Output -> (build-options Args Arg Seal Output) where (shenmod? Arg)
-  [Arg | _] _ _ _ -> (error "build: ~A is not FILE.shenmod, -o OUTPUT or --open" Arg))
+  [] none _ -> (error "usage: shen-jit build FILE.shenmod [-o OUTPUT] [--open | --closed] ~A"
+                      "[--keep FUNCTION] [--dispatch CALLER FUNCTION]")
+  [] File Options -> (build File (check-options Options))
+  ["-o" Output | Args] File Options -> (build-options Args File [[output Output] | Options])
+  ["--open" | Args] File Options -> (build-options Args File [[open] | Options])
+  ["--closed" | Args] File Options -> (build-options Args File [[closed] | Options])
+  ["--keep" F | Args] File Options -> (build-options Args File [[keep (intern F)] | Options])
+  ["--dispatch" F G | Args] File Options -> (build-options Args File [[dispatch (intern F) (intern G)] | Options])
+  [Arg | Args] none Options -> (build-options Args Arg Options) where (shenmod? Arg)
+  [Arg | _] _ _ -> (error "build: ~A is not an option, or lacks its argument" Arg))
+
+(define check-options
+  Options -> (error "build: --closed does not apply to --open")
+      where (and (option? open Options) (option? closed Options))
+  Options -> (error "build: --keep and --dispatch apply to --closed")
+      where (and (not (option? closed Options)) (or (option? keep Options) (option? dispatch Options)))
+  Options -> Options)
+
+(define option?
+  Name Options -> (cons? (assoc Name Options)))
+
+\\ What every option Name was given.
+(define option-values
+  _ [] -> []
+  Name [[Name | Values] | Options] -> [Values | (option-values Name Options)]
+  Name [_ | Options] -> (option-values Name Options))
 
 (define build
-  none _ _ -> (error "usage: shen-jit build FILE.shenmod [-o OUTPUT] [--open]")
-  File Seal Output
+  File Options
   -> (let Fields (descriptor File)
           Main (main-of Fields File)
           Typed (cons? (assoc typed Fields))
+          Seal (not (option? open Options))
+          Output (if (option? output Options)
+                     (hd (tl (assoc output Options)))
+                     (default-output (hd (field name Fields File))))
           _ (if (and Typed (not Seal))
                 (error "build: ~A is a typed program, which is always sealed, so --open does not apply" File)
                 skip)
@@ -435,13 +461,17 @@
                                           (set *hush* true)
                                           (shen-jit.seal (if Seal + -))
                                           (optimise (if Typed + -))
-                                          (module.load File)))
+                                          (module.load File)
+                                          (shen-jit.run-before-save)))
                               (freeze (do (set *build-preloaded* Preloaded)
                                           (set *roots* Roots)
                                           (set *hush* Quiet)
                                           (shen-jit.seal Sealing)
                                           (optimise Optimising))))
-       (shen-jit.save-executable (if (= Output none) (default-output (hd (field name Fields File))) Output) Main)))
+       (if (option? closed Options)
+           (shen-jit.save-closed Output Main
+             [(map (/. X (hd X)) (option-values keep Options)) (option-values dispatch Options)])
+           (shen-jit.save-executable Output Main))))
 
 (define main-of
   Fields File -> (let Main (assoc main Fields)

@@ -846,6 +846,63 @@ So that isolates can call them, the two kinds of definition that stayed in the h
   marked the constant slots it shares with its promoted copy as its own, and a collection that dropped it would have
   cleared the copy's; no image holds both today, as a save collects first, but the order is the old one again.
 
+- **Closed programs** (2026-11-23, Apple M3 Max, against the sealed executables). `build --closed` writes an
+  executable of what the entry point can reach: 432 KB for the typed test program, not 2,013, 543 for
+  `tests/bench/tcp-window`, not 5,296, 678 for an HTTP server, not 3,671, and 817 for `shen-git`, not 3,847, 424 of each
+  being the runtime. A program that prints a line has an image of 1.4 KB, and starts in 1.7 ms, not 2.1. They print what
+  the sealed ones do, also with a collection at every allocation and under the sanitizers, and `shen-git` closed passes
+  its own suite, with Git as the oracle. Closing adds about 10 ms to a build, or 0.1 s with a list of a million elements.
+  - **Marking in C, not in Shen.** The first version had a worklist in Shen, in a VM of its own, that took facts from
+    C, and C then checked every edge of its answer again, so that C could have marked. In C alone there are about 450
+    lines fewer in `src/` and `tools/`, though they do more, and images were of the same size where nothing else
+    changed. A Datalog report over the edges that the worklist followed agreed with it, and could not have
+    disagreed: the worklist wrote an edge for each node as it kept it, and only once C had accepted the answer.
+  - **Reading straight through code, forgetting every slot at a label, a capture or a handler,** was not enough: a
+    literal worker's name was lost in a lambda that captured anything, or where an argument had an `if`. Now it is a
+    forward analysis with joins. Folding `shen-jit.arity?` of a known name, to drop the branch that calls `fn`, found
+    nothing more, as sealed code has no such test: there a call of a function that a later source defines goes
+    through `fn`. Folding `shen-jit.builder?` (below) is what folds.
+  - **Names given to functions that call them** were refused in the library's function, as `isolate.spawn-in`'s was in
+    `shen-jit.spawn-each-h`, whose name a program then gave `--dispatch`. Parameters are followed through calls, with a
+    bit for each that a function uses as a name, and another for a list whose head it uses so, as handlers and
+    `parallel.map`'s functions may be named with arguments. `fn` needs nothing more: before, it was refused for any
+    name, as it also read the whole property table.
+  - **Names in messages** were the rest of it: `parallel.map` and `http.listen` send their isolates the name to call,
+    which where it arrives could be any, and each of their own three or four places needed a `--dispatch`. They sent the
+    function instead, as a definition's crosses by pointer, which the build could check, but messages are to hold data and
+    names alone, so that no closure has a way across, and a server had to keep the name outside closed programs, as its
+    handler may be defined again before it next runs. So the name is followed where it is sent, through
+    `shen-jit.target`, and `shen-jit.call-target` is trusted to be given only those. Not built: names only at spawn, as
+    `[F | Names]`, which could be checked, but changes spawning, its types and what is read here; a library declaring
+    which parameters are names, which trusts every name it computes; and a worker made for each name by a macro.
+  - **What only the builder does.** `json`, `grammar` and `http` were refused, as a rule's loops are stubs that compile
+    when first called, and `http.listen` finishes grammars as it starts. They ask `shen-jit.builder?` first, since an
+    isolate cannot compile, and a closed program cannot either: it is false there, when read and when run, so what only
+    the builder does is not followed. That replaced a substitute for `fn`'s making of forms, which asks too. And a build
+    compiles what a library leaves for later before it saves (`shen-jit.before-save`): a sealed program that decodes one
+    JSON text runs in 3.5 ms, not 6.9, for 229 KB more, and closed, at 463 KB and not 3,239, in 2.6. What is
+    still a stub then is refused, with `shen-jit.unprepared`, not left to raise as it runs.
+  - **Properties by name.** Keeping the subjects that `get` names, and the whole table for any other use, refused
+    every `put` and every `get` of a computed subject, since the table always reaches the macros, and `eval`. The
+    properties named are kept instead, whatever the subject, or of it alone if it is named too: without that a
+    program that read one property of its own kept what the port records of every definition under that name.
+  - **Printers.** There were the registered structs' printers, the kernel's own in a list, and others by `--keep`. A
+    vector whose first element named any other function was printed otherwise, though the function might be there.
+    The names that code or data put first in a vector are kept instead, which covers all of those.
+  - **`--dispatch`** was for the code object that a name is computed in: never a lambda, and, where its function had
+    been inlined, its callers' names. It is for the functions inlined at that point and those the code is in as well.
+  - **C functions** were refused. Plain ones cannot reach Shen, and C written for Shen is asked for with `--keep`. With
+    that and names, all 55 functions that `io` exports can be in a closed program, where 38 could, all 28 of `socket`
+    where 7 could, and all 17 of `io/file` where 7 could.
+  - **Inline bodies** were 9 to 38% of an image. Besides the lowerer only guards of open calls read them, which then
+    call.
+  - **Left out:** `datalog`, which finds the functions it makes by names it computes, in isolates too, so a program
+    shared as it loads (`datalog.share`) gets past compiling and no further.
+- **One format for root arrays** (2026-11-23, Apple M3 Max, load 4, 60 runs each, three rounds). Every image stores the
+  ranges of slots in use, where closed ones had a format of their own: the default image is 19 KB smaller than main's,
+  and starts in the 3.0 ms that did. A gap no longer than a range's own two words is stored, so there are fewer ranges
+  to read.
+
 ### What a future collector should know
 
 - **Costs** (2026-11-04, M3 Max). A root pass is about 0.7 ns per word, 7 µs with the kernel loaded and 25 µs during the

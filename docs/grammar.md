@@ -142,12 +142,11 @@ so `defgrammar` records each rule's arity as it is read, so that rules can call 
 and a rule's loops compile at their first call, when the functions defined before it exist. Isolates
 cannot compile: `(grammar.finish)`, in the builder, compiles the loops of every rule defined so far and
 prepares the read variants of the rules that `grammar.read` names, so call it before spawning isolates that
-parse, as `http.listen` does, and before saving a program, whose image then carries them. Calling it again
-covers what was defined since, and typed code can call it, as its type is `(--> boolean)`. In an isolate, a
-loop or variant never made is refused, saying to call it.
-Sealed programs, such as those `shen-jit build` makes, make their loops, typed rules and read variants the same
-way, each once: until one is made, what stands for it is not sealed, and it is sealed if sealing is on when it
-is made.
+parse, as `http.listen` does, and before saving an image, which then carries them. `shen-jit build` calls it before
+it saves a program. Calling it again covers what was defined since, and typed code can call it, as its type is
+`(--> boolean)`; in an isolate, and in a [closed program](modules.md#closed-builds), it does nothing. In an isolate, a
+loop or variant never made is refused, saying to call it. Until one is made, what stands for it is not sealed, and it
+is sealed if sealing is on when it is made.
 A byte class, a rule that is only `B where Guard`, is not called by the rules read after it: they test the
 byte in place, so that `(+ <tchar>)` is one loop with no call per byte, and a loop over a class is called only
 if its first byte matches. When a loop compiles, it evaluates each class's guard for all 256 bytes and tests a

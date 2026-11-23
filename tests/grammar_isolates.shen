@@ -55,8 +55,9 @@
 (defgrammar <gp.unread> (+ <gp.letter>);)
 
 (define gp.unread
-  [Text Out] -> (channel.send Out (trap-error (grammar.read-from <gp.unread> [] (gp.reader Text) 10 (function gp.fail))
-                                               (/. E (error-to-string E)))))
+  [Text Out] -> (let Rule <gp.unread>
+                  (channel.send Out (trap-error (grammar.read-within Rule (gp.reader Text) 10 (function gp.fail))
+                                      (/. E (error-to-string E))))))
 
 (gp.check "an unprepared variant is refused"
   "grammar: <gp.unread> was not prepared before isolates started: call (grammar.finish), or (grammar.prepare <gp.unread>), in the builder first"

@@ -5,6 +5,19 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- `shen-jit build --closed` writes an executable of only what the program can reach, compiler left out: a runtime of
+  about 400 KB and an image of a few KB to a few hundred. A program that can evaluate or define anything is refused,
+  with the calls that lead there. `--dispatch CALLER FUNCTION` declares what a computed name can be, and
+  `--keep FUNCTION` keeps more.
+- `(shen-jit.before-save F)` has a function of no arguments called before `shen-jit build` saves a program, as the
+  grammar library does: a built program holds its grammars compiled, where each compiled at its first use.
+
+### Changed
+
+- A built or saved program loads its own image whatever `SHEN_JIT_IMAGE` says, and an argument `--stage1` is its own.
+
 ## [0.11] - 2026-11-22
 
 ### Added

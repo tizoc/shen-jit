@@ -335,6 +335,8 @@ static inline bool vm_is_builder(const VM *vm) { return vm->program->owner == vm
    contexts made in heap.c and the published names and strings they read in objects.c and program.c. */
 VM *vm_create_context(Program *program, size_t semispace_words, size_t stack_words);
 V sj_isolate(VM *vm);
+extern const char *const isolate_constants[]; /* the globals every isolate starts with, up to NULL */
+extern const char *const isolate_tags[];      /* the tags of what it makes, up to NULL */
 bool sj_isolate_killed(VM *vm);
 bool isolates_commit_globals(Program *program, size_t n);
 bool isolates_free(Program *program);
@@ -494,6 +496,8 @@ V h_foreign(VM *vm);
 V ffi_primitive(VM *vm, unsigned prim);
 bool ffi_loads_libraries(void);
 bool ffi_floats(V f, unsigned n);
+bool ffi_procedure(V f);
+V ffi_name(V f);
 V ffi_address(VM *vm, V f);
 const struct shen_api *ffi_api(void);
 void ffi_drain_roots(VM *vm);
@@ -508,9 +512,26 @@ typedef struct {
 extern const Primitive primitive_table[];
 extern const size_t primitive_count;
 
+/* An image in memory, its pointers as image.c stores them: offsets in the heap, or with one of these
+   bits in the program space's symbols or objects. */
+#define IMAGE_IN_SYMBOLS (UINT64_C(1) << 62)
+#define IMAGE_IN_OBJECTS (UINT64_C(1) << 61)
+enum { IMAGE_SYMBOLS, IMAGE_PROGRAM, IMAGE_HEAP, IMAGE_CELLS, IMAGE_CONSTS, IMAGE_GLOBALS, IMAGE_PARTS };
+typedef struct {
+    V *parts[IMAGE_PARTS];
+    size_t words[IMAGE_PARTS];
+    size_t free_symbol;
+} ImageContents;
+
+/* A program's image is of one with an entry point, which nothing replaces as it starts. */
 bool image_dump(VM *vm, const char *path);
-bool image_append(VM *vm, const char *path);
+bool image_append(VM *vm, const char *path, bool program);
+bool image_append_contents(const char *path, const ImageContents *image, bool program);
+bool image_is_program(const char *path);
+bool image_collect(VM *vm);
 bool image_copy_runtime(const char *from, const char *to);
+void image_clear_raw(uint64_t *object);
+void image_closed(VM *vm, V options, const char *file, ImageContents *image); /* closed.c */
 VM *image_load(const char *path, size_t min_semispace_words, size_t stack_words,
                void *compile_stub, void *foreign_stub);
 

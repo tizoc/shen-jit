@@ -23,7 +23,7 @@
        shen-jit.pointer? shen-jit.pointer-kind shen-jit.pointer-address
        shen-jit.pointer->string shen-jit.pointer-kill shen-jit.pointer-owner
        shen-jit.pointer-read-only shen-jit.arity shen-jit.function shen-jit.float shen-jit.sqrt
-       shen-jit.truncate]]
+       shen-jit.truncate shen-jit.printer]]
    [2 [+ - * / < > <= >= = cons cn pos <-address set open write-byte
        write-string shen-jit.hash shen-jit.filled-vector
        shen-jit.save-executable shen-jit.foreign
@@ -39,7 +39,7 @@
        shen-jit.u8! shen-jit.u16! shen-jit.u32! shen-jit.bytes->string
        shen-jit.bytes->pointer shen-jit.pointer->bytes
        shen-jit.s32! shen-jit.s64! shen-jit.f32! shen-jit.f64! shen-jit.pointer! shen-jit.isolate
-       shen-jit.word-op]]
+       shen-jit.word-op shen-jit.save-closed]]
    [4 [shen-jit.write-bytes]]
    [5 [shen-jit.copy-bytes shen-jit.xxh64]]
    [fixed [if and or cond let lambda defun freeze type trap-error do thaw eval-kl protect]]])

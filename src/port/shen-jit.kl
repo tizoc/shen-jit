@@ -20,9 +20,13 @@ definition."
 "Only the builder evaluates and defines (docs/design.md, The builder and isolates). An isolate
 sets shen-jit.*isolate* as it starts (shen-jit.start-isolate), so eval and
 eval-kl refuse there at once, before they would reach the builder's globals,
-which it has not got; the runtime refuses to install anything there too."
+which it has not got; the runtime refuses to install anything there too. In a
+closed program nothing is the builder (closed.c). What must have been done in the
+builder raises there with shen-jit.unprepared, which a closed program is refused for."
 
-(defun shen-jit.builder? () (not (value shen-jit.*isolate*)))
+(defun shen-jit.builder? () (if (value shen-jit.*isolate*) false true))
+
+(defun shen-jit.unprepared (Message) (simple-error Message))
 
 (defun shen-jit.not-builder (F)
   (simple-error (cn (str F) ": only the builder can evaluate or define code")))
@@ -127,10 +131,15 @@ commands:
         Runs the script in FILE, or loads the module FILE.shenmod
         describes. *argv* is set to [FILE | ARGS].
 
-    build <FILE.shenmod> [-o <OUTPUT>] [--open]
+    build <FILE.shenmod> [-o <OUTPUT>] [--open | --closed]
+          [--keep <FUNCTION>] [--dispatch <CALLER> <FUNCTION>]
         Writes an executable of the module FILE.shenmod describes,
         and those it requires, which runs the module's main. Its
-        definitions are sealed unless --open is given.
+        definitions are sealed unless --open is given. With --closed
+        it holds only what main can reach, which cannot evaluate or
+        define anything. --keep adds a function, and --dispatch one
+        that CALLER calls by a name it computes; give each as often
+        as needed.
 
     eval <ARGS>
         Evaluates expressions and files. ARGS are evaluated from
@@ -229,6 +238,29 @@ arity. A name with no arity but a lambda form keeps that form."
 (defun shen-jit.make-form (F N)
   (let Form (if (shen-jit.builder?) (eval-kl (shen-jit.curried (cons F ()) N)) (shen-jit.template F N))
     (do (put F shen.lambda-form Form (value *property-vector*)) Form)))
+
+"What an executable of --closed has in place of functions that need an
+evaluator (docs/design.md): a partial function's error is plain, as nothing can be
+tracked, and a vector is printed by the function its first element names, if the
+executable holds it. The values here are the kernel's own functions, as the image
+is made, so that a program's definitions of their names are left alone: get, put
+and unput, whose uses of *property-vector* are understood, then each function and
+what replaces it."
+
+(defun shen-jit.closed-f-error (F) (simple-error (cn "partial function " (str F))))
+
+(defun shen-jit.closed-vector->str (V Mode)
+  (let Printer (trap-error (shen-jit.printer (<-address V 0)) (lambda E ()))
+    (cond ((not (= Printer ())) (Printer V))
+          ((vector? V) (cn "<" (cn (shen.iter-vector V 1 Mode (shen.maxseq)) ">")))
+          (true (cn "<<" (cn (shen.iter-vector V 0 Mode (shen.maxseq)) ">>"))))))
+
+(defun shen-jit.closed-initialise ()
+  (set shen-jit.*closed*
+    (cons (cons (shen-jit.function get) (cons (shen-jit.function put) (cons (shen-jit.function unput) ())))
+    (cons (cons (shen-jit.function shen.f-error) (shen-jit.function shen-jit.closed-f-error))
+    (cons (cons (shen-jit.function shen.vector->str) (shen-jit.function shen-jit.closed-vector->str))
+      ())))))
 
 "A template's last call goes through the name's function cell, which
 shen-jit.function reads inline, so a redefinition is seen, as with a lambda
@@ -967,21 +999,53 @@ registered with (shen-jit.at-guards-dead F), which takes their values off the
 list, as the handle library's sweep releases what its handles hold: what dies
 then, while its globals still hold the rest (isolate.c).
 An error from one is dropped. The builder's run only as an isolate's would:
-never, as the program ends with it."
+never, as the program ends with it. What is kept of each is its function, so that
+a closed program holds it where its name is given here."
 
 (defun shen-jit.at-end-list () (trap-error (value shen-jit.*at-end*) (lambda E ())))
 
-(defun shen-jit.at-end (F) (set shen-jit.*at-end* (adjoin F (shen-jit.at-end-list))))
+(defun shen-jit.at-end (F) (set shen-jit.*at-end* (adjoin (shen-jit.hook F) (shen-jit.at-end-list))))
 
 (defun shen-jit.at-guards-dead (F)
-  (set shen-jit.*guards-dead* (adjoin F (trap-error (value shen-jit.*guards-dead*) (lambda E ())))))
+  (set shen-jit.*guards-dead*
+       (adjoin (shen-jit.hook F) (trap-error (value shen-jit.*guards-dead*) (lambda E ())))))
+
+(defun shen-jit.hook (F) (if (shen-jit.symbol? F) (shen-jit.function F) F))
+
+"A library's work left for later is done before a program is saved, as
+(shen-jit.before-save F) asks, F being the name of a function of no arguments:
+module.build calls it once everything is loaded, with sealing and types on as they
+were."
+
+(defun shen-jit.before-save (F) (set shen-jit.*before-save* (adjoin F (shen-jit.before-save-list))))
+
+(defun shen-jit.before-save-list () (trap-error (value shen-jit.*before-save*) (lambda E ())))
+
+(defun shen-jit.run-before-save () (map (lambda F (shen-jit.apply F ())) (shen-jit.before-save-list)))
+
+"What an isolate is to call goes to it by name, as closures do not cross: F, or
+(F | Args) for the arguments it takes first. (shen-jit.target F) gives F as it is,
+having seen that it is a name, and (shen-jit.call-target F X) calls it, with those
+and X, in the isolate, where F came in a message. A closed program holds what is
+given to the first, and the second is taken to be given only that (closed.c)."
+
+(defun shen-jit.target (F)
+  (do (if (cons? F) (shen-jit.target-name (hd F)) (shen-jit.target-name F)) F))
+
+(defun shen-jit.target-name (F)
+  (if (shen-jit.symbol? F) (trap-error (shen-jit.function F) (lambda E ())) (shen-jit.function F)))
+
+(defun shen-jit.call-target (F X)
+  (if (cons? F)
+      (shen-jit.apply (hd F) (append (tl F) (cons X ())))
+      ((shen-jit.function F) X)))
 
 (defun shen-jit.isolate-ending () (shen-jit.run-at-end (shen-jit.at-end-list)))
 
 (defun shen-jit.run-at-end (Fs)
   (if (= Fs ())
       true
-      (do (trap-error (shen-jit.apply (hd Fs) ()) (lambda E shen.skip)) (shen-jit.run-at-end (tl Fs)))))
+      (do (trap-error (thaw (hd Fs)) (lambda E shen.skip)) (shen-jit.run-at-end (tl Fs)))))
 
 "An isolate or an endpoint is an absvector whose first element is one of these,
 which the printer calls."
@@ -1050,14 +1114,16 @@ from a template, which needs the arity."
                 (cons isolate.spawn-each (cons 3 (cons isolate.stop-each (cons 1
                 (cons isolate.scope (cons 1 (cons isolate.spawn-in (cons 3 (cons shen-jit.print-scope (cons 1
                 (cons shen-jit.at-end (cons 1 (cons shen-jit.at-guards-dead (cons 1
+                (cons shen-jit.before-save (cons 1 (cons shen-jit.unprepared (cons 1
+                (cons shen-jit.target (cons 1 (cons shen-jit.call-target (cons 2
                 (cons shen.tuple (cons 1 (cons shen.pvar (cons 1 (cons shen.dictionary (cons 1
                 (cons shen-jit.print-isolate (cons 1 (cons shen-jit.print-receiver (cons 1
                   (cons shen-jit.print-sender (cons 1 (cons shen-jit.print-given (cons 1
-                    ())))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
+                    ())))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-2 (cons a (cons b ()))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-3 (cons a (cons b (cons c ())))))
   (do (eval-kl (shen-jit.template-defun shen-jit.template-4 (cons a (cons b (cons c (cons d ()))))))
-  (do (do (shen-jit.struct.initialise) (shen-jit.module.initialise))
+  (do (do (shen-jit.struct.initialise) (do (shen-jit.module.initialise) (shen-jit.closed-initialise)))
   (do (shen-jit.isolate-interface)
   (do (shen-jit.register-primitives)
   (do (shen-jit.primitive-procedures)

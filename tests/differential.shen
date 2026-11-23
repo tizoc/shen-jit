@@ -799,7 +799,7 @@
          shen-jit.string->bytes shen-jit.bit-not shen-jit.bswap32 shen-jit.popcount shen-jit.clz shen-jit.ctz
          shen-jit.pvar shen-jit.pvar? shen-jit.pvar-offset shen-jit.pointer? simple-error
          shen-jit.pointer-kind shen-jit.pointer-address shen-jit.pointer-kill shen-jit.pointer-owner shen-jit.pointer-read-only
-         shen-jit.arity shen-jit.function shen-jit.float shen-jit.sqrt shen-jit.truncate]
+         shen-jit.arity shen-jit.function shen-jit.float shen-jit.sqrt shen-jit.truncate shen-jit.printer]
       [2 + - * / < > <= >= = cons cn pos <-address shen-jit.hash shen-jit.filled-vector shen-jit.tagged? shen-jit.same? shen-jit.newpv shen-jit.gc
          shen-jit.append shen-jit.bit-and shen-jit.bit-or shen-jit.bit-xor shen-jit.shift-left shen-jit.shift-right
          shen-jit.rotate32 shen-jit.decimal shen-jit.u8 shen-jit.u16 shen-jit.u32 shen-jit.s32 shen-jit.s64 shen-jit.f32 shen-jit.f64

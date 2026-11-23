@@ -14,7 +14,7 @@
 #define SJ_BUILD_ID "development"
 #endif
 
-enum { IMAGE_VERSION = 5 };
+enum { IMAGE_VERSION = 6 };
 
 typedef struct {
     char magic[4];
@@ -39,13 +39,33 @@ typedef struct {
     char magic[8];
 } ImageTrailer;
 
-static uint64_t image_length(const ImageHeader *h)
+static const char plain_end[] = "SJHI-END", program_end[] = "SJHP-END";
+
+/* A root array holds the ranges of its slots that are in use, in order, and then an empty one at 0.
+   The header counts every slot. */
+typedef struct {
+    uint64_t start, count;
+} SlotRange;
+enum { RANGE_WORDS = sizeof(SlotRange) / sizeof(V) };
+
+static bool read_trailer(FILE *f, long end, ImageTrailer *t)
 {
-    return sizeof(ImageHeader) +
-           (h->symbol_words + h->program_words + h->heap_words + h->cell_entries + h->const_entries +
-            h->global_entries) *
-               sizeof(V) +
-           sizeof(ImageTrailer);
+    return end >= (long)sizeof *t && fseek(f, end - (long)sizeof *t, SEEK_SET) == 0 &&
+           fread(t, sizeof *t, 1, f) == 1 && t->length > 0 && t->length <= (uint64_t)end &&
+           (memcmp(t->magic, plain_end, sizeof t->magic) == 0 ||
+            memcmp(t->magic, program_end, sizeof t->magic) == 0);
+}
+
+bool image_is_program(const char *path)
+{
+    FILE *f = sj_fopen(path, "rb");
+    if (!f)
+        return false;
+    ImageTrailer t;
+    bool program = fseek(f, 0, SEEK_END) == 0 && read_trailer(f, ftell(f), &t) &&
+                   memcmp(t.magic, program_end, sizeof t.magic) == 0;
+    fclose(f);
+    return program;
 }
 
 static uint64_t primitive_checksum(void)
@@ -60,17 +80,14 @@ static uint64_t primitive_checksum(void)
    from the start of the program space's symbols or of its objects. Where the objects start
    depends on how much address space the process could reserve, so an offset from one start
    would not do for both. */
-#define IN_SYMBOLS (UINT64_C(1) << 62)
-#define IN_OBJECTS (UINT64_C(1) << 61)
-
 static inline V to_image(const VM *vm, V v)
 {
     if (!is_ptr(v))
         return v;
     const Space *p = &vm->program->space;
     if (in_program(vm, ptr(v)))
-        return ptr(v) < p->objects ? (v - (V)(uintptr_t)p->base) | IN_SYMBOLS
-                                   : (v - (V)(uintptr_t)p->objects) | IN_OBJECTS;
+        return ptr(v) < p->objects ? (v - (V)(uintptr_t)p->base) | IMAGE_IN_SYMBOLS
+                                   : (v - (V)(uintptr_t)p->objects) | IMAGE_IN_OBJECTS;
     return v - (V)(uintptr_t)vm->space;
 }
 
@@ -79,14 +96,14 @@ static inline V from_image(const VM *vm, V v)
     if (!is_ptr(v))
         return v;
     const Space *p = &vm->program->space;
-    if (v & IN_SYMBOLS)
-        return (v & ~IN_SYMBOLS) + (V)(uintptr_t)p->base;
-    if (v & IN_OBJECTS)
-        return (v & ~IN_OBJECTS) + (V)(uintptr_t)p->objects;
+    if (v & IMAGE_IN_SYMBOLS)
+        return (v & ~IMAGE_IN_SYMBOLS) + (V)(uintptr_t)p->base;
+    if (v & IMAGE_IN_OBJECTS)
+        return (v & ~IMAGE_IN_OBJECTS) + (V)(uintptr_t)p->objects;
     return v + (V)(uintptr_t)vm->space;
 }
 
-static void clear_raw(uint64_t *o)
+void image_clear_raw(uint64_t *o)
 {
     switch (hdr_type(o[0])) {
     case T_CLOSURE: o[PROC_ENTRY] = 0; break;
@@ -148,7 +165,7 @@ static void rebase_save_objects(const VM *vm, uint64_t *at, size_t words)
             obj_values(w, &first, &count);
             for (size_t i = 0; i < count; i++)
                 s[first + i] = to_image(vm, s[first + i]);
-            clear_raw(s);
+            image_clear_raw(s);
             s += obj_words(w);
         } else {
             s[0] = to_image(vm, s[0]);
@@ -188,51 +205,80 @@ static void rebase_save_symbols(const VM *vm, uint64_t *at, size_t words)
         }
 }
 
-static bool write_root_array(FILE *f, const VM *vm, const RootArray *ra)
+/* The next range of slots to store, from at on. One that is not in use but is among those that are
+   goes with them, where a range of its own would take as much. */
+static SlotRange next_range(const V *slots, size_t count, size_t at)
 {
-    V buf[1024];
-    for (size_t i = 0; i < ra->count;) {
-        size_t chunk = i >> RA_CHUNK_BITS, off = i & (RA_CHUNK - 1);
-        size_t n = ra->count - i;
-        if (n > RA_CHUNK - off)
-            n = RA_CHUNK - off;
-        if (n > sizeof buf / sizeof buf[0])
-            n = sizeof buf / sizeof buf[0];
-        const V *src = ra->chunks[chunk] + off;
-        for (size_t j = 0; j < n; j++)
-            buf[j] = to_image(vm, src[j]);
-        if (fwrite(buf, sizeof buf[0], n, f) != n)
+    while (at < count && slots[at] == V_CLEARED)
+        at++;
+    size_t end = at;
+    for (size_t i = at; i < count && i - end <= RANGE_WORDS; i++)
+        if (slots[i] != V_CLEARED)
+            end = i + 1;
+    return (SlotRange){end > at ? at : 0, end - at};
+}
+
+static bool write_slots(FILE *f, const V *slots, size_t count, uint64_t *words)
+{
+    SlotRange range;
+    size_t at = 0;
+    do {
+        range = next_range(slots, count, at);
+        if (fwrite(&range, sizeof range, 1, f) != 1 ||
+            fwrite(slots + range.start, sizeof *slots, range.count, f) != range.count)
             return false;
-        i += n;
-    }
+        at = range.start + range.count;
+        *words += RANGE_WORDS + range.count;
+    } while (range.count);
     return true;
 }
 
-static bool write_globals(FILE *f, const VM *vm)
+static bool write_contents(const char *path, const char *mode, const ImageContents *c, bool program)
 {
-    V buf[1024];
-    for (size_t i = 0; i < vm->program->nglobals;) {
-        size_t n = vm->program->nglobals - i;
-        if (n > sizeof buf / sizeof buf[0])
-            n = sizeof buf / sizeof buf[0];
-        for (size_t j = 0; j < n; j++)
-            buf[j] = to_image(vm, vm->globals[i + j]);
-        if (fwrite(buf, sizeof buf[0], n, f) != n)
-            return false;
-        i += n;
-    }
-    return true;
+    ImageHeader h = {{'S', 'J', 'H', 'I'}, IMAGE_VERSION, {0}, sizeof(V), c->words[IMAGE_SYMBOLS],
+                     c->words[IMAGE_PROGRAM], c->words[IMAGE_HEAP], c->words[IMAGE_CELLS],
+                     c->words[IMAGE_CONSTS], c->words[IMAGE_GLOBALS], c->free_symbol,
+                     primitive_count, primitive_checksum()};
+    strncpy(h.build, SJ_BUILD_ID, sizeof h.build - 1);
+    FILE *f = sj_fopen(path, mode);
+    bool ok = f && fwrite(&h, sizeof h, 1, f) == 1;
+    uint64_t words = 0;
+    for (size_t part = 0; ok && part < IMAGE_PARTS; part++)
+        if (part >= IMAGE_CELLS) {
+            ok = write_slots(f, c->parts[part], c->words[part], &words);
+        } else {
+            ok = fwrite(c->parts[part], sizeof(V), c->words[part], f) == c->words[part];
+            words += c->words[part];
+        }
+    ImageTrailer t = {sizeof h + words * sizeof(V) + sizeof t, {0}};
+    memcpy(t.magic, program ? program_end : plain_end, sizeof t.magic);
+    ok = ok && fwrite(&t, sizeof t, 1, f) == 1;
+    if (f && fclose(f) != 0)
+        ok = false;
+    return ok;
 }
 
-static bool write_copy(VM *vm, const char *path, const char *mode);
-
-static bool write_image(VM *vm, const char *path, const char *mode)
+bool image_append_contents(const char *path, const ImageContents *image, bool program)
 {
-    /* An image holds what the cells, constants and symbol table reach. Drop
-       the transient roots, which it does not save, so that a reloaded image
-       dumps unchanged. Guards, the values of dead pointers, pointers' owners
-       and roots held by C stay: what only they reach is written but cannot be
-       reached in the image, so the next image leaves it out. */
+    return write_contents(path, "ab", image, program);
+}
+
+/* The root array, or the globals without one, rebased. */
+static void copy_slots(const VM *vm, RootArray *ra, V *out, size_t count)
+{
+    for (size_t i = 0; i < count; i++)
+        out[i] = to_image(vm, ra ? *ra_at(ra, i) : vm->globals[i]);
+}
+
+static bool write_copy(VM *vm, const char *path, const char *mode, bool program);
+
+/* An image holds what the cells, constants and symbol table reach. Drop
+   the transient roots, which it does not save, so that a reloaded image
+   dumps unchanged. Guards, the values of dead pointers, pointers' owners
+   and roots held by C stay: what only they reach is written but cannot be
+   reached in the image, so the next image leaves it out. */
+bool image_collect(VM *vm)
+{
     for (size_t i = 0; i < sizeof vm->args / sizeof vm->args[0]; i++)
         vm->args[i] = V_NIL;
     vm->exception = V_NIL;
@@ -252,64 +298,67 @@ static bool write_image(VM *vm, const char *path, const char *mode)
     vm->copy_large = true;
     vm_collect(vm, 0);
     vm->copy_large = false;
+    return true;
+}
+
+static bool write_image(VM *vm, const char *path, const char *mode, bool program)
+{
+    if (!image_collect(vm))
+        return false;
     /* Isolates still running, as they may be when --save writes the builder's image, add symbols,
        cells and shared data to the program space under this lock: held while it is copied and
        written, the image is whole. */
     bool shared = vm->program->isolates != NULL;
     if (shared)
         program_shared_lock();
-    bool ok = write_copy(vm, path, mode);
+    bool ok = write_copy(vm, path, mode, program);
     if (shared)
         program_shared_unlock();
     return ok;
 }
 
 /* The program space and the collected heap, rebased, with the root arrays. */
-static bool write_copy(VM *vm, const char *path, const char *mode)
+static bool write_copy(VM *vm, const char *path, const char *mode, bool program)
 {
     Space *p = &vm->program->space;
-    size_t words = (size_t)(vm->live_end - vm->space);
-    size_t symbol_words = (size_t)(p->symbols_next - p->base);
-    size_t program_words = (size_t)(p->objects_next - p->objects);
-    size_t all = symbol_words + program_words + words;
-    uint64_t *copy = malloc((all ? all : 1) * sizeof(uint64_t));
+    ImageContents c = {.words = {[IMAGE_SYMBOLS] = (size_t)(p->symbols_next - p->base),
+                                 [IMAGE_PROGRAM] = (size_t)(p->objects_next - p->objects),
+                                 [IMAGE_HEAP] = (size_t)(vm->live_end - vm->space),
+                                 [IMAGE_CELLS] = vm->program->cells.count,
+                                 [IMAGE_CONSTS] = vm->program->consts.count,
+                                 [IMAGE_GLOBALS] = vm->program->nglobals},
+                       .free_symbol = p->free_symbol};
+    size_t all = 0;
+    for (size_t part = 0; part < IMAGE_PARTS; part++)
+        all += c.words[part];
+    V *copy = malloc((all ? all : 1) * sizeof *copy);
     if (!copy)
         return false;
-    uint64_t *symbols = copy, *program = copy + symbol_words, *heap = program + program_words;
-    memcpy(symbols, p->base, symbol_words * sizeof(uint64_t));
-    memcpy(program, p->objects, program_words * sizeof(uint64_t));
-    memcpy(heap, vm->space, words * sizeof(uint64_t));
-    rebase_save_symbols(vm, symbols, symbol_words);
-    rebase_save_objects(vm, program, program_words);
-    rebase_save_objects(vm, heap, words);
-
-    ImageHeader h = {{'S', 'J', 'H', 'I'}, IMAGE_VERSION, {0}, sizeof(V), symbol_words, program_words,
-                     words, vm->program->cells.count, vm->program->consts.count, vm->program->nglobals, p->free_symbol,
-                     primitive_count, primitive_checksum()};
-    strncpy(h.build, SJ_BUILD_ID, sizeof h.build - 1);
-    ImageTrailer t = {image_length(&h), {0}};
-    memcpy(t.magic, "SJHI-END", sizeof t.magic);
-
-    FILE *f = sj_fopen(path, mode);
-    bool ok = f && fwrite(&h, sizeof h, 1, f) == 1 &&
-              fwrite(copy, sizeof(uint64_t), all, f) == all &&
-              write_root_array(f, vm, &vm->program->cells) &&
-              write_root_array(f, vm, &vm->program->consts) && write_globals(f, vm) &&
-              fwrite(&t, sizeof t, 1, f) == 1;
-    if (f && fclose(f) != 0)
-        ok = false;
+    V *next = copy;
+    for (size_t part = 0; part < IMAGE_PARTS; next += c.words[part++])
+        c.parts[part] = next;
+    memcpy(c.parts[IMAGE_SYMBOLS], p->base, c.words[IMAGE_SYMBOLS] * sizeof(V));
+    memcpy(c.parts[IMAGE_PROGRAM], p->objects, c.words[IMAGE_PROGRAM] * sizeof(V));
+    memcpy(c.parts[IMAGE_HEAP], vm->space, c.words[IMAGE_HEAP] * sizeof(V));
+    rebase_save_symbols(vm, c.parts[IMAGE_SYMBOLS], c.words[IMAGE_SYMBOLS]);
+    rebase_save_objects(vm, c.parts[IMAGE_PROGRAM], c.words[IMAGE_PROGRAM]);
+    rebase_save_objects(vm, c.parts[IMAGE_HEAP], c.words[IMAGE_HEAP]);
+    copy_slots(vm, &vm->program->cells, c.parts[IMAGE_CELLS], c.words[IMAGE_CELLS]);
+    copy_slots(vm, &vm->program->consts, c.parts[IMAGE_CONSTS], c.words[IMAGE_CONSTS]);
+    copy_slots(vm, NULL, c.parts[IMAGE_GLOBALS], c.words[IMAGE_GLOBALS]);
+    bool ok = write_contents(path, mode, &c, program);
     free(copy);
     return ok;
 }
 
 bool image_dump(VM *vm, const char *path)
 {
-    return write_image(vm, path, "wb");
+    return write_image(vm, path, "wb", false);
 }
 
-bool image_append(VM *vm, const char *path)
+bool image_append(VM *vm, const char *path, bool program)
 {
-    return write_image(vm, path, "ab");
+    return write_image(vm, path, "ab", program);
 }
 
 /* Writes a new file at to with the runtime in the executable at from: what
@@ -321,9 +370,7 @@ bool image_copy_runtime(const char *from, const char *to)
         return false;
     ImageTrailer t;
     long end = fseek(f, 0, SEEK_END) == 0 ? ftell(f) : -1;
-    while (end >= (long)sizeof t && fseek(f, end - (long)sizeof t, SEEK_SET) == 0 &&
-           fread(&t, sizeof t, 1, f) == 1 && memcmp(t.magic, "SJHI-END", sizeof t.magic) == 0 &&
-           t.length > 0 && t.length <= (uint64_t)end)
+    while (end >= 0 && read_trailer(f, end, &t))
         end -= (long)t.length;
     FILE *out = end >= 0 ? sj_fopen(to, "wb") : NULL;
     bool ok = out && fseek(f, 0, SEEK_SET) == 0;
@@ -341,34 +388,64 @@ bool image_copy_runtime(const char *from, const char *to)
     return ok;
 }
 
-static bool read_root_array(FILE *f, const VM *vm, RootArray *ra, size_t count)
+static bool read_values(FILE *f, const VM *vm, V *values, size_t count)
 {
-    if (!count)
-        return true;
+    if (fread(values, sizeof *values, count, f) != count)
+        return false;
+    for (size_t i = 0; i < count; i++)
+        values[i] = from_image(vm, values[i]);
+    return true;
+}
+
+/* The ranges of the count slots of ra, or of the globals without one, which are cleared. A range may
+   cross the array's chunks. left is how many words of the image remain. */
+static bool read_slots(FILE *f, VM *vm, RootArray *ra, size_t count, uint64_t *left)
+{
+    for (uint64_t at = 0;;) {
+        SlotRange range;
+        if (*left < RANGE_WORDS || fread(&range, sizeof range, 1, f) != 1)
+            return false;
+        *left -= RANGE_WORDS;
+        if (!range.count)
+            return range.start == 0;
+        if (range.start < at || range.start > count || range.count > count - range.start ||
+            range.count > *left)
+            return false;
+        *left -= range.count;
+        at = range.start;
+        uint64_t end = at + range.count;
+        while (at < end) {
+            size_t n = (size_t)(end - at);
+            if (ra && n > RA_CHUNK - (at & (RA_CHUNK - 1)))
+                n = RA_CHUNK - (at & (RA_CHUNK - 1));
+            if (!read_values(f, vm, ra ? ra_at(ra, at) : vm->globals + at, n))
+                return false;
+            at += n;
+        }
+    }
+}
+
+static bool read_root_array(FILE *f, VM *vm, RootArray *ra, size_t count, uint64_t *left)
+{
     size_t nchunks = (count + RA_CHUNK - 1) / RA_CHUNK;
     size_t cap = 8;
     while (cap < nchunks)
         cap *= 2;
-    V **chunks = malloc(cap * sizeof *chunks);
-    if (!chunks)
+    V **chunks = count ? malloc(cap * sizeof *chunks) : NULL;
+    if (count && !chunks)
         return false;
     ra->chunks = chunks;
-    ra->chunks_cap = cap;
+    ra->chunks_cap = count ? cap : 0;
     for (size_t c = 0; c < nchunks; c++) {
         V *chunk = malloc(RA_CHUNK * sizeof *chunk);
         if (!chunk)
             return false;
+        for (size_t i = 0; i < RA_CHUNK; i++)
+            chunk[i] = V_CLEARED;
         ra->chunks[ra->nchunks++] = chunk;
-        size_t n = count - ra->count;
-        if (n > RA_CHUNK)
-            n = RA_CHUNK;
-        if (fread(chunk, sizeof *chunk, n, f) != n)
-            return false;
-        for (size_t j = 0; j < n; j++)
-            chunk[j] = from_image(vm, chunk[j]);
-        ra->count += n;
     }
-    return true;
+    ra->count = count;
+    return read_slots(f, vm, ra, count, left);
 }
 
 static bool symbol_table_reserve(SymbolTable *t, size_t count)
@@ -398,15 +475,21 @@ VM *image_load(const char *path, size_t min_semispace_words, size_t stack_words,
     char build[sizeof h.build] = {0};
     strncpy(build, SJ_BUILD_ID, sizeof build - 1);
     /* The image is the last one in the file. */
-    if (fseek(f, -(long)sizeof t, SEEK_END) != 0 || fread(&t, sizeof t, 1, f) != 1 ||
-        memcmp(t.magic, "SJHI-END", sizeof t.magic) != 0 || t.length > LONG_MAX ||
-        fseek(f, -(long)t.length, SEEK_END) != 0 ||
+    long end = fseek(f, 0, SEEK_END) == 0 ? ftell(f) : -1;
+    if (!read_trailer(f, end, &t) || t.length < sizeof h + sizeof t ||
+        fseek(f, end - (long)t.length, SEEK_SET) != 0 ||
         fread(&h, sizeof h, 1, f) != 1 || memcmp(h.magic, "SJHI", 4) != 0 ||
         h.version != IMAGE_VERSION || memcmp(h.build, build, sizeof build) != 0 ||
         h.word_size != sizeof(V) || h.primitive_count != primitive_count ||
-        h.primitive_checksum != primitive_checksum() ||
-        t.length != image_length(&h))
+        h.primitive_checksum != primitive_checksum())
         goto fail;
+    uint64_t left = (t.length - sizeof h - sizeof t) / sizeof(V);
+    if (h.symbol_words > left || h.program_words > left - h.symbol_words ||
+        h.heap_words > left - h.symbol_words - h.program_words ||
+        h.cell_entries > 2 * CELL_MASK || h.const_entries > UINT32_MAX ||
+        h.global_entries < 1 || h.global_entries > CELL_MASK)
+        goto fail;
+    left -= h.symbol_words + h.program_words + h.heap_words;
 
     size_t words = vm_semispace_for(h.heap_words);
     if (words < min_semispace_words)
@@ -420,17 +503,15 @@ VM *image_load(const char *path, size_t min_semispace_words, size_t stack_words,
         fread(p->base, sizeof(uint64_t), h.symbol_words, f) != h.symbol_words ||
         fread(p->objects, sizeof(uint64_t), h.program_words, f) != h.program_words ||
         fread(vm->space, sizeof(uint64_t), h.heap_words, f) != h.heap_words ||
-        !read_root_array(f, vm, &vm->program->cells, h.cell_entries) ||
-        !read_root_array(f, vm, &vm->program->consts, h.const_entries) || h.global_entries < 1 ||
         !vm_globals_commit(vm, h.global_entries) ||
-        fread(vm->globals, sizeof(V), h.global_entries, f) != h.global_entries)
+        !read_root_array(f, vm, &vm->program->cells, h.cell_entries, &left) ||
+        !read_root_array(f, vm, &vm->program->consts, h.const_entries, &left) ||
+        !read_slots(f, vm, NULL, h.global_entries, &left) || left)
         goto fail;
     p->free_symbol = h.free_symbol;
     vm->live_end = vm->space + h.heap_words;
     vm_fresh_area(vm);
     vm->program->nglobals = h.global_entries;
-    for (size_t n = 0; n < vm->program->nglobals; n++)
-        vm->globals[n] = from_image(vm, vm->globals[n]);
     /* Rebase symbols, then rebuild the symbol tables at their final sizes. */
     size_t npub = 0, nown = 0;
     for (uint64_t *s = p->base; s < p->symbols_next; s += SYM_WORDS)

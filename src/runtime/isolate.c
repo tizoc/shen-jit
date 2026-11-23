@@ -462,8 +462,10 @@ static V fragment_in(VM *vm, Fragment *f)
    The first use: the builder's record, the tags, and the program's constants, copied into the
    program space where every isolate reads them. */
 
-static const char *const constant_names[] = {"*language*", "*implementation*", "*release*", "*port*",
-                                             "*porters*", "*os*", "*version*"};
+const char *const isolate_constants[] = {"*language*", "*implementation*", "*release*", "*port*",
+                                         "*porters*", "*os*", "*version*", NULL};
+const char *const isolate_tags[] = {"shen-jit.print-isolate", "shen-jit.print-receiver",
+                                    "shen-jit.print-sender", "shen-jit.print-given", NULL};
 
 static V publish(VM *vm, const char *name)
 {
@@ -493,10 +495,9 @@ static Isolates *isolates_start(VM *vm)
     clock_gettime(CLOCK_REALTIME, &now);
     ps->seed = (uint32_t)now.tv_nsec ^ (uint32_t)now.tv_sec * 2654435761u ^ (uint32_t)((uintptr_t)ps >> 4);
     self->generation = ps->seed;
-    ps->tag_isolate = publish(vm, "shen-jit.print-isolate");
-    ps->tag_receiver = publish(vm, "shen-jit.print-receiver");
-    ps->tag_sender = publish(vm, "shen-jit.print-sender");
-    ps->tag_given = publish(vm, "shen-jit.print-given");
+    V *tags[] = {&ps->tag_isolate, &ps->tag_receiver, &ps->tag_sender, &ps->tag_given};
+    for (size_t i = 0; isolate_tags[i]; i++)
+        *tags[i] = publish(vm, isolate_tags[i]);
     ps->end = publish(vm, "shen-jit.end-of-stream");
     ps->down = publish(vm, "down");
     ps->normal = publish(vm, "normal");
@@ -506,8 +507,8 @@ static Isolates *isolates_start(VM *vm)
     ps->ending = published_find(vm, "shen-jit.isolate-ending", 23);
     ps->run = published_find(vm, "shen-jit.run-at-end", 19);
     ps->sweepers = published_find(vm, "shen-jit.*guards-dead*", 22);
-    for (size_t i = 0; i < sizeof constant_names / sizeof constant_names[0]; i++) {
-        V s = publish(vm, constant_names[i]);
+    for (size_t i = 0; isolate_constants[i]; i++) {
+        V s = publish(vm, isolate_constants[i]);
         V value = s == V_CLEARED ? V_CLEARED : global_value(vm, s);
         if (is_object(value) && obj_type(value) == T_STRING)
             value = program_copy_string(vm, value);

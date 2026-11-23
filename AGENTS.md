@@ -13,7 +13,7 @@ checkout's own workflow, and git ignores it.
 
 | Path | Contents |
 | --- | --- |
-| `src/runtime/` | The C runtime: values and objects, collector, image, primitives, reader, loader, JIT, profiler, and the executable (`main.c`) |
+| `src/runtime/` | The C runtime: values and objects, collector, image, primitives, reader, loader, closed programs, JIT, profiler, and the executable (`main.c`) |
 | `src/lowerer/` | The lowerer, `lower.shen` and the files its header lists, and the stage 0 tools; see [src/lowerer/README.md](src/lowerer/README.md) |
 | `src/port/` | Port code: overrides, the `shen-jit.*` functions, the `defstruct` source extension and the module loader |
 | `docs/` | The guide's source, and how it works |
@@ -83,6 +83,7 @@ Run what the change can break, and nothing more: CI runs everything on every pus
 | What changed | What to run |
 | --- | --- |
 | The runtime, the JIT, the lowerer, the port, `vendor/` or the generated files | `make test-core` (about 20 s) |
+| `src/runtime/closed.c`, or what it reads: the instructions, or a primitive that takes a name | `make test-closed` |
 | The C API (`include/shen.h`, `src/runtime/ffi.c`), images or isolates, which libraries and their adapters use too | `make test-core test-libs` |
 | `lib/native.shen` | `make test-native test-datalog test-bytes test-hyperloglog` |
 | `lib/numbers.shen`, which `buffer`, `memory` and `socket` require | `make test-typed test-libs` |
@@ -103,7 +104,7 @@ Run what the change can break, and nothing more: CI runs everything on every pus
 | Documentation only | `make check-docs`; `make guide` if a rendered page's layout changed, and the examples you changed |
 
 `make test-core` is `test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn
-test-native test-ffi test-overrides test-structs test-isolates test-modules test-typed`, and `make test-libs` is `test-buffer test-bytes test-layout test-hyperloglog test-json test-io test-net-udp test-net-tcp test-net-interface test-net-clients test-net-ipv6 test-net-multicast test-fs test-process
+test-native test-ffi test-overrides test-structs test-isolates test-modules test-closed test-typed`, and `make test-libs` is `test-buffer test-bytes test-layout test-hyperloglog test-json test-io test-net-udp test-net-tcp test-net-interface test-net-clients test-net-ipv6 test-net-multicast test-fs test-process
 test-tree-sitter test-http test-datalog test-curl test-namespaces test-parallel test-shen-git`.
 
 Keep each suite fast. A check that needs a collection at every allocation, a long wait or a large input goes in a

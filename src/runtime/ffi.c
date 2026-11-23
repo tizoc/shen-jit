@@ -382,6 +382,10 @@ static V result_string(VM *vm, const char *s, bool may_be_in_heap)
 
 static V call_procedure(VM *vm, void *function, size_t n);
 
+/* The name a foreign function is defined by, and whether it is a procedure, C written for Shen. */
+V ffi_name(V f) { return ptr(ptr(f)[FOREIGN_DESC])[1 + DESC_NAME]; }
+bool ffi_procedure(V f) { return ptr(ptr(f)[FOREIGN_DESC])[1 + DESC_RESULT] == fix(F_LIMIT); }
+
 /* Whether f is a C function of n doubles giving a double, neither blocking nor variadic, which
    typed code calls with its floats in registers (jit.c, float-call1 and the rest). */
 bool ffi_floats(V f, unsigned n)

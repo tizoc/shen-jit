@@ -409,10 +409,11 @@ An image is a header followed by sections and a trailer, all little-endian:
   and every raw native field is stored as 0. The objects start where the address
   space a process reserves puts them, which a limit on it can change.
 - **Roots:** the function cells with their arities, the constant slots and the global slots, with relative
-  pointers.
-- **Trailer:** the image's length in bytes and the magic `SJHI-END`. A loader
-  reads it from the end of the file, so an image can be appended to another
-  file: the executable carries its image this way.
+  pointers: of each, the ranges of slots in use, with where each starts and its length, and an empty one at the
+  end. The header counts all the slots, and loading clears the others.
+- **Trailer:** the image's length in bytes and the magic `SJHI-END`, or `SJHP-END` for a program, an image with an
+  entry point, which `SHEN_JIT_IMAGE` does not replace. A loader reads it from the end of the file, so an image can
+  be appended to another file: the executable carries its image this way.
 
 Loading reads the program space into a new one and the heap into a region at
 least five times its size, adds the bases to every pointer in one linear pass

@@ -52,10 +52,6 @@
                true
                (error "http: ~A takes ~A arguments, not ~A and the request" F A N))))
 
-(define handler-function
-  F -> (fn F) where (symbol? F)
-  [F | Args] -> (/. Q (shen-jit.apply F (append Args [Q]))))
-
 \\ The server: its image guard, port, listening socket, handler and options, the channel its
 \\ connections tell it on, and what running it has done so far, which only http.run changes. A
 \\ handler's copy (http.current-server) has the port and that channel's send endpoint alone.
@@ -94,7 +90,7 @@
 
 (define listener-start
   L Handler Config -> (new-server (shen-jit.bytes->pointer (shen-jit.u32! (shen-jit.bytes 8) 0 1) 0 server)
-                                  (socket.port L) (io.socket-token L) Handler Config []))
+                                  (socket.port L) (io.socket-token L) (shen-jit.target Handler) Config []))
 
 \\ What a handler gets as its server, in its connection's isolate: its port, and a way to stop it.
 (define handler-copy
@@ -286,7 +282,7 @@
     (let Result (trap-error
                   (io.with-endpoint (io.socket Peer "HTTP peer")
                     (/. E (do (set *serving* (handler-copy Port Control))
-                              (serve-controlled E (handler-function Handler) Options
+                              (serve-controlled E (/. Q (shen-jit.call-target Handler Q)) Options
                                 (freeze (ready? Stop))))))
                   (/. X (:err (io.error serve "HTTP connection" (error-to-string X)))))
       (if (result.err? Result) (tell Control failed) true)))

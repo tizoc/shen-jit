@@ -303,6 +303,8 @@ enum Prim {
     P_TRUNCATE,  /* shen-jit.truncate: a number truncated to a fixnum; fix-from-float in registers */
     P_STRUCT_REF, /* shen-jit.struct-ref: a struct's field, the struct tested once for a slot (jit.c) */
     P_XXH64,     /* shen-jit.xxh64: the XXH64 of consecutive keys, stored as 8 bytes each */
+    P_SAVE_CLOSED, /* shen-jit.save-closed: an executable of what a program can reach (closed.c) */
+    P_PRINTER,   /* shen-jit.printer: the function that prints vectors with a tag, for closed programs */
     P_COUNT
 };
 #define PRIM_RAISE_COND P_COUNT
@@ -316,6 +318,8 @@ bool sj_equal_at(V a, V b, unsigned depth);
    the recursive comparator. Depth belongs to this call, not the OS thread. */
 static inline bool sj_equal(V a, V b) { return sj_equal_at(a, b, 0); }
 uint64_t sj_hash(V v);
+enum { DICT_TAG = 1, DICT_COUNT = 2, DICT_BUCKETS = 3, DICT_FIELDS = 3 };
+V *sj_dict_buckets(V dictionary, size_t *count);
 V sj_dict_find(VM *vm);
 V sj_dict_put(VM *vm);
 V sj_dict_remove(VM *vm);

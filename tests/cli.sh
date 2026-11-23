@@ -444,7 +444,7 @@ check build-inherited-status "$dir/inherited.out" "status 1"
 contains build-inherited-module "$dir/inherited.out" "build: module b is already loaded; build from an image without it"
 if [ -f "$dir/inherited" ]; then fail=$((fail + 1)); echo "FAIL build-inherited: wrote an executable"; fi
 "$SHEN" eval -m tests/modules/hello.shenmod \
-    -e "(trap-error (shen-jit.apply (shen-jit.function shen-jit.module.build) [\"tests/modules/hello.shenmod\" true \"$dir/inherited-root\"]) (/. E (output \"~A~%\" (error-to-string E))))" \
+    -e "(trap-error (shen-jit.apply (shen-jit.function shen-jit.module.build-command) [[\"tests/modules/hello.shenmod\" \"-o\" \"$dir/inherited-root\"]]) (/. E (output \"~A~%\" (error-to-string E))))" \
     -e '(output "after ~A ~A~%" (module.use [b]) (shen-jit.sealed? (gensym probe)))' > "$dir/inherited-root.out" 2>&1
 contains build-inherited-root "$dir/inherited-root.out" "build: module app/hello is already loaded"
 check build-inherited-restored "$dir/inherited-root.out" "after [] false"

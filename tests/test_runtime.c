@@ -406,6 +406,51 @@ static void test_image_round_trip(void)
     vm_destroy(loaded);
 }
 
+/* A root array is stored as the ranges in use, one of which may cross its chunks, with short gaps. */
+static void test_image_ranges(void)
+{
+    static char stub;
+    enum { CONSTS = RA_CHUNK + 4 };
+    V cells[] = {V_CLEARED, V_CLEARED}, globals[] = {V_CLEARED, V_CLEARED, fix(42)};
+    V *constants = malloc(CONSTS * sizeof *constants);
+    CHECK(constants != NULL);
+    if (!constants)
+        return;
+    for (size_t i = 0; i < CONSTS; i++)
+        constants[i] = V_CLEARED;
+    constants[5] = fix(5);
+    constants[RA_CHUNK - 1] = fix(7);
+    constants[RA_CHUNK + 1] = V_NIL;
+    ImageContents contents = {.parts = {[IMAGE_CELLS] = cells, [IMAGE_CONSTS] = constants, [IMAGE_GLOBALS] = globals},
+                              .words = {[IMAGE_CELLS] = 2, [IMAGE_CONSTS] = CONSTS, [IMAGE_GLOBALS] = 3}};
+    remove("test-ranges.img");
+    CHECK(image_append_contents("test-ranges.img", &contents, true));
+    CHECK(image_is_program("test-ranges.img") && !image_is_program("test.img"));
+    VM *loaded = image_load("test-ranges.img", 1024, 64, &stub, &stub);
+    CHECK(loaded != NULL);
+    if (loaded) {
+        CHECK(loaded->program->cells.count == 2 && loaded->program->consts.count == CONSTS);
+        for (size_t i = 0; i < CONSTS; i++)
+            CHECK(*ra_at(&loaded->program->consts, i) == constants[i]);
+        for (size_t i = 0; i < 3; i++)
+            CHECK(loaded->globals[i] == globals[i]);
+    }
+    vm_destroy(loaded);
+    free(constants);
+
+    /* The last range, before the trailer's two words, has no room for what it would hold. */
+    FILE *image = fopen("test-ranges.img", "r+b");
+    CHECK(image != NULL);
+    if (!image)
+        return;
+    uint64_t bad[] = {0, 1};
+    CHECK(fseek(image, 0, SEEK_END) == 0 && ftell(image) < RA_CHUNK * (long)sizeof(V) / 2);
+    CHECK(fseek(image, -4 * (long)sizeof(V), SEEK_END) == 0 && fwrite(bad, sizeof bad, 1, image) == 1);
+    CHECK(fclose(image) == 0);
+    CHECK(image_load("test-ranges.img", 1024, 64, &stub, &stub) == NULL);
+    remove("test-ranges.img");
+}
+
 static const char sample_stage0[] =
     "[defun add1 [code add1 1 5 [1] [[const 3 0] [prim 4 + 2 3] [return 4]] []]]\n"
     "[defun twice [code twice 1 6 [] [[move 5 2] [call-sealed 5 3 add1 1]\n"
@@ -523,6 +568,7 @@ int main(void)
     test_symbol_cells_trimmed();
     test_symbol_cell_while_collecting();
     test_image_round_trip();
+    test_image_ranges();
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
         return 1;
