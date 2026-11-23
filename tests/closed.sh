@@ -331,13 +331,14 @@ parts='(requires numbers buffer) (typed) (sources tc+ "app.shen" tc- "app-main.s
 runs typed '2.5 55 annotated true true false true' app-main
 parts=
 
-# The executable is a program: its arguments are its own, its image too, and it is far smaller. A
-# refused build leaves the one that is there.
+# The executable is a program: its arguments are its own, its image too, and it is far smaller, by what
+# the compiler and the kernel take, as the runtime, which sanitizers make several megabytes, is in both.
+# A refused build leaves the one that is there.
 SHEN_JIT_IMAGE="$dir/none.img" "$dir/data.closed" --stage1 a b > "$dir/own.out" 2>&1
 if grep -qF '["--stage1" "a" "b"]' "$dir/own.out"; then passed; else failed own "not its own" "$dir/own.out"; fi
 SHEN_JIT_IMAGE="$dir/none.img" "$dir/every.sealed" --stage1 a b > "$dir/own.out" 2>&1
 if grep -qF 'undefined function --stage1' "$dir/own.out"; then passed; else failed own-sealed "not its own" "$dir/own.out"; fi
-if [ $((4 * $(wc -c < "$dir/data.closed"))) -lt $((3 * $(wc -c < "$dir/every.sealed"))) ]; then passed; else
+if [ $(($(wc -c < "$dir/data.closed") + 1000000)) -lt $(($(wc -c < "$dir/every.sealed"))) ]; then passed; else
     ls -l "$dir" > "$dir/sizes"; failed size "data.closed is not much smaller than every.sealed" "$dir/sizes"; fi
 module data evaluates "$source"
 "$SHEN" build "$dir/data.shenmod" --closed -o "$dir/data.closed" > /dev/null 2>&1
