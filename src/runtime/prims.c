@@ -143,6 +143,8 @@ const Primitive primitive_table[] = {
     {"shen-jit.xxh64", 5, NULL},
     {"shen-jit.save-closed", 3, NULL},
     {"shen-jit.printer", 1, NULL},
+    {"shen-jit.reserve-pvars", 3, NULL},
+    {"shen-jit.gc-pvars", 3, NULL},
 };
 
 const size_t primitive_count = sizeof primitive_table / sizeof primitive_table[0];
@@ -2016,20 +2018,38 @@ V sj_primitive(VM *vm, size_t index)
         return (uint64_t)fixval(a) << 8 | PVAR_TAG;
     case P_PVARP: return boolean(is_pvar(a));
     case P_SAMEP: return boolean(a == b);
-    case P_NEWPV: {
-        /* A new variable in the vector of bindings a, whose element 1 is the
-           next offset: its binding becomes b, which marks none, and the
-           offset moves on, as the kernel's shen.newpv does. */
+    case P_NEWPV:
+    case P_RESERVE_PVARS: {
+        V count = index == P_NEWPV ? fix(1) : vm->args[2];
+        if (index == P_RESERVE_PVARS && (!is_fix(count) || fixval(count) < 1))
+            return sj_raise_value(vm, "shen-jit.reserve-pvars: ~S is not a positive count", count);
         if (!is_type(a, T_VECTOR) || hdr_size(ptr(a)[0]) < 2 || hdr_shared(ptr(a)[0]))
             return sj_raise_value(vm, "shen-jit.newpv: ~S is not a vector of bindings", a);
-        V n = ptr(a)[2];
-        if (!is_fix(n) || fixval(n) < 0 || (uint64_t)fixval(n) >= hdr_size(ptr(a)[0]))
-            return sj_raise_value(vm, "shen-jit.newpv: no room for a variable at ~S", n);
-        ptr(a)[1 + fixval(n)] = b;
-        ptr(a)[2] = fix(fixval(n) + 1);
-        return (uint64_t)fixval(n) << 8 | PVAR_TAG;
+        V *bindings = ptr(a);
+        V first = bindings[2];
+        uint64_t size = hdr_size(bindings[0]);
+        if (!is_fix(first) || fixval(first) < 0 || (uint64_t)fixval(first) >= size)
+            return sj_raise_value(vm, "shen-jit.newpv: no room for a variable at ~S", first);
+
+        uint64_t start = (uint64_t)fixval(first);
+        if (index == P_NEWPV) {
+            bindings[1 + start] = b;
+            bindings[2] = fix(start + 1);
+            return start << 8 | PVAR_TAG;
+        }
+        /* A failed reservation still has all the stores of the scalar calls
+           that fit. Offsets 0 and 1 can occur in handwritten KLambda. */
+        uint64_t end = start + (uint64_t)fixval(count);
+        uint64_t stop = end < size ? end : size;
+        for (uint64_t offset = start; offset < stop; offset++)
+            bindings[1 + offset] = b;
+        bindings[2] = fix(stop);
+        if (stop < end)
+            return sj_raise_value(vm, "shen-jit.newpv: no room for a variable at ~S", bindings[2]);
+        return first;
     }
     case P_GC:
+    case P_GC_PVARS: {
         /* b, the result of the code that used the last variable made in the
            vector of bindings a; if it failed, the next offset moves back to
            that variable's, as the kernel's shen.gc does. */
@@ -2037,8 +2057,12 @@ V sj_primitive(VM *vm, size_t index)
             return b;
         if (!is_type(a, T_VECTOR) || hdr_size(ptr(a)[0]) < 2 || !is_fix(ptr(a)[2]) || hdr_shared(ptr(a)[0]))
             return sj_raise_value(vm, "shen-jit.gc: ~S is not a vector of bindings", a);
-        ptr(a)[2] = fix(fixval(ptr(a)[2]) - 1);
+        V count = index == P_GC ? fix(1) : vm->args[2];
+        if (!is_fix(count) || fixval(count) < 1)
+            return sj_raise_value(vm, "shen-jit.gc-pvars: ~S is not a positive count", count);
+        ptr(a)[2] = fix(fixval(ptr(a)[2]) - fixval(count));
         return V_FALSE;
+    }
     case P_ISOLATE: return sj_isolate(vm);
     case P_FLOAT:
         if (is_fix(a))

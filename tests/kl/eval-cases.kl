@@ -952,6 +952,132 @@ that holds itself, whose copy would not end."
 (value t.deref-eq-all (defun t.deref-eq-all () (let B (shen.prolog-vector) (let X (shen.newpv B) (let Y (shen.newpv B) (let Z (shen.newpv B) (let U (shen.newpv B) (let V (shen.newpv B) (let C (shen.newpv B) (do (shen.bindv X (cons Z (cons 1 ())) B) (do (shen.bindv Y (cons 2 (cons 1 ())) B) (do (shen.bindv Z 2 B) (do (shen.bindv C (cons C 1) B) (cons (t.deref-eq X Y B) (cons (t.deref-eq X (cons 3 (cons 1 ())) B) (cons (t.deref-eq X Z B) (cons (t.deref-eq Z 2 B) (cons (t.deref-eq U U B) (cons (t.deref-eq U V B) (cons (t.deref-eq C C B) ()))))))))))))))))))))
 (value (true false false true true false true) (t.deref-eq-all))
 
+"Singleton and dotted trails undo on a false continuation or a later mismatch."
+(value t.trail-clash
+  (defun t.trail-clash (B X Y)
+    (is! (cons X (cons Y a)) (cons 1 (cons 2 b)) B 0 0 (freeze (simple-error "continuation ran")))))
+(value (false false false true true)
+  (let B (shen.prolog-vector)
+    (let X (shen.newpv B)
+      (let Y (shen.newpv B)
+        (let R (is X 1 B 0 0 (freeze false))
+          (let S (shen.lzy=! X 2 B (freeze false))
+            (let T (t.trail-clash B X Y)
+              (cons R (cons S (cons T (cons (= X (shen.lazyderef X B))
+                                           (cons (= Y (shen.lazyderef Y B)) ()))))))))))))
+
+"A reservation preserves the offsets and unwinds from the current ticket.
+Overflow leaves the scalar reservations that fit."
+(value t.batch
+  (defun t.batch (B Ticket Keep)
+    (let X (shen.newpv B)
+      (shen.gc B
+        (let Y (shen.newpv B)
+          (shen.gc B
+            (do (address-> B 1 Ticket)
+                (if Keep (cons (shen-jit.pvar-offset X) (cons (shen-jit.pvar-offset Y) ())) false))))))))
+(value (2 3) (t.batch (shen.prolog-vector) 8 true))
+(value (0 1) (t.batch (address-> (absvector 4) 1 0) 8 true))
+(value (1 2) (t.batch (address-> (absvector 4) 1 1) 8 true))
+(value 6 (let B (shen.prolog-vector) (do (t.batch B 8 false) (shen.ticket-number B))))
+(value (3 true)
+  (let B (address-> (absvector 3) 1 2)
+    (trap-error (t.batch B 8 true)
+                (lambda E (cons (shen.ticket-number B) (cons (= (<-address B 2) shen.-null-) ()))))))
+
+"At most 16 variables are reserved inline, and C reserves more: the same stores,
+also with no room to spare, and as many as fit with too little."
+(value t.reserve-16 (defun t.reserve-16 (B) (shen-jit.reserve-pvars B unbound 16)))
+(value t.reserve-17 (defun t.reserve-17 (B) (shen-jit.reserve-pvars B unbound 17)))
+(value t.unbound (defun t.unbound (B I N) (if (= I N) () (cons (= (<-address B I) unbound) (t.unbound B (+ I 1) N)))))
+(value t.reserved
+  (defun t.reserved (F Size)
+    (let B (address-> (shen-jit.filled-vector Size free) 1 2)
+      (let First (trap-error (F B) (lambda E (error-to-string E)))
+        (cons First (cons (shen.ticket-number B) (t.unbound B 2 Size)))))))
+(value (2 18 true true true true true true true true true true true true true true true true false)
+  (t.reserved (lambda B (t.reserve-16 B)) 19))
+(value (2 18 true true true true true true true true true true true true true true true true)
+  (t.reserved (lambda B (t.reserve-16 B)) 18))
+(value ("shen-jit.newpv: no room for a variable at 17" 17 true true true true true true true true true true true true true true true)
+  (t.reserved (lambda B (t.reserve-16 B)) 17))
+(value (2 19 true true true true true true true true true true true true true true true true true)
+  (t.reserved (lambda B (t.reserve-17 B)) 19))
+(value ("shen-jit.newpv: no room for a variable at 18" 18 true true true true true true true true true true true true true true true true)
+  (t.reserved (lambda B (t.reserve-17 B)) 18))
+
+"A temporary of the lowerer's may also be a name in handwritten KLambda."
+(value t.batch-scope
+  (defun t.batch-scope (B shen-jit.lower.ticket1)
+    (let X (shen.newpv B)
+      (shen.gc B
+        (let Y (shen.newpv B)
+          (shen.gc B shen-jit.lower.ticket1))))))
+(value kept (t.batch-scope (shen.prolog-vector) kept))
+
+"Clauses that start with the same test: once the body of one fails, the next
+sees the binding it changed, or the lock it closed."
+(value t.same-heads
+  (defun t.same-heads (X B L Mode)
+    (let A (if (shen.unlocked? L)
+                (let T (shen.lazyderef X B)
+                  (if (= T true)
+                      (cond ((= Mode change) (do (shen.bindv X false B) false))
+                            ((= Mode cut) (shen.lock 6 L))
+                            (true false))
+                      false))
+                false)
+      (if (= A false)
+          (let R (if (shen.unlocked? L)
+                      (let U (shen.lazyderef X B) (if (= U true) second false))
+                      false)
+            (if (= R false)
+                (let S (if (shen.unlocked? L)
+                            (let W (shen.lazyderef X B) (if (= W true) third false))
+                            false)
+                  (if (= S false)
+                      (if (shen.unlocked? L) (cons A (cons R (cons S ()))) false)
+                      S))
+                R))
+          A))))
+(value t.same-heads-query
+  (defun t.same-heads-query (X Mode)
+    (let B (shen.prolog-vector)
+      (let L (address-> (absvector 3) 1 true)
+        (let P (shen.newpv B)
+          (do (if (= X free) true (shen.bindv P X B)) (t.same-heads P B L Mode)))))))
+(value (false false false) (t.same-heads-query free plain))
+(value (false false false) (t.same-heads-query false plain))
+(value second (t.same-heads-query true plain))
+(value (false false false) (t.same-heads-query true change))
+(value false (t.same-heads-query true cut))
+
+"A test of the outer value looks no further, so it ends on a term that holds itself.
+A local function with a test's name receives the term fully dereferenced."
+(value t.inspect (defun t.inspect (X B) (cons? (shen.deref X B))))
+(value t.inspect-symbol (defun t.inspect-symbol (X B) (symbol? (shen.deref X B))))
+(value t.colon (defun t.colon (X B) (= (shen.deref X B) (intern ":"))))
+(value t.named (defun t.named (X B) (= bound (shen.deref X B))))
+(value t.inspected
+  (defun t.inspected (Binding)
+    (let B (shen.prolog-vector)
+      (let P (shen.newpv B)
+        (let Q (shen.newpv B)
+          (do (if (= Binding free) free (shen.bindv P (if (= Binding cycle) (cons a Q) Binding) B))
+              (do (shen.bindv Q P B)
+                  (cons (t.inspect Q B) (cons (t.inspect-symbol Q B) (cons (t.colon Q B) (cons (t.named Q B) ())))))))))))
+(value (false false false false) (t.inspected free))
+(value (false true false true) (t.inspected bound))
+(value (false true true false) (t.inspected (intern ":")))
+(value (false false false false) (t.inspected 1))
+(value (true false false false) (t.inspected (cons bound ())))
+(value (true false false false) (t.inspected cycle))
+(value t.local-inspect (defun t.local-inspect (symbol? X B) (symbol? (shen.deref X B))))
+(value bound
+  (let B (shen.prolog-vector)
+    (let P (shen.newpv B)
+      (do (shen.bindv P bound B) (t.local-inspect (lambda X (hd X)) (cons P ()) B)))))
+
 "Isolates, here also under GC stress and the sanitizers: one that sends back what it was
 given, and two whose lists collections move while the builder allocates its own. Everything is
 defined first, as the program cannot change while another isolate runs, and each case waits for

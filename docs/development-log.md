@@ -1363,6 +1363,55 @@ that. Its readings decided nothing below.
   port: thm13 25.85-25.96 to 24.92-25.02 G, rcc10 18.86-18.97 to 18.30-18.44 G, THORN `meaning` (rewriting on) 55.04-55.33
   to 52.05-52.20 G, steam 0.5-1% fewer, and the kernel suite, stlib build, yql, L and `ec` level (yql, L and `ec` never reach
   it). The kernel's own Prolog compares a dereferenced term only with a constant, which the rule leaves alone.
+- **Unification and compiled Prolog clauses** (2026-11-23, Apple M3 Max, load about 4, up to 40 on `meaning`, retired
+  instructions against 0.11 with loading and compilation included). The first variable a unification binds is the tail of its
+  trail, which saves one pair per nonempty trail: first bindings were 94.9% of the trail pushes on THORN `ec` and 96.8% on
+  `meaning`. A clause reserves its consecutive variables together and releases them together. Shape tests and `=` with a
+  literal atom read the outer value of a dereferenced term and copy nothing: the kernel's typechecker compares with `:` that
+  way, and its tableau prover's clauses ask `(when (symbol? P))`. The changes added 57 net lines to the lowerer.
+
+  Medians of 8 alternating runs, 4 or 5 on `meaning`. The last three columns leave out one change each.
+
+  | Workload | All three | No trail change | No joint reservation | No shape tests |
+  | --- | ---: | ---: | ---: | ---: |
+  | Kernel suite | −1.4% | −1.5% | +0.3% | −1.6% |
+  | Standard library install | +0.4% | +0.5% | +0.1% | +0.3% |
+  | Loading THORN | −0.8% | −0.7% | +0.4% | −1.0% |
+  | THORN `set` | −3.6% | −3.6% | +0.2% | −3.5% |
+  | THORN `L` | −1.8% | −1.5% | −0.6% | −2.3% |
+  | THORN `schubert` | −3.5% | −3.3% | +0.4% | −3.5% |
+  | THORN `ec` | −1.7% | −1.3% | −0.5% | −2.0% |
+  | THORN `meaning` | −1.8% | −1.6% | −0.4% | −1.8% |
+  | Pelletier query 13 | +0.5% | +0.5% | +0.3% | +0.5% |
+  | Both kernel tableau queries, 3,000 repetitions | −11.2% | −11.6% | −11.9% | −0.2% |
+  | 10 walks of a 2,000-element list, `(when (cons? X))` at each step | −97.4% | −97.4% | −97.4% | 0.0% |
+
+  Differences under about 0.5% are noise. The reservation gives nearly all of the gain on THORN, the shape tests all of it on
+  the last two rows, and the trail 0.2-0.4% on `L`, `schubert` and `ec`. Reserving 16 variables took 26 ns and takes 10, and
+  2 variables took 4.0 and take 3.1. In the independent suite, median wall time over 12 alternating rounds fell from 186 to
+  180 ms on the kernel suite, 241 to 237 on `set`, 190 to 187 on `L`, 191 to 181 on `schubert` and 231 to 227 on `ec`, with
+  the standard library install at 60 on both. All 35 THORN outcomes and inference counts matched their recorded values.
+
+  **Rejected: sharing Boolean head tests.** Three or more consecutive clauses whose heads test the same argument against the
+  same Boolean shared one lock check and one dereference when the first did not match, 84 lines in the lowerer. THORN's
+  generated predicates have the shape and nothing in the kernel does: it skipped 210,235 runs of clauses on `schubert` and
+  556,856 on `meaning`. It saved 0.8% on `meaning` (44.0 to 43.7 G), nothing clear on the other THORN problems, and cost 0.3%
+  on the kernel suite, 0.7% on the standard library install, 1.3% on Pelletier query 13, 1.6% on loading THORN and 4.1% on
+  compiling a table of 160 facts. Only a long search gets that back, and every program pays it when it compiles. Testing for
+  `let` once and leaving the rules on it to a function of their own recovered part of the cost. 100,000 queries of the
+  opposite sign over those 160 facts gained 12.2%, which no program here resembles.
+
+  **Rejected: visiting the subterms in the shape tests,** to raise for a variable outside its bindings, which the Prolog
+  compiler never makes. Each test stayed linear in its term: the tableau queries gained 2.9% and the list walks 40.6%. On a
+  term whose tail holds itself, 0.11 overflowed the stack, which a program could catch, and this walk never ended.
+
+  **Other rejected alternatives.** Carrying a head-match flag through each body cost 5.6% more instructions
+  on `set`, and sharing the next clause through a frozen continuation cost 6.7%. Inlining the literal
+  cut-and-fail clause of THORN's `over-complex?` took 109 lowerer lines. It saved about 1.8% of search
+  instructions on `ec` and RCC goal 10 at depth 8, and added 25–26 million instructions to prepare
+  each problem. Inlining helpers such as `show` cost 4% on a full `set` run and 5% on RCC goal 10.
+  A five-line early exit in the inliner's size check saved 0.6% on the kernel suite and cost 0.3%
+  on `meaning`.
 
 ### Native code written by hand
 

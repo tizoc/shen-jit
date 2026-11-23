@@ -39,7 +39,7 @@
        shen-jit.u8! shen-jit.u16! shen-jit.u32! shen-jit.bytes->string
        shen-jit.bytes->pointer shen-jit.pointer->bytes
        shen-jit.s32! shen-jit.s64! shen-jit.f32! shen-jit.f64! shen-jit.pointer! shen-jit.isolate
-       shen-jit.word-op shen-jit.save-closed]]
+       shen-jit.word-op shen-jit.save-closed shen-jit.reserve-pvars shen-jit.gc-pvars]]
    [4 [shen-jit.write-bytes]]
    [5 [shen-jit.copy-bytes shen-jit.xxh64]]
    [fixed [if and or cond let lambda defun freeze type trap-error do thaw eval-kl protect]]])
@@ -160,6 +160,14 @@
       where (and (not (element? = Scope)) (not (element? shen.deref Scope))
                  (shen-jit.sealed? shen.deref) (pure? B Scope)
                  (pure? Y Scope))
+  \\ These read the outer value only, so what is below it stays as it is.
+  Scope [P [shen.deref X B]] -> (norm Scope [P [shen.lazyderef X B]])
+      where (and (element? P [cons? number? string? absvector? empty? atom? symbol? boolean? tuple?])
+                 (shallow-deref? P Scope) (or (fixed? P) (shen-jit.sealed? P)))
+  Scope [= [shen.deref X B] A] -> (norm Scope [= [shen.lazyderef X B] A])
+      where (and (deref-atom? A Scope) (shallow-deref? = Scope))
+  Scope [= A [shen.deref X B]] -> (norm Scope [= A [shen.lazyderef X B]])
+      where (and (deref-atom? A Scope) (shallow-deref? = Scope))
   \\ A constant test, as inline-loop leaves one: its branch.
   Scope [if true X _] -> (norm Scope X)
   Scope [if false _ Y] -> (norm Scope Y)
@@ -168,6 +176,13 @@
   Scope [and X Y] -> [and (norm Scope X) (norm Scope Y)]
   Scope [or X Y] -> [or (norm Scope X) (norm Scope Y)]
   Scope [cond | Clauses] -> (norm-cond Scope Clauses)
+  Scope [let X [shen.newpv B] [shen.gc B Inner]]
+  -> (norm-newpvs Scope B (newpv-run B Inner [X]))
+      where (and (shen-jit.symbol? X) (not (= X B)) (element? B Scope)
+                 (empty? (intersection [let shen.newpv shen.gc X] Scope))
+                 (not (element? X [let shen.newpv shen.gc]))
+                 (shen-jit.sealed? shen.newpv) (shen-jit.sealed? shen.gc)
+                 (newpv-next? B Inner [X]))
   Scope [let X V Body] -> (let-lambda X (norm Scope V)
                                                     (norm [X | Scope] Body))
       where (shen-jit.symbol? X)
@@ -199,6 +214,48 @@
   \\ Values with no literal syntax (absvectors, closures, streams) can reach
   \\ eval-kl at runtime; like Shen/Scheme, treat them as constants.
   _ X -> [const X])
+
+\\ A contiguous run emitted by shen.stpart. The binding vector is already a
+\\ variable, so it has no effects between reservations, and the offsets are
+\\ consecutive. The cleanup subtracts from the ticket left by Inner.
+(define newpv-next?
+  B [let X [shen.newpv B] [shen.gc B _]] Vars
+  -> (and (shen-jit.symbol? X) (not (element? X [B let shen.newpv shen.gc | Vars])))
+  _ _ _ -> false)
+
+(define newpv-run
+  B [let X [shen.newpv B] [shen.gc B Inner]] Vars
+  -> (newpv-run B Inner [X | Vars]) where (newpv-next? B [let X [shen.newpv B] [shen.gc B Inner]] Vars)
+  _ Inner Vars -> [(reverse Vars) Inner])
+
+\\ A fresh variable that is none of Scope, which handwritten KLambda may name.
+(define fresh-avoiding
+  Prefix Scope -> (let V (shen-jit.lower.fresh Prefix)
+                    (if (element? V Scope) (fresh-avoiding Prefix Scope) V)))
+
+(define norm-newpvs
+  Scope B [Vars Inner]
+  -> (let First (fresh-avoiding ticket (append Vars Scope))
+          Count (length Vars)
+       [let First [prim shen-jit.reserve-pvars [[var B] [const shen.-null-] [const Count]]]
+         (newpv-lets Vars First 0
+           [prim shen-jit.gc-pvars [[var B] (norm (append Vars Scope) Inner) [const Count]]])]))
+
+(define newpv-lets
+  [] _ _ Inner -> Inner
+  [X | Xs] First Offset Inner
+  -> [let X [prim shen-jit.pvar [(if (= Offset 0)
+                                     [var First]
+                                     [prim + [[var First] [const Offset]]])]]
+       (newpv-lets Xs First (+ Offset 1) Inner)])
+
+(define shallow-deref?
+  F Scope -> (and (empty? (intersection [F shen.deref shen.lazyderef] Scope))
+                  (shen-jit.sealed? shen.deref) (shen-jit.sealed? shen.lazyderef)))
+
+(define deref-atom?
+  [intern S] Scope -> (and (string? S) (not (element? intern Scope)))
+  A Scope -> (and (literal? A) (not (element? A Scope))))
 
 (define cold
   Scope X -> (let Was (value *cold*)

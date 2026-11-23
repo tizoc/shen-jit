@@ -15,7 +15,7 @@
 (map (/. P (if (= (language) "Scheme") skip (eval-kl [shen-jit.primitive (hd P) (hd (tl P))])))
      [[shen-jit.fixnum? 1] [shen-jit.integer? 1] [shen-jit.symbol? 1] [shen-jit.vector? 1] [shen-jit.pvar 1] [shen-jit.pvar? 1] [shen-jit.pvar-offset 1]
       [shen-jit.hash 2] [shen-jit.filled-vector 2] [shen-jit.tagged? 2] [shen-jit.same? 2] [shen-jit.newpv 2] [shen-jit.gc 2] [shen-jit.append 2]
-      [shen-jit.decimal 2] [shen-jit.deref 3]
+      [shen-jit.decimal 2] [shen-jit.deref 3] [shen-jit.reserve-pvars 3] [shen-jit.gc-pvars 3]
       [shen-jit.pointer-kill 1] [shen-jit.pointer-owner 1] [shen-jit.pointer-kind 1] [shen-jit.pointer-address 1]
       [shen-jit.pointer-sized 2] [shen-jit.pointer-read-only 1] [shen-jit.pointer! 3] [shen-jit.bytes->pointer 3]])
 
@@ -233,7 +233,7 @@
   P N -> (append [captured value-of let-bound nested rethrown quiet inlined]
                  \\ It runs the call twice, and an overlapping copy does not give the same again, nor a
                  \\ new variable, which moves the offset on.
-                 (if (element? P [shen-jit.copy-bytes shen-jit.xxh64 shen-jit.newpv]) [] [loop])
+                 (if (element? P [shen-jit.copy-bytes shen-jit.xxh64 shen-jit.newpv shen-jit.reserve-pvars]) [] [loop])
                  (if (> N 0) [after-cons? after-number? after-string? after-vector? after-symbol?] [])
                  (if (d.boolean? P) [if-test if-not and-test loop-test] [])))
 
@@ -365,6 +365,11 @@
                                Index (d.filter-names [n0 n1 n2 n8 n-1 half r1 sym n9007199254740992] All)
                                Count (d.filter-names [n0 n1 n2 n-1 n2305843009213693951] All)
                             [To From Index Index Count])
+  P 3 All -> (let Valid (d.thunks [[pv2 [address-> [absvector 6] 1 2]]])
+              [(append Valid (d.filter-names [v0 v3 nv2b sym n0] All))
+               (d.filter-names [false true sym nil] All)
+               (d.filter-names [n0 n1 n2 n3 n7 n-1 half] All)])
+    where (element? P [shen-jit.reserve-pvars shen-jit.gc-pvars])
   _ N All -> (d.n-copies N All) where (<= N 2)
   _ N All -> (d.n-copies N (d.filter-names (d.few) All)))
 
@@ -422,6 +427,8 @@
 \\ A constant in each position, and in all of them at once for two arguments. The call is plain, and
 \\ again after a let, which may pass the constant on, and through an inlined function, which does.
 (define d.constants
+  P 3 Lists Literals Plain -> (d.constant-at P 3 2 Lists (d.filter-names [n0 n1 n2 n3 n7 n-1] Literals) Plain)
+      where (element? P [shen-jit.reserve-pvars shen-jit.gc-pvars])
   P N _ _ _ -> done where (> N 2)
   P 0 _ _ _ -> done
   P 1 Lists Literals Plain -> (d.constant-at P 1 0 Lists Literals Plain)
@@ -804,7 +811,8 @@
          shen-jit.append shen-jit.bit-and shen-jit.bit-or shen-jit.bit-xor shen-jit.shift-left shen-jit.shift-right
          shen-jit.rotate32 shen-jit.decimal shen-jit.u8 shen-jit.u16 shen-jit.u32 shen-jit.s32 shen-jit.s64 shen-jit.f32 shen-jit.f64
          shen-jit.pointer-sized shen-jit.apply shen-jit.quotient shen-jit.remainder]
-      [3 address-> shen-jit.struct-ref shen-jit.deref shen-jit.u8! shen-jit.u16! shen-jit.u32! shen-jit.s32! shen-jit.s64! shen-jit.f32!
+      [3 address-> shen-jit.struct-ref shen-jit.deref shen-jit.reserve-pvars shen-jit.gc-pvars
+         shen-jit.u8! shen-jit.u16! shen-jit.u32! shen-jit.s32! shen-jit.s64! shen-jit.f32!
          shen-jit.f64! shen-jit.bytes->string shen-jit.bytes->pointer shen-jit.pointer! shen-jit.word-op]
       [5 shen-jit.copy-bytes shen-jit.xxh64]])
 

@@ -17,6 +17,10 @@ All notable changes to this project are documented in this file. The format is b
 ### Changed
 
 - A built or saved program loads its own image whatever `SHEN_JIT_IMAGE` says, and an argument `--stage1` is its own.
+- Prolog unification allocates fewer pairs, and a clause reserves its variables together. A test
+  such as `(when (cons? X))`, or a comparison with an atom such as `(when (= X a))`, reads only the
+  outer value of X, where it copied the whole term first. It takes the same time for any term, and
+  ends on one that holds itself, where it overflowed the stack.
 
 ## [0.11] - 2026-11-22
 

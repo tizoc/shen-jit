@@ -116,6 +116,13 @@ A code object owns its bytecode, constants, frame size and compiled code. Closur
 code independently of named bindings, so replacing a binding does not disturb an old closure or a running
 frame.
 
+### Prolog clauses
+
+The unifier keeps the first variable it binds as the tail of its trail, so a single binding needs
+no pair. The lowerer reserves consecutive clause variables together and releases them together if
+the body returns `false`. Shape tests and equality with a literal atom read only the outer value of
+a dereferenced term, and leave what is below it as it is.
+
 ## Managed struct source extension
 
 `src/port/struct.shen` registers `defstruct` with the kernel's source reader before ordinary macro

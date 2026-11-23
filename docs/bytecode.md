@@ -149,6 +149,10 @@ plus:
   argument, and if that is false, moves the next offset of the bindings back by one, inline; the port's `shen.gc`
   uses it. `shen-jit.same?` (arity 2) tells whether two values are one and the same. The port's `shen.make-prolog-variable`, `shen.pvar?`,
   `shen.lazyderef`, `shen.deref`, `shen.bindv` and `shen.unwind` use them.
+- `(shen-jit.reserve-pvars B Unbound Count)` reserves Count consecutive offsets in the binding vector B,
+  fills them with Unbound and returns the first offset. If only some fit, it reserves those before
+  raising an error. `(shen-jit.gc-pvars B Result Count)` returns Result. When Result is `false`, it
+  subtracts Count from the current offset in B.
 - `shen-jit.foreign`: arity 2, `(shen-jit.foreign Name Desc)` makes Name a C function, as `lib/ffi.shen`
   describes it (`src/runtime/ffi.c`, and [ffi.md](ffi.md)), and returns Name. Calls go through a stub shared by all of them, so
   no instruction is new. `shen-jit.pointer?`, `shen-jit.pointer-kind`, `shen-jit.pointer-address`,
@@ -338,9 +342,13 @@ shifts, `bswap32`, `clz` and `ctz`. The others are calls to C.
   the functions of loops around it are calls there, as in a loop that is not in
   tail position. Typed code takes the value's kind, float or fixnum, from
   Body's and E's.
-- `(is X Y B L K (freeze E))` and `is!`, with L and K variables, numbers or `[]`: unification,
-  which returns the variables it bound or false, then E, and undoing them if E gives
-  false. No closure is made. E is then never a tail call.
+- `(is X Y B L K (freeze E))` and `is!`, with L and K variables, numbers or `[]`: unification
+  returns a trail or false. The first variable bound is the tail of the trail and each later
+  binding adds one pair. On success E runs in place, and if E returns false the trail is undone.
+  No closure is made. E is then never a tail call.
+- The Prolog compiler introduces clause variables with `(let X (shen.newpv B) (shen.gc B Body))`.
+  When two or more of these forms nest directly with distinct variable names and the same local B,
+  the lowerer emits one reservation and one cleanup.
 - `(shen.bind! X Y B (freeze E))`: the binding, E where the kernel's thaws the closure,
   and undoing the binding if E gives false. No closure is made. The Prolog compiler
   emits these for a variable met by a pattern.
@@ -356,6 +364,11 @@ shifts, `bswap32`, `clz` and `ctz`. The others are calls to C.
   names B, L or K, as they are evaluated inside those bindings.
 - `(= (shen.deref X B) (shen.deref Y B))`, with B and Y each a variable, a number or `[]`, which the Prolog compiler makes of
   `(when (= X Y))`: `(shen-jit.deref= X Y B)`, which dereferences as it compares and copies neither term.
+- `(P (shen.deref X B))`, with P one of `cons?`, `number?`, `string?`, `absvector?`, `empty?`, `atom?`, `symbol?`,
+  `boolean?` and `tuple?`, and `(= (shen.deref X B) A)` either way round, with A a literal atom or `(intern "...")`, as the
+  Prolog compiler makes of `(when (cons? X))` and `(when (= X a))`: `shen.lazyderef` in place of `shen.deref`, since they read
+  the outer value only. What is below it is neither copied nor visited, so a variable there that is outside B, which the
+  Prolog compiler never makes, raises no error.
 - `(let G (freeze E) Body)`, where Body uses G only in `(thaw G)` and as the last argument
   of `shen.bind!`: each use takes a copy of E, within a limit of 100 nodes for the copies.
   The Prolog compiler emits these for atom patterns, a closure made before the test. When E

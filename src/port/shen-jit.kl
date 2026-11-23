@@ -432,19 +432,23 @@ copy would not end."
           (= A B)))))
 
 "Unification, as the kernel's shen.lzy= and shen.lzy=! but with no closures: it
-binds what it can, keeping the variables it bound in a list, and returns that
-list, or undoes them and returns false. The continuation then runs once, and a
-false from it undoes them. Callers have dereferenced both terms. shen-jit.unify=!
-also checks that a variable does not occur in a pair it is to be bound to. Two
-lists are walked and not compared with =, which walks them too. With no occurs
-check a term can hold itself, and the kernel's = ends on two such terms that are
-equal: this ends on them too, as a cycle goes through a variable, and a variable
+binds what it can and returns a trail of the variables it bound, or undoes them and
+returns false. A trail is a list that ends in the first variable bound, so that one
+binding alone, which most unifications make, allocates nothing. The continuation
+then runs once, and a false from it undoes them. Callers have dereferenced both
+terms. shen-jit.unify=! also checks that a variable does not occur in a pair it is to
+be bound to. Two lists are walked and not compared with =, which walks them too. With
+no occurs check a term can hold itself, and the kernel's = ends on two such terms that
+are equal: this ends on them too, as a cycle goes through a variable, and a variable
 leads to one and the same object, which shen-jit.same? tells."
 
 (defun shen-jit.undo (Trail Bindings)
   (if (cons? Trail)
       (do (shen.unwind (hd Trail) Bindings false) (shen-jit.undo (tl Trail) Bindings))
-      false))
+      (if (shen-jit.pvar? Trail) (shen.unwind Trail Bindings false) false)))
+
+(defun shen-jit.trail-push (Var Trail)
+  (if (= Trail ()) Var (cons Var Trail)))
 
 (defun shen-jit.unify= (X Y Bindings Trail)
   (cond ((and (cons? X) (cons? Y))
@@ -454,16 +458,16 @@ leads to one and the same object, which shen-jit.same? tells."
                (let D (shen.lazyderef (hd Y) Bindings)
                  (let Heads (cond ((or (cons? A) (cons? D)) (shen-jit.unify= A D Bindings Trail))
                                   ((= A D) Trail)
-                                  ((shen-jit.pvar? A) (do (shen.bindv A D Bindings) (cons A Trail)))
-                                  ((shen-jit.pvar? D) (do (shen.bindv D A Bindings) (cons D Trail)))
+                                  ((shen-jit.pvar? A) (do (shen.bindv A D Bindings) (shen-jit.trail-push A Trail)))
+                                  ((shen-jit.pvar? D) (do (shen.bindv D A Bindings) (shen-jit.trail-push D Trail)))
                                   (true (shen-jit.undo Trail Bindings)))
                    (if (= Heads false)
                        false
                        (shen-jit.unify= (shen.lazyderef (tl X) Bindings) (shen.lazyderef (tl Y) Bindings)
                                         Bindings Heads)))))))
         ((= X Y) Trail)
-        ((shen-jit.pvar? X) (do (shen.bindv X Y Bindings) (cons X Trail)))
-        ((shen-jit.pvar? Y) (do (shen.bindv Y X Bindings) (cons Y Trail)))
+        ((shen-jit.pvar? X) (do (shen.bindv X Y Bindings) (shen-jit.trail-push X Trail)))
+        ((shen-jit.pvar? Y) (do (shen.bindv Y X Bindings) (shen-jit.trail-push Y Trail)))
         (true (shen-jit.undo Trail Bindings))))
 
 "The kernel's shen.occurs-check? on the term shen.deref builds, without building it."
@@ -487,8 +491,8 @@ leads to one and the same object, which shen-jit.same? tells."
                (let D (shen.lazyderef (hd Y) Bindings)
                  (let Heads (cond ((or (cons? A) (cons? D)) (shen-jit.unify=! A D Bindings Trail))
                                   ((= A D) Trail)
-                                  ((shen-jit.pvar? A) (do (shen.bindv A D Bindings) (cons A Trail)))
-                                  ((shen-jit.pvar? D) (do (shen.bindv D A Bindings) (cons D Trail)))
+                                  ((shen-jit.pvar? A) (do (shen.bindv A D Bindings) (shen-jit.trail-push A Trail)))
+                                  ((shen-jit.pvar? D) (do (shen.bindv D A Bindings) (shen-jit.trail-push D Trail)))
                                   (true (shen-jit.undo Trail Bindings)))
                    (if (= Heads false)
                        false
@@ -498,16 +502,16 @@ leads to one and the same object, which shen-jit.same? tells."
         ((shen-jit.pvar? X)
          (if (shen-jit.occurs? X Y Bindings)
              (shen-jit.undo Trail Bindings)
-             (do (shen.bindv X Y Bindings) (cons X Trail))))
+             (do (shen.bindv X Y Bindings) (shen-jit.trail-push X Trail))))
         ((shen-jit.pvar? Y)
          (if (shen-jit.occurs? Y X Bindings)
              (shen-jit.undo Trail Bindings)
-             (do (shen.bindv Y X Bindings) (cons Y Trail))))
+             (do (shen.bindv Y X Bindings) (shen-jit.trail-push Y Trail))))
         (true (shen-jit.undo Trail Bindings))))
 
 (defun shen-jit.unified (Trail Bindings C)
   (cond ((= Trail false) false)
-        ((cons? Trail)
+        ((not (= Trail ()))
          (let Result (thaw C)
            (if (= Result false) (shen-jit.undo Trail Bindings) Result)))
         (true (thaw C))))

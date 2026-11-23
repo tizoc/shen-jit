@@ -3332,13 +3332,23 @@ static void emit_prim(Emit *e, const uint32_t *p)
         break;
     }
     case P_NEWPV:
-        /* Element 1 of the bindings, which have two elements at least, is the
-           next offset N, a fixnum below their size: element N becomes the
-           second argument, element 1 N + 1, and the result the variable N.
-           Anything else takes the slow path. */
+    case P_RESERVE_PVARS: {
+        sljit_sw count = 1;
+        if (prim == P_RESERVE_PVARS) {
+            if (!fixnum_operand(e, arg[2]) || fixval(*operand_cell(e, arg[2])) < 2 ||
+                fixval(*operand_cell(e, arg[2])) > 16) {
+                slow = slow_path(e, SLOW_PRIM, sljit_emit_jump(c, SLJIT_JUMP));
+                break;
+            }
+            count = fixval(*operand_cell(e, arg[2]));
+        }
+        /* Element 1 holds the first offset. Check room for the whole batch
+           before storing. C preserves partial reservations on overflow, so
+           only a failing scalar call can jump straight to a quiet handler. */
         sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, arg[0]));
         slow = slow_path(e, SLOW_PRIM, tag_cmp(c, SLJIT_NOT_EQUAL, R2, R1, TAG_OBJECT));
-        slow->catch_label = quiet_catch(e); /* C raises wherever this fails */
+        if (prim == P_NEWPV)
+            slow->catch_label = quiet_catch(e);
         sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R1), -TAG_OBJECT);
         sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));
         slow->from[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM(T_VECTOR << 3 | TAG_HEADER));
@@ -3348,20 +3358,35 @@ static void emit_prim(Emit *e, const uint32_t *p)
         sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R0, IMM(3));
         slow->from[2] = sljit_emit_jump(c, SLJIT_NOT_ZERO);
         sljit_emit_op2(c, SLJIT_LSHR, R3, R0, IMM(2));
-        slow->from[3] = sljit_emit_cmp(c, SLJIT_GREATER_EQUAL, R3, R2);
+        if (prim == P_NEWPV) {
+            slow->from[3] = sljit_emit_cmp(c, SLJIT_GREATER_EQUAL, R3, R2);
+        } else {
+            sljit_emit_op2(c, SLJIT_ADD, R4, R3, IMM(count));
+            slow->from[3] = sljit_emit_cmp(c, SLJIT_GREATER, R4, R2);
+        }
         sljit_emit_op2(c, SLJIT_SHL, R3, R3, IMM(3));
         sljit_emit_op2(c, SLJIT_ADD, R2, R1, R3);
         sljit_emit_op1(c, SLJIT_MOV, R3, OPND(e, arg[1]));
-        sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R2), WORD - TAG_OBJECT, R3);
-        sljit_emit_op2(c, SLJIT_ADD, R3, R0, IMM(4));
+        for (sljit_sw i = 0; i < count; i++)
+            sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R2), (i + 1) * WORD - TAG_OBJECT, R3);
+        sljit_emit_op2(c, SLJIT_ADD, R3, R0, IMM(4 * count));
         sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R1), 2 * WORD - TAG_OBJECT, R3);
-        sljit_emit_op2(c, SLJIT_SHL, R0, R0, IMM(6));
-        sljit_emit_op2(c, SLJIT_OR, R0, R0, IMM(PVAR_TAG));
+        if (prim == P_NEWPV) {
+            sljit_emit_op2(c, SLJIT_SHL, R0, R0, IMM(6));
+            sljit_emit_op2(c, SLJIT_OR, R0, R0, IMM(PVAR_TAG));
+        }
         store_result(e, dst);
         break;
-    case P_GC: {
-        /* The second argument, and if it is false, element 1 of the bindings,
-           a fixnum, one less. Anything else takes the slow path. */
+    }
+    case P_GC:
+    case P_GC_PVARS: {
+        if (prim == P_GC_PVARS &&
+            (!fixnum_operand(e, arg[2]) || fixval(*operand_cell(e, arg[2])) < 1)) {
+            slow = slow_path(e, SLOW_PRIM, sljit_emit_jump(c, SLJIT_JUMP));
+            break;
+        }
+        sljit_sw count = prim == P_GC ? 4 : (sljit_sw)*operand_cell(e, arg[2]);
+        /* The second argument, and if it is false, lower the current ticket. */
         sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, arg[1]));
         struct sljit_jump *kept = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R0, IMM(V_FALSE));
         sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, arg[0]));
@@ -3372,7 +3397,7 @@ static void emit_prim(Emit *e, const uint32_t *p)
         sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R1), 2 * WORD - TAG_OBJECT);
         sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R2, IMM(3));
         slow->from[3] = sljit_emit_jump(c, SLJIT_NOT_ZERO);
-        sljit_emit_op2(c, SLJIT_SUB, R2, R2, IMM(4));
+        sljit_emit_op2(c, SLJIT_SUB, R2, R2, IMM(count));
         sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R1), 2 * WORD - TAG_OBJECT, R2);
         sljit_set_label(kept, sljit_emit_label(c));
         store_result(e, dst);

@@ -305,6 +305,7 @@ enum Prim {
     P_XXH64,     /* shen-jit.xxh64: the XXH64 of consecutive keys, stored as 8 bytes each */
     P_SAVE_CLOSED, /* shen-jit.save-closed: an executable of what a program can reach (closed.c) */
     P_PRINTER,   /* shen-jit.printer: the function that prints vectors with a tag, for closed programs */
+    P_RESERVE_PVARS, P_GC_PVARS, /* contiguous Prolog variable offsets and their cleanup */
     P_COUNT
 };
 #define PRIM_RAISE_COND P_COUNT
