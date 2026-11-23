@@ -185,7 +185,10 @@ def case(r):
 
 def same(want, got):
     if callable(want):
-        return want(got)
+        try:
+            return want(got)
+        except ValueError:
+            return False
     if isinstance(want, bool):
         return got == ('true' if want else 'false')
     if isinstance(want, float):
@@ -206,7 +209,7 @@ def main(shen, count=6000, seed=1):
                   (['of-string-base', a, 10], a)]
     with tempfile.TemporaryDirectory() as tmp:
         path = Path(tmp) / 'cases.txt'
-        path.write_text(''.join(' '.join(map(str, words)) + '\n' for words, _ in cases))
+        path.write_bytes(''.join(' '.join(map(str, words)) + '\n' for words, _ in cases).encode())  # no CR on Windows
         here = Path(__file__).resolve().parent
         p = subprocess.run([shen, 'eval', '-m', 'bignum', '-l', str(here / 'bignum_oracle.shen'),
                             '-e', f'(bignum-oracle.run "{path.as_posix()}")'], capture_output=True, text=True)
