@@ -5,6 +5,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.12] - 2026-11-23
+
 ### Added
 
 - `shen-jit build --closed` writes an executable of only what the program can reach, compiler left out: a runtime of
@@ -13,8 +15,12 @@ All notable changes to this project are documented in this file. The format is b
   `--keep FUNCTION` keeps more.
 - `(shen-jit.before-save F)` has a function of no arguments called before `shen-jit build` saves a program, as the
   grammar library does: a built program holds its grammars compiled, where each compiled at its first use.
-- The module `bignum`: bignums, over GMP, for typed code and untyped code. They are plain data, equal with `=`, printed
-  as their digits, saved in images and sent to isolates, and one that fits a fixnum is a fixnum.
+- `(shen-jit.target F)` and `(shen-jit.call-target F X)`, for a function's name sent to an isolate, and
+  `(shen-jit.unprepared Message)`, for what a library should have made in the builder, let a library's code be in a
+  closed program.
+- The module `bignum`: bignums, integers of any size, over GMP, whose library it needs, with arithmetic, powers, number
+  theory, bits and conversions, for typed code and untyped code. They are plain data, equal with `=`, printed as their
+  digits, saved in images and sent to isolates, and one that fits a fixnum is a fixnum.
 
 ### Changed
 
@@ -875,7 +881,8 @@ All notable changes to this project are documented in this file. The format is b
 
 - Initial release
 
-[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.11...HEAD
+[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.12...HEAD
+[0.12]: https://github.com/tizoc/shen-jit/compare/v0.11...v0.12
 [0.11]: https://github.com/tizoc/shen-jit/compare/v0.10...v0.11
 [0.10]: https://github.com/tizoc/shen-jit/compare/v0.9...v0.10
 [0.9]: https://github.com/tizoc/shen-jit/compare/v0.8...v0.9
