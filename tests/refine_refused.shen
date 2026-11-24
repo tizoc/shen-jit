@@ -66,9 +66,9 @@
 (define-checked at {X : fixnum --> fixnum} {requires (fx<= 0 X)} X -> X)
 (define-checked refused {fixnum --> fixnum} X -> (if (not (and (odd X) (fx< X 0))) (at X) 0))
 \\ next
-\\ Products of unknowns, and what wraps or overflows, are not worked out.
+\\ A product is of unknown sign, and what wraps or overflows is not worked out.
 (define-checked at {X : fixnum --> fixnum} {requires (fx<= 0 X)} X -> X)
-(define-checked refused {fixnum --> fixnum} X -> (at (fx* X X)))
+(define-checked refused {fixnum --> fixnum --> fixnum} X Y -> (at (fx* X Y)))
 \\ next
 \\ Refined types.
 (refine.type natural N where (fx<= 0 N))

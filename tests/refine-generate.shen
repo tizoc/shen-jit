@@ -16,12 +16,12 @@
 (define refine-generate.variable
   S -> (intern S))
 
-\\ Whether to write shifts, masks, remainders of any sign, element? and calls in a do, made or not, besides.
+\\ Whether to write shifts, masks, remainders of any sign, products of two, element? and calls in a do, made or not, besides.
 (set refine-generate.*wide* false)
 
 (define refine-generate.term
   Vs 0 -> (if (= 0 (smt-generate.below 3)) (smt-generate.between -3 3) (smt-generate.pick Vs))
-  Vs D -> (refine-generate.bits Vs (- D 1) (smt-generate.below 6)) where (and (value refine-generate.*wide*) (= 0 (smt-generate.below 2)))
+  Vs D -> (refine-generate.bits Vs (- D 1) (smt-generate.below 8)) where (and (value refine-generate.*wide*) (= 0 (smt-generate.below 2)))
   Vs D -> (refine-generate.term-of Vs (- D 1) (smt-generate.below 8)))
 
 (define refine-generate.term-of
@@ -38,7 +38,9 @@
   Vs D 2 -> [shen-jit.bit-and (refine-generate.term Vs D) (smt-generate.pick [1 3 7 2 (smt-generate.pick Vs)])]
   Vs D 3 -> [shen-jit.bit-and (smt-generate.pick [1 3 7]) (refine-generate.term Vs D)]
   Vs D 4 -> [(smt-generate.pick [shen-jit.bit-or shen-jit.bit-xor]) (refine-generate.term Vs D) (refine-generate.term Vs 0)]
-  Vs D 5 -> [fxremainder (refine-generate.term Vs D) (smt-generate.pick [-2 2 3 4])])
+  Vs D 5 -> [fxremainder (refine-generate.term Vs D) (smt-generate.pick [-2 2 3 4])]
+  Vs D 6 -> (let V (smt-generate.pick Vs) [(smt-generate.pick [fxquotient fxremainder]) (refine-generate.term Vs D) [fx+ 1 [fx* V V]]])
+  Vs D 7 -> [fx* (refine-generate.term Vs 0) (refine-generate.term Vs D)])
 
 (define refine-generate.condition
   Vs 0 -> [(smt-generate.pick [fx< fx<= fx> fx>= fx= =]) (refine-generate.term Vs 1) (smt-generate.pick Vs)]

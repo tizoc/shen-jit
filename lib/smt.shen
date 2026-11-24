@@ -15,7 +15,7 @@
   (use shen-jit)
   (shadow floor gcd product)
   (import struct defstruct)
-  (export budget check check-model check-proof formula integer model proof reason result sat? t term truth unknown?
+  (export budget check check-model check-within check-proof formula integer model proof reason result sat? t term truth unknown?
     unsat? valid?)
 
 \\ What check gives. Typed code sees one type, result, and the functions below.
@@ -128,7 +128,10 @@
 
 \\ How many sums smt.check may make and cases it may try before it answers that it does not know.
 (define budget
-  N -> (set *budget* N) where (and (shen-jit.fixnum? N) (> N 0))
+  N -> (set *budget* (some-budget N)))
+
+(define some-budget
+  N -> N where (and (shen-jit.fixnum? N) (> N 0))
   N -> (error "smt: a budget of ~S" N))
 
 (define spend
@@ -425,9 +428,13 @@
 \\ What it is for.
 
 (define check
-  Fs -> (let Ns (names-of Fs)
-             _ (set *left* (value *budget*))
-          (trap-error (answer (search (read-facts Fs Ns) []) Fs Ns) (/. E (gave-up (error-to-string E))))))
+  Fs -> (check-within (value *budget*) Fs))
+
+\\ The same with a budget of its own.
+(define check-within
+  Budget Fs -> (let Ns (names-of Fs)
+                    _ (set *left* (some-budget Budget))
+                 (trap-error (answer (search (read-facts Fs Ns) []) Fs Ns) (/. E (gave-up (error-to-string E))))))
 
 (define gave-up
   "integer overflow" -> (unknown.make "integer overflow")
@@ -570,6 +577,7 @@
   [Op | Ts] : (- term);)
 
 (declare check [[list formula] --> result])
+(declare check-within [fixnum --> [[list formula] --> result]])
 (declare valid? [[list formula] --> [formula --> boolean]])
 (declare check-model [[list formula] --> [model --> boolean]])
 (declare check-proof [[list formula] --> [proof --> boolean]])

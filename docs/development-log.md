@@ -6518,6 +6518,30 @@ The two facts that conditions on the network code lacked.
   layout. The sizes of two layouts, one in a namespace, against what their functions give. As this was first built, 10,000 generated functions, with nothing broken in 954,747 calls, and 16 bugs planted, all
   caught.
 
+### Products of unknowns in conditions (2026-11-24, Apple M3 Max at load 2 to 4)
+
+- **Why:** of eleven programs written as examples would be, those that index by row and column, or have pages of any size, were refused: `smt` is linear, and a product of two unknowns was an
+  unknown of its own.
+- **Built:** 142 lines of code in `lib/refine-prove.shen`, and `smt.check-within`, a check with a budget of its own. `smt` stays linear, and proves what it is given as before. A product is multiplied out into
+  products of names, each an unknown that is the same however it is written. A square is from 0.
+- **Facts are added as a model breaks them.** `smt` is asked without any. If it finds a model in which a product is not as its factors' order makes it, those facts that the model breaks are added and it is asked again,
+  up to 12 times. They are implications, such as that `F*R + R <= G*R` where F is below G and R from 0, for G another product's factor, 0, or a number that F is compared with, in both
+  directions and for R from 0 and to 0. If none is broken and the model still does not multiply, what a product is where a factor has the model's value. So a function that has no products, or whose proof needs
+  nothing of them, costs what it did, and the example in an error is one: where the model in the end is not, the error says that little is known.
+- **Cases that cannot be are dropped first.** Each guard is asked about by itself, with a budget of 300 sums, and what is left is mostly one case, which the search need not try. Those of one case are added before the others, of which two at a time.
+  With every case kept, eight products from 0 and a fourth dimension ran out of budget. If none can be, that ends the rounds, as the outside review said: 129 over the test file, against 150. `smt.check-within` took any budget, one below 0 as without end. After 200 cases in one answer, each is kept, as
+  each is asked with all that is known: ten comparisons of products where a condition does not follow took 9.2 s, and thirty
+  over a minute, which the fourth review found; ten take 0.3 s now, and sixty 0.8.
+- **Rejected: all the facts from the start.** A three-dimensional index has 51 formulas then, and runs out of budget at once. **Equal arguments for products:** a pure function gives the same for the same, and each two products had a clause for
+  it, which the order of their factors says already: 16 hard functions took 6.9 s with them and 1.4 without, most of which is starting. **Every fact at once:** 11.5 s against 2.2 for nine with products of many names.
+- **What it proves:** an index by row and column in 2 rounds, by three dimensions in 3, and by four in 5; a stride, four bytes a pixel, a loop over rows; a grid that knows its size; pages, how many there are, and the column of an index, by a quotient and a
+  remainder by a variable, whose facts were there already and had a product in them; areas, volumes and squared distances. Each typechecks in under 10 ms but for four dimensions, 40. The example of an area that does not fit is 4096 by 4096.
+- **Not proved:** that A² + B² is at least 2AB, and what else takes the sign of a sum of products. An index whose products are of degree 4 has a fact only where its parts are written.
+- **Cost:** thirty products in one condition that fails take 1.3 s, and of 600 generated functions with products in quotients and remainders the slowest took 1.2.
+- **Checked:** each fact against 11 numbers for each of three, and 10,000 conditions made up over three unknowns, 2,584 of them proved, each so for every value from -4 to 4. As this was first built, 2,042 generated functions with products, called 602,397 times, and nothing broken, and
+  49 bugs planted, of which the suite caught 45, the others changing only how long it takes. Where a product would leave the fixnums, the operation raises, and nothing after it runs: the proof is of what is left.
+- **Not run:** Linux, Windows and x86-64, where CI runs the suite.
+
 ### What modules and typed programs cost outside typed code (2026-11-17, Apple M3 Max, against main)
 
 - **Image and startup.** The image is 1,339,584 bytes against 1,179,472 (+14%), most of it the lowerer, whose

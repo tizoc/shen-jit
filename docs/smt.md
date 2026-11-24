@@ -39,6 +39,7 @@ namespace, names are qualified as any symbol is, so strings are the simpler ones
 | Function | What it gives |
 | --- | --- |
 | `(smt.check Formulas)` | What becomes of them together: a result that is one of the three below |
+| `(smt.check-within N Formulas)` | The same, with a budget of N |
 | `(smt.valid? Assumptions Goal)` | Whether the goal holds wherever the assumptions do: `true` only with a proof |
 | `(smt.sat? R)`, `(smt.model R)` | Whether they can hold, and then a model |
 | `(smt.unsat? R)`, `(smt.proof R)` | Whether they cannot, and then a proof |

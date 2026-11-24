@@ -140,7 +140,7 @@ gives one of those types to other values breaks that.
 
 | Of | What is read |
 | --- | --- |
-| Fixnums | `fx<`, `fx<=`, `fx>`, `fx>=`, `fx=` and `=`, of terms made with `fx+`, `fx-` and `fx*` by a constant, and of quotients, remainders, shifts and masks by one |
+| Fixnums | `fx<`, `fx<=`, `fx>`, `fx>=`, `fx=` and `=`, of terms made with `fx+`, `fx-` and `fx*`, of quotients and remainders, and of shifts and masks by a constant |
 | Numbers and floats | `<`, `<=`, `>`, `>=`, `fl<` and the rest, and `=`, by their order |
 | Symbols and strings | `=`, with each other and with constants, which are all different |
 | Any that `=` is read of | `element?` of a list that is written, as in `(element? Mode [read write])`, and `=` of lists and pairs that are |
@@ -149,8 +149,8 @@ gives one of those types to other values breaks that.
 | Pairs and structs | What `fst` and `snd`, and the reader of a field that does not change, give of one that was made |
 | Anything | What a pure function gives, as itself: a Boolean one is true or false, the same each time |
 
-`and`, `or`, `not` and `if` combine them, a Boolean variable is one, and `=` of two Booleans is too. Any other term, such
-as a product of two variables, is something unknown. What cannot be read proves nothing.
+`and`, `or`, `not` and `if` combine them, a Boolean variable is one, and `=` of two Booleans is too. Any other term is
+something unknown. What cannot be read proves nothing.
 
 - **A predicate needs no meaning.** `(refine.pure sorted?)` says that `sorted?` gives the same for the same list. A
   test of it, or a promise, then proves a condition that asks for it, of the same list. A function that a pure one is
@@ -162,6 +162,12 @@ as a product of two variables, is something unknown. What cannot be read proves 
   too, by `(fx= R (fx+ I N))`. Functions whose promises name each other in a circle are not read so.
 - **Fixnums are integers here,** as an operation whose result is no fixnum raises: one that a program has is the
   integer that the proof was about. So are numbers that are always integers, as a `length` is.
+- **A product of two unknowns is known by its factors' order.** It is multiplied out, so that `(fx* (fx+ Y 1) W)` is
+  `(fx+ (fx* Y W) W)`. Then it is compared with another that has a factor in common, and with that factor times 0 or a
+  number that the other factor is compared with: where W is from 0 and Y below H, `(fx* Y W)` is at least W below
+  `(fx* H W)`. A square is from 0. This proves indices by row and column, pages of any size, areas, and what a quotient by
+  a variable gives. It does not prove that the squares of two unknowns come to at least twice their product, and where
+  it has no answer the error says so.
 - **Bits are arithmetic.** A shift to the right by a constant of up to 32 is a quotient rounded down, a mask of up to
   32 ones is the remainder that goes with it, and a shift to the left is a product where what is shifted fits in 24
   bits. Of `shen-jit.bit-or` and `shen-jit.bit-xor`, what is known is that they are no more than the sum, for numbers
@@ -347,6 +353,40 @@ in bytes for the number of its keys:
 ```text
 type error in rule 1 of index-of: search needs (fx<= (fx* 2 (shen-jit.bytes-length Table)) (shen-jit.bytes-length Table)),
 which may not be so, as if (shen-jit.bytes-length Table) is 1
+```
+
+### A cell of a grid
+
+```shen
+(define-checked byte-in
+  {B : buffer.storage --> I : fixnum --> fixnum}
+  {requires (fx<= 0 I) (fx< I (shen-jit.bytes-length B))}
+  B I -> (shen-jit.u8 B I))
+
+(defstruct grid (store : buffer.storage) (width : fixnum) (height : fixnum))
+
+(refine.type good-grid G : grid where
+  (and (fx<= 0 (grid.width G))
+       (fx<= 0 (grid.height G))
+       (fx<= (fx* (grid.width G) (grid.height G)) (shen-jit.bytes-length (grid.store G)))))
+
+(define-checked new-grid
+  {Width : fixnum --> Height : fixnum --> good-grid}
+  {requires (fx<= 0 Width) (fx<= 0 Height)}
+  Width Height -> (grid.make (shen-jit.bytes (fx* Width Height)) Width Height))
+
+(define-checked cell
+  {G : good-grid --> X : fixnum --> Y : fixnum --> fixnum}
+  {requires (fx<= 0 X) (fx< X (grid.width G)) (fx<= 0 Y) (fx< Y (grid.height G))}
+  G X Y -> (byte-in (grid.store G) (fx+ (fx* Y (grid.width G)) X)))
+```
+
+That a cell is inside follows from the order of two products: a row that is below the height ends where the next one
+starts, or before. Were the row to be as long as the grid is high:
+
+```text
+type error in rule 1 of cell: byte-in needs (fx< (fx+ (fx* Y (grid.height G)) X) (shen-jit.bytes-length (grid.store G))),
+which may not be so, as if (grid.height G) is 2 and Y is 1 and (shen-jit.bytes-length (grid.store G)) is 2 and X is 0
 ```
 
 ### A date that exists

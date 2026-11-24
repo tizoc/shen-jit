@@ -24,4 +24,4 @@
   {--> string}
   -> (make-string "~A / ~A ~A ~A ~A" (smt-typed.describe (smt.check (smt-typed.pigeons))) (smt-typed.in-range? "i" 7)
                   (smt-typed.checked? (smt-typed.pigeons)) (smt-typed.checked? [[< x 1] [> x 0]])
-                  (smt-typed.describe (smt.check [false]))))
+                  (smt-typed.describe (smt.check-within 10 [false]))))

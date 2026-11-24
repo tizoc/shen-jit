@@ -4,7 +4,7 @@
 (refine.type span P : (fixnum * fixnum) where (fx<= (fst P) (snd P)))
 (refine.type (nonempty A) Xs : (list A) where (not (empty? Xs)))
 (refine.type name S : string where (not (= S "")))
-(refine.type square N where (fx<= 0 (fx* N N)))
+(refine.type square N where (fx<= 1 (fx* N N)))
 (define natural->fixnum {natural --> fixnum} N -> N)
 (define octet->natural {octet --> natural} N -> N)
 (define digit->fixnum {digit --> fixnum} N -> N)
@@ -40,7 +40,7 @@
 (define f {fixnum --> box} X -> (box.make X))
 \\ says type error in rule 1 of f: name->string needs (not (= S "")), which may not be so, as if S is ""
 (define f {string --> string} S -> (name->string S))
-\\ says type error in rule 1 of f: square->fixnum needs (fx<= 0 (fx* X X)), which may not be so, as if (fx* X X) is -1
+\\ says type error in rule 1 of f: square->fixnum needs (fx<= 1 (fx* X X)), which may not be so, as if X is 0
 (define f {fixnum --> fixnum} X -> (square->fixnum X))
 \\ says type error in rule 1 of f: f promises (fx<= 0 (fx- X 1)), which may not be so, as if X is 0
 (define f {fixnum --> natural} X -> (if (fx> X 5) X (fx- X 1)))

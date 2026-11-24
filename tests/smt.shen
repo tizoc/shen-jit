@@ -107,6 +107,13 @@
                _ (smt.budget 20000)
             R)))
 (smt-test.is unsat [[< [* 3 x] [* 2 y]] [< [* 3 y] [* 2 z]] [< [* 3 z] [* 2 x]] [> x 0]])
+(smt-test.check "what is no budget" ["smt: a budget of -1" "smt: a budget of 0" "smt: a budget of 1.5" "smt: a budget of -1"]
+  (freeze (map (/. F (trap-error (thaw F) (/. E (error-to-string E))))
+               [(freeze (smt.check-within -1 [[< x 1]])) (freeze (smt.check-within 0 [[< x 1]])) (freeze (smt.check-within 1.5 [[< x 1]]))
+                (freeze (smt.budget -1))])))
+(smt-test.check "a budget of its own" [unsat unsat "out of budget"]
+  (freeze (map (/. N (smt-test.kind (smt.check-within N [[< [* 3 x] [* 2 y]] [< [* 3 y] [* 2 z]] [< [* 3 z] [* 2 x]] [> x 0]]))) [20000 200 2])))
+(smt-test.is unsat [[< [* 3 x] [* 2 y]] [< [* 3 y] [* 2 z]] [< [* 3 z] [* 2 x]] [> x 0]])
 
 (smt-test.refused "smt: (* x y) is not a linear term" [[< [* x y] 1]])
 (smt-test.refused "smt: (f x) is not a linear term" [[< [f x] 1]])

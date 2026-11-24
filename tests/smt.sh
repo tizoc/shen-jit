@@ -58,22 +58,23 @@ awk '/^## /{on = /^## Examples$/} on && /^```/{kind = (kind == "") ? substr($0, 
 awk '/^## /{on = /^## Examples$/} on && /^```/{kind = (kind == "") ? substr($0, 4) : ""; if (kind == "") print ""; next} kind == "text" {printf "%s ", $0}' docs/refine.md | sed -e 's/ $//' -e '/^$/d' > "$dir/said"
 "$SHEN" eval -m refine -e '(tc +)' -l "$dir/examples.shen" -e '(tc -)' \
     -e '(define said-by F -> (trap-error (thaw F) (/. E (error-to-string E))))' \
-    -e '(output "~A ~A ~S ~A ~S ~A ~S ~A ~A~%" (index-of (shen-jit.string->bytes (@s (n->string 0) (n->string 3) (n->string 1) (n->string 4))) 260) (index-of (shen-jit.string->bytes "") 1) (read-date 2024 2 29) (said-by (freeze (read-date 2023 2 29))) (pay (account.make ann 10) (account.make bob 5) 7) (said-by (freeze (day 2023 4 31))) (greet) (summary []) (summary [1 2 6]))' \
+    -e '(output "~A ~A ~S ~A ~S ~A ~S ~A ~A ~A ~A~%" (index-of (shen-jit.string->bytes (@s (n->string 0) (n->string 3) (n->string 1) (n->string 4))) 260) (index-of (shen-jit.string->bytes "") 1) (read-date 2024 2 29) (said-by (freeze (read-date 2023 2 29))) (pay (account.make ann 10) (account.make bob 5) 7) (said-by (freeze (day 2023 4 31))) (greet) (summary []) (summary [1 2 6]) (cell (new-grid 3 2) 2 1) (said-by (freeze (cell (new-grid 3 2) 3 0))))' \
     > "$dir/examples.out" 2>&1
-grep -qxF '1 -1 #<date year: 2024 month: 2 day: 29> there is no 2023-2-29 (@p #<account owner: ann balance: 3> #<account owner: bob balance: 12>) day: not so: (fx<= D (days-in Y M)) #<link state: down sent: 7> nothing 3' "$dir/examples.out"
+grep -qxF '1 -1 #<date year: 2024 month: 2 day: 29> there is no 2023-2-29 (@p #<account owner: ann balance: 3> #<account owner: bob balance: 12>) day: not so: (fx<= D (days-in Y M)) #<link state: down sent: 7> nothing 3 0 cell: not so: (fx< X (grid.width G))' "$dir/examples.out"
 for change in 's/0 (fxquotient (shen-jit.bytes-length Table) 2)/0 (shen-jit.bytes-length Table)/' '/^(refine.pure days-in)$/d' \
     's/(if (and (fx<= 0 N) (fx<= N (account.balance A)))/(if (fx<= N (account.balance A))/' 's/(close-link (send L 2))/(send (close-link L) 2)/' \
     's/^  \[\] -> "nothing"$//' 's/(day Y M D)$/(day Y D M)/' 's/(@p (withdraw A N) (deposit B N))/(@p (withdraw A N) B)/' \
-    's/(fxquotient (fx+ Low High) 2)/(fxquotient (fx+ Low (fx+ High 1)) 2)/' 's/(fx<= 1 D) (fx<= D (days-in Y M)))$/(fx<= D 31))/'; do
+    's/(fxquotient (fx+ Low High) 2)/(fxquotient (fx+ Low (fx+ High 1)) 2)/' 's/(fx<= 1 D) (fx<= D (days-in Y M)))$/(fx<= D 31))/' \
+    's/(fx\* Y (grid.width G))/(fx* Y (grid.height G))/'; do
     sed "$change" "$dir/examples.shen" > "$dir/broken.shen"
     if cmp -s "$dir/examples.shen" "$dir/broken.shen"; then echo "no change: $change"; exit 1; fi
     if "$SHEN" eval -m refine -e '(tc +)' -l "$dir/broken.shen" > "$dir/broken.out" 2>&1; then echo "accepted: $change"; exit 1; fi
     sed -n 's/^.*uncaught error: //p' "$dir/broken.out" >> "$dir/errors"
 done
-test "$(wc -l < "$dir/errors")" -eq 9
-test "$(wc -l < "$dir/said")" -eq 5
+test "$(wc -l < "$dir/errors")" -eq 10
+test "$(wc -l < "$dir/said")" -eq 6
 while read -r error; do grep -qxF "$error" "$dir/errors" || { echo "not said: $error"; exit 1; }; done < "$dir/said"
-test "$(grep -c 'may not be so' "$dir/errors")" -eq 9
+test "$(grep -c 'may not be so' "$dir/errors")" -eq 10
 
 # An error says where it is, its rule too if refine makes the rules, and who needs or promises what.
 says() {
@@ -215,6 +216,8 @@ for n in '1 promises: promises promises (fx= X 0)' '2 uses: from-0 needs (fx<= 0
     if "$SHEN" eval -e '(tc +)' -l "$dir/any.shen" -e '(tc -)' -m refine -e '(tc +)' -l "$dir/any${n%% *}.shen" > "$dir/any.out" 2>&1; then echo "accepted: $n"; exit 1; fi
     grep -q "type error in rule 1 of ${n#* }, which may not be so" "$dir/any.out"
 done
+# A product of unknowns is as its factors are ordered.
+cases tests/refine_products.shen
 # What an independent review found to be believed, refused or never answered, and should not be.
 cases tests/refine_sound.shen
 

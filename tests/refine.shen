@@ -150,6 +150,65 @@
 (define refine-test.beside
   -> (append [254 256 257 65534 65536 65537 4294967294 4294967296] (refine-test.numbers)))
 
+\\ What is so of products, of each of these as two factors of the first and one of the second.
+(define refine-test.ordered?
+  F G R -> (let M (* F R) T (* G R)
+                Model [[f F] [g G] [r R] [m M] [t T]]
+             (and (smt.check-model (refine.ordered f g r m t) Model)
+                  (smt.check-model (refine.ordered f G r m [* G r]) Model)
+                  (smt.check-model (refine.at-value m f F r) Model))))
+
+(refine-test.check "products" true
+  (freeze (let Ns [0 1 -1 2 -2 3 -5 7 100 -100 16777216]
+            (refine-test.every? (/. F (refine-test.every? (/. G (refine-test.every? (/. R (refine-test.ordered? F G R)) Ns)) Ns)) Ns))))
+(refine-test.check "numbers to order them against" [[5 -3] [] 1 0]
+  (freeze [(refine.compared-with x [[and [> x -3] [or [< 5 x] [<= x 2305843009213693951]]] [< x y] [<= [+ x 1] 9]] [])
+           (refine.compared-with x [[<= y 4]] []) (length (refine.at-value m f 5 r)) (length (refine.at-value m f 16777217 r))]))
+
+(define refine-test.named
+  [F G R M T] -> [[f F] [g G] [r R] [m M] [t T]])
+
+(refine-test.check "what breaks them" [true true true true true true true]
+  (freeze (map (/. Model (not (smt.check-model (refine.ordered f g r m t) (refine-test.named Model))))
+               [[1 2 3 6 3] [2 1 3 3 6] [1 2 3 4 6] [2 1 3 6 4] [1 2 -3 -7 -6] [2 1 -3 -6 -7] [2 2 3 6 7]])))
+
+\\ Conditions with products of two and three, made up, and what is proved of them tried on every value of a box.
+(define refine-test.product-term
+  0 -> (smt-generate.pick [x y z x y z (smt-generate.between -3 3)])
+  D -> [(smt-generate.pick [fx+ fx- fx* fx*]) (refine-test.product-term (smt-generate.below D)) (refine-test.product-term (- D 1))])
+
+(define refine-test.product-condition
+  -> [(smt-generate.pick [fx<= fx< fx>= fx> fx=]) (refine-test.product-term (smt-generate.below 3)) (refine-test.product-term (smt-generate.below 2))])
+
+(define refine-test.value-at
+  N _ -> N where (number? N)
+  [fx+ A B] E -> (+ (refine-test.value-at A E) (refine-test.value-at B E))
+  [fx- A B] E -> (- (refine-test.value-at A E) (refine-test.value-at B E))
+  [fx* A B] E -> (* (refine-test.value-at A E) (refine-test.value-at B E))
+  [Op A B] E -> ((function Op) (refine-test.value-at A E) (refine-test.value-at B E))
+  X E -> (tl (assoc X E)))
+
+(set refine-test.*box*
+  (let Ns [0 1 -1 2 -2 3 -3]
+    (mapcan (/. X (mapcan (/. Y (map (/. Z [[x | X] [y | Y] [z | Z]]) Ns)) Ns)) Ns)))
+
+(define refine-test.so?
+  Guards Goal E -> (or (not (refine-test.every? (/. G (refine-test.value-at G E)) Guards)) (refine-test.value-at Goal E)))
+
+\\ How many of N are proved, each so everywhere in the box, or what is proved and is not.
+(define refine-test.proved
+  0 Proved -> Proved
+  N Proved -> (let Guards (map (/. I (refine-test.product-condition)) (smt-generate.pick [[1] [1 2] [1 2 3] [1 2 3 4]]))
+                   Goal (refine-test.product-condition)
+                (if (not (refine-test.proves? Guards Goal))
+                    (refine-test.proved (- N 1) Proved)
+                    (if (refine-test.every? (/. E (refine-test.so? Guards Goal E)) (value refine-test.*box*))
+                        (refine-test.proved (- N 1) (+ Proved 1))
+                        [Guards Goal]))))
+
+(refine-test.check "products that are made up" true
+  (freeze (let Proved (refine-test.proved 150 0) (and (number? Proved) (> Proved 10)))))
+
 (refine-test.check "widths" [true true true] (freeze (map (fn refine-test.widths?) [shen-jit.bit-or shen-jit.bit-xor shen-jit.bit-and])))
 
 (refine-test.check "shifts and masks by constants" [true true true true [true true true true true] false]

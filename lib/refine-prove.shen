@@ -24,20 +24,23 @@
 (set *always* [])
 (set *values* [])
 (set *names* [])
+(set *products* [])
 (set *described* [])
 (set *numbers* [])
 (set *constants* [])
 (set *replaced* 0)
 (set *depth* 0)
+(set *large* false)
 (set *hypotheses* [])
 (set *types* [])
 
 (define known-of
-  -> [*facts* *always* *names* *described* *numbers* *constants*])
+  -> [*facts* *always* *names* *products* *described* *numbers* *constants*])
 
 (define reset
   -> (do (map (/. X (set X [])) [*values* *hypotheses* *types* | (known-of)])
-         (set *depth* 0)))
+         (set *depth* 0)
+         (set *large* false)))
 
 \\ Whether a term is so short that it can be wherever it is meant. One that is not is named, as what doubles would
 \\ have no end.
@@ -297,6 +300,10 @@
   [F X] -> (simplify-struct (struct-operation F) X [F X])
   X -> X)
 
+\\ Such that what two make is a float to the last digit, and that the solver's sums do not leave the fixnums.
+(define small?
+  N -> (and (shen-jit.fixnum? N) (<= N 16777216) (>= N -16777216)))
+
 (define bits?
   Op -> (element? Op [shen-jit.bit-and shen-jit.bit-or shen-jit.bit-xor shen-jit.shift-left shen-jit.shift-right fxquotient fxremainder]))
 
@@ -391,17 +398,57 @@
 (define constant?
   X -> (or (empty? X) (string? X) (number? X) (boolean? X) (and (symbol? X) (not (variable? X)))))
 
-\\ As terms of smt's. A product is linear if one side is constant.
+\\ As terms of smt's. A product is linear if one side is constant, and otherwise of unknowns.
 (define integer
   N -> N where (shen-jit.fixnum? N)
   [Op A B] -> [+ (integer A) (integer B)] where (element? Op [+ fx+])
   [Op A B] -> [- (integer A) (integer B)] where (element? Op [- fx-])
-  [Op A B] -> (product-of (integer A) (integer B) [Op A B]) where (element? Op [* fx*])
+  [Op A B] -> (multiply (integer A) (integer B) [Op A B]) where (element? Op [* fx*])
   X -> (name integer X))
 
+\\ It is multiplied out, if that does not make too much of it. A square is from 0.
+(define multiply
+  A B X -> (do (set *large* true) (name integer X)) where (> (* (size A) (size B)) 32)
+  A A _ -> (let S (product-of A A)
+                _ (set *always* [[<= 0 S] | (value *always*)])
+             S)
+  A B _ -> (product-of A B))
+
+(define size
+  [_ A B] -> (+ (size A) (size B))
+  _ -> 1)
+
 (define product-of
-  A B X -> [* A B] where (or (linear-constant? A) (linear-constant? B))
-  _ _ X -> (name integer X))
+  A B -> [* A B] where (or (linear-constant? A) (linear-constant? B))
+  [* A C] B -> (if (linear-constant? A) [* A (product-of C B)] [* C (product-of A B)])
+  [Op A C] B -> [Op (product-of A B) (product-of C B)]
+  A B -> (product-of B A) where (cons? B)
+  X Y -> (product-named (append (factors X) (factors Y)) (value *products*)))
+
+\\ A product of unknowns is an unknown, the same however it is written: [Name | Factors], each in *products*.
+(define factors
+  X -> (let P (assoc X (value *products*)) (if (empty? P) [X] (tl P))))
+
+(define product-named
+  [X] _ -> X
+  Fs [] -> (let Name (name integer (product-term Fs))
+                _ (set *products* [[Name | Fs] | (value *products*)])
+             Name)
+  Fs [[Name | Gs] | _] -> Name where (same-factors? Fs Gs)
+  Fs [_ | Ps] -> (product-named Fs Ps))
+
+(define product-term
+  [X] -> (term-named X (value *names*))
+  [X | Xs] -> [fx* (term-named X (value *names*)) (product-term Xs)])
+
+(define term-named
+  Name [[[_ | X] Name] | _] -> X
+  Name [_ | Ns] -> (term-named Name Ns))
+
+(define same-factors?
+  [] [] -> true
+  [F | Fs] Gs -> (and (element? F Gs) (same-factors? Fs (without F Gs)))
+  _ _ -> false)
 
 (define linear-constant?
   N -> true where (shen-jit.fixnum? N)
@@ -454,7 +501,7 @@
 
 (define congruences
   Kind [F | Args] Name Others -> (congruent-to Kind F Args Name Others)
-    where (and (element? Kind [integer same true]) (symbol? F) (not (element? F [valued if])))
+    where (and (element? Kind [integer same true]) (symbol? F) (not (element? F [valued if fx*])))
   _ _ _ _ -> [])
 
 (define congruent-to
@@ -587,6 +634,149 @@
   Kind [[[Kind | _] _] | Ns] -> (+ 1 (count-names Kind Ns))
   Kind [_ | Ns] -> (count-names Kind Ns))
 
+\\ What is so of products of unknowns. M is F times R, and T is G times R. The first say less, and have fewer cases.
+(define ordered
+  F G R M T -> [[or [not [<= F G]] [not [<= 0 R]] [<= M T]]
+                [or [not [<= G F]] [not [<= 0 R]] [<= T M]]
+                [or [not [< F G]] [not [<= 0 R]] [<= [+ M R] T]]
+                [or [not [< G F]] [not [<= 0 R]] [<= [+ T R] M]]
+                [or [not [< F G]] [not [<= R 0]] [>= [+ M R] T]]
+                [or [not [< G F]] [not [<= R 0]] [>= [+ T R] M]]
+                [or [not [= F G]] [= M T]]])
+
+\\ Of each product, for each of its factors that leaves one or a product that has a name, against that many times 0,
+\\ the numbers the factor is compared with, and the factors of the other products that the rest is in.
+(define products-ordered
+  _ [] -> []
+  Fs [[M | Xs] | Ps] -> (append (mapcan (/. F (product-ordered Fs M F (without F Xs) Ps)) (distinct Xs)) (products-ordered Fs Ps)))
+
+(define product-ordered
+  Fs M F Rest Ps -> (let R (rest-name Rest (value *products*))
+                      (if (= R [])
+                          []
+                          (append (ordered-by F R M Fs)
+                                  (if (= Rest [R]) [] (ordered-by R F M Fs))
+                                  (mapcan (/. P (ordered-with F M R Rest P)) Ps)))))
+
+(define ordered-by
+  F R M Fs -> (mapcan (/. N (ordered F N R M [* N R])) (adjoin 0 (compared-with F Fs []))))
+
+(define rest-name
+  [X] _ -> X
+  _ [] -> []
+  Xs [[M | Ys] | _] -> M where (same-factors? Xs Ys)
+  Xs [_ | Ps] -> (rest-name Xs Ps))
+
+(define ordered-with
+  F M R Rest [T | Xs] -> (mapcan (/. G (if (same-factors? Rest (without G Xs)) (ordered F G R M T) [])) (distinct Xs)))
+
+(define distinct
+  [] -> []
+  [X | Xs] -> (adjoin X (distinct Xs)))
+
+(define compared-with
+  X [Op X N] Ns -> (if (small? N) (adjoin N Ns) Ns) where (element? Op [< > <= >= =])
+  X [Op N X] Ns -> (if (small? N) (adjoin N Ns) Ns) where (element? Op [< > <= >= =])
+  X [F | Fs] Ns -> (compared-with X Fs (compared-with X F Ns))
+  _ _ Ns -> Ns)
+
+\\ The answer, with what is so of products for as long as a model breaks some of it.
+(define decide
+  Fs -> (let R (smt.check Fs) (if (empty? (value *products*)) R (do (set *tries* 0) (decided Fs R 12)))))
+
+(define decided
+  _ R 0 -> R
+  Fs R N -> (if (smt.sat? R) (without-broken Fs R (broken Fs (completed (smt.model R))) N) R))
+
+(define without-broken
+  _ R [] _ -> R
+  Fs _ New N -> (let All (append (simplest (possible-each New Fs [])) Fs)
+                  (decided All (smt.check All) (- N 1))))
+
+\\ Each without the cases that cannot be, which the search would try every time.
+(define possible-each
+  [] _ _ -> []
+  [[or | Cases] | Fs] Known Tried -> (let Now (tried Cases Known Tried)
+                                       [(mapcan (/. C (if (tl (assoc C Now)) [C] [])) Cases) | (possible-each Fs Known Now)]))
+
+(define tried
+  [] _ Tried -> Tried
+  [C | Cs] Known Tried -> (tried Cs Known (if (empty? (assoc C Tried)) [[C | (possible? C Known)] | Tried] Tried)))
+
+\\ Each is tried against all that is known, which is slow where much is: after 200 of them in an answer, each may be.
+(set *tries* 0)
+
+(define possible?
+  _ _ -> true where (> (value *tries*) 200)
+  C Known -> (do (set *tries* (+ 1 (value *tries*))) (not (smt.unsat? (smt.check-within 300 [C | Known])))))
+
+\\ Those of one case, or the first of the others.
+(define simplest
+  Fs -> (let Units (mapcan (fn unit-of) Fs) (if (empty? Units) (first-choices 2 Fs) Units)))
+
+(define unit-of
+  [] -> [[or]]
+  [F] -> [F]
+  _ -> [])
+
+(define first-choices
+  0 _ -> []
+  _ [] -> []
+  N [F | Fs] -> [[or | F] | (first-choices (- N 1) Fs)])
+
+(define broken
+  Fs Model -> (let Bs (broken-of (products-ordered Fs (value *products*)) Model)
+                (if (empty? Bs) (broken-of (mapcan (/. P (at-values (hd P) (tl P) Model)) (value *products*)) Model) Bs)))
+
+(define broken-of
+  [] _ -> []
+  [F | Fs] Model -> (if (smt.check-model [F] Model) (broken-of Fs Model) [F | (broken-of Fs Model)]))
+
+\\ Of a product where a factor is what it is in a model.
+(define at-values
+  M Xs Model -> (mapcan (/. X (at-value M X (value-in X Model) (rest-name (without X Xs) (value *products*)))) (distinct Xs)))
+
+(define at-value
+  _ _ _ [] -> []
+  M X V R -> (if (small? V) [[or [not [= X V]] [= M [* V R]]]] []))
+
+\\ A model with a value for each product and factor, the product's own if it has none.
+(define completed
+  Model -> (complete (reverse (value *products*)) Model))
+
+(define complete
+  [] Model -> Model
+  [[M | Xs] | Ps] Model -> (complete Ps (with-value M (value-of Xs Model 0) (with-zeros Xs Model))))
+
+(define with-zeros
+  [] Model -> Model
+  [X | Xs] Model -> (with-zeros Xs (with-value X 0 Model)))
+
+(define with-value
+  X V Model -> (if (empty? (assoc X Model)) [[X V] | Model] Model))
+
+(define value-in
+  X Model -> (hd (tl (assoc X Model))))
+
+\\ What factors come to in a model, if it is a fixnum.
+(define value-of
+  Xs Model Default -> (trap-error (product-in Xs (with-zeros Xs Model)) (/. E Default)))
+
+(define product-in
+  [] _ -> 1
+  [X | Xs] Model -> (fx* (value-in X Model) (product-in Xs Model)))
+
+\\ What is left of two products but for a factor of each has a name if it is the same.
+(define name-rests
+  [] -> skip
+  [[_ | Xs] | Ps] -> (do (map (/. P (name-shared Xs (tl P))) Ps) (name-rests Ps)))
+
+(define name-shared
+  Xs Ys -> (map (/. X (map (/. Y (name-rest (without X Xs) (without Y Ys))) Ys)) Xs))
+
+(define name-rest
+  Xs Ys -> (if (same-factors? Xs Ys) (product-named Xs (value *products*)) skip))
+
 \\ ---------------------------------------------------------------------------
 \\ What is asked.
 
@@ -599,7 +789,8 @@
             _ (set *replaced* 0)
             Goal (formula P)
             _ (set *asked* Goal)
-         (smt.check (append (value *facts*) (value *always*) (places) [[not Goal]]))))
+            _ (name-rests (value *products*))
+         (decide (append (value *facts*) (value *always*) (places) [[not Goal]]))))
 
 \\ For the side condition of a datatype's rule, where (ctxt Hyps) gives the hypotheses.
 (define proves?
@@ -632,8 +823,17 @@
 
 (define not-met
   P R -> (make-string "~R, which ~A" (shown P) (if (smt.sat? R)
-                                                    (@s "may not be so" (example (smt.model R)) (another (values-in P (value *values*))))
+                                                    (by-model P (completed (smt.model R)))
                                                     (cn "is not proved: " (smt.reason R)))))
+
+(define by-model
+  P Model -> (@s "may not be so" (example Model) (another (values-in P (value *values*))))
+    where (and (not (value *large*)) (multiplied? Model (value *products*)))
+  _ _ -> "is not proved: little is known of products of unknowns")
+
+(define multiplied?
+  _ [] -> true
+  Model [[M | Xs] | Ps] -> (and (= (value-in M Model) (value-of Xs Model none)) (multiplied? Model Ps)))
 
 \\ The values of what was asked, in it and made as it was read.
 (define values-in
@@ -686,13 +886,16 @@
   [[[no-number | X] Name] | Ns] Model -> [X | (no-numbers Ns Model)] where (element? [Name true] Model)
   [_ | Ns] Model -> (no-numbers Ns Model))
 
-\\ An if is what its parts are, so it is those that the example gives.
+\\ An if and a product are what their parts are, so it is those that the example gives.
 (define asked-parts
-  [[_ if | Parts] Name] -> Parts where (mentions? Name (value *asked*))
+  [[_ F | Parts] Name] -> Parts where (and (by-parts? F) (mentions? Name (value *asked*)))
   _ -> [])
 
+(define by-parts?
+  F -> (element? F [if fx*]))
+
 (define asked?
-  _ [if | _] _ -> false
+  _ [F | _] _ -> false where (by-parts? F)
   Name X Parts -> (or (mentions? Name (value *asked*)) (mentions? X Parts)))
 
 (define mentions?
