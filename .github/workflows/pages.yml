@@ -20,6 +20,7 @@ on:
       - docs/word.md
       - docs/words.md
       - docs/bignum.md
+      - docs/smt.md
       - docs/option.md
       - docs/result.md
       - docs/buffers.md

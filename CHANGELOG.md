@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- `smt` tells whether formulas over the integers can hold together, with a model or a proof that has been checked.
+
 ### Fixed
 
 - Functions that call each other, in a typed program or in sealed code, could run the compiler out of memory or stack.

@@ -625,6 +625,7 @@ adapter shipped beside it, or in its `lib/`.
 | --- | --- | --- | --- | --- |
 | `numbers`, `floats`, `word`, `words` | Typed fixnums, floats, 64-bit words and unboxed arrays | Yes | No | [Numbers](numbers.md), [Floats](floats.md), [Word](word.md), [Words](words.md) |
 | `bignum` | Bignums, over GMP | No | No | [Bignums](bignum.md) |
+| `smt` | Formulas over the integers | Yes | No | [Formulas](smt.md) |
 | `option`, `result` | Optional values and typed error results (`let-ok`) | Yes | No | [Option](option.md), [Result](result.md) |
 | `buffer`, `cursor`, `bytes` | Checked byte views, cursors and SIMD byte scans/conversions | Yes | No | [Buffers](buffers.md), [Bytes](bytes.md) |
 | `layout`, `grammar`, `json` | Binary wire layouts, compiled byte grammars and JSON | Yes | No | [Layout](layout.md), [Grammar](grammar.md), [JSON](json.md) |
@@ -1310,7 +1311,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | Target | What it does |
 | --- | --- |
 | `make test-core` | `test`, `test-jit`, `test-ops`, `test-kl`, `check-lowerer`, `check-generated`, `test-kernel`, `test-stlib`, `test-thorn`, `test-native`, `test-ffi`, `test-overrides`, `test-structs`, `test-isolates`, `test-modules`, `test-closed` and `test-typed` |
-| `make test-libs` | `test-buffer`, `test-bytes`, `test-layout`, `test-hyperloglog`, `test-json`, `test-io`, `test-net-udp`, `test-net-tcp`, `test-net-interface`, `test-net-clients`, `test-net-ipv6`, `test-net-multicast`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl`, `test-namespaces`, `test-parallel`, `test-shen-git` and `test-bignum` |
+| `make test-libs` | `test-buffer`, `test-bytes`, `test-layout`, `test-hyperloglog`, `test-json`, `test-io`, `test-net-udp`, `test-net-tcp`, `test-net-interface`, `test-net-clients`, `test-net-ipv6`, `test-net-multicast`, `test-fs`, `test-process`, `test-tree-sitter`, `test-http`, `test-datalog`, `test-curl`, `test-namespaces`, `test-parallel`, `test-shen-git`, `test-bignum` and `test-smt` |
 | `make test` | The runtime's unit tests |
 | `make test-jit`, `make test-ops` | The JIT and the instructions, on small programs |
 | `make test-kl` | The `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
@@ -1319,6 +1320,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-closed` | Closed executables: that they run as the sealed ones of the same modules, and with a collection at every allocation in `make test-kernel-stress`, and what is refused |
 | `make test-typed` | Typed programs: `numbers`, `floats`, `word` and `words`, and typed definitions compiled with their types, values in registers among them |
 | `make test-bignum` | Bignums, also against Python's where there is Python 3, with typing, an image, isolates and a closed program; needs GMP's library, and skips what does without it |
+| `make test-smt` | `smt`: formulas against every value of a box, proofs tried where they do not hold, and refused programs; `make test-smt-z3` compares formulas with Z3, if it is there |
 | `make test-parallel` | `parallel.map` over isolates: order, balance, errors, what crosses and shared arguments |
 | `make test-kernel` | The kernel's test suite, the extension tests, the contract examples and `tests/cli.sh` |
 | `make test-stlib` | The executable with the standard library |

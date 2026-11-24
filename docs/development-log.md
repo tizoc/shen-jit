@@ -6269,6 +6269,34 @@ operation has one report, so typed clients can use `result.let-ok` throughout. K
 alone would require a value for launch failures. Putting the reports in `io.error` would make a general I/O
 type carry process-specific data. The process and Tree-sitter application tests cover the new shape.
 
+### Formulas over the integers (2026-11-23, Apple M3 Max at load 2 to 4, Z3 5.3.1)
+
+- **Built:** `lib/smt.shen`, which tells whether formulas over the integers can hold together: 550 lines of code with the check of its
+  proofs, Shen alone. It is for conditions on typed code, the entry after this one.
+- **No SAT core, and no Z3.** Conditions ask about small conjunctions, so a search that splits one `or` at a time is
+  enough: a query of five facts takes 14 µs. Z3 was tried first, behind a type rule, through four C functions, and
+  worked. It would have to be installed to typecheck a program, and its releases could change what typechecks.
+- **Difference logic alone, rejected.** It has no `Start + Count <= Length`, the check that buffers make most. Fourier
+  and Motzkin's elimination, with bounds rounded down, takes it, and gives proofs that are sums of rows. Simplex, not
+  tried, would make fewer sums and take more code. No bignums: an overflow raises, and the answer is then unknown.
+- **The order of elimination.** The unknown that adds fewest rows was eliminated first, also where that loses integers: of `i = 4q`, `e = 4r`
+  and `i < e`, the rows for `q` and `r` went, and with them that `i + 4 <= e`. An unknown with no multiple in its bounds on one side, or in
+  an equation, goes first. Of 60,000 formulas, 539 were unknown and 225 are, of which 29 and not 103 have no model. No slower: 100 unknowns
+  in a chain 5.3 ms against 6.2, 100 bounded pairs 45 against 56.
+- **The search is not trusted.** `check` tries every model, and checks every proof, before it gives it. What an answer
+  rests on is reading formulas into rows and the check of a proof, the second typed and 139 lines with its types. The
+  check stopped three bugs of the search as it was written: what a proof used left out the propositions; steps were
+  kept up to the last one made, and not to the one that refuted; and rows kept their numbers when a proof was moved out
+  of a case. A fourth, a coefficient of 0 that was kept, did not end, which generated formulas showed.
+- **Its struct rules are precluded.** Once loaded, each was tried wherever a type was open: a function that binds a call by
+  `let` took 12,534 inferences with them in scope and 2,167 without.
+- **Not faster, though it could be.** The 112 queries of three typed test files have 6 facts at most, and take 1.0 to 1.4 of the 5 to 13 ms
+  that a file loads in, mostly the first. The greatest of ten numbers, or six pigeons in five holes, end the budget, in 0.2 s at most. Leaving out
+  facts that share no unknown with the question, learning from cases, and choosing an unknown again when the first integer tried does not do were not tried.
+- **Checked:** 580 generated formulas against every value of a box; 213 tries of a proof where a formula it needs is gone and the rest
+  can hold, which must fail. Apart from the suite, 60,000 formulas against Z3 (`make test-smt-z3`), with no answer that differs and under 1% unknown.
+- **Left out:** products of unknowns, and any fact that an overflow elsewhere makes unknown: a bound near 2^61 beside two others ends the query.
+
 ### What modules and typed programs cost outside typed code (2026-11-17, Apple M3 Max, against main)
 
 - **Image and startup.** The image is 1,339,584 bytes against 1,179,472 (+14%), most of it the lowerer, whose

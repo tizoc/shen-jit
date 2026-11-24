@@ -120,6 +120,16 @@ test-bignum: $(BUILD)/shen-jit $(BUILD)/shen-jit-stlib
 	sh tests/bignum.sh $(SHEN_JIT) $(abspath $(BUILD)/shen-jit-stlib)
 	sh tests/refused.sh $(SHEN_JIT) tests/bignum_refused.shen -m bignum
 
+# Formulas over the integers.
+.PHONY: test-smt test-smt-z3
+test-smt: $(BUILD)/shen-jit $(BUILD)/shen-jit-stlib
+	sh tests/smt.sh $(SHEN_JIT) $(abspath $(BUILD)/shen-jit-stlib)
+	sh tests/refused.sh $(SHEN_JIT) tests/smt_refused.shen -m smt
+
+# The same formulas against Z3, an independent solver, if z3 is there.
+test-smt-z3: $(BUILD)/shen-jit
+	sh tests/smt-z3.sh $(BUILD)/shen-jit
+
 .PHONY: tree-sitter test-tree-sitter deps-tree-sitter
 tree-sitter: $(TREE_SITTER_ADAPTER)
 
@@ -298,7 +308,7 @@ check-docs:
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words bignum option result buffers bytes layout grammar io fs processes parallel tree-sitter framing io-sockets git hyperloglog networking net-udp net-tcp net-tun deadlines http-head http http-streaming http-listener json datalog curl
+GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words bignum smt option result buffers bytes layout grammar io fs processes parallel tree-sitter framing io-sockets git hyperloglog networking net-udp net-tcp net-tun deadlines http-head http http-streaming http-listener json datalog curl
 PANDOC ?= pandoc
 GUIDE_PANDOC := $(PANDOC) -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
@@ -424,7 +434,7 @@ test-isolates-stress: $(BUILD)/shen-jit
 
 # Every library's suite, without the collections test-lib-stress adds (about 30 s).
 test-libs: test-buffer test-bytes test-layout test-hyperloglog test-json test-io test-net-udp test-net-tcp test-net-interface test-net-clients test-net-ipv6 test-net-multicast test-fs test-process test-tree-sitter test-http test-datalog test-curl test-namespaces \
-  test-parallel test-shen-git test-bignum
+  test-parallel test-shen-git test-bignum test-smt
 
 .PHONY: test-isolates test-isolates-stress test-parallel
 
