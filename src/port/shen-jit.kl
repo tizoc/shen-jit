@@ -42,6 +42,19 @@ builder raises there with shen-jit.unprepared, which a closed program is refused
 
 (defun input+ (Type Stream) (shen.input-h+ Type Stream))
 
+"The kernel's shen.input-h+, with what it reads checked as any typed form is, so that a library can
+take part (shen-jit.typecheck)."
+
+(defun shen.input-h+ (Type Stream)
+  (let Mono? (shen.monotype Type)
+    (let Input (read Stream)
+      (let Check (shen-jit.typecheck Input Type (address-> (absvector 2) 0 (cons Input ())))
+        (if (= false (hd Check))
+            (simple-error (cn "type error: " (shen.app Input (cn " is not of type " (shen.app Type "
+" shen.r)) shen.r)))
+            (let Value (eval-kl (hd (tl Check)))
+              (do (thaw (tl (tl Check))) Value)))))))
+
 "Overrides."
 
 (defun hash (X Bound) (shen-jit.hash X Bound))
@@ -1142,7 +1155,8 @@ from a template, which needs the arity."
                       (cons shen-jit.lower.constant (cons 2 (cons shen-jit.lower.add-code (cons 2
                         (cons shen-jit.lower.code-form (cons 1 (cons shen-jit.lower.prim-arity (cons 1
                           (cons shen-jit.lower.fixed? (cons 1
-                            (cons shen-jit.finally (cons 2 (cons shen-jit.on-error (cons 2 ())))))))))))))))))))))))))))))))))))))))
+                            (cons shen-jit.property (cons 3 (cons shen-jit.eval-checked (cons 1
+                              (cons shen-jit.finally (cons 2 (cons shen-jit.on-error (cons 2 ())))))))))))))))))))))))))))))))))))))))))))
       (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.finally))
       (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.on-error))
       (do (declare shen-jit.fixnum? (cons A (cons --> (cons boolean ()))))
@@ -1154,7 +1168,7 @@ from a template, which needs the arity."
           (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.exit))
               (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.code))
                   (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.save-executable))
-                      (do (set shen-jit.*checked* false) (do (set shen-jit.defined ()) (shen-jit.representation-initialise))))))))))))))))))))))
+                      (do (set shen-jit.*checked* false) (do (set shen-jit.*around-typecheck* ()) (do (set shen-jit.defined ()) (shen-jit.representation-initialise)))))))))))))))))))))))
 
 "Definitions are factorised as they are evaluated, as Shen/Scheme's compiler
 does: the kernel's shen.factor binds each selector once and shares the tests
@@ -1245,22 +1259,34 @@ that the typechecker gave its type forms: (type X T) written in untyped code cha
 it. Module sources evaluate without printing the inferred types."
 
 (defun shen.work-through (V)
-  (shen-jit.work-through V (= () (shen-jit.module.loading-list))))
+  (shen-jit.work-through V (address-> (absvector 2) 0 V) (= () (shen-jit.module.loading-list))))
 
-(defun shen-jit.work-through (V Report)
+(defun shen-jit.work-through (V All Report)
   (cond ((= () V) ())
         ((and (cons? V) (and (cons? (tl V)) (and (cons? (tl (tl V))) (= (hd (tl V)) (intern ":")))))
-         (let Check (shen.typecheck (hd V) (hd (tl (tl V))))
-           (if (= Check false)
+         (let Check (shen-jit.typecheck (hd V) (hd (tl (tl V))) All)
+           (if (= (hd Check) false)
                (shen.type-error)
-               (let Eval (shen-jit.eval-checked (hd V))
-                 (do (if Report
-                         (pr (shen.app Eval (cn " : " (shen.app (shen.pretty-type Check) "
+               (let Eval (shen-jit.eval-checked (hd (tl Check)))
+                 (do (thaw (tl (tl Check)))
+                     (do (if Report
+                             (pr (shen.app Eval (cn " : " (shen.app (shen.pretty-type (hd Check)) "
 " shen.r)) shen.s) (stoutput))
-                         skip)
-                     (shen-jit.work-through (tl (tl (tl V))) Report))))))
-        ((cons? V) (shen-jit.work-through (cons (hd V) (cons (intern ":") (cons A (tl V)))) Report))
+                             skip)
+                         (shen-jit.work-through (tl (tl (tl V))) All Report)))))))
+        ((cons? V) (shen-jit.work-through (cons (hd V) (cons (intern ":") (cons A (tl V)))) All Report))
         (true (simple-error "implementation error in shen.work-through"))))
+
+"What a form's check gives, the form to evaluate, and what to do once it was. A library may take part:
+shen-jit.*around-typecheck* is a list of a function that is given the form, a vector of all that is read with it
+and a place for what the library makes of that, and what checks a form, as lib/refine.shen's, which checks and
+evaluates what it makes of the form."
+
+(defun shen-jit.typecheck (X A All)
+  (let Around (value shen-jit.*around-typecheck*)
+    (if (cons? Around)
+        ((((hd Around) X) All) (lambda Y (shen.typecheck Y A)))
+        (cons (shen.typecheck X A) (cons X (freeze skip))))))
 
 "Only a definition is marked, so that an expression raises as it does unchecked, with its
 backtrace."

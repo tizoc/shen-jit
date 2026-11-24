@@ -8,6 +8,11 @@ All notable changes to this project are documented in this file. The format is b
 ### Added
 
 - `smt` tells whether formulas over the integers can hold together, with a model or a proof that has been checked.
+- Experimental `refine` proves conditions as typed code is checked: `define-checked` gives a function conditions and
+  promises, and `refine.type` a name to a condition on arguments, results and the fields of structs. Conditions are
+  about fixnums, the order of numbers, symbols and strings, lists, structs, and whatever pure predicates tell.
+  Conditions are tested as a program runs, though they were proved, until `(refine.test -)`, after which they cost
+  nothing.
 
 ### Fixed
 

@@ -203,6 +203,8 @@ The module `numbers` adds two kinds of number for typed code, `fixnum` and `floa
 ([Arrays of doubles](floats.md)), `word` 64-bit words, whose arithmetic wraps, which typed code keeps in
 registers too ([64-bit words](word.md)), and `words` arrays of them, read by element ([Arrays of words](words.md)).
 The module `bignum` adds bignums, integers of any size, for typed code and untyped code alike ([Bignums](bignum.md)).
+`refine` adds conditions on what functions are given, such as an index being inside its buffer or a list being sorted,
+that are proved as typed code is checked; it is experimental ([Conditions, proved](refine.md)).
 
 Prolog and a compiler-compiler are built in:
 
@@ -625,7 +627,7 @@ adapter shipped beside it, or in its `lib/`.
 | --- | --- | --- | --- | --- |
 | `numbers`, `floats`, `word`, `words` | Typed fixnums, floats, 64-bit words and unboxed arrays | Yes | No | [Numbers](numbers.md), [Floats](floats.md), [Word](word.md), [Words](words.md) |
 | `bignum` | Bignums, over GMP | No | No | [Bignums](bignum.md) |
-| `smt` | Formulas over the integers | Yes | No | [Formulas](smt.md) |
+| `smt`, `refine` | Formulas over the integers, and conditions proved as typed code is checked (experimental) | Yes | No | [Formulas](smt.md), [Conditions](refine.md) |
 | `option`, `result` | Optional values and typed error results (`let-ok`) | Yes | No | [Option](option.md), [Result](result.md) |
 | `buffer`, `cursor`, `bytes` | Checked byte views, cursors and SIMD byte scans/conversions | Yes | No | [Buffers](buffers.md), [Bytes](bytes.md) |
 | `layout`, `grammar`, `json` | Binary wire layouts, compiled byte grammars and JSON | Yes | No | [Layout](layout.md), [Grammar](grammar.md), [JSON](json.md) |
@@ -1320,7 +1322,7 @@ Run `make deps-tree-sitter` once for the optional binding's pinned native test d
 | `make test-closed` | Closed executables: that they run as the sealed ones of the same modules, and with a collection at every allocation in `make test-kernel-stress`, and what is refused |
 | `make test-typed` | Typed programs: `numbers`, `floats`, `word` and `words`, and typed definitions compiled with their types, values in registers among them |
 | `make test-bignum` | Bignums, also against Python's where there is Python 3, with typing, an image, isolates and a closed program; needs GMP's library, and skips what does without it |
-| `make test-smt` | `smt`: formulas against every value of a box, proofs tried where they do not hold, and refused programs; `make test-smt-z3` compares formulas with Z3, if it is there |
+| `make test-smt` | `smt` and `refine`: formulas against every value of a box, proofs tried where they do not hold, generated functions whose conditions are tested as they run, refused programs, and typed and closed programs; `make test-smt-z3` compares formulas with Z3, if it is there |
 | `make test-parallel` | `parallel.map` over isolates: order, balance, errors, what crosses and shared arguments |
 | `make test-kernel` | The kernel's test suite, the extension tests, the contract examples and `tests/cli.sh` |
 | `make test-stlib` | The executable with the standard library |

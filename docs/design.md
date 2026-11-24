@@ -193,9 +193,15 @@ try can define it again.
 
 ### Typed definitions
 
-The port's `shen.work-through`, the kernel's step that typechecks each form `load` and the REPL read under `(tc +)`
-and then evaluates it, names in `shen-jit.*checked*` the definition it evaluates, for as long as it does. Under
-`(optimise +)`, `shen.record-and-evaluate` gives that definition, and only that one, to the kernel's
+The port's `shen.work-through` is the kernel's step that typechecks each form `load` and the REPL read under `(tc +)`
+and then evaluates it, and its `shen.input-h+` does the same of what `input+` reads. A library may stand around each
+check, by the list of a function in `shen-jit.*around-typecheck*`, which is given the form, all that is read with it
+and what checks a form, and gives the type, the form to evaluate and what to do once it was. So `refine` has a form
+checked as it was written, and then walks
+it as it would run, to prove what its calls need; it gives it to be evaluated as it is, or, in a module that asks for no
+tests, with the calls that were proved made those of functions that do not test it. The step names in
+`shen-jit.*checked*` the definition it evaluates, for as long as it does. Under `(optimise +)`,
+`shen.record-and-evaluate` gives that definition, and only that one, to the kernel's
 `shen.x.type-annotations.annotate-kl`, after factorising it, marks its body `(shen-jit.annotated Body)` for the
 lowerer, which trusts the type forms of such a body only, and marks the name with the property
 `shen-jit.annotated`, which `shen-jit.code` follows to make the same code again. Before it is marked, each

@@ -3,7 +3,7 @@
 Every kernel function that Shen/JIT replaces, in `src/port/`, and why. Stage 0 leaves out a kernel `defun` that the port also defines. Nothing
 is overridden just because another port does it: each entry was measured, and [development-log.md](development-log.md) has the numbers. Keep this current with each change.
 
-`make test-overrides` runs each of them beside the kernel's definition, from the KLambda, over generated values, except for `shen.read-evaluate-print`, `shen.toplevel-display-exception` and the launcher's `shen.x.launcher.main`, `shen.x.launcher.eval-command-h`, `shen.x.launcher.help-text`, `shen.x.launcher.script-command` and `shen.x.launcher.launch-shen`, which `tests/cli.sh` covers; `shen.rules->prolog`, whose module ownership behavior `tests/modules.shen` covers; `shen.work-through`, which typechecks and evaluates, as `tests/typed.shen` and the kernel's tests run it; and `eval`, `shen.execute-store-arity`, `update-lambda-table` and `shen.update-lambda-table/precompiled`, which change the program, as a check must not. Where they differ on purpose, `o.known` in `tests/overrides.shen` says how and why.
+`make test-overrides` runs each of them beside the kernel's definition, from the KLambda, over generated values, except for `shen.read-evaluate-print`, `shen.toplevel-display-exception` and the launcher's `shen.x.launcher.main`, `shen.x.launcher.eval-command-h`, `shen.x.launcher.help-text`, `shen.x.launcher.script-command` and `shen.x.launcher.launch-shen`, which `tests/cli.sh` covers; `shen.rules->prolog`, whose module ownership behavior `tests/modules.shen` covers; `shen.work-through` and `shen.input-h+`, which typecheck and evaluate, as `tests/typed.shen`, `tests/smt.sh` and the kernel's tests run them; and `eval`, `shen.execute-store-arity`, `update-lambda-table` and `shen.update-lambda-table/precompiled`, which change the program, as a check must not. Where they differ on purpose, `o.known` in `tests/overrides.shen` says how and why.
 
 ## Also overridden by Shen/Scheme
 
@@ -37,6 +37,7 @@ The functions that Shen/Scheme 0.54 replaces in its `src/overrides.shen`, with w
 | --- | --- |
 | `shen.rules->prolog` | Records a successfully compiled datatype as belonging to the module whose sources are loading, including redefinitions on retry; `include` does not transfer ownership. Covered by `tests/modules.shen` |
 | `shen.lazyderef` | `shen-jit.deref`, inline along a chain of variables, of which nearly every one is a single step |
+| `shen.input-h+` | What `input+` reads is typechecked through `shen-jit.typecheck`, as each form that `load` and the REPL read is, so that a library around the check, as `refine`, sees it too |
 | `shen.lzy=`, `shen.lzy=!` | Closure-free unification keeps a trail whose tail is the first bound variable. A single binding allocates no pair. `shen.lzy=!` avoids `=` on two lists. `tests/prolog-unify.shen` checks both unifiers against the kernel's |
 | `<-vector` | The kernel's body is over the inliner's limit of 15 nodes. Split into `<-vector` and `shen-jit.vector-element`, both inline, so a failing `<-address` happens in the caller, where a quiet handler catches it with a jump. Same checks, order and messages |
 | `shen.misc?` | The reader asks it about every byte of a symbol that is not a lowercase letter; the kernel's is an `element?` over 19 codes. The same codes as ranges, with non-numbers false as before |
@@ -68,7 +69,7 @@ The functions that Shen/Scheme 0.54 replaces in its `src/overrides.shen`, with w
 | `shen.x.launcher.help-text` | Lists `-m`, `script` taking a descriptor, and `build` |
 | `shen.x.launcher.script-command` | `script FILE.shenmod` loads that module (docs/modules.md) |
 | `shen.x.launcher.launch-shen` | A `build` command, which makes an executable from a module's descriptor |
-| `shen.work-through` | Names the definition it evaluates after typechecking it, so that under `(optimise +)` `shen.record-and-evaluate` compiles it with the kernel's type annotations, and only it. Suppresses inferred type reports when evaluating module sources |
+| `shen.work-through` | Names the definition it evaluates after typechecking it, so that under `(optimise +)` `shen.record-and-evaluate` compiles it with the kernel's type annotations, and only it. Suppresses inferred type reports when evaluating module sources. Checks through `shen-jit.typecheck`, which a library may stand around with `shen-jit.*around-typecheck*`, and evaluates the form that gives |
 
 ## Candidates found by profiling
 

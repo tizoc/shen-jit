@@ -1099,8 +1099,8 @@ b" (n->string 0) (n->string 255)] (o.strings)))
       \\ They change the program, which a check must not: arities and eval.
       eval shen.execute-store-arity update-lambda-table
       shen.update-lambda-table/precompiled
-      \\ It typechecks and evaluates, which tests/typed.shen and the kernel's tests run.
-      shen.work-through])
+      \\ They typecheck and evaluate, which tests/typed.shen, tests/smt.sh and the kernel's tests run.
+      shen.work-through shen.input-h+])
 
 (define o.tested
   -> (append (o.single-names) (append (o.dict-group) (append (o.prolog-group) [integer?]))))

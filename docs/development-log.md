@@ -6297,6 +6297,185 @@ type carry process-specific data. The process and Tree-sitter application tests 
   can hold, which must fail. Apart from the suite, 60,000 formulas against Z3 (`make test-smt-z3`), with no answer that differs and under 1% unknown.
 - **Left out:** products of unknowns, and any fact that an overflow elsewhere makes unknown: a bound near 2^61 beside two others ends the query.
 
+### Conditions proved as typed code is checked (2026-11-25, Apple M3 Max at load 2 to 4)
+
+- **Built:** `lib/refine.shen`, which gives functions conditions and promises, and conditions names, and has typed
+  code prove them: 1,635 lines of code, with `refine-walk.shen`, which walks that code, and `refine-prove.shen`,
+  what it makes of it for `smt`. The only change outside `lib/` is in the port, a call around each check, which gives
+  the form to evaluate besides, and the same around what `input+` reads.
+- **`define-checked`** is `define` with `{requires P ...}` and `{ensures Q ...}`, of names that the signature has, `{X
+  : fixnum --> R : fixnum}`. It was `refine.define`, with `(X Y) where P --> R where Q`, which gave `where` and `-->`
+  a second meaning each and took names apart from their types. The reader gives `{`, `}` and `:` as symbols already,
+  so only the names are taken out. In a namespace the two words would be its own, so a syntax handler protects them,
+  as `deflayout`'s fields are. Not `define` itself: it would put a source form before a core one, and change how code
+  that has nothing to do with conditions is read. Not `define-proved`, as under `(tc -)` nothing is.
+- **The kernel checks what was written, and then that is walked as it would run.** Each expression is a term, and what
+  is known is a list of formulas: the condition, what the clause's patterns are and that those before it did not
+  match, the test of an `if` in its branches, what a call promised after it. What a call needs is asked where it is.
+  What is learned in a part that may not run is known after it as an implication, and arguments know only what was
+  before them all, as they run in any order.
+- **Rejected, after it was built: facts through the type checker.** A `where` guard is a hypothesis there already,
+  which a rule reads with `ctxt`. The test of an `if`, what a `let` binds and the clauses before are not. So what was
+  checked of a form had markers for those, `(let V (type (type 0 never) (known P)) E)`, where a datatype's rules added
+  P to the hypotheses, and one for what each call needs; what was evaluated had none, and the calls that were proved
+  were found in it again. A refined type was a type, with rules for what is of it. With contracts from elsewhere and
+  products, below, that was 1,916 lines, where this is 1,635 with both. 60 functions took 92,537 inferences and
+  14.8 ms, where this takes 42,664 and 10.0. As each marker costs, a plain `define` of each had none, and knew its
+  guards alone, for 42,294 and 5.8; it knows as much as any now, for 42,534 and 7.3.
+- **What three reviews found of it,** by agents told to break it, after the suite, planted bugs and 100,000 generated
+  functions had not: programs that proved what was not so, of 23 kinds, then 15, then 13, and an outside one six more.
+  Most came of asking a type checker. The variables of a pattern are not its own, what a `let` binds has a name that
+  another may have, a pattern written again is what it matched, a rule such as `X : any` looks at nothing in a term,
+  and a check that goes back leaves what it marked. Each fix was a transformation of what is checked, and what is
+  checked and what is evaluated had to be walked alike. Their programs are in `tests/refine_sound.shen`. **First the
+  markers were in the source,** which what is read and never checked believed, as did a program that wrote one.
+- **What it could do that this cannot:** a refined type inside another, as `(list natural)` or `(natural --> fixnum)`,
+  a pattern's variable that a datatype's rule types, and a lambda's argument by the type wanted of it. A list's
+  condition is said of the list now, by a predicate, and a refined type in a type is an error.
+- **A refined type is a name** for its base, as a synonym, and for a condition on a whole argument, result or field of
+  a struct, and so joins what a contract requires and ensures, in a plain `define` too, which tests it. A struct's
+  constructor and setters test nothing, as `defstruct` made them, so they are for direct calls alone, and `(fn
+  lamp.make)` is refused: a generated function that was given one found that nothing tested it.
+- **A term's type is found again,** from signatures and from what calls are given, as the kernel says that code is
+  typed and not how. It is a type that the value is of, whatever the kernel took it for, as a program may have a rule
+  that a fixnum is a number. So what a variable in a function's type stands for is of all that the call is given,
+  unknown if the type of one argument is, and in no function or vector that the call gives, which may be given more.
+  What holds of a value's type only is asked of it: which of two readings `=` has, and whether what it compares may
+  change. Four of the holes below were here.
+- **Not proved is an error at once,** which names the function and its rule, the condition alone, and values for which
+  it fails, or says which call may be another each time. A condition that calls a function with one must be proved
+  where it is, as the test that F makes of it would otherwise raise.
+- **Where nothing is read, nothing is assumed.** A Boolean that cannot be read is true where it is known and false
+  where it is needed, the other way round under `not`. A call that is not declared pure is another unknown each time.
+- **Conditions are tested where they are not proved,** by the function under its own name: in calls from untyped code,
+  through `fn`, and checked before F had the condition. Typed calls that were proved are tested there too, or go to
+  F's body.
+- **A contract is in force as the type of its function is.** It is its function's once the definition was evaluated,
+  until another is, as told by its source, which tracking it keeps, or by its procedure where there is none. An
+  expression, which is evaluated at once, is checked by those. So is a definition, but by the contracts of what is
+  defined after it in its file, as by the types of that: the port gives each form with all that is read with it. First
+  it was from when it was read, so that a file that did not read left its contracts on the functions that were there,
+  and a plain `define` left that of the `define-checked` it replaced; 6 of 14 sequences of files written to try it
+  went wrong. Then it was once the types were declared, which another file does too: a definition that was refused was
+  believed by the next file that defined the function. A `refine.type` of a struct's field is as the struct was made.
+- **Each contract that a function has had has a body,** so that what was proved of one does not run what needs
+  another, made once a definition that may call it is checked. Its name is a `gensym`. It was `F.%body`, and a program
+  that named it was refused, as the outside review found not everywhere. What is checked is told from a plain `define`
+  of the name by a stamp in its first clause, which says what was read with it: two definitions of one function in a
+  file are each checked by their own.
+- **A contract under `(tc -)`** is taken by a form that is evaluated after the definition. It was taken as it was
+  read, and a macro took that of a function away as a `define` of it was read.
+- **A term is read in four ways,** each with a name of its own: as an integer, by its place among numbers, as which
+  thing it is, and as true or false.
+- **Numbers by order, as integers.** What is true of an order of finitely many numbers is true of integers if those
+  that are written are far enough apart for every other to fit between two. So the solver needed no strict bounds
+  between fractions. Shen/JIT compares integers with floats exactly, without which there would be no order. Arithmetic
+  is not read, as floats round. A float that is no number has a proposition that says so, under which every comparison
+  is false, and two of them may be equal, as `=` is true of one object.
+- **Symbols and strings are integers too,** each constant its own. `=` of lists and pairs of these and of numbers is a
+  proposition, and by parts where both are written. Of anything else it is another each time, as the elements of a
+  vector change.
+- **A pattern matches what is equal to it.** 1 matches 1.0, which is `=` to it and no fixnum, and 9007199254740992 a
+  float that is no less when 1 is added. So a number in a pattern says of what it matched that it is equal, as a
+  variable that is there again does. The kernel takes a pattern that is written again in the action for what it
+  matched, unless a `let` or a lambda has one of its names, so that is what it is read as, and of one with a variable
+  twice only its type is. A float that is written is not the fixnum that it is equal to: 25 and 2.5e1 were one term,
+  and one key.
+- **What a pattern's variable is may change.** The kernel puts `(account.balance A)` wherever the variable of
+  `(:account balance <- B)` is written, in a closure too, so a guard of B says nothing of B in the action. Where a
+  pattern is in a vector, a mutable field or a pattern of one's own, an occurrence is another value each time, of
+  which what the field's reader promises is known. **Rejected: to bind it once in what is evaluated,** which would
+  change what a program does as it is loaded with `refine`.
+- **Terms that double are named.** Each `let` that is used twice, a definition in an argument of itself and an `if` in
+  the test of another doubled what was read: ten nested clamps did not end. What has over 100 parts is a name, equal
+  to what it is.
+- **Nothing is kept that only what was asked names.** The terms of what a call needs were kept once it was proved,
+  with what is so of them, and so were those of a `freeze` or a lambda: five reads of masked indices ran out of
+  budget. They go, and what is known of a value does not say of what it was made.
+- **A promise `(= R P)` is a definition,** read in place of the call, in conditions too, at most 100 times for one
+  call, for what they cost. What `refine.trust` says holds whatever the arguments, so that a length that may be
+  negative is said to be nothing.
+- **A shift and a mask by a constant are division:** `(shift-right A 3)` is `R` with `8R <= A < 8R + 8`, and `(bit-and
+  A 7)` is what is left over. `fxremainder` is tied to `fxquotient` the same way. These are terms of the prover's and
+  not `refine.trust`s, as a trust cannot raise 2 to a power. A left shift is a product for what fits in 24 bits:
+  between the bounds at which it loses none, sums of two rows leave the fixnums, and 47 of 10,000 generated functions
+  that had loaded were refused. `lib` has about 50 constant shifts to the right and 40 masks.
+- **`element?` of a list that is written** is the `or` of its equations; of any other it is a value of its own.
+- **Unsound on the way, of no checker,** each accepted by a suite that passed, and what found it. Promises that define
+  each other in a circle, by functions that only raise, made one call two things, and three different pairs were
+  impossible, as `(bit * fixnum)` was read as `bit` (about 90 definitions written by hand). `(fail)`, and what `(where
+  G E)` gives as an action, were taken for what the function gives; `fail-if` is a retry only at the head of a `<-`
+  clause's action (a review, and what the kernel makes of `<-`). `((fst P) X)` was read as a call of a pure function,
+  `=` of what changes, and 1 and 1.0, as the same each time, and a field as of its type in what is no such struct (a
+  review). What is taken by name was known of a program's own, as `span.make`, or `buffer.length` where a program has
+  a `buffer` (a review). What a function with some of its arguments is given was known to have been evaluated, which
+  the lambda that the reader makes of it does not do (the outside review). `refine.type any X : A where true` made a
+  fixnum an octet (a review).
+- **And in this, as it was written:** a call's result was of the type of its first argument (`(pick 1 2.5)`), an
+  argument whose type is not known said nothing of what the others are, and what `(twice (later-of 0))` gives was a
+  fixnum as 0 is. A pattern written again was what it matched where a `let` had taken its variable, if only to be what
+  it was, where it has a wildcard, and where it is there twice. A member of a union that nothing is of made the rest
+  of a function impossible. A `let` of `5` was the constant, and one of `if` the form. A plain `define` tested
+  nothing, as one that is given to a function must. An expression called a body that its file defines after it.
+  Reading the code found seven, random typed programs, in which each expression's type and term are compared with its
+  value, two, and earlier programs, the generators and the sessions one each. 48,000 of those programs, with 534,000
+  values and 514,000 terms, break nothing now; with any of seven faults planted in the types they break 18 to 170
+  times in 1,600. As that check was first written it compared no term that has an argument in it. **Why no generator
+  had shown them:** they called no polymorphic function with what differs, wrote no pattern again, and bound no name
+  that a `let` should not.
+- **What a fourth review found,** by an agent told to break this design, who read its code and its guide: 13 programs
+  that proved what was not so, and seven that failed or ran something else. The kernel compiles a definition without
+  `protect`, so `(protect X)` is the value of X, and what is in one runs; a `let` or a lambda may bind a constant, or
+  a form, which the kernel then puts wherever that is written, in a pattern too; a pattern is written again as `=` has
+  it, as 2.5e1 is 25. A lambda that the reader makes of a function with some of its arguments works them out at each
+  call, so `(fx+ (cell.m C))` is not the same each time, nor is `(= V)` of a vector, nor a lambda or an argument that
+  a pure function is given. A field was known by its type as it is now, where its constructor tests it as it was; it
+  is known by its reader's promise. A refined type over a triple was its first element; `input+` was checked by the
+  kernel alone, so that what it read made a struct with a field that is not so; a `cond` that a rule types was a call;
+  a file that a side condition loads cleared what was known of the one being checked; a program's own `refine.valued`
+  was a term. And: a condition with a function given some of its arguments raised as it was tested, as no reader had
+  made a lambda of it; a result written as a function in brackets, or as a synonym, made one of a single argument; a
+  definition under `(tc -)` left its old body to what was proved after it, which now calls it; a struct declared after
+  what makes one gave a body that was never made; a refined type without its parameter failed in `refine`. Loading
+  20,000 numbers in a list took 2.1 s, as the type of each tail was found again, and takes 0.1, and products, below,
+  could take a minute where a condition did not follow. Left as they are, and said in the guide: a guard is believed
+  in a rule of one's own of a variable that is read again, a datatype may give `boolean` to other values, and what
+  untyped code makes of a struct is believed. Of all this, 56 lines. After it, the reviewer's generator loaded 22,488
+  functions of 80,000, called 25 times each, mine 3,162 of 8,496, and 1,200 sessions and 38,400 typed programs ran,
+  with nothing broken. Of 96 faults planted in what the fixes touched, the suite catches all but three, which change
+  how long it takes, or what nothing reaches: three cases were added for those it missed at first.
+- **A check that did not run.** The generators compared what a function gave with its promise by a pattern on its
+  definition, one token too short, which never matched: no promise had been checked in any run. It is evaluated from
+  the contract now, and the suite fails if no function that loads has one.
+- **Tried on the project's code:** of 13 functions of `lib/net` and `lib/hyperloglog`, with conditions, 12 were proved
+  as this was first built. The other shifts an index of no known size to the left.
+- **What was proved is tested all the same,** for as long as proofs may be wrong, until `(refine.test -)`. Of the
+  third review's programs, 24 show a condition, a promise or a type that is not so in the code before its fixes. With
+  every condition tested 20 of them raise. It had to be asked for at first, by `(refine.test +)`. What it costs: a sum
+  of 10 million bytes five times takes 280 ms against 82, and 90 in a plain `define`, and 300,000 binary searches of
+  60,000 pairs of bytes 70 against 50. A condition is tested whole, and which part of it failed is looked for then: a
+  clause for each part took 322. A condition that walks a list walks it at each call. Asking for none is for one
+  module, as a library would otherwise take them from the program that uses it. Left out: testing promises, which
+  would cost a function that has no condition its tail calls.
+- **What it costs to load.** A plain definition takes some 25 µs more once `refine` is loaded, and no more inferences
+  to speak of: the typed client of JSON takes 12.8 ms against 11.5 without `refine`, and that of grammars 16.4 against
+  15.3 where a plain `define` knew its guards alone. The types of functions are asked for once in a clause: asked for
+  each time, they were most of it.
+- **Checked:** `make test-smt`. 72,000 generated functions, 25,291 of them loaded, called with each of a box, testing
+  each condition as it runs, and 4,000 random sessions of files, half of them with nothing that was proved tested,
+  with nothing broken. 646 cases that load or must not, what the reviews wrote among them. Of 950 programs of the
+  reviews and of earlier trials, those that load and did not, or the other way, were looked at: what is refused has a
+  refined type inside another, or is a use of what was defined again. Each clause of `refine`'s was taken out in turn,
+  and each guard: the suite caught 492 of 624. Cases were added for what the others showed, and some 30 lines that did
+  nothing were taken out. It catches 539 of 581 now, and the others take longer, prove less, say less in an error, or
+  guard against what nothing yet makes, as a `define-checked` in a library. The suite tests nothing that was proved,
+  as a test hides that the proof was wrong.
+- **Not run:** Linux, Windows and x86-64, where CI runs the suite. Nothing but the port's own files changes in
+  `generated.sha256`.
+- **Left out:** what a vector holds, conditions over all of a list, which would take induction, linking an integer's
+  place among numbers to its value, and float arithmetic. Names that the reader makes are shown, as Y123, and a call
+  of what was defined by a file loaded within the file is not seen as one, and tested.
+
 ### What modules and typed programs cost outside typed code (2026-11-17, Apple M3 Max, against main)
 
 - **Image and startup.** The image is 1,339,584 bytes against 1,179,472 (+14%), most of it the lowerer, whose

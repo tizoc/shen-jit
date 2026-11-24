@@ -1,6 +1,7 @@
 #!/bin/sh
-# smt (lib/smt.shen): the checks, generated formulas and a typed client.
-# Usage: tests/smt.sh path/to/shen-jit [path/to/shen-jit-stlib]
+# smt and refine (lib/smt.shen, lib/refine.shen): the checks, typed clients, generated formulas and
+# functions, a namespace, and typed and closed programs, whose code must be what it would be without
+# conditions. Usage: tests/smt.sh path/to/shen-jit [path/to/shen-jit-stlib]
 set -eu
 SHEN=$1
 SHEN_JIT_MAX_HEAP=512M # a bug that never ends must end
@@ -8,13 +9,261 @@ export SHEN_JIT_MAX_HEAP
 dir=$(mktemp -d)
 trap 'smt_status=$?; if [ "$smt_status" -ne 0 ]; then cat "$dir"/*.out 2>/dev/null; fi; rm -rf "$dir"' EXIT
 if command -v cygpath > /dev/null; then dir=$(cygpath -m "$dir"); fi
+passed=0
 
-# The standard library defines some of the module's names.
+# The standard library defines some of the modules' names.
 for shen in "$SHEN" ${2:+"$2"}; do
     "$shen" eval -m smt -l tests/smt-generate.shen -l tests/smt.shen > "$dir/smt.out" 2>&1
     grep -a '^FAIL \|^[0-9]* passed' "$dir/smt.out" | awk '{ print } END { exit !/ 0 failed/ }'
+    "$shen" eval -m refine -m buffer -l tests/smt-generate.shen -l tests/refine.shen > "$dir/refine.out" 2>&1
+    grep -a '^FAIL \|^[0-9]* passed' "$dir/refine.out" | awk '{ print } END { exit !/ 0 failed/ }'
 done
 
 "$SHEN" eval -m smt -e '(tc +)' -l tests/smt_typed.shen -e '(tc -)' -e '(output "~A~%" (smt-typed.main))' > "$dir/smt-typed.out" 2>&1
 grep -qxF 'x 0, y 0, p1 false / true true true unsat' "$dir/smt-typed.out"
-echo "1 passed, 0 failed"
+
+line='804 25187 -1 104 true false 104 99 101 100 103 6 0 5 1 3 3 4 0 9 262 8 100 9 99 0 (@p 2 7) 5 10 0'
+for shen in "$SHEN" ${2:+"$2"}; do
+    "$shen" eval -m refine -e '(define pair-up A B -> (@p A B))' -e '(tc +)' -l tests/refine_typed.shen \
+        -e '(tc -)' -e '(output "~A~%" (refine-typed.main (shen-jit.string->bytes "abcdefgh")))' > "$dir/refine-typed.out" 2>&1
+    grep -qxF "$line" "$dir/refine-typed.out"
+done
+
+for shen in "$SHEN" ${2:+"$2"}; do
+    "$shen" eval -m refine -e '(tc +)' -l tests/refine_data.shen -e '(tc -)' -e '(output "~A~%" (refine-data.main))' > "$dir/refine-data.out" 2>&1
+    grep -qxF '3 6 1 2 0 5 4 [1 2] 0 7 1 0.5 1 0 3 2 9 ok true false 8 2 2 2 11 7 2 3 [4 4 5] 2 4 2 1 true true false 0' "$dir/refine-data.out"
+done
+
+"$SHEN" eval -m refine -m buffer -e '(tc +)' -l tests/refine_bytes.shen -e '(tc -)' -e '(output "~A~%" (refine-bytes.main))' > "$dir/refine-bytes.out" 2>&1
+grep -qxF 'true false 2569 2 185207048 185207048 62 2 15 168297988 -123 -16 0 9 3 0 3 4 63 0 0 5 2 0 1 3 -1234' "$dir/refine-bytes.out"
+
+# The documentation's example, and the same with one thing wrong: each a length, a test or a step.
+"$SHEN" eval -m refine -e '(tc +)' -l tests/refine_records.shen -e '(tc -)' \
+    -e '(output "~A ~A~%" (records (shen-jit.string->bytes (@s (n->string 7) (n->string 2) "ab" (n->string 9) (n->string 0)))) (trap-error (records (shen-jit.string->bytes (@s (n->string 7) (n->string 9) "ab"))) (/. E (error-to-string E))))' \
+    > "$dir/records.out" 2>&1
+grep -qxF '2 the record at 0 is cut short' "$dir/records.out"
+for change in 's/(fx> (fx+ I 2) (shen-jit/(fx> (fx+ I 1) (shen-jit/' 's/(fx> (fx+ I N) (shen-jit/(fx> N (shen-jit/' \
+    's/(fx= N -1)$/(fx= N 0)/' 's/(fx+ 2 (byte-at/(fx+ 1 (byte-at/'; do
+    sed "$change" tests/refine_records.shen > "$dir/broken.shen"
+    if cmp -s tests/refine_records.shen "$dir/broken.shen"; then echo "no change: $change"; exit 1; fi
+    if "$SHEN" eval -m refine -e '(tc +)' -l "$dir/broken.shen" > "$dir/broken.out" 2>&1; then echo "accepted: $change"; exit 1; fi
+    grep -q 'type error in .* may not be so' "$dir/broken.out"
+done
+
+# An error says where it is, its rule too if refine makes the rules, and who needs or promises what.
+says() {
+    printf '%s\n%s\n' '(define-checked at {I : fixnum --> fixnum} {requires (fx< I 99) (fx<= 0 I)} I -> I)' "$2" > "$dir/says.shen"
+    if "$SHEN" eval -m refine -e '(tc +)' -l "$dir/says.shen" > "$dir/says.out" 2>&1; then echo "accepted: $2"; exit 1; fi
+    grep -q "type error in $1, which may not be so, as if X is -1\$" "$dir/says.out" || { cat "$dir/says.out"; exit 1; }
+}
+says 'rule 1 of two: at needs (fx<= 0 X)' '(define two {fixnum --> fixnum} X -> (fx+ 1 (at X)) where (fx< X 9))'
+says 'rule 2 of two: at needs (fx<= 0 X)' '(define-checked two {fixnum --> fixnum} X <- 1 where (fx> X 3) X -> (fx+ 1 (at X)) where (fx< X 9))'
+says 'rule 3 of two: at needs (fx<= 0 X)' '(define-checked two {fixnum --> fixnum} 5 -> 0 6 -> 0 X -> 1 where (and (fx< X 9) (fx= 2 (at X))) _ -> 0)'
+says 'rule 2 of two: two promises (fx<= 0 X)' '(define-checked two {fixnum --> R : fixnum} {ensures (fx<= 0 R)} 5 -> 0 X -> X)'
+says 'rule 1 of two: two promises (fx<= 0 X)' '(define-checked two {X : fixnum --> fixnum} {ensures (fx<= 0 X)} X -> (let X 0 1))'
+# A define knows its ifs, lets and earlier clauses too.
+for body in 'X -> (if (fx< X 0) 0 (at X))' 'X -> 0 where (fx< X 0) X -> (at X)' 'X -> (let Y (fx- X X) (at Y))' 'X -> (do (at (fx- X X)) (at 1))'; do
+    printf '%s\n%s\n' '(define-checked at {I : fixnum --> fixnum} {requires (fx<= 0 I)} I -> I)' "(define two {fixnum --> fixnum} $body)" > "$dir/says.shen"
+    "$SHEN" eval -m refine -e '(tc +)' -l "$dir/says.shen" > "$dir/says.out" 2>&1
+done
+
+# However many calls have a condition that a promise names.
+awk 'BEGIN { print "(define-checked in? {I : fixnum --> N : fixnum --> R : boolean} {ensures (= R (and (fx<= 0 I) (fx< I N)))} I N -> (and (fx<= 0 I) (fx< I N)))"
+             print "(define-checked at {I : fixnum --> fixnum} {requires (in? I 9)} I -> I)"
+             print "(define many {fixnum --> fixnum} X -> (if (in? X 9) (do"
+             for (i = 0; i < 120; i++) print "(at X)"
+             print ") 0))" }' > "$dir/many.shen"
+"$SHEN" eval -m refine -e '(tc +)' -l "$dir/many.shen" > "$dir/many.out" 2>&1
+
+# What loading each case of a fixture says, after its own definitions: an error, which is the kernel's and ends its line
+# if it needs nothing, or that it loads. A condition that was wrongly proved is not tested.
+cases() {
+    rm -f "$dir"/case* "$dir/cases.expected"
+    awk -v dir="$dir" 'function another() { close(dir "/case" n ".shen"); n++ }
+        BEGIN { n = 0 }
+        /^\\\\ says / { another(); print substr($0, 9) (/ type error/ && !/ needs | promises / ? "" : ".") > (dir "/cases.expected"); next }
+        /^\\\\ untyped says / { another(); print substr($0, 17) "." > (dir "/cases.expected"); print > (dir "/case" n ".untyped"); next }
+        /^\\\\ loads/ { another(); print "loads." > (dir "/cases.expected"); if (/untyped/) print > (dir "/case" n ".untyped"); next }
+        { print > (dir "/case" n ".shen") }' "$1"
+    # They are in a file, as there are more than a command line can have on Windows.
+    n=1
+    while [ -f "$dir/case$n.shen" ]; do
+        if [ ! -f "$dir/case$n.untyped" ]; then echo '(tc +)'; fi
+        printf '(trap-error (do (load "%s") (do (output "says loads.~%%") loaded)) (/. E (do (output "says ~A.~%%" (error-to-string E)) loaded)))\n' "$dir/case$n.shen"
+        echo '(tc -)'
+        n=$((n + 1))
+    done > "$dir/cases.shen"
+    "$SHEN" eval -m refine -e '(maxinferences 100000000)' -e '(refine.test -)' -e '(tc +)' -l "$dir/case0.shen" -e '(tc -)' -l "$dir/cases.shen" > "$dir/cases.out" 2>&1
+    sed -n 's/^says //p' "$dir/cases.out" > "$dir/cases.got"
+    diff "$dir/cases.expected" "$dir/cases.got" || exit 1
+}
+
+# A type error for want of a proof that a term is of a refined type says which, and no other does.
+cases tests/refine_errors.shen
+# A contract is as its function was last defined.
+cases tests/refine_redefined.shen
+# And what a file that is loaded from another defines is as that has it.
+printf '(define-checked inner {X : fixnum --> R : fixnum} {ensures (fx= R 2)} X -> 2)\n' > "$dir/inner.shen"
+for n in 1 2; do
+    printf '(define-checked at {X : fixnum --> fixnum} {requires (fx= X %s)} X -> X)\n(define-checked inner {X : fixnum --> R : fixnum} {ensures (fx= R 1)} X -> 1)\n(load "%s/inner.shen")\n(define uses {fixnum --> fixnum} X -> (at (inner X)))\n' $n "$dir" > "$dir/outer$n.shen"
+done
+printf '(refine.type five N where (fx= N 5))\n(defstruct fives (it : five))\n' > "$dir/fives.shen"
+printf '(load "%s/fives.shen")\n(define maker {--> (fixnum --> fives)} -> (fn fives.make))\n' "$dir" > "$dir/outer3.shen"
+if "$SHEN" eval -m refine -e '(tc +)' -l "$dir/outer3.shen" > "$dir/nested.out" 2>&1; then echo "accepted: a constructor as a value"; exit 1; fi
+grep -q 'refine: fives.make does not test' "$dir/nested.out"
+if "$SHEN" eval -m refine -e '(tc +)' -l "$dir/outer1.shen" > "$dir/nested.out" 2>&1; then echo "accepted: a nested load"; exit 1; fi
+grep -q 'type error in rule 1 of uses: at needs (fx= 2 1)' "$dir/nested.out"
+"$SHEN" eval -m refine -e '(tc +)' -l "$dir/outer2.shen" > "$dir/nested.out" 2>&1
+# A file that a side condition loads leaves what is known of the one being checked as it was.
+printf '(define helper {fixnum --> fixnum} X -> X)\n' > "$dir/helper.shen"
+printf '(refine.type above N where (fx> N 0))\n(datatype loads-helper\n  if (do (load "%s/helper.shen") true)\n  ___\n  needs-helper : helped;)\n(define use-helped {helped --> fixnum} _ -> 1)\n(define mk {fixnum --> acc} N -> (do (use-helped needs-helper) (acc.make N)))\n(defstruct acc (bal : above))\n' "$dir" > "$dir/outer4.shen"
+if "$SHEN" eval -m refine -e '(tc +)' -l "$dir/outer4.shen" > "$dir/nested.out" 2>&1; then echo "accepted: a load in a side condition"; exit 1; fi
+grep -q 'type error in rule 1 of mk: acc.make needs (fx> N 0)' "$dir/nested.out"
+# What input+ reads is checked as any typed expression is.
+printf '(account.make a -5)\n' > "$dir/account.data"
+printf '(refine.type money N where (fx<= 0 N))\n(defstruct account (owner : symbol) (balance : money))\n(define from-file {string --> account} File -> (input+ account (open File in)))\n' > "$dir/input.shen"
+"$SHEN" eval -m refine -e '(tc +)' -l "$dir/input.shen" -e "(output \"~A~%\" (trap-error (from-file \"$dir/account.data\") (/. E (error-to-string E))))" > "$dir/input.out" 2>&1
+grep -q '^type error: account.make needs (fx<= 0 -5)' "$dir/input.out"
+# Nor is what is known of a function by its name known of another in its place: a struct's or a library's.
+printf '(define ends.low {ends --> fixnum} S -> (fx+ 1 (ends.high S)))\n' > "$dir/inner.shen"
+printf '(define-checked at {X : fixnum --> fixnum} {requires (fx= X 9)} X -> X)\n(defstruct ends (low : fixnum) (high : fixnum))\n(load "%s/inner.shen")\n(define-checked uses {--> fixnum} -> (at (ends.low (ends.make 9 7))))\n' "$dir" > "$dir/outer.shen"
+printf '(define buffer.length {buffer.view --> fixnum} V -> (fx- 0 1))\n' > "$dir/library1.shen"
+printf '(define-checked buffer.length {buffer.view --> fixnum} V -> (fx- 0 1))\n' > "$dir/library3.shen"
+printf '(define-checked from-0 {N : fixnum --> fixnum} {requires (fx<= 0 N)} N -> N)\n(define uses {buffer.view --> fixnum} V -> (from-0 (buffer.length V)))\n' > "$dir/library2.shen"
+printf '(define buffer.length V -> -1)\n' > "$dir/untyped.shen"
+printf '(let A (tc -) B (load "untyped.shen") (tc +))\n' > "$dir/library4.shen"
+printf '(eval-kl [defun buffer.length [(protect V)] -1])\n(update-lambda-table buffer.length 1)\n(declare buffer.length [number --> fixnum])\n' > "$dir/bare.shen"
+printf '(let A (tc -) B (load "bare.shen") (tc +))\n' > "$dir/library5.shen"
+printf '(define-checked from-0 {N : fixnum --> fixnum} {requires (fx<= 0 N)} N -> N)\n(define uses {number --> fixnum} V -> (from-0 (buffer.length V)))\n' > "$dir/library6.shen"
+for n in '-l outer.shen' \
+    '-m buffer -l library1.shen -l library2.shen' '-m buffer -l library3.shen -l library2.shen' '-m buffer -l library4.shen -l library2.shen' \
+    '-l library5.shen -l library6.shen'; do
+    if (cd "$dir" && "$SHEN" eval -m refine $(echo "$n" | sed 's/ -l.*//; s/^-l.*//') -e '(tc +)' $(echo "$n" | sed 's/^-m [a-z]* //')) > "$dir/names.out" 2>&1; then echo "accepted: $n"; exit 1; fi
+    grep -q 'type error in rule 1 of uses: .*, which may not be so' "$dir/names.out"
+done
+# A condition that was proved is tested too, as what was proved may no longer be so, until that is not asked for.
+printf '(define-checked at-1 {X : fixnum --> fixnum} {requires (fx= X 1)} X -> X)\n(define-checked one {--> R : fixnum} {ensures (fx= R 1)} -> 1)\n' > "$dir/one.shen"
+for n in before during after; do printf '(define %s {--> fixnum} -> (at-1 (one)))\n' $n > "$dir/$n.shen"; done
+printf '(refine.test +)\n' > "$dir/on.shen"
+printf '(refine.test -)\n' > "$dir/off.shen"
+"$SHEN" eval -m refine -e '(tc +)' -l "$dir/off.shen" -l "$dir/one.shen" -l "$dir/on.shen" -l "$dir/before.shen" -l "$dir/off.shen" -l "$dir/off.shen" -l "$dir/during.shen" -l "$dir/on.shen" -l "$dir/after.shen" \
+    -e '(tc -)' -e '(define one -> 2)' -e '(define try F -> (trap-error (thaw F) (/. E (error-to-string E))))' \
+    -e '(output "~A, ~A, ~A, ~A~%" (try (freeze (before))) (during) (try (freeze (after))) (try (freeze (refine.test yes))))' > "$dir/tested.out" 2>&1
+grep -qxF 'at-1: not so: (fx= X 1), 2, at-1: not so: (fx= X 1), refine.test expects a + or a -' "$dir/tested.out"
+# A function that tests when it is defined has no body to go to.
+"$SHEN" eval -m refine -e '(tc +)' -l "$dir/one.shen" -l "$dir/off.shen" -l "$dir/during.shen" -e '(tc -)' -e '(define one -> 2)' \
+    -e '(output "~A~%" (trap-error (during) (/. E (error-to-string E))))' > "$dir/tested.out" 2>&1
+grep -qx 'at-1: not so: (fx= X 1)' "$dir/tested.out"
+# What was proved of a contract calls a definition of it under (tc -), which tests it.
+for n in 1 2; do printf '(define-checked f {X : fixnum --> fixnum} {requires (fx> X 0)} X -> %s)\n' $n > "$dir/f$n.shen"; done
+for n in g h; do printf '(define %s {fixnum --> fixnum} X -> (f 5))\n' $n > "$dir/$n.shen"; done
+"$SHEN" eval -m refine -e '(refine.test -)' -e '(tc +)' -l "$dir/f1.shen" -l "$dir/g.shen" -e '(tc -)' -l "$dir/f2.shen" -e '(tc +)' -l "$dir/h.shen" \
+    -e '(output "~A ~A~%" (g 1) (h 1))' > "$dir/tested.out" 2>&1
+grep -qx '2 2' "$dir/tested.out"
+# A condition with a function given some of its arguments, or more than it takes, is tested as the reader makes it.
+printf '(define all? {(A --> boolean) --> (list A) --> boolean} _ [] -> true F [X | Xs] -> (and (F X) (all? F Xs)))\n(refine.pure all?)\n' > "$dir/partial.shen"
+printf '(define adder {fixnum --> (fixnum --> fixnum)} X -> (/. Y (fx+ X Y)))\n(define-checked over-3 {Ns : (list number) --> number} {requires (all? (< 3) Ns)} Ns -> (length Ns))\n' >> "$dir/partial.shen"
+printf '(define-checked added {X : fixnum --> fixnum} {requires (fx> (adder X 1) 0)} X -> X)\n' >> "$dir/partial.shen"
+"$SHEN" eval -m refine -e '(tc +)' -l "$dir/partial.shen" -e '(output "~A ~A~%" (over-3 [4 5]) (added 5))' > "$dir/tested.out" 2>&1
+grep -qx '2 5' "$dir/tested.out"
+# A module asks for itself, and not for one that requires it, nor for a file.
+printf '(shen.module (version 1) (name untested) (requires refine) (sources tc- "test.shen" tc+ "one.shen" "during.shen"))\n' > "$dir/untested.shenmod"
+printf '(shen.module (version 1) (name tested) (requires refine untested) (sources tc+ "before.shen"))\n' > "$dir/tested.shenmod"
+printf '(shen.x.namespace untested (use refine => r) (r.test -))\n' > "$dir/test.shen"
+"$SHEN" eval -m "$dir/untested.shenmod" -m "$dir/tested.shenmod" -e '(tc +)' -l "$dir/after.shen" -e '(tc -)' \
+    -e '(define one -> 2)' -e '(define try F -> (trap-error (thaw F) (/. E (error-to-string E))))' \
+    -e '(output "~A, ~A, ~A~%" (try (freeze (before))) (during) (try (freeze (after))))' > "$dir/tested.out" 2>&1
+grep -qxF 'at-1: not so: (fx= X 1), 2, at-1: not so: (fx= X 1)' "$dir/tested.out"
+printf '(shen.module (version 1) (name asked) (requires refine) (sources tc- "asked.shen"))\n' > "$dir/asked.shenmod"
+printf '(shen.x.namespace asked (use refine => r) (r.test +))\n' > "$dir/asked.shen"
+"$SHEN" eval -m refine -e '(tc +)' -l "$dir/off.shen" -l "$dir/one.shen" -m "$dir/asked.shenmod" -l "$dir/during.shen" -e '(tc -)' -e '(define one -> 2)' -e '(output "~A~%" (during))' > "$dir/tested.out" 2>&1
+grep -qx 2 "$dir/tested.out"
+# What a rule types without looking inside is asked for all the same.
+printf '(datatype any\n  _______\n  X : any;)\n' > "$dir/any.shen"
+printf '(define-checked promises {X : fixnum --> R : any} {ensures (fx= X 0)} X -> X)\n' > "$dir/any1.shen"
+printf '(define-checked from-0 {N : fixnum --> fixnum} {requires (fx<= 0 N)} N -> N)\n(define uses {fixnum --> any} N -> (from-0 N))\n' > "$dir/any2.shen"
+for n in '1 promises: promises promises (fx= X 0)' '2 uses: from-0 needs (fx<= 0 N)'; do
+    if "$SHEN" eval -e '(tc +)' -l "$dir/any.shen" -e '(tc -)' -m refine -e '(tc +)' -l "$dir/any${n%% *}.shen" > "$dir/any.out" 2>&1; then echo "accepted: $n"; exit 1; fi
+    grep -q "type error in rule 1 of ${n#* }, which may not be so" "$dir/any.out"
+done
+# What an independent review found to be believed, refused or never answered, and should not be.
+cases tests/refine_sound.shen
+
+# Functions that load never break what they proved, nor promise what they do not give.
+"$SHEN" eval -m refine -l tests/smt-generate.shen -l tests/refine-generate.shen -e "(refine-generate.run \"$dir\" 5 ${SMT_FUNCTIONS:-500})" \
+    -e '(map (/. X (output "BROKEN ~A~%" X)) (value refine-generate.*broken*))' \
+    -e '(output "generated: ~A loaded, ~A refused, ~A broken, ~A with a promise~%" (value refine-generate.*loaded*) (value refine-generate.*refused*) (length (value refine-generate.*broken*)) (value refine-generate.*promising*))' \
+    > "$dir/generated.out" 2>&1
+grep -aq '^generated: [1-9][0-9][0-9]* loaded, [1-9][0-9][0-9]* refused, 0 broken, [1-9][0-9]* with a promise$' "$dir/generated.out"
+# The same of lists, symbols, numbers, predicates and calls that are not always made.
+"$SHEN" eval -m refine -l tests/smt-generate.shen -l tests/refine-generate.shen -e "(refine-generate.run-data \"$dir\" 13 ${SMT_FUNCTIONS:-250})" \
+    -e '(map (/. X (output "BROKEN ~A~%" X)) (value refine-generate.*broken*))' \
+    -e '(output "generated: ~A loaded, ~A refused, ~A broken~%" (value refine-generate.*loaded*) (value refine-generate.*refused*) (length (value refine-generate.*broken*)))' \
+    > "$dir/generated-data.out" 2>&1
+grep -aq '^generated: [1-9][0-9][0-9]* loaded, [1-9][0-9][0-9]* refused, 0 broken$' "$dir/generated-data.out"
+# And of shifts, masks, remainders of any sign, products of two, element? and calls in a do.
+"$SHEN" eval -m refine -l tests/smt-generate.shen -l tests/refine-generate.shen -e "(refine-generate.run-wide \"$dir\" 13 ${SMT_FUNCTIONS:-250})" \
+    -e '(map (/. X (output "BROKEN ~A~%" X)) (value refine-generate.*broken*))' \
+    -e '(output "generated: ~A loaded, ~A refused, ~A broken~%" (value refine-generate.*loaded*) (value refine-generate.*refused*) (length (value refine-generate.*broken*)))' \
+    > "$dir/generated-wide.out" 2>&1
+grep -aq '^generated: [1-9][0-9][0-9]* loaded, [1-9][0-9][0-9]* refused, 0 broken$' "$dir/generated-wide.out"
+# And of pairs, structs, lists and functions whose parts are of refined types, and of what changes.
+"$SHEN" eval -m refine -l tests/smt-generate.shen -l tests/refine-generate.shen -e "(refine-generate.run-shapes \"$dir\" 5 ${SMT_FUNCTIONS:-600})" \
+    -e '(map (/. X (output "BROKEN ~A~%" X)) (value refine-generate.*broken*))' \
+    -e '(output "generated: ~A loaded, ~A refused, ~A broken~%" (value refine-generate.*loaded*) (value refine-generate.*refused*) (length (value refine-generate.*broken*)))' \
+    > "$dir/generated-shapes.out" 2>&1
+grep -aq '^generated: [1-9][0-9][0-9]* loaded, [1-9][0-9][0-9]* refused, 0 broken$' "$dir/generated-shapes.out"
+# And of patterns, with wildcards, literals and variables again, and of what tries the next clause.
+"$SHEN" eval -m refine -l tests/smt-generate.shen -l tests/refine-generate.shen -e "(refine-generate.run-patterns \"$dir\" 5 ${SMT_FUNCTIONS:-600})" \
+    -e '(map (/. X (output "BROKEN ~A~%" X)) (value refine-generate.*broken*))' \
+    -e '(output "generated: ~A loaded, ~A refused, ~A broken, ~A with a promise~%" (value refine-generate.*loaded*) (value refine-generate.*refused*) (length (value refine-generate.*broken*)) (value refine-generate.*promising*))' \
+    > "$dir/generated-patterns.out" 2>&1
+grep -aq '^generated: [1-9][0-9][0-9]* loaded, [1-9][0-9][0-9]* refused, 0 broken, [1-9][0-9]* with a promise$' "$dir/generated-patterns.out"
+passed=$((passed + 34))
+
+# Under a namespace's own names, in a typed program, whose loop must be the plain one's.
+cat > "$dir/app.shenmod" <<'END'
+(shen.module (version 1) (name app) (typed) (requires refine) (main app.main) (sources tc+ "app.shen"))
+END
+cat > "$dir/app.shen" <<'END'
+(shen.x.namespace app
+  (use refine => r)
+  (use shen-jit)
+  (import refine define-checked => checked)
+  (externals [buffer.storage])
+  (export main add-up plain)
+
+  (r.test -)
+  (r.type natural N where (fx<= 0 N))
+
+  (checked byte-at {B : buffer.storage --> I : fixnum --> natural}
+    {requires (fx<= 0 I) (fx< I (shen-jit.bytes-length B))}
+    B I -> (shen-jit.u8 B I))
+
+  (r.define-checked add-up {B : buffer.storage --> I : fixnum --> N : fixnum --> fixnum --> fixnum}
+    {requires (fx<= 0 I) (fx<= N (shen-jit.bytes-length B))}
+    _ I N Acc -> Acc where (fx>= I N)
+    B I N Acc -> (let J (fx+ I 1) (add-up B J N (fx+ Acc (byte-at B I)))))
+
+  (define plain {buffer.storage --> fixnum --> fixnum --> fixnum --> fixnum}
+    _ I N Acc -> Acc where (fx>= I N)
+    B I N Acc -> (let J (fx+ I 1) (plain B J N (fx+ Acc (shen-jit.u8 B I)))))
+
+  (r.define-checked main {--> symbol}
+    -> (let B (shen-jit.u8! (shen-jit.u8! (shen-jit.bytes 5) 1 30) 4 12)
+            N (shen-jit.bytes-length B)
+         (do (output "sum ~A ~A~%" (add-up B 0 N 0) (plain B 0 N 0)) done))))
+END
+cat > "$dir/code.shen" <<'END'
+(define instructions
+  F -> (mapcan (/. I (if (= (hd I) inline) [] [I])) (hd (tl (tl (tl (tl (tl (hd (tl (tl (shen-jit.code F))))))))))))
+(output "same code: ~A~%" (= (instructions (tl (hd (get app.add-up refine.bodies)))) (instructions app.plain)))
+END
+"$SHEN" eval -m "$dir/app.shenmod" -l "$dir/code.shen" > "$dir/code.out" 2>&1
+grep -qxF 'same code: true' "$dir/code.out"
+for closed in '' --closed; do
+    "$SHEN" build "$dir/app.shenmod" $closed -o "$dir/app.exe" > "$dir/build.out" 2>&1
+    "$dir/app.exe" > "$dir/app.out" 2>&1
+    grep -qxF 'sum 42 42' "$dir/app.out"
+done
+echo "$((passed + 3)) passed, 0 failed"

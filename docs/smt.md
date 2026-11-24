@@ -1,7 +1,8 @@
 # Formulas over the integers
 
 [lib/smt.shen](../lib/smt.shen) tells whether formulas over the integers can hold together: it gives values for
-which they do, or a proof that there are none. Its module is `smt`, and it is Shen alone.
+which they do, or a proof that there are none. Its module is `smt`, and it is Shen alone. [`refine`](refine.md)
+checks typed code with it.
 
 ```sh
 shen-jit eval -m smt -l program.shen

@@ -17,6 +17,7 @@ local PAGES = {
   words = 'Arrays of words',
   bignum = 'Bignums',
   smt = 'Formulas over the integers',
+  refine = 'Conditions, proved',
   option = 'Optional values',
   result = 'Results',
   buffers = 'Buffers and cursors',
@@ -47,7 +48,7 @@ local PAGES = {
 }
 local GROUPS = {
   { label = 'Internals & performance', pages = { 'design', 'semantics', 'bytecode', 'performance', 'ffi' } },
-  { label = 'Language & types', pages = { 'structs', 'modules', 'numbers', 'floats', 'word', 'words', 'bignum', 'smt', 'option', 'result' } },
+  { label = 'Language & types', pages = { 'structs', 'modules', 'numbers', 'floats', 'word', 'words', 'bignum', 'smt', 'refine', 'option', 'result' } },
   { label = 'Bytes & parsing', pages = { 'buffers', 'bytes', 'layout', 'grammar', 'json', 'tree-sitter' } },
   { label = 'I/O & systems', pages = { 'io', 'framing', 'deadlines', 'fs', 'processes', 'io-sockets', 'parallel' } },
   { label = 'Networking', pages = { 'networking', 'net-udp', 'net-tcp', 'net-tun' } },

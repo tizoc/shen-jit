@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name refine)
+  (requires numbers smt)
+  (sources tc- "refine.shen" "refine-prove.shen" "refine-walk.shen" "refine-facts.shen"))

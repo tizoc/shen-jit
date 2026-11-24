@@ -31,7 +31,7 @@
             [make | struct.make]
             [union | struct.union]])
          (shen.initialise-arity-table [slot 2 slot! 3 ref 3 allocate 2 tagged 2 shown 2 pattern 4 record-reader 3
-                                       record-constructor 1 constructor-rule-needed? 1])
+                                       record-constructor 1 constructor-rule-needed? 1 reader-name 2])
          (shen.set-lambda-form-entry (shen.lambda-entry pattern))
          (shen.x.programmable-pattern-matching.register-handler pattern)
          (declare slot [(protect A) --> [number --> (protect B)]])
@@ -376,9 +376,13 @@
   X -> X)
 
 \\ Remember the entry installed by the generated declaration. A later declaration
-\\ for the same name installs a new entry, even when the function is unchanged.
+\\ for the same name installs a new entry, even when the function is unchanged. And the
+\\ procedures of the constructors and the test, as record-reader does those of the readers.
 (define record-constructor
-  F -> (do (put F constructor-signature (assoc F (value shen.*sigf*))) F))
+  F -> (let Name (struct-of F)
+         (do (put F constructor-signature (assoc F (value shen.*sigf*)))
+             (map (/. G (put G shen-jit.struct.procedure (shen-jit.function G))) [(member Name make) F (predicate-name Name)])
+             F)))
 
 (define constructor-rule-needed?
   F -> (or (not (shen.type-theory-enabled?))

@@ -120,11 +120,12 @@ test-bignum: $(BUILD)/shen-jit $(BUILD)/shen-jit-stlib
 	sh tests/bignum.sh $(SHEN_JIT) $(abspath $(BUILD)/shen-jit-stlib)
 	sh tests/refused.sh $(SHEN_JIT) tests/bignum_refused.shen -m bignum
 
-# Formulas over the integers.
+# Formulas over the integers, and what refine proves with them as typed code is checked.
 .PHONY: test-smt test-smt-z3
 test-smt: $(BUILD)/shen-jit $(BUILD)/shen-jit-stlib
 	sh tests/smt.sh $(SHEN_JIT) $(abspath $(BUILD)/shen-jit-stlib)
 	sh tests/refused.sh $(SHEN_JIT) tests/smt_refused.shen -m smt
+	SHEN_JIT_MAX_HEAP=512M sh tests/refused.sh $(SHEN_JIT) tests/refine_refused.shen -m refine -m buffer
 
 # The same formulas against Z3, an independent solver, if z3 is there.
 test-smt-z3: $(BUILD)/shen-jit
@@ -308,7 +309,7 @@ check-docs:
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words bignum smt option result buffers bytes layout grammar io fs processes parallel tree-sitter framing io-sockets git hyperloglog networking net-udp net-tcp net-tun deadlines http-head http http-streaming http-listener json datalog curl
+GUIDE_PAGES := design semantics bytecode ffi performance structs modules numbers floats word words bignum smt refine option result buffers bytes layout grammar io fs processes parallel tree-sitter framing io-sockets git hyperloglog networking net-udp net-tcp net-tun deadlines http-head http http-streaming http-listener json datalog curl
 PANDOC ?= pandoc
 GUIDE_PANDOC := $(PANDOC) -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
