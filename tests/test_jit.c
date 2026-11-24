@@ -150,6 +150,7 @@ int main(int argc, char **argv)
         fprintf(stderr, "cannot create the VM\n");
         return 1;
     }
+    vm->max_words = (size_t)1 << 27; /* 1 GiB: a bug may allocate without end */
     LoadStats stats = {0};
     const char *error = NULL;
     if (!load_stage0(vm, text, len, &stats, &error)) {

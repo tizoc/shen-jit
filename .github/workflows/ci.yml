@@ -15,6 +15,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # No limit, unlike the Makefile's: what people run has none.
+  SHEN_JIT_MAX_HEAP: ''
+
 jobs:
   tarball:
     runs-on: ubuntu-24.04

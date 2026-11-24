@@ -360,6 +360,12 @@ test-kl-stress: $(BUILD)/test_kl $(BUILD)/stage0/.done
 # Linux, truncating it).
 KERNEL_DIR ?= .deps/kernel
 SHEN_JIT := $(abspath $(BUILD)/shen-jit)
+
+# A test that a bug makes allocate without end stops here, and not when the machine has no memory left.
+# Some tests set less. SHEN_JIT_MAX_HEAP= (empty) is no limit, as in CI: with one, large objects take
+# their words from the allocation area's room, so collections come at other times.
+test-% check-lowerer fuzz-native differential-scheme: export SHEN_JIT_MAX_HEAP ?= 1G
+
 RESULTS := grep -A1 '^passed \.\.\.' | tail -2 | awk '{ print } END { exit !/failed \.\.\. 0$$/ }'
 
 test-kernel: all $(FFI_TEST_LIB)

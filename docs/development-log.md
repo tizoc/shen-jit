@@ -2826,6 +2826,26 @@ A renamed definition calls the port's everything else, so a difference belongs t
 - **Does it notice?** Sixteen bugs planted in the port, one at a time, each failed: no undo in the unifier, no occurs check, a binding order swapped, `shen.deref` stopping at a pair, the gensym count, `shen.record-kl` always adding, a wrong exponent past the fixnum range in `shen.compute-integer` and in `shen.compute-E`, a zero digit's place lost in `shen.compute-fraction-h`, a missed code in `shen.misc?`, a missed `+` in `shen.<atom>`, the dictionary's count, `read-file-as-string` giving bytes, `fn`'s error as a value, what `shen.record-and-evaluate` returns, a dropped free-variable check. Three more broke the reader the test itself is read with: that fails too. A new override that the test does not name fails, as does a listed difference that no longer shows.
 - **Left out:** `shen.read-evaluate-print`, `shen.toplevel-display-exception` and `shen.x.launcher.main`, which read the REPL's input, display what reaches the top and end the process, as `tests/cli.sh` checks. `hash` at a bound below 1, where the kernel's never ends. Values of `hash`, which differ by design, so only its range. Running the rules together: `shen.<atom>` runs on the port's number functions, each checked alone.
 
+### A limit on every test's heap (2026-11-23, Apple M3 Max, 64 GB, macOS arm64)
+
+Bugs planted in two libraries as they were written, `smt` and `refine`, were run with a timeout that killed `sh` and left `shen-jit` under it allocating,
+and four at once ended in a kernel panic, twice: the compressor's segments ran out, with 62 swap files. Nothing had limited them:
+without `SHEN_JIT_MAX_HEAP` a heap grows to what it reserves, 64 GiB, and its area is five times what is live, so 12.8 GiB live is enough.
+
+- **Not a regression.** A program with 91 MB live peaks at 464 MB in 0.1 and 433 MB in 0.12. Physical memory was never considered.
+- **The limit is in the Makefile,** 1 GB for `test-%`, `check-lowerer`, `fuzz-native` and `differential-scheme`, and not for benchmarks.
+  A variable set for a pattern of targets reaches what they run, their prerequisites and a `make` within: a shell in place of make's
+  saw it in every line of 18 test targets and in none of 6 that time something (GNU make 3.81). `native_fuzz.py` sets 256 MB, as
+  what it runs is mutated, and `curl.py` kills what it stops waiting for.
+- **Room to spare.** `test-core` and `test-libs` pass at 256 MB too. At 1 GB the stress suites and the fuzzer pass as well.
+- **Does it stop one?** A program that keeps everything it makes ended in 0.9 s, at 2.2 GB, with "out of memory". A process peaked at
+  2.2 to 2.8 times the limit, from 64 MB to 1 GB.
+- **A limit does not end a loop.** One planted bug, whose tests trap errors, ran past 25 s at 256 MB. Only killing its process group ends it.
+- **CI stays without one,** to run what people run. With any limit, however far off, a large object takes its words from the area's
+  room (`vm_alloc_object`), so collections come at other times: not only near the limit.
+- **Left for later:** a default from physical memory, which every isolate would have for itself, and an area that grows by less
+  than five times for a large heap. Neither was measured.
+
 ### The REPL and small decisions
 
 - **End of input ends the process, status 0 (2026-11-01).** The kernel's REPL, and so Shen/Scheme, prints "empty stream" at every

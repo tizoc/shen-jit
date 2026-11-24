@@ -112,6 +112,12 @@ Keep each suite fast. A check that needs a collection at every allocation, a lon
 stress target that CI runs, as `test-lib-stress` holds the libraries' saved images reloaded under GC stress: a test
 script runs such a part only when `TEST_GC_STRESS=1`.
 
+Under `make`, each test's heap is limited to 1 GB, and the C test programs that run Shen limit theirs.
+`SHEN_JIT_MAX_HEAP=SIZE make ...` sets another limit, and an empty one none, as in CI. A test script run directly has no
+limit unless it sets one: give it one for planted bugs, and for mutated or generated code, as four processes without
+one took a 64 GB machine down. A process can use nearly three times its limit, and a limit does not end a loop: run such
+code in a process group of its own and kill the group at a timeout, since killing `sh` or `make` alone leaves `shen-jit` running.
+
 `make test-curl` builds the optional adapter with libcurl's development headers, then runs an independent
 loopback HTTP/TLS fixture with Python 3 and the `openssl` command. Static builds run the pure checks and
 explicitly skip the native part. `make curl` builds the adapter for applications; ordinary builds do not need it.

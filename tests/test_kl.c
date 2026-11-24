@@ -398,7 +398,10 @@ int main(int argc, char **argv)
         return 2;
     }
     vm = vm_create(1 << 22, 1 << 16);
-    if (!vm || !jit_init(vm) || !load_stage0_dir(argv[1]) || !sj_init_host(vm))
+    if (!vm)
+        return 1;
+    vm->max_words = (size_t)1 << 27; /* 1 GiB: a bug may allocate without end */
+    if (!jit_init(vm) || !load_stage0_dir(argv[1]) || !sj_init_host(vm))
         return 1;
     *global_slot_new(vm, intern_cstr(vm, "shen.*gensym*")) = fix(0);
     bool stress = argc > 3 && strcmp(argv[3], "--stress") == 0;

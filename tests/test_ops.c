@@ -161,6 +161,8 @@ int main(int argc, char **argv)
     vm = vm_create(1 << 16, 1 << 16);
     LoadStats stats = {0};
     const char *error = NULL;
+    if (vm)
+        vm->max_words = (size_t)1 << 27; /* 1 GiB: a bug may allocate without end */
     if (!vm || !jit_init(vm) || !load_stage0(vm, text, len, &stats, &error)) {
         fprintf(stderr, "setup failed: %s\n", error ? error : "VM");
         return 1;

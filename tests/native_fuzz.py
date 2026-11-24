@@ -153,7 +153,7 @@ def run(binary, cases, stress):
             for c in cases:
                 f.write(f'(fuzz.try {show(c)})\n')
             f.write('(output "accepted ~A~%" (value fuzz.*accepted*))\n')
-        env = dict(os.environ, SHEN_JIT_GC_STRESS=str(stress))
+        env = dict(os.environ, SHEN_JIT_GC_STRESS=str(stress), SHEN_JIT_MAX_HEAP='256M') # mutated code may allocate without end
         try:
             p = subprocess.run([binary, 'eval', '-l', path], env=env, capture_output=True, text=True,
                                timeout=1 + len(cases) // 25)

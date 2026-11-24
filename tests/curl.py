@@ -197,7 +197,10 @@ def main():
                     produced = server.produced
                 finally:
                     server.sink_release.set()
-                    pressure.wait(timeout=40)
+                    try:
+                        pressure.wait(timeout=40)
+                    finally:
+                        pressure.kill()
                 out,err = out_path.read_text(),err_path.read_text()
                 assert reached,('stream never reached the sink',out[-1000:],err)
                 assert produced < 67108864//4, f'slow sink allowed {produced} bytes to be produced'
