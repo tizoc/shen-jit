@@ -143,6 +143,15 @@
   N N -> [N]
   I N -> [I | (refine-test.up-to (+ I 1) N)])
 
+\\ Of each two numbers, and of those beside what 8, 16 and 32 bits hold.
+(define refine-test.widths?
+  F -> (refine-test.every? (/. A (refine-test.every? (/. B (refine-test.trusted F [A B])) (refine-test.beside))) (refine-test.beside)))
+
+(define refine-test.beside
+  -> (append [254 256 257 65534 65536 65537 4294967294 4294967296] (refine-test.numbers)))
+
+(refine-test.check "widths" [true true true] (freeze (map (fn refine-test.widths?) [shen-jit.bit-or shen-jit.bit-xor shen-jit.bit-and])))
+
 (refine-test.check "shifts and masks by constants" [true true true true [true true true true true] false]
   (freeze [(refine-test.every-bits? shen-jit.shift-right (refine-test.up-to 0 40))
            (refine-test.every-bits? shen-jit.shift-left (refine-test.up-to 0 40))

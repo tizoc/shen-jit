@@ -20,7 +20,7 @@
   (use smt)
   (use shen-jit)
   (use shen)
-  (externals [verified fixnum unit define-checked requires ensures trusts layout.made])
+  (externals [verified fixnum unit define-checked requires ensures trusts layout.size layout.made])
   (export define-checked refine.contract => contract refine.type => type refine.trust => trust refine.pure => pure refine.test => test)
 
 \\ ---------------------------------------------------------------------------
@@ -277,6 +277,14 @@
 
 (define comparison?
   Op -> (element? Op [= fx= fx< fx> fx<= fx>= < > <= >= fl< fl> fl<= fl>=]))
+
+\\ The length of a layout, for the function that gives it (lib/layout.shen).
+(define layout-size
+  F -> (size-of F (declared F layout.size none) (assoc F (value *operations*))))
+
+(define size-of
+  F [Procedure | N] Entry -> N where (and (as-it-was? F Procedure) (or (empty? Entry) (= N (tl Entry))))
+  _ _ _ -> none)
 
 \\ A list whose elements are there.
 (define written?

@@ -67,10 +67,50 @@
 (define-checked by-spread {fixnum --> fixnum} N -> (let S (spread N) (small (fx+ 1 (fxquotient S 2)))))
 (define-checked by-digit {digit --> fixnum} N -> (small (fx+ 1 (fxquotient N 3))))
 
+\\ HalfSipHash's rounds, as lib/net/tcp-listener.shen had them over a view, but for their types: each stored word has 32 bits.
+(refine.type hash-state V : buffer.view where (fx= 16 (buffer.length V)))
+(refine.type u32 N where (and (fx<= 0 N) (fx<= N 4294967295)))
+(define-checked add32 {fixnum --> fixnum --> u32} A B -> (shen-jit.bit-and (fx+ A B) 4294967295))
+(define rotate32
+  {fixnum --> fixnum --> u32}
+  X Bits -> (add32 (shen-jit.shift-left X Bits) (shen-jit.shift-right X (fx- 32 Bits))))
+(define-checked hash-round
+  {hash-state --> hash-state}
+  H ->
+    (let V0 (buffer.u32-be H 0)
+         V1 (buffer.u32-be H 4)
+         V2 (buffer.u32-be H 8)
+         V3 (buffer.u32-be H 12)
+         A (add32 V0 V1)
+         B (shen-jit.bit-xor (rotate32 V1 5) A)
+         C (add32 V2 V3)
+         D (shen-jit.bit-xor (rotate32 V3 8) C)
+         E (add32 (rotate32 A 16) D)
+         G (add32 C B)
+      (do (buffer.u32-be-> H 0 E)
+          (buffer.u32-be-> H 4 (shen-jit.bit-xor (rotate32 B 13) G))
+          (buffer.u32-be-> H 8 (rotate32 G 16))
+          (buffer.u32-be-> H 12 (shen-jit.bit-xor (rotate32 D 7) E)))))
+(define-checked hash-word
+  {hash-state --> u32 --> hash-state}
+  H W ->
+    (do (buffer.u32-be-> H 12 (shen-jit.bit-xor (buffer.u32-be H 12) W))
+        (hash-round (hash-round H))
+        (buffer.u32-be-> H 0 (shen-jit.bit-xor (buffer.u32-be H 0) W))))
+(define-checked hash-end
+  {hash-state --> Bytes : fixnum --> fixnum}
+  {requires (fx<= 0 Bytes) (fx<= Bytes 255)}
+  H Bytes ->
+    (do (hash-word H (shen-jit.shift-left Bytes 24))
+        (buffer.u32-be-> H 8 (shen-jit.bit-xor (buffer.u32-be H 8) 255))
+        (hash-round (hash-round (hash-round (hash-round H))))
+        (shen-jit.bit-xor (buffer.u32-be H 4) (buffer.u32-be H 12))))
+
 (define-checked refine-contracts.main
   {--> string}
   -> (let V (buffer.from-string "abcdefghijkl")
        (@s (make-string "~A ~A ~A ~A " (byte-or V 1) (byte-or V 12) (byte-guarded V 2) (byte-through V 3))
            (make-string "~A ~A ~A ~A " (if (fx>= (buffer.length V) 8) (nested V) 0) (sixteen V 70000) (buffer.length (pad (buffer.new 4) 1 4)) (if (fx>= (buffer.length V) 4) (equal-from? V 0 V 0 4) false))
            (make-string "~A ~A ~A ~A ~A" (next 4) (next-from-0 -3) (second [1 2 3] 0) (second [1] 9) (more 3))
-           (make-string " ~A ~A ~A ~A" (by-steps 7) (by-strides 1) (by-spread 0) (by-digit 9)))))
+           (make-string " ~A ~A ~A ~A" (by-steps 7) (by-strides 1) (by-spread 0) (by-digit 9))
+           (make-string " ~A" (hash-end (hash-word (buffer.u32-be-> (buffer.u32-be-> (buffer.new 16) 0 1819895653) 12 1952801890) 305419896) 4)))))

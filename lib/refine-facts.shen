@@ -31,9 +31,17 @@
 (refine.trust (shen-jit.bit-and A B) --> R where
   (and (or (fx< A 0) (and (fx<= 0 R) (fx<= R A))) (or (fx< B 0) (and (fx<= 0 R) (fx<= R B)))))
 (refine.trust (shen-jit.bit-or A B) --> R where
-  (or (fx< A 0) (fx< B 0) (and (fx<= A R) (fx<= B R) (fx<= R (fx+ A B)))))
+  (or (fx< A 0) (fx< B 0)
+      (and (fx<= A R) (fx<= B R) (fx<= R (fx+ A B))
+           (or (fx> A 255) (fx> B 255) (fx<= R 255))
+           (or (fx> A 65535) (fx> B 65535) (fx<= R 65535))
+           (or (fx> A 4294967295) (fx> B 4294967295) (fx<= R 4294967295)))))
 (refine.trust (shen-jit.bit-xor A B) --> R where
-  (or (fx< A 0) (fx< B 0) (and (fx<= 0 R) (fx<= R (fx+ A B)))))
+  (or (fx< A 0) (fx< B 0)
+      (and (fx<= 0 R) (fx<= R (fx+ A B))
+           (or (fx> A 255) (fx> B 255) (fx<= R 255))
+           (or (fx> A 65535) (fx> B 65535) (fx<= R 65535))
+           (or (fx> A 4294967295) (fx> B 4294967295) (fx<= R 4294967295)))))
 (refine.trust (shen-jit.shift-right A K) --> R where (if (fx>= A 0) (and (fx<= 0 R) (fx<= R A)) (and (fx< R 0) (fx<= A R))))
 (refine.trust (shen-jit.popcount N) --> R where (and (fx<= 0 R) (fx<= R 64)))
 (refine.trust (fxlimit V) --> R where (fx<= 0 R))

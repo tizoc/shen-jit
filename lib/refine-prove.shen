@@ -233,6 +233,7 @@
     where (and (= (length Formals) (length Args)) (brief? Args) (< (value *replaced*) 100))
   element? [X Ys] _ -> (one-of X Ys) where (written? Ys)
   = [A B] _ -> (new-value [= A B]) where (not (stays-equal? A B))
+  F [] _ -> (layout-size F) where (number? (layout-size F))
   F Args _ -> (if (and (pure? F) (steady? (known-type F (assoc F (value *types*))) Args)) (simplify [F | Args]) (new-value [F | Args])))
 
 \\ Whether what a function is given as functions are the same each time: pure ones, by name or with some of their

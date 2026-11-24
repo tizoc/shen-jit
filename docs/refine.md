@@ -142,7 +142,7 @@ gives one of those types to other values breaks that.
 | Numbers and floats | `<`, `<=`, `>`, `>=`, `fl<` and the rest, and `=`, by their order |
 | Symbols and strings | `=`, with each other and with constants, which are all different |
 | Any that `=` is read of | `element?` of a list that is written, as in `(element? Mode [read write])`, and `=` of lists and pairs that are |
-| Bytes and buffers | The length of what is made, sliced, copied into or written |
+| Bytes and buffers | The length of what is made, sliced, copied into or written, and the [layout](layout.md) sizes, as `(header.size)` |
 | Lists | `empty?`, `cons?` and `(= Xs [])`, and the `length` of one, of `append`, `reverse`, `map` and `tail` |
 | Pairs and structs | What `fst` and `snd`, and the reader of a field that does not change, give of one that was made |
 | Anything | What a pure function gives, as itself: a Boolean one is true or false, the same each time |
@@ -163,7 +163,7 @@ as a product of two variables, is something unknown. What cannot be read proves 
 - **Bits are arithmetic.** A shift to the right by a constant of up to 32 is a quotient rounded down, a mask of up to
   32 ones is the remainder that goes with it, and a shift to the left is a product where what is shifted fits in 24
   bits. Of `shen-jit.bit-or` and `shen-jit.bit-xor`, what is known is that they are no more than the sum, for numbers
-  from 0.
+  from 0, and have 8, 16 or 32 bits where both do.
 - **Other numbers have only their order.** Float arithmetic rounds, so `(+ X 1)` is some number and no more. And a
   float may be no number, for which every comparison is false: that `(< X 0)` is false says that X is at least 0 or is
   no number, so a guard that leaves only numbers from 0 to the clauses after it is `(not (>= X 0))`.

@@ -35,10 +35,10 @@ for shen in "$SHEN" ${2:+"$2"}; do
 done
 
 "$SHEN" eval -m refine -m buffer -e '(tc +)' -l tests/refine_bytes.shen -e '(tc -)' -e '(output "~A~%" (refine-bytes.main))' > "$dir/refine-bytes.out" 2>&1
-grep -qxF 'true false 2569 2 185207048 185207048 62 2 15 168297988 -123 -16 0 9 3 0 3 4 63 0 0 5 2 0 1 3 -1234' "$dir/refine-bytes.out"
+grep -qxF 'true false 2569 2 185207048 185207048 62 2 15 168297988 -123 -16 0 9 3 0 3 4 63 0 0 5 2 0 1 3 -1234 62 65295 4294967295' "$dir/refine-bytes.out"
 
 "$SHEN" eval -m buffer/contracts -e '(tc +)' -l tests/refine_contracts.shen -e '(tc -)' -e '(output "~A~%" (refine-contracts.main))' > "$dir/refine-contracts.out" 2>&1
-grep -qxF '98 -1 99 100 104 1734900351 4 true 6 1 2 9 0 4 1 4 4' "$dir/refine-contracts.out"
+grep -qxF '98 -1 99 100 104 1734900351 4 true 6 1 2 9 0 4 1 4 4 3773727229' "$dir/refine-contracts.out"
 
 # The documentation's example, and the same with one thing wrong: each a length, a test or a step.
 "$SHEN" eval -m refine -e '(tc +)' -l tests/refine_records.shen -e '(tc -)' \
@@ -130,6 +130,8 @@ grep -q '^type error: account.make needs (fx<= 0 -5)' "$dir/input.out"
 # Nor is what is known of a function by its name known of another in its place: a struct's, a layout's or a library's.
 printf '(define ends.low {ends --> fixnum} S -> (fx+ 1 (ends.high S)))\n' > "$dir/inner.shen"
 printf '(define-checked at {X : fixnum --> fixnum} {requires (fx= X 9)} X -> X)\n(defstruct ends (low : fixnum) (high : fixnum))\n(load "%s/inner.shen")\n(define-checked uses {--> fixnum} -> (at (ends.low (ends.make 9 7))))\n' "$dir" > "$dir/outer.shen"
+printf '(deflayout lay (tag 8) (length 16))\n(define lay.size {--> fixnum} -> 5)\n' > "$dir/layout1.shen"
+printf '(define-checked uses {--> R : fixnum} {ensures (fx= R 3)} -> (lay.size))\n' > "$dir/layout2.shen"
 printf '(define buffer.length {buffer.view --> fixnum} V -> (fx- 0 1))\n' > "$dir/library1.shen"
 printf '(define-checked buffer.length {buffer.view --> fixnum} V -> (fx- 0 1))\n' > "$dir/library3.shen"
 printf '(define-checked from-0 {N : fixnum --> fixnum} {requires (fx<= 0 N)} N -> N)\n(define uses {buffer.view --> fixnum} V -> (from-0 (buffer.length V)))\n' > "$dir/library2.shen"
@@ -140,7 +142,7 @@ printf '(let A (tc -) B (load "untyped.shen") (tc +))\n' > "$dir/library4.shen"
 printf '(eval-kl [defun buffer.length [(protect V)] -1])\n(update-lambda-table buffer.length 1)\n(declare buffer.length [number --> fixnum])\n' > "$dir/bare.shen"
 printf '(let A (tc -) B (load "bare.shen") (tc +))\n' > "$dir/library5.shen"
 printf '(define-checked from-0 {N : fixnum --> fixnum} {requires (fx<= 0 N)} N -> N)\n(define uses {number --> fixnum} V -> (from-0 (buffer.length V)))\n' > "$dir/library6.shen"
-for n in '-l outer.shen' '-m layout -l layout3.shen -l layout4.shen' \
+for n in '-l outer.shen' '-m layout -l layout1.shen -l layout2.shen' '-m layout -l layout3.shen -l layout4.shen' \
     '-m buffer -l library1.shen -l library2.shen' '-m buffer -l library3.shen -l library2.shen' '-m buffer -l library4.shen -l library2.shen' \
     '-l library5.shen -l library6.shen'; do
     if (cd "$dir" && "$SHEN" eval -m refine $(echo "$n" | sed 's/ -l.*//; s/^-l.*//') -e '(tc +)' $(echo "$n" | sed 's/^-m [a-z]* //')) > "$dir/names.out" 2>&1; then echo "accepted: $n"; exit 1; fi
@@ -224,7 +226,7 @@ grep -aq '^generated: [1-9][0-9][0-9]* loaded, [1-9][0-9][0-9]* refused, 0 broke
     -e '(output "generated: ~A loaded, ~A refused, ~A broken, ~A with a promise~%" (value refine-generate.*loaded*) (value refine-generate.*refused*) (length (value refine-generate.*broken*)) (value refine-generate.*promising*))' \
     > "$dir/generated-patterns.out" 2>&1
 grep -aq '^generated: [1-9][0-9][0-9]* loaded, [1-9][0-9][0-9]* refused, 0 broken, [1-9][0-9]* with a promise$' "$dir/generated-patterns.out"
-passed=$((passed + 34))
+passed=$((passed + 35))
 
 # Under a namespace's own names, in a typed program, whose loop must be the plain one's.
 cat > "$dir/app.shenmod" <<'END'
@@ -322,6 +324,23 @@ module laid 'buffer/contracts layout buffer' 'tc+ "lay.shen"'
 sed 's/(tl (hd (get app.add-up refine.bodies)))/scope.proved/; s/app.plain/scope.plain/' "$dir/code.shen" > "$dir/scope-code.shen"
 "$SHEN" eval -m "$dir/plain.shenmod" -m "$dir/proved.shenmod" -l "$dir/scope-code.shen" > "$dir/scope.out" 2>&1
 grep -qxF 'same code: true' "$dir/scope.out"
+# The size of a layout is the number it is, in a namespace or not.
+module lay layout 'tc+ "lay.shen"'
+cat > "$dir/sized.shen" <<'END'
+(define-checked after {V : buffer.view --> I : fixnum --> fixnum} {requires (fx<= 0 I) (fx< I (buffer.length V))} V I -> (buffer.u8 V I))
+(define-checked rest {V : buffer.view --> fixnum} {requires (fx> (buffer.length V) (lay.size))} V -> (let N (lay.size) (after V N)))
+(define-checked inside {V : buffer.view --> fixnum} {requires (fx>= (buffer.length V) 12)} V -> (after V (fx- (net-wire.dns.size) 1)))
+(define-checked seven {--> R : fixnum} {ensures (fx= R 7)} -> (fx+ 1 (lay.size)))
+END
+cat > "$dir/oversized.shen" <<'END'
+(define-checked after {V : buffer.view --> I : fixnum --> fixnum} {requires (fx<= 0 I) (fx< I (buffer.length V))} V I -> (buffer.u8 V I))
+(define-checked inside {V : buffer.view --> fixnum} {requires (fx>= (buffer.length V) 12)} V -> (after V (net-wire.dns.size)))
+END
+"$SHEN" eval -m refine -m "$dir/lay.shenmod" -m net/wire -e '(tc +)' -l "$dir/sized.shen" -e '(tc -)' \
+    -e '(output "~A ~A ~A ~A~%" (tl (get lay.size layout.size)) (lay.size) (tl (get net-wire.dns.size layout.size)) (net-wire.dns.size))' > "$dir/sized.out" 2>&1
+grep -qxF '6 6 12 12' "$dir/sized.out"
+if "$SHEN" eval -m refine -m net/wire -e '(tc +)' -l "$dir/oversized.shen" > "$dir/sized.out" 2>&1; then echo "accepted: past a layout"; exit 1; fi
+grep -q 'type error in rule 1 of inside: after needs (fx< 12 (buffer.length V))' "$dir/sized.out"
 # In a namespace.
 cat > "$dir/ns.shenmod" <<'END'
 (shen.module (version 1) (name ns) (requires refine buffer) (sources tc- "ns.shen" tc+ "ns-typed.shen"))
@@ -333,4 +352,4 @@ END
 cp "$dir/direct.shen" "$dir/ns-typed.shen"
 if "$SHEN" eval -m "$dir/ns.shenmod" > "$dir/scope.out" 2>&1; then echo "accepted: a namespace"; exit 1; fi
 grep -q 'type error in rule 1 of scope.direct: buffer.u8 needs (fx<= 0 I)' "$dir/scope.out"
-echo "$((passed + 16)) passed, 0 failed"
+echo "$((passed + 18)) passed, 0 failed"

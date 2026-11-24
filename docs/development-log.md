@@ -6504,6 +6504,20 @@ type carry process-specific data. The process and Tree-sitter application tests 
   generated functions, a quarter of which may call one with a contract from elsewhere, with nothing broken in 1,907,226 calls, and 24 bugs
   planted before the review, of which the suite caught 23, as this was first built.
 
+### The size of a layout and the width of xor (2026-11-24, Apple M3 Max, against the commit before)
+
+The two facts that conditions on the network code lacked.
+
+- **A layout's size is a number.** `deflayout` leaves the length as a property of `NAME.size`, which `refine` reads the call as, also where a `let` binds it. A
+  trust for each layout would have said as much, in every program that uses one.
+- **`bit-xor` and `bit-or` of numbers of 8, 16 or 32 bits have as many,** as three more alternatives for each. Only their sum bounded them before. Any other width is not known.
+- **The TCP listener's hash is proved,** as it was over a view, but for its types: the rounds of HalfSipHash, 16 reads and writes, each stored word of 32 bits, which failed at
+  the first stored `xor`. A file of it alone loads in 7.6 ms.
+- **What it costs.** Of 20,000 generated functions, none was refused that had not been, and as many ended for want of budget, 9, as this was first built.
+- **Checked:** each two of 35 numbers, beside what 8, 16 and 32 bits hold among them, for `or`, `xor` and `and`. 104 definitions must not load, and one past a
+  layout. The sizes of two layouts, one in a namespace, against what their functions give. As this was first built, 10,000 generated functions, with nothing broken in 954,747 calls, and 16 bugs planted, all
+  caught.
+
 ### What modules and typed programs cost outside typed code (2026-11-17, Apple M3 Max, against main)
 
 - **Image and startup.** The image is 1,339,584 bytes against 1,179,472 (+14%), most of it the lowerer, whose

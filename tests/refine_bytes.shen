@@ -55,6 +55,13 @@
   {B : buffer.storage --> I : fixnum --> J : fixnum --> fixnum}
   {requires (fx<= 0 I) (fx< I 4) (fx<= 0 J) (fx< J 4) (fx= 7 (shen-jit.bytes-length B))}
   B I J -> (byte B (shen-jit.bit-xor I J)))
+\\ What is of 8, 16 or 32 bits stays so.
+(refine.type u8 N where (and (fx<= 0 N) (fx<= N 255)))
+(refine.type u16 N where (and (fx<= 0 N) (fx<= N 65535)))
+(refine.type u32 N where (and (fx<= 0 N) (fx<= N 4294967295)))
+(define-checked mixed8 {u8 --> u8 --> u8} A B -> (shen-jit.bit-xor A (shen-jit.bit-or B 129)))
+(define-checked mixed16 {u16 --> u8 --> u16} A B -> (shen-jit.bit-or A (shen-jit.bit-xor A B)))
+(define-checked mixed32 {u32 --> u16 --> u32 --> u32} A B C -> (shen-jit.bit-xor (shen-jit.bit-or A B) (shen-jit.bit-xor C 1819895653)))
 (define-checked middle
   {B : buffer.storage --> Low : fixnum --> High : fixnum --> fixnum}
   {requires (fx<= 0 Low) (fx< Low High) (fx<= High (shen-jit.bytes-length B))}
@@ -157,4 +164,5 @@
                (make-string "~A ~A ~A ~A " (last-of-new 3) (last-written) (copied F) (sliced V))
                (make-string "~A ~A ~A ~A " (padded) (wrapped) (checked B 63) (trap-error (checked B 64) (/. X 0)))
                (make-string "~A ~A ~A ~A " (checked-if B 2) (checked-if B 5) (accessed write) (accessed close))
-               (make-string "~A ~A ~A" (accessing read) (accessing other) (parted -1234))))))
+               (make-string "~A ~A ~A " (accessing read) (accessing other) (parted -1234))
+               (make-string "~A ~A ~A" (mixed8 255 64) (mixed16 65280 15) (mixed32 4294967295 1 1819895653))))))

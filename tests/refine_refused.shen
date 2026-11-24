@@ -318,6 +318,17 @@
 \\ next
 (define-checked refused {P : (fixnum * fixnum) --> R : fixnum} {ensures (fx<= R (fst P))} (@p A B) -> (let A B A))
 \\ next
+\\ One bit more than both have, one that has more, and one that may be negative.
+(refine.type u8 N where (and (fx<= 0 N) (fx<= N 255)))
+(define-checked refused {u8 --> N : fixnum --> u8} {requires (fx<= 0 N) (fx<= N 256)} A N -> (shen-jit.bit-xor A N))
+\\ next
+(refine.type u8 N where (and (fx<= 0 N) (fx<= N 255)))
+(refine.type u16 N where (and (fx<= 0 N) (fx<= N 65535)))
+(define-checked refused {u8 --> u16 --> u8} A B -> (shen-jit.bit-or A B))
+\\ next
+(refine.type u32 N where (and (fx<= 0 N) (fx<= N 4294967295)))
+(define-checked refused {u32 --> N : fixnum --> u32} {requires (fx<= N 4294967295)} A N -> (shen-jit.bit-xor A N))
+\\ next
 \\ What is compared is of one type in the end.
 (refine.type natural N where (fx<= 0 N))
 (refine.type small N : natural where (fx< N 10))

@@ -46,14 +46,22 @@
   Name [_ | Fields] -> (layout.check-names Name Fields))
 
 (define layout.fields
-  Name [] Bit -> [(layout.size Name Bit)]
+  Name [] Bit -> (layout.size Name Bit)
   Name [[Field Bits] | Fields] Bit -> (append (layout.field Name Field Bits Bit)
                                               (layout.fields Name Fields (+ Bit Bits))))
 
+\\ The length is the function's property too, for refine to know what that function gives.
 (define layout.size
-  Name Bit -> [define (layout.name Name size "") { --> fixnum } -> (shen-jit.quotient Bit 8)]
+  Name Bit -> (let F (layout.name Name size "")
+                   Bytes (shen-jit.quotient Bit 8)
+                [[define F { --> fixnum } -> Bytes] [layout.sized F Bytes]])
     where (= (shen-jit.remainder Bit 8) 0)
   Name Bit -> (error "deflayout: ~A is ~A bits, not whole bytes" Name Bit))
+
+(define layout.sized
+  F Bytes -> (do (put F layout.size [(shen-jit.function F) | Bytes]) F))
+
+(declare layout.sized [symbol --> [number --> symbol]])
 
 (define layout.padding?
   Field -> (= Field (intern "_")))
