@@ -53,6 +53,8 @@ type error in rule 1 of record-length: byte-at needs (fx< (fx+ I 1) (shen-jit.by
 as if I is 0 and (shen-jit.bytes-length B) is 1
 ```
 
+There are more programs under [Examples](#examples).
+
 ## Contracts
 
 ```shen
@@ -305,6 +307,184 @@ rule is used:
 A condition that is not proved there fails as any premise does, and the type checker looks for another proof. Only
 guards are known there, as the type checker knows nothing else of a place, and a guard of a variable that a pattern
 reads from what may change is believed all the same.
+
+## Examples
+
+### A search that stays in its table
+
+```shen
+\\ The key at I of a table of 16-bit keys.
+(define-checked key-at
+  {Table : buffer.storage --> I : fixnum --> fixnum}
+  {requires (fx<= 0 I) (fx<= (fx* 2 (fx+ I 1)) (shen-jit.bytes-length Table))}
+  Table I -> (fx+ (fx* 256 (shen-jit.u8 Table (fx* 2 I))) (shen-jit.u8 Table (fx+ 1 (fx* 2 I)))))
+
+\\ Where a key is, from Low and before High, or -1.
+(define-checked search
+  {Table : buffer.storage --> Key : fixnum --> Low : fixnum --> High : fixnum --> R : fixnum}
+  {requires (fx<= 0 Low) (fx<= Low High) (fx<= (fx* 2 High) (shen-jit.bytes-length Table))}
+  {ensures (fx<= -1 R) (fx< R High)}
+  Table Key Low High
+  -> (if (fx= Low High)
+         -1
+         (let Middle (fxquotient (fx+ Low High) 2)
+              Found (key-at Table Middle)
+           (if (fx= Found Key)
+               Middle
+               (if (fx< Found Key)
+                   (search Table Key (fx+ Middle 1) High)
+                   (search Table Key Low Middle))))))
+
+(define index-of
+  {buffer.storage --> fixnum --> fixnum}
+  Table Key -> (search Table Key 0 (fxquotient (shen-jit.bytes-length Table) 2)))
+```
+
+A key is read only where there is one, as Middle is at least Low and less than High. That the table is sorted is not
+said: one that is not may give the wrong answer, and never reads outside it. Were `index-of` to take the table's length
+in bytes for the number of its keys:
+
+```text
+type error in rule 1 of index-of: search needs (fx<= (fx* 2 (shen-jit.bytes-length Table)) (shen-jit.bytes-length Table)),
+which may not be so, as if (shen-jit.bytes-length Table) is 1
+```
+
+### A date that exists
+
+```shen
+(refine.type month M where (and (fx<= 1 M) (fx<= M 12)))
+
+(define leap?
+  {fixnum --> boolean}
+  Y -> (or (fx= 0 (fxremainder Y 400)) (and (fx= 0 (fxremainder Y 4)) (not (fx= 0 (fxremainder Y 100))))))
+
+(define days-in
+  {fixnum --> month --> fixnum}
+  Y 2 -> (if (leap? Y) 29 28)
+  _ M -> (if (element? M [4 6 9 11]) 30 31))
+
+(refine.pure days-in)
+
+(defstruct date (year : fixnum) (month : month) (day : fixnum))
+
+(define-checked day
+  {Y : fixnum --> M : month --> D : fixnum --> date}
+  {requires (fx<= 1 D) (fx<= D (days-in Y M))}
+  Y M D -> (date.make Y M D))
+
+(define read-date
+  {fixnum --> fixnum --> fixnum --> date}
+  Y M D -> (if (and (fx<= 1 M) (fx<= M 12) (fx<= 1 D) (fx<= D (days-in Y M)))
+               (day Y M D)
+               (error "there is no ~A-~A-~A" Y M D)))
+```
+
+Whoever makes a date with `day` has asked how long its month is. Without `(refine.pure days-in)`, what `read-date` tests
+would say nothing of what `day` needs:
+
+```text
+type error in rule 1 of read-date: day needs (fx<= D (days-in Y M)), which may not be so, as if D is 1 and
+(days-in Y M) is 0. days-in is not declared pure, so (days-in Y M) may be another each time
+```
+
+With the month and the day the wrong way round, it is `day needs (fx<= D 12)`.
+
+### Money that is neither made nor lost
+
+```shen
+(refine.type money N where (fx<= 0 N))
+
+(defstruct account (owner : symbol) (balance : money))
+
+(define-checked withdraw
+  {A : account --> N : money --> R : account}
+  {requires (fx<= N (account.balance A))}
+  {ensures (fx= (account.balance R) (fx- (account.balance A) N))}
+  A N -> (account.make (account.owner A) (fx- (account.balance A) N)))
+
+(define-checked deposit
+  {A : account --> N : money --> R : account}
+  {ensures (fx= (account.balance R) (fx+ (account.balance A) N))}
+  A N -> (account.make (account.owner A) (fx+ (account.balance A) N)))
+
+(define-checked transfer
+  {A : account --> B : account --> N : money --> R : (account * account)}
+  {requires (fx<= N (account.balance A))}
+  {ensures (fx= (fx+ (account.balance (fst R)) (account.balance (snd R)))
+                (fx+ (account.balance A) (account.balance B)))}
+  A B N -> (@p (withdraw A N) (deposit B N)))
+
+(define pay
+  {account --> account --> fixnum --> (account * account)}
+  A B N -> (if (and (fx<= 0 N) (fx<= N (account.balance A))) (transfer A B N) (error "~A cannot pay ~A" A N)))
+```
+
+A balance is never below 0, and the two after a transfer come to what they did before. Were `transfer` to forget the
+deposit, it would not keep that promise, and were `pay` not to ask whether N is from 0:
+
+```text
+type error in rule 1 of pay: transfer needs (fx<= 0 N), which may not be so, as if N is -1
+```
+
+### A link that is not used once closed
+
+```shen
+(defstruct link (state : symbol) (sent : fixnum))
+
+(define-checked open-link
+  {--> R : link}
+  {ensures (= (link.state R) up)}
+  -> (link.make up 0))
+
+(define-checked send
+  {L : link --> N : fixnum --> R : link}
+  {requires (= (link.state L) up)}
+  {ensures (= (link.state R) up)}
+  L N -> (link.make up (fx+ (link.sent L) N)))
+
+(define-checked close-link
+  {L : link --> R : link}
+  {requires (= (link.state L) up)}
+  {ensures (= (link.state R) down)}
+  L -> (link.make down (link.sent L)))
+
+(define greet
+  {--> link}
+  -> (let L (send (open-link) 5)
+       (close-link (send L 2))))
+```
+
+Each step says what state it leaves, so that the next need not test it. To send after closing:
+
+```text
+type error in rule 1 of greet: send needs (= (link.state (close-link L)) up), which may not be so, as if
+(link.state (close-link L)) is down
+```
+
+### A mean of something
+
+```shen
+(define total
+  {(list number) --> number}
+  [] -> 0
+  [X | Xs] -> (+ X (total Xs)))
+
+(define-checked mean
+  {Xs : (list number) --> number}
+  {requires (not (empty? Xs))}
+  Xs -> (/ (total Xs) (length Xs)))
+
+(define summary
+  {(list number) --> string}
+  [] -> "nothing"
+  Xs -> (make-string "~A" (mean Xs)))
+```
+
+Without the clause for `[]`:
+
+```text
+type error in rule 1 of summary: mean needs (not (empty? Xs)), which may not be so, as if (empty? Xs) is true
+```
 
 ## What it costs
 

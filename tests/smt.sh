@@ -53,6 +53,28 @@ for change in 's/(fx> (fx+ I 2) (shen-jit/(fx> (fx+ I 1) (shen-jit/' 's/(fx> (fx
     grep -q 'type error in .* may not be so' "$dir/broken.out"
 done
 
+# The documentation's other examples, each also with something wrong, whose error is what it says or ends what it quotes.
+awk '/^## /{on = /^## Examples$/} on && /^```/{kind = (kind == "") ? substr($0, 4) : ""; next} kind == "shen"' docs/refine.md > "$dir/examples.shen"
+awk '/^## /{on = /^## Examples$/} on && /^```/{kind = (kind == "") ? substr($0, 4) : ""; if (kind == "") print ""; next} kind == "text" {printf "%s ", $0}' docs/refine.md | sed -e 's/ $//' -e '/^$/d' > "$dir/said"
+"$SHEN" eval -m refine -e '(tc +)' -l "$dir/examples.shen" -e '(tc -)' \
+    -e '(define said-by F -> (trap-error (thaw F) (/. E (error-to-string E))))' \
+    -e '(output "~A ~A ~S ~A ~S ~A ~S ~A ~A~%" (index-of (shen-jit.string->bytes (@s (n->string 0) (n->string 3) (n->string 1) (n->string 4))) 260) (index-of (shen-jit.string->bytes "") 1) (read-date 2024 2 29) (said-by (freeze (read-date 2023 2 29))) (pay (account.make ann 10) (account.make bob 5) 7) (said-by (freeze (day 2023 4 31))) (greet) (summary []) (summary [1 2 6]))' \
+    > "$dir/examples.out" 2>&1
+grep -qxF '1 -1 #<date year: 2024 month: 2 day: 29> there is no 2023-2-29 (@p #<account owner: ann balance: 3> #<account owner: bob balance: 12>) day: not so: (fx<= D (days-in Y M)) #<link state: down sent: 7> nothing 3' "$dir/examples.out"
+for change in 's/0 (fxquotient (shen-jit.bytes-length Table) 2)/0 (shen-jit.bytes-length Table)/' '/^(refine.pure days-in)$/d' \
+    's/(if (and (fx<= 0 N) (fx<= N (account.balance A)))/(if (fx<= N (account.balance A))/' 's/(close-link (send L 2))/(send (close-link L) 2)/' \
+    's/^  \[\] -> "nothing"$//' 's/(day Y M D)$/(day Y D M)/' 's/(@p (withdraw A N) (deposit B N))/(@p (withdraw A N) B)/' \
+    's/(fxquotient (fx+ Low High) 2)/(fxquotient (fx+ Low (fx+ High 1)) 2)/' 's/(fx<= 1 D) (fx<= D (days-in Y M)))$/(fx<= D 31))/'; do
+    sed "$change" "$dir/examples.shen" > "$dir/broken.shen"
+    if cmp -s "$dir/examples.shen" "$dir/broken.shen"; then echo "no change: $change"; exit 1; fi
+    if "$SHEN" eval -m refine -e '(tc +)' -l "$dir/broken.shen" > "$dir/broken.out" 2>&1; then echo "accepted: $change"; exit 1; fi
+    sed -n 's/^.*uncaught error: //p' "$dir/broken.out" >> "$dir/errors"
+done
+test "$(wc -l < "$dir/errors")" -eq 9
+test "$(wc -l < "$dir/said")" -eq 5
+while read -r error; do grep -qxF "$error" "$dir/errors" || { echo "not said: $error"; exit 1; }; done < "$dir/said"
+test "$(grep -c 'may not be so' "$dir/errors")" -eq 9
+
 # An error says where it is, its rule too if refine makes the rules, and who needs or promises what.
 says() {
     printf '%s\n%s\n' '(define-checked at {I : fixnum --> fixnum} {requires (fx< I 99) (fx<= 0 I)} I -> I)' "$2" > "$dir/says.shen"
