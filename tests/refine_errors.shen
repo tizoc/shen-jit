@@ -164,10 +164,17 @@
 (refine.type (of-list (list A)) X : (list A) where (cons? X))
 \\ says refine.trust: (refine.trust (trusted-lower x) --> R where (fx< R 3)) is not (refine.trust (F Formal ...) --> Result where Condition)
 (refine.trust (trusted-lower x) --> R where (fx< R 3))
+\\ says refine.contract: (refine.contract (known-unit x) requires (> x 0)) is not (refine.contract (F X ...) --> Result requires Condition ... trusts Promise ...)
+(refine.contract (known-unit x) requires (> x 0))
+\\ says refine.contract: known-unit has neither requires nor trusts
+(refine.contract (known-unit X) needs (> X 0))
+\\ A function that gives one, of fewer arguments than its type has arrows.
 \\ says refine: (natural --> fixnum) has a refined type in it, which is for a whole argument, result or field, in the signature of gives-taker
 (define gives-taker {fixnum --> natural --> fixnum} X -> (/. Y (fx+ X Y)))
 \\ says refine.type: (refine.type lower-2 x : number where (< x 3)) is not (refine.type Name Variable : Base where Condition)
 (refine.type lower-2 x : number where (< x 3))
+\\ says refine.contract: known-unit has neither requires nor trusts
+(refine.contract (known-unit X) --> r trusts (= r 1))
 \\ loads
 (define-checked from-0-probe {X : number --> fixnum} {requires (>= X 0)} _ -> 1)
 (define-checked up-to-5-probe {X : number --> fixnum} {requires (<= X 5)} _ -> 1)

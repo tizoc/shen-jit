@@ -11,8 +11,9 @@ All notable changes to this project are documented in this file. The format is b
 - Experimental `refine` proves conditions as typed code is checked: `define-checked` gives a function conditions and
   promises, and `refine.type` a name to a condition on arguments, results and the fields of structs. Conditions are
   about fixnums, the order of numbers, symbols and strings, lists, structs, and whatever pure predicates tell.
-  Conditions are tested as a program runs, though they were proved, until `(refine.test -)`, after which they cost
-  nothing.
+  `refine.contract` gives conditions to functions that are there already, as `buffer/contracts` does to those of
+  buffers, for the modules that require it. Conditions are tested as a program runs, though they were proved, until
+  `(refine.test -)`, after which they cost nothing.
 
 ### Fixed
 

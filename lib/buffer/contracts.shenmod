@@ -1,0 +1,5 @@
+(shen.module
+  (version 1)
+  (name buffer/contracts)
+  (requires buffer refine)
+  (sources tc- "contracts.shen"))

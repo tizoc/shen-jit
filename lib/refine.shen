@@ -20,8 +20,8 @@
   (use smt)
   (use shen-jit)
   (use shen)
-  (externals [verified fixnum unit define-checked requires ensures trusts])
-  (export define-checked refine.type => type refine.trust => trust refine.pure => pure refine.test => test)
+  (externals [verified fixnum unit define-checked requires ensures trusts layout.made])
+  (export define-checked refine.contract => contract refine.type => type refine.trust => trust refine.pure => pure refine.test => test)
 
 \\ ---------------------------------------------------------------------------
 \\ What is declared. A contract is [Formals Pre Result Post], what is trusted of a function [Formals Result Post], and a
@@ -31,9 +31,9 @@
 (define declared
   F Key Default -> (shen-jit.property F Key Default))
 
-\\ The contract in force: that of define-checked or of a signature.
+\\ The contract in force: that of define-checked or of a signature, or those of refine.contract.
 (define contract
-  F -> (own-contract F) where (symbol? F)
+  F -> (let C (own-contract F) (if (empty? C) (outside-contract F) C)) where (symbol? F)
   _ -> [])
 
 \\ What a define that is being checked defines, and its contract, or [] for an expression, and [F N | Contract] for what is
@@ -145,6 +145,22 @@
 \\ What is in the braces of a definition, and what is after them.
 (define signature-of
   Rest -> (let Split (until-brace none Rest []) [(fst Split) | (snd Split)]))
+
+\\ Those of a function made elsewhere, as one: each that is of this module or one that this requires, or all if there
+\\ is no module here. What a module requires of its own does not bind those that require it.
+(define outside-contract
+  F -> (joined (contracts-from (declared F outside []) (shen-jit.module.loading-list))))
+
+(define contracts-from
+  Contracts [] -> (map (fn tl) Contracts)
+  Contracts [Here | _] -> (let Modules (assoc Here (shen-jit.module.requires-list))
+                            (mapcan (/. Entry (if (element? (hd Entry) Modules) [(tl Entry)] [])) Contracts)))
+
+(define joined
+  [] -> []
+  [C] -> C
+  [[Formals Pre R Post] [Names P S Q] | Cs]
+  -> (joined [[Formals (conjunction [Pre (replace Names Formals P)]) R (conjunction [Post (replace [S | Names] [R | Formals] Q)])] | Cs]))
 
 (define trusted
   F -> (if (and (symbol? F) (known? F)) (declared F trusted []) []))
@@ -467,7 +483,9 @@
 \\ What was read after a define-checked may have been of its name too.
 (define only-contract
   F C -> F where (says-nothing? C)
-  F _ -> (if (cons? (trusted F)) (error "refine.trust: ~A has a contract of its own" F) F))
+  F _ -> (cases (cons? (declared F outside [])) (error "refine.contract: ~A has a contract of its own" F)
+                (cons? (trusted F)) (error "refine.trust: ~A has a contract of its own" F)
+                true F))
 
 \\ ---------------------------------------------------------------------------
 \\ Whether what was proved is tested.
@@ -588,8 +606,50 @@
     where (and (symbol? F) (variables? Formals) (variable? R))
   Form -> (error "refine.trust: ~R is not (refine.trust (F Formal ...) --> Result where Condition)" Form))
 
+\\ (refine.contract (F X ...) --> R requires P ... trusts Q ...): a contract of a function that is made elsewhere, its
+\\ result named for what is trusted, with either part or both. F tests what it must itself: nothing here changes it.
+(define expand-contract-of
+  [_ [F | Formals] --> R | Tokens] -> (outside F Formals R (words Tokens)) where (and (variable? R) (names? F Formals))
+  [_ [F | Formals] | Tokens] -> (outside F Formals (gensym (protect R)) (words Tokens)) where (names? F Formals)
+  Form -> (error "refine.contract: ~R is not (refine.contract (F X ...) --> Result requires Condition ... trusts Promise ...)" Form))
+
+\\ What follows requires, and what follows trusts.
+(define words
+  [Word | Tokens] -> (required-words Tokens []) where (= (word Word) requires)
+  [Word | Tokens] -> (@p [] Tokens) where (= (word Word) trusts)
+  _ -> (@p [] []))
+
+(define required-words
+  [] Ps -> (@p (reverse Ps) [])
+  [Word | Tokens] Ps -> (@p (reverse Ps) Tokens) where (= (word Word) trusts)
+  [P | Tokens] Ps -> (required-words Tokens [P | Ps]))
+
+(define names?
+  F Formals -> (and (symbol? F) (not (variable? F)) (variables? Formals)))
+
+(define outside
+  F _ _ (@p [] []) -> (error "refine.contract: ~A has neither requires nor trusts" F)
+  F _ _ _ -> (error "refine.contract: ~A has a contract of its own" F) where (cons? (established F))
+  F Formals _ _ -> (error "refine.contract: ~A takes ~A, and not the arguments ~R" F (arity F) Formals)
+    where (not (element? (arity F) [-1 (length Formals)]))
+  F _ _ _ -> (error "refine.contract: ~A is read by refine as what it is, and not as a call" F)
+    where (element? F [if and or not let lambda do freeze trap-error type protect cond where fn])
+  F Formals R (@p Ps Qs)
+  -> (let Contract [Formals (said-of F requires Formals Ps) R (said-of F trusts [R | Formals] Qs)]
+          _ (boolean-of F Formals (function-type F) (hd (tl Contract)))
+          _ (boolean-of F (append Formals [R]) (with-result (function-type F)) (hd (tl (tl (tl Contract)))))
+          _ (map (/. G (put G outside (shen.assoc-> (here) Contract (declared G outside []))))
+                 (both-names F (declared F shen-jit.struct.operation-of none)))
+       [F]))
+
+\\ A struct's constructor has two.
+(define both-names
+  F T -> [F (member T ".%make")] where (= F (member T ".make"))
+  F _ -> [F])
+
 \\ That a condition is a Boolean, its names being of the types of F's arguments, and of its result.
 (define boolean-of
+  _ _ [] _ -> true
   F Names T P -> (or (boolean-of? Names T P) (error "refine: not a condition on what ~A takes and gives: ~R" F P)))
 
 (define boolean-of?
@@ -622,6 +682,8 @@
          (shen.register-source-form refine.type (fn expand-type))
          (shen.register-source-form refine.trust (fn expand-trust))
          (shen.register-source-form refine.pure (fn expand-pure))
+         (shen.register-source-form refine.contract (fn expand-contract-of))
+         (shen.x.namespaces.register-syntax refine.contract (fn namespace-words))
          (shen.x.namespaces.register-syntax define-checked (fn namespace-syntax))
          (shen.x.namespaces.register-definitions define-checked (fn introduced))))
 
@@ -629,6 +691,9 @@
 (define namespace-syntax
   [Head F | Tokens] -> [Head F | (protect-sections Tokens)]
   Form -> Form)
+
+(define namespace-words
+  [Head | Tokens] -> [Head | (map (/. X (if (element? X [requires trusts]) [protect X] X)) Tokens)])
 
 (define protect-sections
   [{ Key | Tokens] -> [{ [protect Key] | (protect-sections Tokens)] where (element? Key [requires ensures])

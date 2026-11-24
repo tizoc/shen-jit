@@ -6,6 +6,7 @@
   (use smt)
   (use shen-jit)
   (use shen)
+  (externals [layout.made])
 
 \\ Where in the program that is, whether nothing is asked, the calls that were proved, with what does not test them, and the
 \\ patterns that were matched, with their terms and what their names are.
@@ -223,6 +224,8 @@
 (define need-of
   F [Formals Pre | _] Ts E -> (do (need F "needs" (replace Formals Ts Pre)) (proved F E))
     where (and (not (= Pre true)) (= (length Formals) (length Ts)))
+  F [Formals | _] _ _ -> (error "refine.contract: ~A takes ~A, and not the arguments ~R" F (arity F) Formals)
+    where (and (> (arity F) -1) (not (= (arity F) (length Formals))))
   _ _ _ _ -> skip)
 
 \\ What has divided has not divided by 0.
@@ -494,10 +497,10 @@
 (define walk-expression
   Form -> (let _ (arguments "" [] [] []) (ran [] Form)))
 
-\\ What defstruct makes is as it says.
+\\ What a layout makes tests what it is given, as what its contract is of does, and what defstruct makes is as it says.
 (define around-define
   Form F Tokens Clauses [] Check -> [(Check Form) Form | (freeze (establish F (signed F (arity F) Tokens)))]
-    where (or (empty? Clauses) (by-defstruct? (hd (tl (tl (hd Clauses))))))
+    where (or (empty? Clauses) (by-defstruct? (hd (tl (tl (hd Clauses))))) (= Form (macroexpand (declared F layout.made []))))
   Form F Tokens Clauses [] Check -> (checked-define F Tokens (signed F (arity F) Tokens) Clauses Check)
   Form F Tokens Clauses [Stamp] Check -> (let C (tl (get Stamp stamped)) (checked-define F Tokens C (tl Clauses) Check)))
 

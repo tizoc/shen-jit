@@ -168,6 +168,14 @@
 (define-checked over-100 {X : fixnum --> fixnum} {requires (fx> X 100)} X -> X)
 \\ says type error in rule 1 of uses-made: over-100 needs (fx> (never-made.value (never-made.make 500)) 100), which may not be so, as if (never-made.value (never-made.make 500)) is 0
 (define uses-made {--> fixnum} -> (over-100 (never-made.value (never-made.make 500))))
+\\ loads
+(define made-outside {fixnum --> fixnum} X -> X)
+(refine.contract (made-outside X) requires (fx= X 1))
+\\ loads
+(refine.contract (made-outside X) requires (fx= X 2))
+(define uses-outside {--> fixnum} -> (made-outside 2))
+\\ says type error in rule 1 of uses-outside: made-outside needs (fx= 1 2), which may not be so
+(define uses-outside {--> fixnum} -> (made-outside 1))
 \\ An expression is evaluated before what is defined after it, so it calls no body of that.
 \\ loads untyped
 (define-checked later-again {X : fixnum --> R : fixnum} {requires (fx> X 5)} {ensures (fx= R 1)} X -> 1)
@@ -176,3 +184,9 @@
 (define-checked later-again {X : fixnum --> R : fixnum} {requires (fx> X 5)} {ensures (fx= R 1)} X -> 1)
 (define calls-later {--> fixnum} -> (later-again 6))
 (calls-later)
+\\ What has a contract from elsewhere has no body, also where it is defined later.
+\\ loads
+(refine.contract (outside-later X) requires (fx= X 1))
+(define calls-outside-later {--> fixnum} -> (outside-later 1))
+(define outside-later {fixnum --> fixnum} X -> X)
+(if (fx= 1 (calls-outside-later)) true (simple-error "not 1"))

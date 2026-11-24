@@ -94,7 +94,7 @@ between them by those of what is defined by then. So, as with types, a definitio
 defined may be given something else. A file that does not read changes none, nor does a definition that is refused, which
 leaves the function as it was. What was proved is not proved again, as what was typechecked is not: not when a function
 that is called, or that a condition calls, is defined again, and not by a new `refine.type` of a name. Those,
-`refine.trust` and `refine.pure` are in effect as they are read.
+`refine.contract`, `refine.trust` and `refine.pure` are in effect as they are read.
 
 ## What is known
 
@@ -243,6 +243,48 @@ is loaded, and of no function that a program defines in their place. That bytes 
 `memory.free` gives back, which have none. A struct's constructor, its test and the readers of its fields that do not
 change are pure, for as long as they are those that `defstruct` made.
 
+## Functions made elsewhere
+
+```shen
+(refine.contract (buffer.u8 V I) --> R
+  requires (fx<= 0 I) (fx< I (buffer.length V))
+  trusts (fx<= 0 R) (fx<= R 255))
+```
+
+`refine.contract` gives a contract to a function that is there already, with `requires`, `trusts`, or both. The names
+are of its arguments, in order, as many as it takes, and of its result, `--> R`, which only what is trusted can be of.
+Conditions are checked to be Booleans of the types the function has, if it has any by then. A form that `refine` reads
+itself, as `if` or `let`, has none.
+
+- **`requires` must be proved by each direct call in typed code,** as a condition is. The function that runs is the
+  same, and tests what it did: a contract makes a program say before it runs what would have raised. It is for a
+  function that is safe by itself, and costs nothing as the program runs.
+- **`trusts` is taken as said,** as the body is not read again. It is known once the call has been made.
+- **It binds who asks for it.** A contract in a module is for that module's sources and for those of modules whose
+  `requires` names it. A module that requires one of these is not bound, nor is a library, whatever was loaded before.
+  In the REPL and in files that are no module's, what has been loaded is for all. Of several modules' contracts of a
+  function, each that is for a module holds there. The functions that a [layout](layout.md) makes test what they are
+  given, and need no proof.
+
+So contracts go in modules of their own, and a library need not require `refine` to have them. The module
+`buffer/contracts` has those of [buffers](buffers.md): that an index is in its view, that a slice and a copy fit, and
+that a stored value fits its width.
+
+```shen
+(shen.module
+  (version 1)
+  (name sums)
+  (requires buffer buffer/contracts)
+  (sources tc+ "sums.shen"))
+```
+
+```shen
+(define-checked sum-from
+  {V : buffer.view --> I : fixnum --> fixnum --> fixnum}
+  {requires (fx<= 0 I)}
+  V I Sum -> (if (fx>= I (buffer.length V)) Sum (sum-from V (fx+ I 1) (fx+ Sum (buffer.u8 V I)))))
+```
+
 ## Rules of one's own
 
 `(refine.proves? Hyps Condition)` is for the side condition of a datatype rule, where `ctxt` gives the hypotheses. The
@@ -272,4 +314,4 @@ but for a few where the datatypes of `smt` are tried, after which each definitio
 asked of `smt`. A closed program keeps nothing of `refine` or `smt`.
 
 In a namespace, `(import refine define-checked)` gives the name, and `(use refine => r)` gives `r.define-checked`,
-`r.type`, `r.trust`, `r.pure` and `r.test`.
+`r.contract`, `r.type`, `r.trust`, `r.pure` and `r.test`.

@@ -627,7 +627,7 @@ adapter shipped beside it, or in its `lib/`.
 | --- | --- | --- | --- | --- |
 | `numbers`, `floats`, `word`, `words` | Typed fixnums, floats, 64-bit words and unboxed arrays | Yes | No | [Numbers](numbers.md), [Floats](floats.md), [Word](word.md), [Words](words.md) |
 | `bignum` | Bignums, over GMP | No | No | [Bignums](bignum.md) |
-| `smt`, `refine` | Formulas over the integers, and conditions proved as typed code is checked (experimental) | Yes | No | [Formulas](smt.md), [Conditions](refine.md) |
+| `smt`, `refine`, `buffer/contracts` | Formulas over the integers, and conditions proved as typed code is checked, with those of buffers (experimental) | Yes | No | [Formulas](smt.md), [Conditions](refine.md) |
 | `option`, `result` | Optional values and typed error results (`let-ok`) | Yes | No | [Option](option.md), [Result](result.md) |
 | `buffer`, `cursor`, `bytes` | Checked byte views, cursors and SIMD byte scans/conversions | Yes | No | [Buffers](buffers.md), [Bytes](bytes.md) |
 | `layout`, `grammar`, `json` | Binary wire layouts, compiled byte grammars and JSON | Yes | No | [Layout](layout.md), [Grammar](grammar.md), [JSON](json.md) |

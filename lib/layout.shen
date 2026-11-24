@@ -98,12 +98,16 @@
   32 -> buffer.u32-be->)
 
 (define layout.reader-def
-  Name Field Body -> [define (layout.name Name Field "") {buffer.view --> fixnum --> fixnum}
-                        (protect B) (protect I) -> Body])
+  Name Field Body -> (layout.made [define (layout.name Name Field "") {buffer.view --> fixnum --> fixnum}
+                                     (protect B) (protect I) -> Body]))
 
 (define layout.writer-def
-  Name Field Body -> [define (layout.name Name Field "->") {buffer.view --> fixnum --> fixnum --> buffer.view}
-                        (protect B) (protect I) (protect X) -> Body])
+  Name Field Body -> (layout.made [define (layout.name Name Field "->") {buffer.view --> fixnum --> fixnum --> buffer.view}
+                                     (protect B) (protect I) (protect X) -> Body]))
+
+\\ They test what they are given as buffer's do, and a contract on those is not for them, which refine reads this for.
+(define layout.made
+  [define F | Rest] -> (do (put F layout.made [define F | Rest]) [define F | Rest]))
 
 \\ Whole bytes: one read of 8, 16 or 32 bits, or a few, most significant first, for 24, 40, 48 or 56.
 (define layout.bytes

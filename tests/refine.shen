@@ -1,5 +1,5 @@
 \\ lib/refine.shen in untyped code, its errors, and what lib/refine-facts.shen trusts, tried on numbers.
-\\ shen-jit eval -m refine -m buffer -l tests/smt-generate.shen -l tests/refine.shen
+\\ shen-jit eval -m buffer/contracts -l tests/smt-generate.shen -l tests/refine.shen
 
 (set refine-test.*passed* 0)
 (set refine-test.*failed* 0)
@@ -42,6 +42,15 @@
    "refine.type: (refine.type t where true) is not (refine.type Name Variable : Base where Condition)"
    "refine.type: (t A) is under itself"
    "refine.trust: (refine.trust f --> R where (fx> R 0)) is not (refine.trust (F Formal ...) --> Result where Condition)"
+   "refine.contract: buffer.u8 takes 2, and not the arguments (V)"
+   "refine.contract: refine-test.at has a contract of its own"
+   "refine: buffer.u8 requires something of J, which is not a name it can be of"
+   "refine: buffer.u8 requires something of R, which is not a name it can be of"
+   "refine: buffer.u8 trusts something of J, which is not a name it can be of"
+   "refine: not a condition on what buffer.new takes and gives: (fx< N (buffer.length N))"
+   "refine: not a condition on what buffer.new takes and gives: (fx< R 3)"
+   "refine: not a condition on what buffer.new takes and gives: (buffer.new N)"
+   "refine.contract: (refine.contract buffer.new requires (fx< N 3)) is not (refine.contract (F X ...) --> Result requires Condition ... trusts Promise ...)"
    "refine.trust: refine-test.at has a contract of its own"
    read]
   (freeze (map (fn refine-test.reads)
@@ -53,6 +62,11 @@
      "(define-checked f {X : fixnum --> R : fixnum} {requires (fx> R 0)} X -> X)"
      "(define-checked f {X : fixnum --> R : fixnum} {ensures (fx> R Y)} X -> X)"
      "(refine.type t where true)" "(refine.type (t A) X : (t A) where true)" "(refine.trust f --> R where (fx> R 0))"
+     "(refine.contract (buffer.u8 V) requires (fx<= 0 V))" "(refine.contract (refine-test.at V I) requires (fx<= 1 I))"
+     "(refine.contract (buffer.u8 V I) requires (fx<= 0 J))" "(refine.contract (buffer.u8 V I) --> R requires (fx<= 0 R))"
+     "(refine.contract (buffer.u8 V I) trusts (fx<= 0 J))"
+     "(refine.contract (buffer.new N) requires (fx< N (buffer.length N)))" "(refine.contract (buffer.new N) --> R trusts (fx< R 3))"
+     "(refine.contract (buffer.new N) requires (buffer.new N))" "(refine.contract buffer.new requires (fx< N 3))"
      "(refine.trust (refine-test.at V I) --> R where true)" "(refine.trust (refine-test.other V I) --> R where (fx>= R 0))"])))
 
 \\ ---------------------------------------------------------------------------
@@ -162,6 +176,43 @@
      [buffer.u8-> (value refine-test.*view*) 8 1] [buffer.u16-be-> (value refine-test.*view*) 7 1]
      [buffer.u32-be-> (value refine-test.*view*) 5 1] [buffer.copy-into! (value refine-test.*view*) 1 (buffer.new 20) 4 3]])))
 (refine-test.check "occurrences" true (freeze (refine-test.trusted occurrences [a [a b a]])))
+
+\\ What buffer's contracts ask is what its functions need, over small arguments: where it is so they give
+\\ something, and where it is not they raise. offset-at takes a count below 0, as it were none.
+(set refine-test.*views* (map (fn buffer.new) [0 1 5]))
+(define refine-test.small -> [-1 0 1 2 4 5 6])
+(define refine-test.stored -> [-1 0 255 256 65535 65536 4294967295 4294967296])
+
+(define refine-test.agrees?
+  F Args -> (let C (refine.contract F)
+                 Asked (eval (refine.replace (hd C) (map (fn refine-test.quoted) Args) (hd (tl C))))
+                 Given (trap-error (do (refine-test.apply (function F) Args) true) (/. E false))
+              (if (= Asked Given) true [F Args Asked Given])))
+
+\\ A view, where code has one, is the value of a global.
+(define refine-test.quoted
+  X -> X where (number? X)
+  X -> [nth (refine-test.place X (value refine-test.*views*)) [value refine-test.*views*]])
+
+(define refine-test.place
+  X [Y | Ys] -> 1 where (= (buffer.length X) (buffer.length Y))
+  X [_ | Ys] -> (+ 1 (refine-test.place X Ys)))
+
+(define refine-test.over
+  [] -> [[]]
+  [Xs | More] -> (let Rest (refine-test.over More) (mapcan (/. X (map (/. R [X | R]) Rest)) Xs)))
+
+(define refine-test.disagreements
+  F Boxes -> (mapcan (/. Args (let A (refine-test.agrees? F Args) (if (= A true) [] [A]))) (refine-test.over Boxes)))
+
+(refine-test.check "contracts of buffer" [[] [] [] [] [] [] [] [] []]
+  (freeze (let Vs (value refine-test.*views*) Is (refine-test.small) Xs (refine-test.stored)
+            [(refine-test.disagreements buffer.new [Is]) (refine-test.disagreements buffer.slice [Vs Is Is])
+             (refine-test.disagreements buffer.copy-into! [Vs Is Vs Is Is])
+             (refine-test.disagreements buffer.u8 [Vs Is]) (refine-test.disagreements buffer.u16-be [Vs Is]) (refine-test.disagreements buffer.u32-be [Vs Is])
+             (refine-test.disagreements buffer.u8-> [Vs Is Xs]) (refine-test.disagreements buffer.u16-be-> [Vs Is Xs]) (refine-test.disagreements buffer.u32-be-> [Vs Is Xs])])))
+(refine-test.check "a count below 0 of offset-at" [-1]
+  (freeze (map (/. D (hd (tl (tl (hd (tl D)))))) [(hd (refine-test.disagreements buffer.offset-at [[(hd (tl (value refine-test.*views*)))] [0] [-1 0 1]]))])))
 
 (define refine-test.read
   Forms -> (address-> (absvector 2) 0 Forms))

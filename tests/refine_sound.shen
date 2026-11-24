@@ -258,6 +258,31 @@
 (define oddly {fixnum --> fixnum} X -> X)
 (refine.trust (oddly X) --> R where (fx> (span.end (span.make X)) 0))
 (define-checked uses-oddly {fixnum --> fixnum} X -> (positive (oddly X)))
+\\ Contracts of functions that take nothing, of calls that macros make, and of what makes a struct.
+\\ loads
+(define tick {--> fixnum} -> 1)
+(define ready? {--> boolean} -> false)
+(refine.contract (tick) requires (ready?))
+(define two {fixnum --> fixnum --> fixnum} _ Y -> Y)
+(refine.contract (two X Y) requires (fx> Y 0))
+(refine.contract (span.make A B) requires (fx<= A B))
+(defmacro twice [twice [two A B]] -> [do [two A B] [two A -1]])
+\\ says type error in rule 1 of uses: tick needs (ready?), which may not be so, as if (ready?) is false. ready? is not declared pure, so (ready?) may be another each time
+(define uses {--> fixnum} -> (tick))
+\\ says type error in rule 1 of uses: two needs (fx> -1 0), which may not be so
+(define uses {fixnum --> fixnum} X -> (twice (two X 5)))
+\\ says type error in rule 1 of uses: span.%make needs (fx<= 5 1), which may not be so
+(define uses {--> span} -> (:span start <- 5 end <- 1))
+\\ loads
+(define uses {--> span} -> (:span start <- 1 end <- 5))
+(define uses-start {span --> fixnum} (:span start <- 5 end <- X) -> X _ -> (two 1 5))
+\\ says type error in rule 1 of uses: two needs (fx> -1 0), which may not be so
+(define uses {fixnum --> fixnum} X -> (two X -1))
+(define two {fixnum --> fixnum --> fixnum} _ Y -> Y)
+\\ says type error in rule 1 of uses: edges.%make needs (fx<= 5 1), which may not be so
+(defstruct edges (low : fixnum) (high : fixnum))
+(refine.contract (edges.make A B) requires (fx<= A B))
+(define uses {--> edges} -> (:edges low <- 5 high <- 1))
 \\ What is known of a function is of what it is now.
 \\ loads
 (defstruct ends (low : fixnum) (high : fixnum))
@@ -376,6 +401,12 @@
 \\ loads
 (define-checked made-twice {X : fixnum --> fixnum} {requires (fx> X 0)} X -> (if (fx> X 1) (made-twice (fx- X 1)) 1))
 (define-checked made-twice {X : fixnum --> fixnum} {requires (fx> X 5)} X -> X)
+\\ loads
+(define-checked no-conditions {fixnum --> fixnum} X -> X)
+\\ loads
+(refine.contract (no-conditions X) requires (fx> X 0))
+\\ says type error in rule 1 of uses-conditions: no-conditions needs (fx> X 0), which may not be so, as if X is 0
+(define uses-conditions {fixnum --> fixnum} X -> (no-conditions X))
 \\ What was proved of one condition does not call what has another.
 \\ loads
 (define-checked later {X : fixnum --> fixnum} {requires (fx> X 0)} X -> X)
@@ -462,6 +493,9 @@
 \\ says refine.trust: two-contracts has a contract of its own
 (define-checked two-contracts {X : fixnum --> fixnum} {requires (fx> X 0)} X -> X)
 (refine.trust (two-contracts X) --> R where (fx> R 0))
+\\ says refine.contract: two-contracts has a contract of its own
+(define-checked two-contracts {X : fixnum --> fixnum} {requires (fx> X 0)} X -> X)
+(refine.contract (two-contracts X) --> R requires (fx> X 0))
 \\ What an error says.
 \\ loads
 (define-checked needs-it {B : boolean --> fixnum} {requires B} _ -> 1)
@@ -743,6 +777,14 @@
 (define-checked sizes {(list fixnum) --> fixnum} [] -> 0 Xs -> (positive (size-of Xs)))
 \\ says define-checked: no-clauses has no clauses
 (define-checked no-clauses {X : fixnum --> fixnum})
+\\ loads
+(define-checked contractless {fixnum --> fixnum} X -> X)
+\\ loads
+(refine.contract (contractless X) requires (fx> X 0))
+\\ loads
+(define-checked contractless {fixnum --> fixnum} X -> X)
+\\ says refine.contract: contractless has neither requires nor trusts
+(refine.contract (contractless X))
 \\ What a function with some of its arguments is given is not evaluated until it has the others.
 \\ says type error in rule 1 of given-some: positive needs (fx> X 0), which may not be so, as if X is 0
 (define-checked given-some {fixnum --> fixnum} X -> (let P (@p 1 (fx+ (fxquotient 1 0))) (positive X)))
@@ -1120,3 +1162,10 @@
 (define make-later {fixnum --> later-acc} N -> (if (fx> N 0) (later-acc.make N) (later-acc.make 1)))
 (defstruct later-acc (bal : above-0))
 (make-later 5)
+\\ A contract is of a function, with its arguments.
+\\ says refine.contract: if is read by refine as what it is, and not as a call
+(refine.contract (if P A B) requires P)
+\\ says refine.contract: later-two takes 2, and not the arguments (X)
+(refine.contract (later-two X) requires (fx> X 0))
+(define later-two {fixnum --> fixnum --> fixnum} X Y -> X)
+(define uses-later-two {fixnum --> fixnum} X -> (later-two X 1))

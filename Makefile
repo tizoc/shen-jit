@@ -126,6 +126,7 @@ test-smt: $(BUILD)/shen-jit $(BUILD)/shen-jit-stlib
 	sh tests/smt.sh $(SHEN_JIT) $(abspath $(BUILD)/shen-jit-stlib)
 	sh tests/refused.sh $(SHEN_JIT) tests/smt_refused.shen -m smt
 	SHEN_JIT_MAX_HEAP=512M sh tests/refused.sh $(SHEN_JIT) tests/refine_refused.shen -m refine -m buffer
+	SHEN_JIT_MAX_HEAP=512M sh tests/refused.sh $(SHEN_JIT) tests/refine_contracts_refused.shen -m buffer/contracts
 
 # The same formulas against Z3, an independent solver, if z3 is there.
 test-smt-z3: $(BUILD)/shen-jit

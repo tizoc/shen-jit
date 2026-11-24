@@ -129,6 +129,10 @@
         where (refine-generate.condition [(protect A) (protect B)] 0)])
 
 (define refine-generate.function
+  Name -> (subst far-probe probe (refine-generate.near-function Name)) where (and (value refine-generate.*wide*) (= 0 (smt-generate.below 2)))
+  Name -> (refine-generate.near-function Name))
+
+(define refine-generate.near-function
   Name -> (refine-generate.promising Name) where (and (value refine-generate.*wide*) (= 0 (smt-generate.below 3)))
   Name -> (let Clauses (refine-generate.clauses (smt-generate.below 3))
             [define-checked Name | (append (refine-generate.contract (smt-generate.below 3)) Clauses)]))
@@ -189,6 +193,9 @@
   {requires (fx< A B)}
   {ensures (fx<= A R) (fx<= R B)}
   A B -> (if (fx< A B) A (let _ (refine-generate.broke (make-string `probe ~A ~A` A B)) A)))
+(define far-probe {fixnum --> fixnum --> fixnum}
+  A B -> (if (fx< A B) A (let _ (refine-generate.broke (make-string `far-probe ~A ~A` A B)) A)))
+(refine.contract (far-probe A B) --> R requires (fx< A B) trusts (fx= R A) (fx< R B))
 (define-checked helper {fixnum --> R : fixnum}
   {ensures (fx<= 0 R) (fx<= R 5)}
   N -> 0 where (fx< N 0)

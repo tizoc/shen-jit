@@ -6476,6 +6476,34 @@ type carry process-specific data. The process and Tree-sitter application tests 
   place among numbers to its value, and float arithmetic. Names that the reader makes are shown, as Y123, and a call
   of what was defined by a file loaded within the file is not seen as one, and tested.
 
+### Contracts of functions made elsewhere (2026-11-24, Apple M3 Max, against the commit before)
+
+- **`refine.contract`** says what a function that is there already requires, and what of its result is trusted, and `buffer/contracts` says it of ten of
+  `buffer`'s. Before, each needed a wrapper. Calls keep calling the function, which keeps its own tests, so there is no `F.%body`, and no
+  function is made.
+- **A call that is proved still calls F,** as a contract from elsewhere has no body.
+- **Whom it binds.** As a property of F it would bind every typed source loaded later, libraries among them, whose authors asked for nothing. It is for the sources
+  of modules that require the one it is in, directly, as the loader knows. Not through others: a module that proves its own calls would bind all that use it. Type
+  rules are seen through others, as they let code be typed, where this refuses it.
+- **Conditions are typechecked** where the function has a type, as nothing else would: a misspelt one would prove nothing and promise nothing.
+- **What is asked is what is needed:** over small arguments, each of nine functions gives something where its contract holds and raises where it does not. `offset-at`
+  takes a count below 0, and its contract does not.
+- **Tried on the project's code,** in a copy, each module requiring `buffer/contracts`: of 104 calls in nine modules, 18 are proved as they are, the rest being in
+  functions that do not say what they are given. With contracts on seven loops of `net/dns`, `net/fragments` and `net/ethernet`, all the reads and writes in
+  them are, and what is left is asked of their callers, whose numbers come from packets. Not proved there: that `(wire.dns.size)` is 12, which nothing says, and that the `xor` of
+  two numbers of 32 bits has 32 bits, as only their sum bounds it.
+- **Each module's contract is its own.** A function had one, so that a module that only trusted something of it removed another's condition, as the third review found. Those that are for a module hold there together.
+- **Not for what a layout makes,** whose functions test what they are given: a module that required both could not have a layout, as nothing it wrote could prove what those need. The definition that `deflayout` made is let off,
+  and not its name, as a program's own of that name was too, until the outside review.
+- **and, or and sums of more than two** were not read in what a contract keeps, which no macro expands: promises, types and trusts. What a call needs was, being in code.
+- **Rejected: proved reads that skip a view's tests.** A contract would name a second function, to be called where its condition is proved: over the storage, whose own test would still keep it in memory. In a typed
+  program a byte read through a view takes 3.8 ns, 1.2 without the view's tests, and the hash of the TCP listener, HalfSipHash over a view of 16 bytes, 1,525 ns and 735. Programs gain little. With every test of `buffer`'s reads
+  and writes taken out of `lib`, proved or not, a TCP connection and 128 KB takes 5 to 10% less (380 to 416 µs against 421 to 432), a connection alone as long (about 11), and five commands of `shen-git` no less. 18 of 104 calls in those modules are proved
+  as they are. An active open from a table gains the most, 1.75 µs against 2.6 to 3.1, and by its hash alone: over plain bytes, every test kept, it takes 455 ns and the open 1.48 µs, which needs no proof.
+- **Checked:** 27 definitions that must not load, for that alone; that the code of a function is the same with a contract and without; modules that are bound and that are not. 20,000
+  generated functions, a quarter of which may call one with a contract from elsewhere, with nothing broken in 1,907,226 calls, and 24 bugs
+  planted before the review, of which the suite caught 23, as this was first built.
+
 ### What modules and typed programs cost outside typed code (2026-11-17, Apple M3 Max, against main)
 
 - **Image and startup.** The image is 1,339,584 bytes against 1,179,472 (+14%), most of it the lowerer, whose

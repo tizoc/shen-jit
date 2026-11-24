@@ -15,7 +15,7 @@ passed=0
 for shen in "$SHEN" ${2:+"$2"}; do
     "$shen" eval -m smt -l tests/smt-generate.shen -l tests/smt.shen > "$dir/smt.out" 2>&1
     grep -a '^FAIL \|^[0-9]* passed' "$dir/smt.out" | awk '{ print } END { exit !/ 0 failed/ }'
-    "$shen" eval -m refine -m buffer -l tests/smt-generate.shen -l tests/refine.shen > "$dir/refine.out" 2>&1
+    "$shen" eval -m buffer/contracts -l tests/smt-generate.shen -l tests/refine.shen > "$dir/refine.out" 2>&1
     grep -a '^FAIL \|^[0-9]* passed' "$dir/refine.out" | awk '{ print } END { exit !/ 0 failed/ }'
 done
 
@@ -36,6 +36,9 @@ done
 
 "$SHEN" eval -m refine -m buffer -e '(tc +)' -l tests/refine_bytes.shen -e '(tc -)' -e '(output "~A~%" (refine-bytes.main))' > "$dir/refine-bytes.out" 2>&1
 grep -qxF 'true false 2569 2 185207048 185207048 62 2 15 168297988 -123 -16 0 9 3 0 3 4 63 0 0 5 2 0 1 3 -1234' "$dir/refine-bytes.out"
+
+"$SHEN" eval -m buffer/contracts -e '(tc +)' -l tests/refine_contracts.shen -e '(tc -)' -e '(output "~A~%" (refine-contracts.main))' > "$dir/refine-contracts.out" 2>&1
+grep -qxF '98 -1 99 100 104 1734900351 4 true 6 1 2 9 0 4 1 4 4' "$dir/refine-contracts.out"
 
 # The documentation's example, and the same with one thing wrong: each a length, a test or a step.
 "$SHEN" eval -m refine -e '(tc +)' -l tests/refine_records.shen -e '(tc -)' \
@@ -124,22 +127,24 @@ printf '(account.make a -5)\n' > "$dir/account.data"
 printf '(refine.type money N where (fx<= 0 N))\n(defstruct account (owner : symbol) (balance : money))\n(define from-file {string --> account} File -> (input+ account (open File in)))\n' > "$dir/input.shen"
 "$SHEN" eval -m refine -e '(tc +)' -l "$dir/input.shen" -e "(output \"~A~%\" (trap-error (from-file \"$dir/account.data\") (/. E (error-to-string E))))" > "$dir/input.out" 2>&1
 grep -q '^type error: account.make needs (fx<= 0 -5)' "$dir/input.out"
-# Nor is what is known of a function by its name known of another in its place: a struct's or a library's.
+# Nor is what is known of a function by its name known of another in its place: a struct's, a layout's or a library's.
 printf '(define ends.low {ends --> fixnum} S -> (fx+ 1 (ends.high S)))\n' > "$dir/inner.shen"
 printf '(define-checked at {X : fixnum --> fixnum} {requires (fx= X 9)} X -> X)\n(defstruct ends (low : fixnum) (high : fixnum))\n(load "%s/inner.shen")\n(define-checked uses {--> fixnum} -> (at (ends.low (ends.make 9 7))))\n' "$dir" > "$dir/outer.shen"
 printf '(define buffer.length {buffer.view --> fixnum} V -> (fx- 0 1))\n' > "$dir/library1.shen"
 printf '(define-checked buffer.length {buffer.view --> fixnum} V -> (fx- 0 1))\n' > "$dir/library3.shen"
 printf '(define-checked from-0 {N : fixnum --> fixnum} {requires (fx<= 0 N)} N -> N)\n(define uses {buffer.view --> fixnum} V -> (from-0 (buffer.length V)))\n' > "$dir/library2.shen"
+printf '(deflayout lay (tag 8) (length 16))\n' > "$dir/layout3.shen"
+printf '(define-checked from-0 {N : fixnum --> fixnum} {requires (fx<= 0 N)} N -> N)\n(define lay.tag {fixnum --> fixnum} N -> (from-0 N))\n' > "$dir/layout4.shen"
 printf '(define buffer.length V -> -1)\n' > "$dir/untyped.shen"
 printf '(let A (tc -) B (load "untyped.shen") (tc +))\n' > "$dir/library4.shen"
 printf '(eval-kl [defun buffer.length [(protect V)] -1])\n(update-lambda-table buffer.length 1)\n(declare buffer.length [number --> fixnum])\n' > "$dir/bare.shen"
 printf '(let A (tc -) B (load "bare.shen") (tc +))\n' > "$dir/library5.shen"
 printf '(define-checked from-0 {N : fixnum --> fixnum} {requires (fx<= 0 N)} N -> N)\n(define uses {number --> fixnum} V -> (from-0 (buffer.length V)))\n' > "$dir/library6.shen"
-for n in '-l outer.shen' \
+for n in '-l outer.shen' '-m layout -l layout3.shen -l layout4.shen' \
     '-m buffer -l library1.shen -l library2.shen' '-m buffer -l library3.shen -l library2.shen' '-m buffer -l library4.shen -l library2.shen' \
     '-l library5.shen -l library6.shen'; do
     if (cd "$dir" && "$SHEN" eval -m refine $(echo "$n" | sed 's/ -l.*//; s/^-l.*//') -e '(tc +)' $(echo "$n" | sed 's/^-m [a-z]* //')) > "$dir/names.out" 2>&1; then echo "accepted: $n"; exit 1; fi
-    grep -q 'type error in rule 1 of uses: .*, which may not be so' "$dir/names.out"
+    grep -q 'type error in rule 1 of \(uses\|lay.tag\): .*, which may not be so' "$dir/names.out"
 done
 # A condition that was proved is tested too, as what was proved may no longer be so, until that is not asked for.
 printf '(define-checked at-1 {X : fixnum --> fixnum} {requires (fx= X 1)} X -> X)\n(define-checked one {--> R : fixnum} {ensures (fx= R 1)} -> 1)\n' > "$dir/one.shen"
@@ -266,4 +271,66 @@ for closed in '' --closed; do
     "$dir/app.exe" > "$dir/app.out" 2>&1
     grep -qxF 'sum 42 42' "$dir/app.out"
 done
-echo "$((passed + 3)) passed, 0 failed"
+
+# A contract from elsewhere binds the modules that require the one it is in, and no other, whatever was
+# loaded before: not those that require these, nor a library. And it leaves what is called as it was.
+module() { printf '(shen.module (version 1) (name %s) (requires %s) (sources %s))\n' "$1" "$2" "$3" > "$dir/$1.shenmod"; }
+printf '(define %s {buffer.view --> fixnum --> fixnum} V I -> (buffer.u8 V I) where (and (fx<= 0 I) (fx< I (buffer.length V))) _ _ -> 0)\n' scope.proved > "$dir/proved.shen"
+printf '(define %s {buffer.view --> fixnum --> fixnum} V I -> (buffer.u8 V I) where (and (fx<= 0 I) (fx< I (buffer.length V))) _ _ -> 0)\n' scope.plain > "$dir/plain.shen"
+for n in direct through without; do printf '(define scope.%s {buffer.view --> fixnum --> fixnum} V I -> (buffer.u8 V I))\n' $n > "$dir/$n.shen"; done
+printf '(refine.contract (buffer.u8 V I) requires (fx<= 0 I) (fx< I (buffer.length V)))\n' > "$dir/own.shen"
+module proved 'buffer/contracts buffer' 'tc+ "proved.shen"'
+module plain buffer 'tc+ "plain.shen"'
+module through 'buffer proved' 'tc+ "through.shen"'
+module without buffer 'tc+ "without.shen"'
+module direct 'buffer/contracts buffer' 'tc+ "direct.shen"'
+module own 'refine buffer' 'tc- "own.shen" tc+ "direct.shen"'
+"$SHEN" eval -m "$dir/proved.shenmod" -m "$dir/through.shenmod" -m "$dir/without.shenmod" -m net/dns -e '(output "loaded~%")' > "$dir/scope.out" 2>&1
+grep -qx 'loaded' "$dir/scope.out"
+for n in direct own; do
+    if "$SHEN" eval -m "$dir/$n.shenmod" > "$dir/scope.out" 2>&1; then echo "accepted: module $n"; exit 1; fi
+    grep -q 'type error in rule 1 of scope.direct: buffer.u8 needs (fx<= 0 I)' "$dir/scope.out"
+done
+if "$SHEN" eval -m buffer/contracts -e '(tc +)' -l "$dir/direct.shen" > "$dir/scope.out" 2>&1; then echo "accepted: a file"; exit 1; fi
+"$SHEN" eval -m buffer -m refine -e '(tc +)' -l "$dir/direct.shen" > "$dir/scope.out" 2>&1
+# Another module's contract of the same function leaves it, and where both are required both hold, of their own names.
+printf '(define scope.raw {buffer.view --> fixnum --> fixnum} V I -> (if (and (fx<= 0 I) (fx< I 9)) (fx+ I 6) 0))\n' > "$dir/raw.shen"
+printf '(refine.contract (scope.raw W J) --> S requires (fx< J 9) trusts (fx> S 5))\n' > "$dir/below.shen"
+printf '(refine.contract (scope.raw V I) --> R requires (fx<= 0 I) trusts (fx< R 20))\n' > "$dir/above.shen"
+printf '(define-checked scope.few {X : fixnum --> fixnum} {requires (fx> X 5) (fx< X 20)} X -> X)\n' > "$dir/few.shen"
+for n in both low high; do
+    case $n in both) guard='(and (fx<= 0 I) (fx< I 9))';; low) guard='(fx<= 0 I)';; high) guard='(fx< I 9)';; esac
+    printf '(define-checked scope.%s {buffer.view --> fixnum --> fixnum} V I -> (if %s (let N (scope.raw V I) (scope.few N)) 0))\n' $n "$guard" > "$dir/$n.shen"
+done
+module raw buffer 'tc+ "raw.shen"'
+module below 'refine raw' 'tc- "below.shen"'
+module above 'refine raw' 'tc- "above.shen"'
+module both 'refine raw below above buffer' 'tc+ "few.shen" "both.shen"'
+module low 'refine raw below above buffer' 'tc+ "few.shen" "low.shen"'
+module alone 'refine raw below buffer' 'tc+ "few.shen" "low.shen"'
+module high 'refine raw below above buffer' 'tc+ "few.shen" "high.shen"'
+"$SHEN" eval -m "$dir/both.shenmod" -e '(output "~A~%" (scope.both (buffer.new 1) 3))' > "$dir/scope.out" 2>&1
+grep -qx 9 "$dir/scope.out"
+for n in 'low (fx< I 9)' 'high (fx<= 0 I)' 'alone (fx< I 9)'; do
+    if "$SHEN" eval -m "$dir/below.shenmod" -m "$dir/above.shenmod" -m "$dir/${n%% *}.shenmod" > "$dir/scope.out" 2>&1; then echo "accepted: module $n"; exit 1; fi
+    grep -q "type error in rule 1 of .*: scope.raw needs ${n#* }" "$dir/scope.out"
+done
+# What a layout makes tests what it is given, and needs no proof.
+printf '(deflayout lay (tag 8) (length 16) (rest 24))\n(deflayout bits (low 3) (high 5))\n' > "$dir/lay.shen"
+module laid 'buffer/contracts layout buffer' 'tc+ "lay.shen"'
+"$SHEN" eval -m "$dir/laid.shenmod" > "$dir/scope.out" 2>&1
+sed 's/(tl (hd (get app.add-up refine.bodies)))/scope.proved/; s/app.plain/scope.plain/' "$dir/code.shen" > "$dir/scope-code.shen"
+"$SHEN" eval -m "$dir/plain.shenmod" -m "$dir/proved.shenmod" -l "$dir/scope-code.shen" > "$dir/scope.out" 2>&1
+grep -qxF 'same code: true' "$dir/scope.out"
+# In a namespace.
+cat > "$dir/ns.shenmod" <<'END'
+(shen.module (version 1) (name ns) (requires refine buffer) (sources tc- "ns.shen" tc+ "ns-typed.shen"))
+END
+cat > "$dir/ns.shen" <<'END'
+(shen.x.namespace ns (use refine => r) (use buffer)
+  (r.contract (buffer.u8 V I) --> R requires (fx<= 0 I) (fx< I (buffer.length V)) trusts (fx<= 0 R)))
+END
+cp "$dir/direct.shen" "$dir/ns-typed.shen"
+if "$SHEN" eval -m "$dir/ns.shenmod" > "$dir/scope.out" 2>&1; then echo "accepted: a namespace"; exit 1; fi
+grep -q 'type error in rule 1 of scope.direct: buffer.u8 needs (fx<= 0 I)' "$dir/scope.out"
+echo "$((passed + 16)) passed, 0 failed"

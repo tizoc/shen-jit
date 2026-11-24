@@ -79,6 +79,9 @@ which `buffer` requires: `(buffer.u8 V 0)` and `(buffer.slice V 0 (buffer.length
 arithmetic on them takes `fx+` and the other fixnum operators. As with other opaque FFI values, a typed foreign allocator needs an explicit
 compatible declaration at its boundary.
 
+Typed code of a module that requires `buffer/contracts` must prove that its indices, slices, copies and stored values fit
+([Conditions, proved](refine.md#functions-made-elsewhere)). The operations test it all the same.
+
 The byte and big-endian operations and the view checks they use are typed in `lib/buffer-typed.shen`.
 In a [typed program](modules.md#typed-programs), the loop below inlines `buffer.u8` and keeps the view's
 offsets and the bytes it reads in registers while checking the view and index.
