@@ -4260,6 +4260,18 @@ A review of the networking code after it had been rewritten found what still rea
   calls into the TUN adapter are no longer exported, so `(use net-tun)` gives only its checked API.
 - [Networking](networking.md), a guide page, documents the modules and how their code is written.
 
+### The TCP listener's hash over plain bytes (2026-11-24, Apple M3 Max, against main)
+
+The 16 bytes of HalfSipHash's state, from which initial sequence numbers and first ephemeral ports come,
+were a view, so each of a round's eight reads and writes tested the view and then the storage. They are
+bytes now, which nothing else reads, in the machine's order, by the raw operations, which test their own
+bounds. Over 24 tuples and keys the hash is what it was. An active open from a table, in a typed program,
+five rounds alternated: 1.07 to 1.19 µs against 2.41 to 2.52. A connection alone and one with 128 KB, which
+hash nothing, take what they did.
+
+- Rejected: `shen-jit.rotate32` for its rotations, 1.98 to 2.06 µs: the JIT has no inline form of it, and
+  has of the shifts and masks.
+
 ### Vacant TCP slots passed over (2026-11-20, Apple M3 Max, against the branch before it)
 
 A review measured an idle `net-interface.poll` and `next-deadline` at 63 ns with 4 TCP slots and 1.6 µs

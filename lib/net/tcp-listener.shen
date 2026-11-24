@@ -60,7 +60,7 @@
   (mutable next-port : fixnum)
   (key0 : fixnum)
   (key1 : fixnum)
-  (hash : buffer.view)
+  (hash : buffer.storage)
   (local4 : net-ipv6.address)                           \\ Its IPv4 address, mapped.
   (input-remote : net-ipv6.address)
   (mutable next-output : fixnum)
@@ -133,7 +133,7 @@
         next-port <- 49152
         key0 <- Key0
         key1 <- Key1
-        hash <- (buffer.new 16)
+        hash <- (shen-jit.bytes 16)
         local4 <- (net-ipv6.map-ipv4 (net-ipv6.make-address 0 0 0 0) IP)
         input-remote <- (net-ipv6.make-address 0 0 0 0)
         next-output <- 1
@@ -302,54 +302,55 @@
          (if (fx> I N) 0 I)))
 
 \\ HalfSipHash-2-4, over a connection's tuple as tuple-hash gives it: both addresses as IPv6 ones, an IPv4
-\\ address mapped, and both ports, 36 bytes.
+\\ address mapped, and both ports, 36 bytes. Its state is four words of bytes that nothing else reads, so they
+\\ are in the machine's order.
 (define rotate32
   {fixnum --> fixnum --> fixnum}
   X Bits -> (add32 (shen-jit.shift-left X Bits) (shen-jit.shift-right X (fx- 32 Bits))))
 
 (define hash-round
-  {buffer.view --> buffer.view}
+  {buffer.storage --> buffer.storage}
   H ->
-    (let V0 (buffer.u32-be H 0)
-         V1 (buffer.u32-be H 4)
-         V2 (buffer.u32-be H 8)
-         V3 (buffer.u32-be H 12)
+    (let V0 (shen-jit.u32 H 0)
+         V1 (shen-jit.u32 H 4)
+         V2 (shen-jit.u32 H 8)
+         V3 (shen-jit.u32 H 12)
          A (add32 V0 V1)
          B (shen-jit.bit-xor (rotate32 V1 5) A)
          C (add32 V2 V3)
          D (shen-jit.bit-xor (rotate32 V3 8) C)
          E (add32 (rotate32 A 16) D)
          G (add32 C B)
-      (do (buffer.u32-be-> H 0 E)
-          (buffer.u32-be-> H 4 (shen-jit.bit-xor (rotate32 B 13) G))
-          (buffer.u32-be-> H 8 (rotate32 G 16))
-          (buffer.u32-be-> H 12 (shen-jit.bit-xor (rotate32 D 7) E)))))
+      (do (shen-jit.u32! H 0 E)
+          (shen-jit.u32! H 4 (shen-jit.bit-xor (rotate32 B 13) G))
+          (shen-jit.u32! H 8 (rotate32 G 16))
+          (shen-jit.u32! H 12 (shen-jit.bit-xor (rotate32 D 7) E)))))
 
 (define hash-word
-  {buffer.view --> fixnum --> buffer.view}
+  {buffer.storage --> fixnum --> buffer.storage}
   H W ->
-    (do (buffer.u32-be-> H 12 (shen-jit.bit-xor (buffer.u32-be H 12) W))
+    (do (shen-jit.u32! H 12 (shen-jit.bit-xor (shen-jit.u32 H 12) W))
         (hash-round (hash-round H))
-        (buffer.u32-be-> H 0 (shen-jit.bit-xor (buffer.u32-be H 0) W))))
+        (shen-jit.u32! H 0 (shen-jit.bit-xor (shen-jit.u32 H 0) W))))
 
 (define hash-start
-  {listener --> buffer.view}
+  {listener --> buffer.storage}
   L ->
     (let H (listener.hash L)
          K0 (listener.key0 L)
          K1 (listener.key1 L)
-      (do (buffer.u32-be-> H 0 K0)
-          (buffer.u32-be-> H 4 K1)
-          (buffer.u32-be-> H 8 (shen-jit.bit-xor K0 1819895653))
-          (buffer.u32-be-> H 12 (shen-jit.bit-xor K1 1952801890)))))
+      (do (shen-jit.u32! H 0 K0)
+          (shen-jit.u32! H 4 K1)
+          (shen-jit.u32! H 8 (shen-jit.bit-xor K0 1819895653))
+          (shen-jit.u32! H 12 (shen-jit.bit-xor K1 1952801890)))))
 
 (define hash-end
-  {buffer.view --> fixnum --> fixnum}
+  {buffer.storage --> fixnum --> fixnum}
   H Bytes ->
     (do (hash-word H (shen-jit.shift-left Bytes 24))
-        (buffer.u32-be-> H 8 (shen-jit.bit-xor (buffer.u32-be H 8) 255))
+        (shen-jit.u32! H 8 (shen-jit.bit-xor (shen-jit.u32 H 8) 255))
         (hash-round (hash-round (hash-round (hash-round H))))
-        (shen-jit.bit-xor (buffer.u32-be H 4) (buffer.u32-be H 12))))
+        (shen-jit.bit-xor (shen-jit.u32 H 4) (shen-jit.u32 H 12))))
 
 \\ RFC 6528: a connection's initial sequence number hashes its tuple with the listener's keys.
 (define tuple-hash
@@ -362,7 +363,7 @@
           (hash-end H 36))))
 
 (define hash-address
-  {buffer.view --> net-ipv6.address --> buffer.view}
+  {buffer.storage --> net-ipv6.address --> buffer.storage}
   H A ->
     (do (hash-word H (net-ipv6.address.a A))
         (hash-word H (net-ipv6.address.b A))
