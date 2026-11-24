@@ -1136,6 +1136,34 @@ cannot. The kernel suite is the kernel's `tests/runme.shen`; the stlib install l
   namespace had prefixed: code that kept values in registers and called before a return, a tail call or a branch was
   made boxed, against what design.md says. Alone: the networking code 13,327 against 13,371 instructions, its timings
   and the numeric programs the same.
+- **Functions that call each other, inlined a bounded number of times** (2026-11-24, Apple M3 Max, load 3 to 5 with
+  other work running, against the commit before). A typed module of `up`, whose tail call was of `up2`, and `up2`, whose
+  tail call was of `up`, with a caller of `(up 0 1)`, ran out of 512 MB in 5.8 s as it loaded, with nothing but
+  `numbers`. `up` was made first, so `up2` was not there to inline: its code kept the tail call and was `typed`, inlined
+  at any depth. `up2` inlined `up`, so that its own tail call was a loop's jump, its code called nothing and it was
+  `contained`, at any depth too. Nothing then stopped the caller. Both claims rested on "its own code inlined all it
+  calls", which a call of what is made later breaks. Written in place, with no `let`, `up` was 14 nodes rather than 18, so
+  small and no `typed` body, and two levels deep. Found with it, all older: two `typed` bodies, with the same end; two
+  untyped sealed functions, each `contained` as each calls the other outside a message but only on its way to a raise
+  (out of memory in 2.4 s); and two sealed bodies of primitives and each other, over which `leaf?` recursed (stack
+  overflow in 0.6 s). Now no contained or typed body or loop is inlined inside itself, which loops alone were
+  kept from; `leaf?` takes no body twice on one path; and a body whose tail call is of a function not made yet is
+  `calling`, two levels deep. The four load in 0.02 s and give what the same code gives open. Of 600 generated sets of
+  two to six functions that call each other, in tail position, under arithmetic, before a raise and in messages, each
+  loaded typed, sealed and open, all agree and load in 0.02 s, where 21 of them ran the build before out of memory.
+  Nothing else changes: of the 358,856 definitions that 31 suites, the typed numeric programs and every library loaded
+  sealed lower, none has other code, and one another mark, `tcp.connected`, whose tail call is of what is made after it.
+  Stage 0 output changes in the lowerer alone. Loading the networking and `git` libraries sealed and building
+  the numeric programs, instructions retired, median of 7: 0.999 to 1.002. The executable is 792 bytes larger.
+  **Rejected: the first two alone.** Functions that call each other were then inlined along every path that takes none
+  twice. Typed states over an index that each go on to four others, with a caller: eight of them loaded and ran in 0.15
+  s, ten in 2.8, twelve not in 60, and ten that go on to five in 36. With the third, twelve that go on to six take 0.05.
+  **Rejected: `calling` for any tail call,** a line shorter. 27 functions of `hyperloglog` and the networking change mark,
+  all but one with tail calls of what was made before them, which cannot come back. One has other code:
+  `hyperloglog.add!` takes `buffer.check` in and keeps registers, 127 instructions against 11, which was not timed.
+  **Rejected: "made already" for contained bodies too,** in place of "not inside itself". It would do for calls of sealed
+  functions, but an open function may be replaced by a sealed one that calls back, as a grammar rule's stub is, and
+  counting open calls changes `sqlite.fail`.
 
 ### Factorisation
 

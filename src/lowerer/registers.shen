@@ -140,8 +140,8 @@
   _ -> false)
 
 \\ Whether code calls nothing, not even in tail position, but on its way to a raise, as an
-\\ error's message is made: inlined, it calls nothing either but where the message is made, which
-\\ inlines no calling body.
+\\ error's message is made: inlined, it calls nothing either but there, and a message inlines no
+\\ calling body.
 (define calls-only-to-raise?
   Is -> (and (not (tail-calls? Is)) (calls-safe-back? (reverse Is) [] false [])))
 
@@ -150,10 +150,17 @@
   [[Op | _] | _] -> true where (element? Op [tail-call tail-call-sealed tail-call-value])
   [_ | Is] -> (tail-calls? Is))
 
-(define calls-nothing?
+\\ Whether code calls nothing but, in tail position, sealed functions made already, or a value. One made
+\\ later can call back what this code is of: each would then inline the other, and code would be made for
+\\ each way through functions that call each other.
+(define calls-only-made?
   [] -> true
-  [[Op | _] | _] -> false where (element? Op [call call-sealed call-value push-handler])
-  [_ | Is] -> (calls-nothing? Is))
+  [[Op | _] | _] -> false where (element? Op [call call-sealed call-value tail-call push-handler])
+  [[tail-call-sealed _ F _] | _] -> false where (not (made? F))
+  [_ | Is] -> (calls-only-made? Is))
+
+(define made?
+  F -> (trap-error (do (shen-jit.function F) true) (/. E false)))
 
 \\ Whether no call has registers to keep: after each, every way on leaves the definition, by a
 \\ return, a tail call or a raise, before it reads or writes a register or goes back to a loop, as
@@ -1175,11 +1182,12 @@
 \\ The inline form of F, whose Code is made: a small body, marked contained when that code calls
 \\ nothing but on its way to a raise; else, when Code keeps values in registers, which it does only
 \\ when it calls nothing but on its way out, a body of up to 800 nodes, marked typed when it calls
-\\ nothing but in tail position, or calling when it calls at all (inline-at), which only a
-\\ definition that keeps values in registers too inlines: a loop over such a function, as over
-\\ the force between two bodies, then keeps its own values in registers round it. A body that
-\\ calls F, which such code does only in tail position, as its loop, is marked loop, with where
-\\ each parameter goes (param-kinds), and such a definition inlines it as a loop of its own.
+\\ nothing but, in tail position, what was made before it (calls-only-made?), or calling when it
+\\ calls anything else (inline-at), which only a definition that keeps values in registers too
+\\ inlines: a loop over such a function, as over the force between two bodies, then keeps its own
+\\ values in registers round it. A body that calls F, which such code does only in tail position, as
+\\ its loop, is marked loop, with where each parameter goes (param-kinds), and such a definition
+\\ inlines it as a loop of its own.
 (define inline-of
   F Params Body Sealed Code Kinds
   -> (let Inline (inline-form F Params Body (cons? Sealed))
@@ -1188,7 +1196,7 @@
              ((or (not (value *typed*)) (not (computes? (instructions Code)))
                   (> (size Body) 800))
               Inline)
-             ((inlinable? F Body false) [Params Body (if (calls-nothing? (instructions Code)) typed calling)])
+             ((inlinable? F Body false) [Params Body (if (calls-only-made? (instructions Code)) typed calling)])
              \\ inlinable? with a name no body has, as Body calls F
              ((and (inlinable? shen-jit.lower.loop Body false)
                    (loops-in? (instructions Code))
@@ -1219,11 +1227,8 @@
 \\ it, rather than reading it each round.
 (define inline-loop
   F [Params Body loop Kinds] Args
-  -> (let Looping (value *looping*)
-          Within (set *looping* [F | Looping])
-          N (length Params)
+  -> (let N (length Params)
           Normal (inlined-norm F Params (fix-kl F N (fixed-flags F N Params Args 1 Body) Body))
-          Out (set *looping* Looping)
           Fresh (map (/. P (shen-jit.lower.fresh arg)) Params)
           Result (result-kind (exits F (kinds-env Params Kinds) Normal))
           Info [F Kinds Result Params (kept F Params Normal)]

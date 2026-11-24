@@ -217,8 +217,9 @@ words in the float and word registers that hand-written native code uses, and it
 registers, rather than leaving by a return, a tail call or a raise as an error's message does, has a handler,
 computes nothing in them or runs out of them, it is lowered again as usual. A call of a C function of
 doubles is no call there. Such a definition's inline form, for callers that keep registers too, may be larger
-than usual, and inlines at any depth where it is sealed, as its own code inlined all it calls; one that is a loop
-is inlined as a loop of the caller's, two levels deep. The builder records the next free float
+than usual, and inlines at any depth where it is sealed and calls only, in tail position, sealed functions made
+before it; one that calls more is inlined two levels deep, and so is one that is a loop, as a loop of the
+caller's. The builder records the next free float
 and word registers and the loops' heads with each parameter's place, and the environment binds a variable to
 `[float R]`, `[word W]` or `[bits W]`, a fixnum or a 64-bit word, as well as to a slot or a label. A word leaves
 the registers as 8 new bytes, which is what `lib/word.shen` makes of one. Every read of a float from a slot is checked, so what the types say decides only what is kept in
@@ -321,9 +322,9 @@ Some refinements are built on that:
   to a return placed with the slow paths, so a turn of the loop takes one jump, back, instead of two.
 - **Small functions are inlined,** by the lowerer, sealed or open, two levels deep, or at any depth when the body
   is primitives alone over parameters and constants, up to 48 nodes, as a struct's reader or constructor is, a
-  sealed small body whose own code calls nothing but where an error's message is made, which is no level either,
-  or a sealed typed body inlined into code that keeps registers. An error's message inlines only bodies of
-  primitives. An open one sits behind a test that the name's
+  sealed small body whose own code calls nothing but on its way to a raise, which is no level either,
+  or a sealed typed body inlined into code that keeps registers, each not inside itself. An error's message
+  inlines only bodies of primitives. An open one sits behind a test that the name's
   definition still has that body, which on arm64 and x86-64 is a nop that a redefinition patches into a branch to the ordinary
   call, and elsewhere a test each time. Bodies inlined after stage 0 are marked in the bytecode, so a backtrace names them as if
   they were not inlined. A lambda passed to a sealed one that only applies it makes no closure: it runs where it is applied.

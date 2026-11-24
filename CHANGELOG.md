@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+
+- Functions that call each other, in a typed program or in sealed code, could run the compiler out of memory or stack.
+
 ## [0.12] - 2026-11-23
 
 ### Added

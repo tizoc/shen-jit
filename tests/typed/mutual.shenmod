@@ -1,0 +1,6 @@
+(shen.module
+  (version 1)
+  (name mutual)
+  (requires numbers)
+  (typed)
+  (sources tc+ "mutual.shen"))

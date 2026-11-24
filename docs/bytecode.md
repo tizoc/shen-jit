@@ -570,18 +570,19 @@ shifts, `bswap32`, `clz` and `ctz`. The others are calls to C.
   in the body, unless a parameter is named `let` or `lambda`, so that `(vector 1)` lowers to `(absvector 2)` and a constant
   length, and a float stays a constant of the code computing with it. A body that is then a constant,
   with no parameter left, is that constant, which its caller takes as an operand. A small body whose
-  code calls nothing, not even in tail position, but where an error's message is made carries
-  `(Params Body contained)`: where the callee is sealed it inlines at any depth and is no level, as its
-  own code inlined all it calls and it cannot be redefined, so that a loop over helpers that read a
-  buffer keeps its values in registers. An error's message, the argument of `simple-error`, inlines
+  code calls nothing, not even in tail position, but on its way to a raise, as where an error's message
+  is made, carries `(Params Body contained)`: where the callee is sealed it inlines at any depth and is
+  no level, as its own code inlined all else it calls and it cannot be redefined, so that a loop over
+  helpers that read a buffer keeps its values in registers. An error's message, the argument of `simple-error`, inlines
   only bodies of primitives: it is code no correct run reaches, and a contained body could otherwise
   reach itself through messages that call each other. Stage 0 knows bodies from their source, not from
   their code, so lowering for it, as the self-hosting check does too, takes a contained body as any
   small one. A definition with
   type annotations whose code keeps values in registers carries `(Params Body typed)` instead when it
-  is not small, up to 800 nodes, or `(Params Body calling)` when that code calls on its way out,
+  is not small, up to 800 nodes, or `(Params Body calling)` when that code calls on its way out
+  anything but, in tail position, a closure or sealed functions made before it. Either is
   inlined only into a definition that keeps values in registers: a typed body at any depth where the
-  callee is sealed, as its own code inlined all it calls and it cannot be redefined, and two levels
+  callee is sealed, as it calls only what was made before it and it cannot be redefined, and two levels
   deep otherwise, and a calling body two levels deep, as its calls could reach it again. One whose code is a loop, its own tail calls,
   carries `(Params Body loop Kinds)`, Kinds saying where each parameter goes, and such a definition
   inlines it where the callee is sealed, two levels deep at most, as a loop of its own (above): its arguments stay arguments, and
@@ -589,7 +590,9 @@ shifts, `bswap32`, `clz` and `ctz`. The others are calls to C.
   parameters to those, and the body follows, normalised in its own scope. A
   fresh variable bound to a variable, and each parameter, share a slot with
   what they are bound to, so inlining adds no moves. Inlining nests two
-  levels at most, but for the bodies above that inline at any depth. Stage 0 inlines too, so the kernel's calls to its own
+  levels at most, but for the bodies above that inline at any depth. A contained or typed body or a loop
+  is not inlined inside itself, as it could be where sealed functions call each other, and a body that such
+  calls lead back to is not one of primitives. Stage 0 inlines too, so the kernel's calls to its own
   small functions are inlined. Outside stage 0 the body's code is marked
   `(inline F N)`, so that backtraces still show F.
 - A call to an open F with such a body is inlined too, behind `(if

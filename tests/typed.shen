@@ -661,4 +661,14 @@
   [(shen.typecheck [rep.seq-number [rep.seq-of 1]] (protect A))
    (shen.typecheck [fx< [rep.seq-of 1] [rep.seq-of 2]] (protect A))])
 
+\\ Functions that call each other are inlined a bounded number of times, and one whose tail call is of a
+\\ function made after it two levels deep, or there would be code for each way through several.
+(typed.check "functions that call each other load" [mutual] (module.load "tests/typed/mutual.shenmod"))
+(typed.check "and run" [1 10 11] [(mutual-up-main) (mutual-left-main) (mutual-a-main)])
+(typed.check "to an error" ["negative" "integer overflow"]
+  [(trap-error (mutual-up-checked -1 1) (/. E (error-to-string E)))
+   (trap-error (mutual-add-main) (/. E (error-to-string E)))])
+(typed.check "a body whose tail call is of what is made later inlines as one that calls" [calling calling]
+  (map (/. F (hd (tl (tl (shen-jit.inline-body F))))) [mutual-left mutual-a]))
+
 (output "~A passed, ~A failed (typed)~%" (value typed.passed) (value typed.failed))

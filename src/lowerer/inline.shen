@@ -19,7 +19,7 @@
 \\ A body of primitives alone calls nothing, so it may be larger.
 (define small?
   Body -> (let Size (size Body)
-            (or (<= Size 15) (and (<= Size 48) (leaf? Body)))))
+            (or (<= Size 15) (and (<= Size 48) (leaf? Body [])))))
 
 (define inlinable?
   F [F | _] _ -> false
@@ -52,20 +52,21 @@
 
 \\ A body of primitives over parameters and constants, such as a struct's
 \\ reader or constructor, calls nothing, so it is inlined at any depth. So is
-\\ a contained body where F is sealed: F's own code called nothing but where
-\\ an error's message is made, and nothing that calls is inlined there, so the
-\\ body inlines no more than that code held, and F, which cannot be redefined,
-\\ was made after all it calls; nor is it a level (inlined-norm). So is a
-\\ typed body, larger, which only code that keeps values in registers inlines,
-\\ where F is sealed: F's own code called nothing but on its way out. One whose
-\\ code calls, calling, is inlined into such code two levels deep, as those
-\\ calls could reach it again. A loop is inlined two levels deep, only where F
-\\ is sealed, and not inside itself: its own calls of F go back to its head.
+\\ a contained body where F is sealed: F's own code called nothing but on its
+\\ way to a raise, and nothing that calls is inlined in an error's message, so
+\\ the body inlines little more than that code held; nor is it a level
+\\ (inlined-norm). So is a typed body, larger, which only code that keeps values
+\\ in registers inlines, where F is sealed: F's own code called nothing but, on
+\\ its way out, what was made before it. One whose code calls anything else,
+\\ calling, is inlined into such code two levels deep, as those calls could reach
+\\ it again. A loop is inlined two levels deep, only where F is sealed: its own
+\\ calls of F go back to its head. None of these but a calling body is inlined
+\\ inside itself, where what it calls calls it (within?).
 (define inline-at
   F N -> (let Inline (shen-jit.inline-body F)
            (if (and (cons? Inline) (= (length (hd Inline)) N)
                     (if (trap-error (value *cold*) (/. E false))
-                        (and (not (loop-form? Inline)) (leaf? (hd (tl Inline))))
+                        (and (not (loop-form? Inline)) (leaf? (hd (tl Inline)) []))
                         (inline-here? F (if (stage0?) (uncontained Inline) Inline)
                                       (trap-error (value *inline-depth*) (/. E 0))
                                       (trap-error (value *registers*) (/. E false)))))
@@ -73,14 +74,17 @@
                [])))
 
 (define inline-here?
-  _ [_ Body] Depth _ -> (or (< Depth 2) (leaf? Body))
-  F [_ Body contained] Depth _ -> (or (< Depth 2) (shen-jit.sealed? F) (leaf? Body))
-  F [_ _ typed] Depth Registers -> (and Registers (or (< Depth 2) (shen-jit.sealed? F)))
+  _ [_ Body] Depth _ -> (or (< Depth 2) (leaf? Body []))
   _ [_ _ calling] Depth Registers -> (and Registers (< Depth 2))
-  F [_ _ loop _] Depth Registers
-  -> (and Registers (< Depth 2) (shen-jit.sealed? F)
-          (not (element? F (trap-error (value *looping*) (/. E [])))))
+  F _ _ _ -> false where (within? F)
+  F [_ Body contained] Depth _ -> (or (< Depth 2) (shen-jit.sealed? F) (leaf? Body []))
+  F [_ _ typed] Depth Registers -> (and Registers (or (< Depth 2) (shen-jit.sealed? F)))
+  F [_ _ loop _] Depth Registers -> (and Registers (< Depth 2) (shen-jit.sealed? F))
   _ _ _ _ -> false)
+
+\\ Whether F is sealed, and is the definition being lowered or one whose body is being inlined there.
+(define within?
+  F -> (and (shen-jit.sealed? F) (element? F (trap-error (value *within*) (/. E [])))))
 
 \\ Stage 0 knows bodies from their source alone, not from code, so lowering for it, as the
 \\ self-hosting check does too, takes a contained body as any small one.
@@ -98,24 +102,24 @@
               (and (cons? Inline) (cons? (tl (tl Inline))) (= (hd (tl (tl Inline))) contained)))))
 
 (define leaf?
-  [Op | Args] -> (and (leaf-op? Op (length Args))
-                      (leaves? Args))
-  _ -> false)
-
-\\ A primitive, or a sealed function whose own body is such a body, as the
-\\ typed helpers of struct.shen are.
-(define leaf-op?
-  Op N -> true where (= N (prim-arity Op))
-  Op N -> (let Inline (shen-jit.inline-body Op)
-            (and (cons? Inline) (= (length (hd Inline)) N) (not (loop-form? Inline))
-                 (leaf? (hd (tl Inline)))))
-    where (and (shen-jit.symbol? Op) (shen-jit.sealed? Op))
+  [Op | Args] Ops -> (and (leaf-op? Op (length Args) Ops)
+                          (leaves? Args Ops))
   _ _ -> false)
 
+\\ A primitive, or a sealed function whose own body is such a body, as the
+\\ typed helpers of struct.shen are, but not one of Ops, whose bodies led here.
+(define leaf-op?
+  Op N _ -> true where (= N (prim-arity Op))
+  Op N Ops -> (let Inline (shen-jit.inline-body Op)
+                (and (cons? Inline) (= (length (hd Inline)) N) (not (loop-form? Inline))
+                     (leaf? (hd (tl Inline)) [Op | Ops])))
+    where (and (shen-jit.symbol? Op) (shen-jit.sealed? Op) (not (element? Op Ops)))
+  _ _ _ -> false)
+
 (define leaves?
-  [] -> true
-  [X | Xs] -> (and (leaf? X) (leaves? Xs)) where (cons? X)
-  [_ | Xs] -> (leaves? Xs))
+  [] _ -> true
+  [X | Xs] Ops -> (and (leaf? X Ops) (leaves? Xs Ops)) where (cons? X)
+  [_ | Xs] Ops -> (leaves? Xs Ops))
 
 \\ The arguments go to fresh variables first, so binding the parameters cannot
 \\ capture a variable an argument uses; the body is normalized in its own
@@ -145,16 +149,19 @@
 (define inline-args
   F Params Body Args -> (inline-frozen F Params Args (inlined-norm F Params Body) [] []))
 
-\\ F's Body normalised where it is inlined: a level deeper, unless F is contained, and typed only if
-\\ F was annotated too.
+\\ F's Body normalised where it is inlined: within F, a level deeper, unless F is contained, and typed
+\\ only if F was annotated too.
 (define inlined-norm
   F Params Body -> (let Depth (value *inline-depth*)
                         Deeper (set *inline-depth* (if (contained? F) Depth (+ Depth 1)))
                         Typed (value *typed*)
                         Inner (set *typed* (and Typed (annotated? F)))
+                        Within (value *within*)
+                        In (set *within* [F | Within])
                         Normal (norm Params Body)
                         Back (set *inline-depth* Depth)
                         Outer (set *typed* Typed)
+                        Out (set *within* Within)
                      Normal))
 
 \\ An argument (freeze E) of a parameter the inlined body only thaws, once: E runs

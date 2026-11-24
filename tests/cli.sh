@@ -193,6 +193,18 @@ cat > "$dir/contained.shen" <<'SHEN'
 SHEN
 "$SHEN" --seal eval -l "$dir/contained.shen" > "$dir/contained.out" 2>&1
 check contained "$dir/contained.out" "contained a! eg y even odd"
+# Two that are contained, as each calls the other only on its way to a raise, outside its message,
+# and two that are primitives and each other: neither inlines inside itself.
+cat > "$dir/each-other.shen" <<'SHEN'
+(define cli-ei X -> (if (> X 0) X (do (cli-ej X) (simple-error "ei"))))
+(define cli-ej X -> (cli-ei (- X 1)))
+(define cli-ek X -> (cli-el (tl X)))
+(define cli-el X -> (cli-ek (tl X)))
+(define cli-em X -> [(cli-ej X) (trap-error (cli-ek [1 2 3]) (/. E ended))])
+(output "each-other ~A ~A~%" (cli-em 2) (map (/. F (tl (tl (shen-jit.inline-body F)))) [cli-ei cli-ej]))
+SHEN
+"$SHEN" --seal eval -l "$dir/each-other.shen" > "$dir/each-other.out" 2>&1
+check each-other "$dir/each-other.out" "each-other [1 ended] [[contained] [contained]]"
 
 # Functions the kernel did not know when compiling a call, such as one
 # defined later at the top level, are called through fn: by name when the

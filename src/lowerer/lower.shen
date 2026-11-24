@@ -52,7 +52,7 @@
          (set *cold* false)
          (set *stage0* (cons? Sealed))
          (set *fresh* 0)
-         (set *looping* [F])
+         (set *within* [F])
          (let Trusted (set *typed* Annotated)
               Kinds (param-kinds Params Typed Annotated)
               Registers (set *registers* (registers-for? Annotated Typed))
@@ -157,7 +157,7 @@
                   (set *fresh* 0)
                   (set *typed* false)
                   (set *registers* false)
-                  (set *looping* [])
+                  (set *within* [])
                   (shen-jit.lower.code eval-kl [] (norm [] (untyped [] X)) Sealed)))
 
 \\ A variable of the lowerer's own, fresh within the definition being lowered.
