@@ -5,6 +5,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.13] - 2026-11-25
+
 ### Added
 
 - `smt` tells whether formulas over the integers can hold together, with a model or a proof that has been checked.
@@ -14,6 +16,10 @@ All notable changes to this project are documented in this file. The format is b
   `refine.contract` gives conditions to functions that are there already, as `buffer/contracts` does to those of
   buffers, for the modules that require it. Conditions are tested as a program runs, though they were proved, until
   `(refine.test -)`, after which they cost nothing.
+
+### Changed
+
+- `net/tcp` opens a connection from its table in about 1.1 µs, where it took 2.5: its hash keeps its state in plain bytes.
 
 ### Fixed
 
@@ -895,7 +901,8 @@ All notable changes to this project are documented in this file. The format is b
 
 - Initial release
 
-[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.12...HEAD
+[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.13...HEAD
+[0.13]: https://github.com/tizoc/shen-jit/compare/v0.12...v0.13
 [0.12]: https://github.com/tizoc/shen-jit/compare/v0.11...v0.12
 [0.11]: https://github.com/tizoc/shen-jit/compare/v0.10...v0.11
 [0.10]: https://github.com/tizoc/shen-jit/compare/v0.9...v0.10
