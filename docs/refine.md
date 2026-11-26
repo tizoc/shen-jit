@@ -85,10 +85,11 @@ whether `refine` proved what it should not have, what is trusted is not so, or a
 `(refine.test -)` ends this for what is checked after it in the same module, or, where there is none, in the REPL and in
 files that are no module's, and `(refine.test +)` brings it back. F is then two functions, what tests its condition and
 its body, which does not, and whose name, as `F.%body` and a number, no program has, though errors and `track` show it.
-A call that was proved in such code goes to the body, if F was defined in such code too, and a loop is the code it would
-be without conditions. Each contract that F has had has a body of its own, so what was proved to meet one never runs
-what needs another. Promises are not tested. Under `(tc -)`, nothing is proved: a `define-checked` tests its condition,
-and its promise is taken as said. What was proved of its contract before calls it then.
+A call that was proved in such code goes to the body, if F was defined in such code too, where `(track F)` does not see
+it, and a loop is the code it would be without conditions. Each contract that F has had has a body of its own, so what
+was proved to meet one never runs what needs another. Promises are not tested. Under `(tc -)`, nothing is proved: a
+`define-checked` tests its condition, and its promise is taken as said. What was proved of its contract before calls it
+then.
 
 A contract is as its function was last defined. Another `define-checked` changes it, and a `define` takes it away. The
 definitions of a file are checked by its contracts, as by its types, wherever they are in it, and what it evaluates
