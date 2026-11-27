@@ -118,6 +118,13 @@
 (smt-test.check "cached row state across prop splits and reset on new rows" ["no integers found" sat]
   (freeze [(smt-test.kind (smt.check [[= [* 3 x] [+ [* 2 y] 1]] [or p q] [not p]]))
            (smt-test.kind (smt.check [[= [* 3 x] [+ [* 2 y] 1]] [or p [= x 1]] [not p]]))]))
+\\ Without the row of [>= [* -4 z] [- u 5]], no integers are found for the rest, though r makes its choice hold.
+(smt-test.check "a model found by splitting a choice that holds" sat
+  (freeze (smt-test.kind (smt.check [[< [- y] [* 2 u]] [< [+ y [* 2 z]] [- x 4]] r [<= [+ [* 5 x] y [* 5 z]] 0]
+                                     [or [<= [* -2 z] [+ [* 3 x] [* 2 u]]] [>= [* 2 u] -1]] [<= 0 [+ [* 2 u] x]]
+                                     [or r [>= [* -4 z] [- u 5]]] [< [+ [* 5 u] x] 0]]))))
+(smt-test.check "five pigeons in four holes, within the default budget" unsat
+  (freeze (smt-test.kind (smt.check (smt-test.pigeons 4)))))
 (smt-test.check "a model too large to be checked" "integer overflow"
   (freeze (smt-test.kind (smt.check [[<= x [* 8 y]] [>= y 1152921504606846975] [<= x 1]]))))
 (smt-test.check "a budget" "out of budget"

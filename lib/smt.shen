@@ -368,21 +368,35 @@
   F Made R -> (search-choice F Made R (open-choice (facts.choices F) (length (facts.choices F)) Made (facts.props F) (facts.rows F) [])))
 
 (define search-choice
-  F _ R [] -> (settled-or-unsat (if (= R none) (refute F) R) F)
+  F Made R [] -> (settled F Made (if (= R none) (refute F) R))
   F Made R [N K Parts] -> (branch F [N | Made] N Parts [] [] [] R) where (fx<= K 1)
   F Made R [N _ Parts] -> (search-branch F Made N Parts (if (= R none) (refute F) R)))
-
-(define settled-or-unsat
-  [unsat Steps] _ -> [unsat (refutation.make Steps) (rows-used Steps)]
-  R F -> (settled R F))
 
 (define search-branch
   _ _ _ _ [unsat Steps] -> [unsat (refutation.make Steps) (rows-used Steps)]
   F Made N Parts R -> (branch F [N | Made] N Parts [] [] [] R))
 
+\\ What the rows give once each choice is made or holds. Where they have no integers found, each choice that
+\\ holds is split after all, one at a time, as the rows of another of its cases may lead to some. Its cases
+\\ split no other that holds: stuck, among the choices made, says so.
 (define settled
-  [sat Values] F -> [sat Values (facts.props F)]
-  [stuck] _ -> [unknown "no integers found"])
+  _ _ [unsat Steps] -> [unsat (refutation.make Steps) (rows-used Steps)]
+  F _ [sat Values] -> [sat Values (facts.props F)]
+  F Made [stuck] -> (if (element? stuck Made)
+                        [unknown "no integers found"]
+                        (split-held F Made (unmade (facts.choices F) (length (facts.choices F)) Made))))
+
+(define split-held
+  _ _ [] -> [unknown "no integers found"]
+  F Made [[N | Parts] | Cs] -> (let R (branch F [N stuck | Made] N Parts [] [] [] [stuck])
+                                 (if (= (hd R) unknown) (split-held F Made Cs) R)))
+
+\\ The choices not made yet, newest first, each as [N | Parts].
+(define unmade
+  [] _ _ -> []
+  [Parts | Cs] N Made -> (if (element? N Made)
+                             (unmade Cs (fx- N 1) Made)
+                             [[N | Parts] | (unmade Cs (fx- N 1) Made)]))
 
 \\ The open choice with the fewest unclosed cases, skipping any that already hold: [N Open Parts], or [].
 (define open-choice
