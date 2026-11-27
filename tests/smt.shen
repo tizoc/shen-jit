@@ -99,6 +99,25 @@
   (freeze (smt-test.kind (smt.check (append (map (/. N [or [= (concat x N) 1] [= (concat x N) 2]]) (smt-test.up-to 20)) [[or [< 2 1] [< 3 1]]])))))
 (smt-test.check "nor with what a case denies" unsat
   (freeze (smt-test.kind (smt.check (append (map (/. N [or [= (concat x N) 1] [= (concat x N) 2]]) (smt-test.up-to 20)) [[not p] q [or p [and p q]]])))))
+\\ Unit choices, satisfied choices, direct contradictions and cached rows across splits.
+(smt-test.check "unit chains ahead of open choices" [unsat unsat]
+  (freeze (let Open (map (/. N [or [= (concat u N) 1] [= (concat u N) 2]]) (smt-test.up-to 12))
+               PChain (append [p0 [not p10]] (map (/. N [or [not (concat p (- N 1))] (concat p N)]) (smt-test.up-to 10)))
+               RChain (append [[<= 0 r0] [< r6 0]] (map (/. N [or [not [<= 0 (concat r (- N 1))]] [<= 0 (concat r N)]]) (smt-test.up-to 6)))
+            [(smt-test.kind (smt.check-within 100 (append Open PChain)))
+             (smt-test.kind (smt.check-within 100 (append Open RChain)))])))
+(smt-test.check "satisfied choices and direct row contradictions" [sat unsat sat unsat]
+  (freeze [(smt-test.kind (smt.check (append [[<= x 5] p] (map (/. N [or [<= x 10] [= (concat y N) 1]]) (smt-test.up-to 12)))))
+           (smt-test.kind (smt.check [[<= x 5] [or [<= x 10] q] [>= x 6]]))
+           (smt-test.kind (smt.check [[or [and [<= 0 x] [> 0 x]] [<= 1 y]]]))
+           (smt-test.kind (smt.check [[or [and [<= 0 x] [> 0 x]] [and [<= 0 y] [> 0 y]]]]))]))
+(smt-test.check "large fixnums inside choices do not overflow" [sat sat unsat]
+  (freeze [(smt-test.kind (smt.check [[<= [* 2305843009213693951 x] 1] [or [<= [* 2305843009213693951 x] -2] p] [= x 0]]))
+           (smt-test.kind (smt.check [[<= x -2305843009213693951] [or p [>= x 2305843009213693951]]]))
+           (smt-test.kind (smt.check [[<= x -1000] [or [>= x 1] [and [<= y -1000] [>= y 1]]]]))]))
+(smt-test.check "cached row state across prop splits and reset on new rows" ["no integers found" sat]
+  (freeze [(smt-test.kind (smt.check [[= [* 3 x] [+ [* 2 y] 1]] [or p q] [not p]]))
+           (smt-test.kind (smt.check [[= [* 3 x] [+ [* 2 y] 1]] [or p [= x 1]] [not p]]))]))
 (smt-test.check "a model too large to be checked" "integer overflow"
   (freeze (smt-test.kind (smt.check [[<= x [* 8 y]] [>= y 1152921504606846975] [<= x 1]]))))
 (smt-test.check "a budget" "out of budget"

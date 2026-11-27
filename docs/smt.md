@@ -78,13 +78,15 @@ and a proposition with its negation, need no steps.
 
 ## How it decides
 
-Formulas are read with their negations moved to their atoms. While some `or` has no part chosen, the rows so far are
-refuted if they can be, and otherwise the one with the fewest parts is split; a proof that does not use the part it
-was found under does for the whole. Rows are refuted by eliminating one unknown after another: each row that
-bounds it above is added to each that bounds it below, which Fourier and Motzkin described, and every sum is
-divided by what its coefficients have in common, with its bound rounded down. An unknown that has no multiple in what
-bounds it on one side, or in what it is equal to, goes first, as eliminating it loses no integers; of those, the one
-that makes fewest rows.
+Formulas are read with their negations moved to their atoms. Each step picks an `or` that does not already hold by what
+is known, preferring one whose parts are all closed or all but one closed, so forced cases propagate without eliminating
+unknowns first. Before splitting a choice with two or more open parts, or once no choice is left, the rows so far are
+refuted if they can be; branches that add no rows reuse that check, and a row that directly denies another closes in a
+single step. A proof that does not use the part it was found under does for the whole. Rows are refuted by eliminating
+one unknown after another: each row that bounds it above is added to each that bounds it below, which Fourier and
+Motzkin described, and every sum is divided by what its coefficients have in common, with its bound rounded down. An
+unknown that has no multiple in what bounds it on one side, or in what it is equal to, goes first, as eliminating it
+loses no integers; of those, the one that makes fewest rows.
 
 That suits what programs ask, some tens of rows over some tens of unknowns. It has no products of unknowns, no arrays,
 no functions and no quantifiers, and nothing is kept from one check to the next. Elimination can make many rows

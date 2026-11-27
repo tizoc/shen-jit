@@ -163,12 +163,42 @@
                                 (if (< (row.bound R) (row.bound S)) [[N | R] | Ls] [[M | S] | Ls])
                                 [[M | S] | (add-tight [N | R] Ls)]))
 
-\\ The lines, or [refuted N] if one of those added is false by itself.
+\\ The lines, or [refuted N] if one of those added is false by itself or directly denies another.
 (define add-lines
   [] Ls -> Ls
   [[N | R] | More] Ls -> (cases (false-row? R) [refuted N]
                                 (true-row? R) (add-lines More Ls)
-                                true (add-lines More (add-tight [N | R] Ls))))
+                                true (add-one-line [N | R] More Ls)))
+
+(define add-one-line
+  L More Ls -> (let Opp (opposite-contradiction (tl L) Ls)
+                 (if (cons? Opp)
+                     [refuted (hd (combine L 1 Opp 1))]
+                     (add-lines More (add-tight L Ls)))))
+
+(define opposite-contradiction
+  _ [] -> []
+  R [[M | S] | Ls] -> [M | S] where (and (sum-negative? (row.bound R) (row.bound S))
+                                         (negated-terms? (row.terms R) (row.terms S)))
+  R [_ | Ls] -> (opposite-contradiction R Ls))
+
+\\ Whether A + B < 0 without overflowing fixnums.
+(define sum-negative?
+  A B -> (if (fx< A 0)
+             (if (fx< B 0)
+                 (fx>= A (fx- -2305843009213693951 B))
+                 (fx< (fx+ A B) 0))
+             (and (fx< B 0) (fx< (fx+ A B) 0))))
+
+(define negated-coeff?
+  C D -> (if (fx< C 0)
+             (and (fx> D 0) (fx= (fx+ C D) 0))
+             (and (fx< D 0) (fx= (fx+ C D) 0))))
+
+(define negated-terms?
+  [] [] -> true
+  [(@p X C) | As] [(@p X D) | Bs] -> (and (negated-coeff? C D) (negated-terms? As Bs))
+  _ _ -> false)
 
 (define coefficient
   X [] -> 0
@@ -258,7 +288,7 @@
 
 (define opposite
   _ [] -> []
-  [N | R] [[M | S] | Ls] -> (if (and (= (row.bound R) (- 0 (row.bound S))) (= (row.terms R) (times -1 (row.terms S))))
+  [N | R] [[M | S] | Ls] -> (if (and (= (row.bound R) (- 0 (row.bound S))) (negated-terms? (row.terms R) (row.terms S)))
                                 [M | S]
                                 (opposite [N | R] Ls)))
 
@@ -334,38 +364,121 @@
 \\ facts, [row | N], [choice | N] and [prop | N] each, or everything, for facts that were closed.
 
 (define search
-  F _ -> [unsat (refutation.make []) everything] where (facts.closed F)
-  F Made -> (search-h F Made (refute F)))
+  F _ _ -> [unsat (refutation.make []) everything] where (facts.closed F)
+  F Made R -> (search-choice F Made R (open-choice (facts.choices F) (length (facts.choices F)) Made (facts.props F) (facts.rows F) [])))
 
-(define search-h
-  F Made [unsat Steps] -> [unsat (refutation.make Steps) (rows-used Steps)]
-  F Made R -> (let N (open-choice (reverse (facts.choices F)) 1 Made [])
-                (if (empty? N)
-                    (settled R F)
-                    (branch F [(hd N) | Made] (hd N) (hd (numbered (hd N) (reverse (facts.choices F)))) [] [] []))))
+(define search-choice
+  F _ R [] -> (settled-or-unsat (if (= R none) (refute F) R) F)
+  F Made R [N K Parts] -> (branch F [N | Made] N Parts [] [] [] R) where (fx<= K 1)
+  F Made R [N _ Parts] -> (search-branch F Made N Parts (if (= R none) (refute F) R)))
+
+(define settled-or-unsat
+  [unsat Steps] _ -> [unsat (refutation.make Steps) (rows-used Steps)]
+  R F -> (settled R F))
+
+(define search-branch
+  _ _ _ _ [unsat Steps] -> [unsat (refutation.make Steps) (rows-used Steps)]
+  F Made N Parts R -> (branch F [N | Made] N Parts [] [] [] R))
 
 (define settled
   [sat Values] F -> [sat Values (facts.props F)]
   [stuck] _ -> [unknown "no integers found"])
 
-\\ The choice not made yet that has the fewest cases, in a list.
+\\ The open choice with the fewest unclosed cases, skipping any that already hold: [N Open Parts], or [].
 (define open-choice
-  [] _ _ Best -> (if (empty? Best) [] [(hd Best)])
-  [Parts | Cs] N Made Best -> (open-choice Cs (+ N 1) Made
-                                (if (or (element? N Made) (and (cons? Best) (<= (tl Best) (length Parts))))
-                                    Best
-                                    [N | (length Parts)])))
+  [] _ _ _ _ Best -> Best
+  [Parts | Cs] N Made Props Rows Best
+  -> (if (element? N Made)
+         (open-choice Cs (fx- N 1) Made Props Rows Best)
+         (let Limit (if (empty? Best) -1 (hd (tl Best)))
+              K (choice-open Parts Props Rows 0 Limit)
+           (cases (= K held) (open-choice Cs (fx- N 1) Made Props Rows Best)
+                  (= K 0) [N 0 Parts]
+                  (or (empty? Best) (fx< K Limit)) (open-choice Cs (fx- N 1) Made Props Rows [N K Parts])
+                  true (open-choice Cs (fx- N 1) Made Props Rows Best)))))
+
+(define choice-open
+  [] _ _ K _ -> K
+  _ _ _ K Limit -> Limit where (and (fx> Limit 0) (fx>= K Limit))
+  [P | Ps] Props Rows K Limit
+  -> (let S (node-state P Props Rows)
+       (cases (= S held) held
+              (= S closed) (choice-open Ps Props Rows K Limit)
+              true (choice-open Ps Props Rows (fx+ K 1) Limit))))
+
+(define node-state
+  (:prop name <- X holds <- H) Props _ -> (prop-state X H Props)
+  (:atom row <- R) _ Rows -> (row-state R Rows)
+  (:all parts <- Ps) Props Rows -> (all-state Ps Props Rows held)
+  (:any parts <- Ps) Props Rows -> (any-state Ps Props Rows closed))
+
+(define prop-state
+  _ _ [] -> open
+  X H [(@p X H) | _] -> held
+  X _ [(@p X _) | _] -> closed
+  X H [_ | Ps] -> (prop-state X H Ps))
+
+(define row-state
+  R _ -> held where (true-row? R)
+  R _ -> closed where (false-row? R)
+  R Rows -> (row-state-in (row.terms R) (row.bound R) Rows))
+
+(define row-state-in
+  _ _ [] -> open
+  Ts B [S | Rows] -> (cases (and (fx<= (row.bound S) B) (= Ts (row.terms S))) held
+                            (and (sum-negative? B (row.bound S)) (negated-terms? Ts (row.terms S))) closed
+                            true (row-state-in Ts B Rows)))
+
+(define all-state
+  [] _ _ Acc -> Acc
+  [P | Ps] Props Rows Acc
+  -> (let S (node-state P Props Rows)
+       (cases (= S closed) closed
+              (= S open) (all-state Ps Props Rows open)
+              true (all-state Ps Props Rows Acc))))
+
+(define any-state
+  [] _ _ Acc -> Acc
+  [P | Ps] Props Rows Acc
+  -> (let S (node-state P Props Rows)
+       (cases (= S held) held
+              (= S open) (any-state Ps Props Rows open)
+              true (any-state Ps Props Rows Acc))))
+
+(define contradicting-row
+  _ [] _ -> 0
+  R [S | Rows] N -> N where (and (sum-negative? (row.bound R) (row.bound S))
+                                 (negated-terms? (row.terms R) (row.terms S)))
+  R [_ | Rows] N -> (contradicting-row R Rows (fx- N 1)))
+
+(define quick-refute
+  0 _ _ _ _ -> []
+  Count [R | More] AllRows Total N
+  -> (let K (contradicting-row R AllRows Total)
+       (if (fx> K 0)
+           [unsat (refutation.make [(@p 1 [(@p K 1) (@p N 1)])]) [[row | K] [row | N]]]
+           (quick-refute (fx- Count 1) More AllRows Total (fx- N 1)))))
 
 \\ Proofs, newest first, and what they used, of the cases of choice N tried so far; Reasons is why some
 \\ are not known. A proof that does not use its case shows that the facts cannot hold without it, once
 \\ what it numbers after that case's rows and choices is numbered without them.
 (define branch
-  F _ N [] Proofs Used [] -> [unsat (split.make N (reverse Proofs)) [[choice | N] | Used]]
-  _ _ _ [] _ _ [Reason | _] -> [unknown Reason]
-  F Made N [P | Ps] Proofs Used Reasons
+  F _ N [] Proofs Used [] _ -> [unsat (split.make N (reverse Proofs)) [[choice | N] | Used]]
+  _ _ _ [] _ _ [Reason | _] _ -> [unknown Reason]
+  F Made N [P | Ps] Proofs Used Reasons R
   -> (let Spent (spend)
           G (expand P F)
-       (branch-h F Made N Ps Proofs Used Reasons G (if (facts.closed G) (closing P F) (search G Made)))))
+       (branch-h F Made N Ps Proofs Used Reasons R G (branch-case P F G Made R))))
+
+(define branch-case
+  P F G _ _ -> (closing P F) where (facts.closed G)
+  _ F G Made R -> (let Old (facts.rows F)
+                       New (facts.rows G)
+                    (if (= New Old)
+                        (search G Made R)
+                        (let NewN (length New)
+                             Quick (quick-refute (fx- NewN (length Old)) New New NewN)
+                          (if (cons? Quick) Quick (search G Made none))))))
 
 \\ What closes facts with a case: that, as a row they do not have, and the propositions that it denies.
 (define closing
@@ -382,12 +495,12 @@
   Ls [(@p X Holds) | Ps] -> (if (element? (@p X (not Holds)) Ls) [[prop | (+ 1 (length Ps))] | (denied Ls Ps)] (denied Ls Ps)))
 
 (define branch-h
-  F Made N Ps Proofs Used Reasons G [unsat Proof New]
+  F Made N Ps Proofs Used Reasons R G [unsat Proof New]
   -> (if (uses? New F)
-         (branch F Made N Ps [Proof | Proofs] (union (known New F) Used) Reasons)
+         (branch F Made N Ps [Proof | Proofs] (union (known New F) Used) Reasons R)
          [unsat (without-case Proof F G) New])
-  _ _ _ _ _ _ _ _ [sat Values Props] -> [sat Values Props]
-  F Made N Ps Proofs Used Reasons _ [unknown Reason] -> (branch F Made N Ps Proofs Used [Reason | Reasons]))
+  _ _ _ _ _ _ _ _ _ [sat Values Props] -> [sat Values Props]
+  F Made N Ps Proofs Used Reasons R _ [unknown Reason] -> (branch F Made N Ps Proofs Used [Reason | Reasons] R))
 
 (define without-case
   Proof F G -> (renumbered Proof (length (facts.rows F)) (- (length (facts.rows G)) (length (facts.rows F)))
@@ -434,7 +547,7 @@
 (define check-within
   Budget Fs -> (let Ns (names-of Fs)
                     _ (set *left* (some-budget Budget))
-                 (trap-error (answer (search (read-facts Fs Ns) []) Fs Ns) (/. E (gave-up (error-to-string E))))))
+                 (trap-error (answer (search (read-facts Fs Ns) [] none) Fs Ns) (/. E (gave-up (error-to-string E))))))
 
 (define gave-up
   "integer overflow" -> (unknown.make "integer overflow")

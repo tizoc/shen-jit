@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- `smt` skips choices that already hold, propagates unit choices before running Fourier–Motzkin elimination, reuses elimination results across branches that add no rows, and closes direct two-row contradictions in one step.
+
 ## [0.13] - 2026-11-25
 
 ### Added
